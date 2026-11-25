@@ -13,9 +13,12 @@ import { groupNames } from "./groups.mjs";
 // this module, a soak saves the state of its Docker event stream, and Docker's, k6's and the host's
 // own text stays in the raw files beside the summary. Soak v5: the fixed rate is checked per
 // interval from the arrivals k6 started in it, and the event stream is a live one whose coverage of
-// the load is shown by a marker container started before and after it.
-export const convergenceSchema = "marketplace-convergence/v4";
-export const soakSchema = "marketplace-soak/v6";
+// the load is shown by a marker container started before and after it. Convergence v5 and soak v7:
+// the host's CPU model is saved only as its SHA-256 (cpuModelSha256, cpuModelDigest), never as text.
+// Soak v7 also counts a start of the app as a restart only after a die stamped strictly earlier,
+// and reads an app row whose action names a restart-relevant event only when it is exactly that word.
+export const convergenceSchema = "marketplace-convergence/v5";
+export const soakSchema = "marketplace-soak/v7";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
 // from memory and from the HTTP upstream.
 export const steadyTargets = Object.freeze(["page", "json"]);
@@ -49,7 +52,7 @@ export const failureCodes = Object.freeze({
   "load-exit": "the k6 load did not finish or exited with an error",
   "load-evidence": "k6's summary export or engine clock was missing, or its counts did not validate",
   "failed-requests": "requests failed, so the cell has no reading",
-  "instance-changed": "the app stopped, restarted, was replaced or was OOM-killed during the pass",
+  "instance-changed": "the app stopped, restarted, was replaced or was OOM-killed during the pass, or the load would have run against another instance than the one that served the cold start",
   unsettled: "a cell's containers were not all removed, or a create was not acknowledged, so no further cell was measured",
   "summary-invalid": "the summary did not validate as a complete pass",
   error: "another error",
@@ -57,10 +60,9 @@ export const failureCodes = Object.freeze({
 /**
  * The patterns a value from Docker, the host or a probe must match to be saved (savedValue), and
  * that the readers check again. Anything else is saved as null (not recorded) and kept only in the
- * raw files. The CPU model is limited to letters, digits, single spaces and ( ) . , @ / + -.
+ * raw files. A CPU model is never saved as text: cpuModelDigest.
  */
 export const savedText = Object.freeze({
-  cpu: /^(?=.{1,96}$)[A-Za-z0-9().,@/+-]+( [A-Za-z0-9().,@/+-]+)*$/,
   kernel: /^\d{1,4}\.\d{1,4}[0-9A-Za-z.+_-]{0,64}$/,
   onlineCpus: /^\d{1,4}(-\d{1,4})?(,\d{1,4}(-\d{1,4})?){0,63}$/,
   docker: /^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.]{1,32})?$/,
@@ -86,6 +88,19 @@ export function savedValue(kind, text) {
   if (typeof text !== "string") return null;
   const value = text.replace(/\s+/g, " ").trim();
   return matches(kind, value) ? value : null;
+}
+/** The longest CPU model, in characters after whitespace is normalized, that cpuModelDigest hashes. */
+export const cpuModelLimit = 256;
+/**
+ * A host's CPU model as a pass saves and compares it: the SHA-256 (hex) of its text with whitespace
+ * normalized as savedValue normalizes it, or null when there is no such text or it is longer than
+ * cpuModelLimit. The text itself stays in the raw host.txt and is never saved or printed; a pass and
+ * a timed round (whose host.cpu is text) are compared by this digest of each (unlikeRound).
+ */
+export function cpuModelDigest(text) {
+  if (typeof text !== "string") return null;
+  const model = text.replace(/\s+/g, " ").trim();
+  return model.length > 0 && model.length <= cpuModelLimit ? createHash("sha256").update(model).digest("hex") : null;
 }
 /**
  * The tolerance reading: a screening reading of a pass's throughput, not a certificate of steady
@@ -280,7 +295,9 @@ export const markerIs = (action, name) => typeof action === "string" && action =
  * and before the fence is read like any other. This relies on the client delivering rows in the daemon's order up to the fence; a stream
  * without the fence is not read at all. Every row must be one of the two container IDs, an action
  * (lowercase letters and underscores, optionally followed by ": " and detail, as health_status and
- * exec_start are) and a time in nanoseconds. One row that is not, fewer than two marker starts, or
+ * exec_start are) and a time in nanoseconds; an app row whose action is start, restart, die, kill or
+ * oom with detail after it (`restart: x`) is not one, since only the exact word is that event. One
+ * row that is not, fewer than two marker starts, or
  * witnesses that do not bracket the load make the whole observation unreadable: this throws a fixed
  * message (with a count), and the caller saves the stream as unavailable, as it does for a stream
  * with no fence. Returns the app's start,
@@ -304,6 +321,9 @@ export function readEvents(text, { app, marker, startedAt, finishedAt } = {}) {
     const id = row.slice(0, Math.max(first, 0)), action = row.slice(first + 1, Math.max(last, first + 1)), nanos = row.slice(last + 1);
     if (first <= 0 || last <= first || (id !== app && id !== marker) || !/^[a-z_]{1,32}(: .*)?$/.test(action) || !/^[1-9]\d{0,19}$/.test(nanos)) { unreadable++; continue; }
     const name = action.split(":", 1)[0], at = BigInt(nanos);
+    // An app row that names a restart-relevant event is read only as that exact word: a
+    // `restart: detail` row is not a restart, nor anything else, so it makes the stream unreadable.
+    if (id === app && restartActions.includes(name) && action !== name) { unreadable++; continue; }
     if (id === marker) {
       // The first marker row after the second start decides the fence: the second start's own exit,
       // stamped later than that start, or nothing (false) whatever comes after it. A marker action
@@ -411,6 +431,19 @@ export function appInstance(info, which) {
   assert.ok(matches("containerId", info?.Id) && nonNegative(info.RestartCount) && s !== null && typeof s === "object" && startTime(s.StartedAt)
     && typeof s.Running === "boolean" && typeof s.OOMKilled === "boolean", `the app's instance ${which} the load is not recorded as a container ID, a StartedAt time, a RestartCount and its running and OOM states`);
   return { id: info.Id, startedAt: s.StartedAt, restartCount: info.RestartCount, running: s.Running, oomKilled: s.OOMKilled };
+}
+/**
+ * The app before the load must be the instance that served the cold probe: `served` is the app's
+ * container ID, StartedAt and RestartCount as Docker reported them once the probe had its first 200,
+ * `before` the snapshot (appInstance) taken before the load. Any of the three that differs (or a
+ * served value missing, which cannot equal a validated one) refuses the cell before a load starts,
+ * since its cold start and its load would describe two instances. The message names which differed,
+ * never Docker's values (the raw cold.json and app-container.json keep those).
+ */
+export function servedCold(served, before) {
+  const changed = [served?.id !== before.id && "another container ID", served?.startedAt !== before.startedAt && "another StartedAt",
+    served?.restartCount !== before.restartCount && "another RestartCount"].filter(Boolean);
+  assert.ok(changed.length === 0, `the app before the load is not the instance that served the cold probe: ${changed.join(", ")}`);
 }
 /** The app before the load: a valid snapshot (appInstance) of a running app that was not OOM-killed. */
 export function appBefore(info) {
@@ -556,8 +589,8 @@ function passEvidence(s, schema) {
   assert.ok(k.unacknowledged.length === 0 && k.recovered === 0, "a pass with a create Docker did not acknowledge, or a resource recovered by its label, is not evidence");
   assert.ok(matches("time", s.startedAt) && matches("time", s.finishedAt) && Date.parse(s.finishedAt) >= Date.parse(s.startedAt), "a pass records its window");
   const host = s.host;
-  fields(host, ["platform", "release", "node", "docker", "kernel", "cpu", "onlineCpus"], "the pass's host");
-  for (const key of Object.keys(host)) nullable(key === "release" ? "kernel" : key, host[key], `the pass's host ${key} is not a value it saves`);
+  fields(host, ["platform", "release", "node", "docker", "kernel", "cpuModelSha256", "onlineCpus"], "the pass's host");
+  for (const key of Object.keys(host)) nullable({ release: "kernel", cpuModelSha256: "sha256" }[key] ?? key, host[key], `the pass's host ${key} is not a value it saves`);
   assert.ok(Object.hasOwn(startups, s.startup), "a pass records how it started each app, by a known code");
   assert.equal(s.scope, passScope[kind], "a pass states its scope");
   // What makes a pass comparable with a timed round (unlikeRound): its image IDs and CPU settings,
@@ -745,7 +778,7 @@ function soakMemory(memory, seconds, end) {
  * still reported; p99 is kept per interval; the fixed rate is held only as soakArrivals says, from
  * `arrivals` per interval; a restart is shown only by restart evidence (restartClaim): a RestartCount
  * increase, another container ID or StartedAt at the end (a `docker restart` keeps RestartCount), a
- * restart event, or a start of the app after a die of it. A kill (a signal, which need not stop the
+ * restart event, or a start of the app stamped strictly after a die of it. A kill (a signal, which need not stop the
  * app), a die, an OOM event and an app not running or OOM-killed at the end are saved as they are
  * and reported as observations of their own, not as restarts. `before` and `after`
  * have appInstance's forms, and the app must have been running before the load. `memory` is null
@@ -773,8 +806,12 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
 }
-/** The events that show a restart: a restart event, or a start of the app after a die of it. */
-export const restartsSeen = (events) => events.filter((e, i) => e.action === "restart" || (e.action === "start" && events.slice(0, i).some((d) => d.action === "die")));
+/**
+ * The events that show a restart: a restart event, or a start of the app stamped strictly after a
+ * die of it. Events are paired by their daemon times, never by the order the stream delivered them:
+ * a die delivered before a start but stamped at or after it does not make that start a restart.
+ */
+export const restartsSeen = (events) => events.filter((e) => e.action === "restart" || (e.action === "start" && events.some((d) => d.action === "die" && d.atSeconds < e.atSeconds)));
 // The restart claim from its observations: true only on restart evidence (a RestartCount increase,
 // another instance at the end, or restartsSeen), false when there is none and the event stream was
 // read and covered the load, and null (not established) otherwise. A kill, a die with no start
@@ -888,7 +925,8 @@ export function unlikeRound(round, apps, c, { pages = c.options.targets.includes
     same(`the ${role} CPU quota`, c.measurement?.cpus?.[role]?.quota, round.measurement?.cpus?.[role]?.quota);
     same(`the ${role} CPU pinning (cpuset)`, c.measurement?.cpus?.[role]?.cpuset, round.measurement?.cpus?.[role]?.cpuset);
   }
-  same("the host CPU", c.host?.cpu, round.host?.cpu);
+  // The pass saves its CPU model only as a digest; the round's text is compared by the same digest.
+  same("the host CPU", c.host?.cpuModelSha256, cpuModelDigest(round.host?.cpu));
   // run.mjs records the host's os.release(); containers share that kernel, which the pass reads in one.
   same("the kernel release", c.host?.kernel, round.host?.release);
   same("the online CPU set", c.host?.onlineCpus, round.host?.onlineCpus);
@@ -930,6 +968,7 @@ const noReading = (verdict) => !verdict.withinTolerance && (verdict.reason === "
  * warmup was long enough or too short: a timed warmup is set only by a separate reviewed change
  * from a saved like-for-like pass. report.mjs states the case with no pass itself, so a report
  * without one never loads this module.
+ * Neither side's CPU model text is printed: the pass saves only its digest, and the round's is compared by the same digest.
  * @param {{commit: string, options: {warmup: number, group?: string}, host?: {cpu?: string}, measurement?: {cpus?: object}, apps?: object, split?: object}} round a validated timed summary
  * @param {string[]} apps the round's measured adapters
  * @param {object} convergence a saved convergence pass
@@ -940,7 +979,7 @@ export function convergenceLines(round, apps, convergence) {
   // The round is validated by report.mjs; its adapter names and warmup are printed, so check them here too.
   assert.ok(Array.isArray(apps) && apps.every((app) => matches("name", app)) && finite(warmup) && warmup >= 0, "convergenceLines reads a validated round's adapters and warmup");
   const c = validateConvergence(convergence), o = c.options;
-  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, reading ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU: ${c.host.cpu ?? "not recorded"}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${startups[c.startup]}.`];
+  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, reading ${flattenRule.name}), measured at commit \`${c.commit}\`. Host CPU model: ${c.host.cpuModelSha256 ? "compared by its SHA-256, not printed" : "not recorded"}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after ${startups[c.startup]}.`];
   const found = [], read = [], failed = [], none = [], api = [], missing = [];
   for (const app of apps) for (const source of steadySources) for (const target of steadyTargets) {
     const name = `${app} ${source} ${target}`, cell = c.cells.find((x) => x.app === app && x.source === source && x.target === target);

@@ -196,7 +196,9 @@ the file is read back only up to 4,096 bytes, a longer one failing the cold star
 It must hold exactly what `bench/catalog/cold.mjs` writes (`coldOutput`): the readiness line, then
 one result line as `JSON.stringify` writes the fields it names and the path it polled, each line
 ended by one newline; padding, a blank line or anything else fails the cold start, nothing is
-trimmed. The result must then pass the timed validator's own cold-start rules
+trimmed. While the probe runs the file is only polled for the readiness line; once the probe has
+exited, the final read (`coldResult`) requires both lines, each ended by its newline, so an empty
+file, a readiness line alone or a result line without its newline fails the cold start. The result must then pass the timed validator's own cold-start rules
 (`validateColdStart` in [report.mjs](report.mjs)), so a first 200 with an empty body fails the cold
 start in a pass as it fails a timed round. What the probe wrote, stderr included, is in `cold.log`,
 collected before the probe is removed even when it never became ready (a collection that fails is
@@ -281,8 +283,14 @@ What a pass saves is an allowlist (`savedText` and `passEvidence` in
 [steady-contract.mjs](steady-contract.mjs)): every field in `summary.json` is fixed by the
 checkout (the options, the rule, the scope, a failure or startup code), a validated number, or a
 value from Docker, the host or k6 that matched a strict pattern: 64-hex image IDs and hashes, a k6
-version `N.N.N`, a kernel release, an online CPU set, a Docker server version and a CPU model of
-letters, digits, single spaces and `( ) . , @ / + -` up to 96 characters. A value that does not
+version `N.N.N`, a kernel release, an online CPU set and a Docker server version. The host's CPU
+model is saved only as the SHA-256 of its text (`cpuModelSha256`, from `cpuModelDigest`: whitespace
+normalized, at most 256 characters, otherwise null); the text stays in `host.txt`, a timed round's
+model is compared with it by the same digest, and neither `steady-report.mjs` nor
+`report.mjs --convergence` prints either text (`report.mjs` without `--convergence` still prints
+the round's model as it always has). A
+convergence pass is saved as `marketplace-convergence/v5` and a soak as `marketplace-soak/v7`
+(below); a v4 convergence pass saved the model's text and is not read. A value that does not
 match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
 version), fails that step. Adapter names (the pass's adapters and those it selected for
 admission) must be ones this checkout's adapter inventory has, and a group one of its groups; the
@@ -300,7 +308,10 @@ the raw `load-clock.json` and container receipts), the app container's before an
 (each must record a 64-hex container ID, a StartedAt timestamp that is a real start, a
 RestartCount and its running and OOM states, and the app must be running and not OOM-killed
 before the load, `appInstance` and `appBefore`; a missing counter or malformed timestamp on
-either side fails the cell rather than comparing equal. Then, for a convergence cell: the same ID
+either side fails the cell rather than comparing equal. The app before the load must also be the
+instance that served the cold probe: the container ID, StartedAt and RestartCount Docker reported
+once the probe had its first 200 must all be unchanged (`servedCold`), or the cell fails
+`instance-changed` before its marker or load container is created. Then, for a convergence cell: the same ID
 and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
 evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
 row of a soak's live Docker event stream, with whether it showed the marker's two starts. A saved
@@ -341,15 +352,18 @@ second marker start (an OOM kill stamped 15 s into the load is seen, never clean
 an app event both after the second marker start and stamped after FinishedAt is teardown. The stream is saved
 as one of three states: unavailable (the stream failed, did not show both marker starts and the
 fence within its bound, showed another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row that was not the app's or the
-marker's ID, an action and a nanosecond time, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
+marker's ID, an action and a nanosecond time, or was an app row naming a start, restart, die, kill or OOM
+with anything after that word, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
 (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
-another container ID or StartedAt at the end, a `restart` event, or a `start` of the app after a
-`die` of it. It is no when there is none and the stream was read and covered the load (clean or
+another container ID or StartedAt at the end, a `restart` event, or a `start` of the app stamped
+strictly after a `die` of it (events are paired by their daemon times, never by the order the
+stream delivered them). It is no when there is none and the stream was read and covered the load (clean or
 seen), and not established when there is none and the stream was unavailable. A `kill` is a signal,
 which need not stop the app (SIGCONT, for one), a `die` with no start after it is an exit, and an
 `oom` event or an app not running or OOM-killed at the end is what it says: the report lists these
 in their own column, as observations, never as a restart. A soak is saved as
-`marketplace-soak/v6`; a v5 soak counted those observations as restarts and is not read. The container states and the memory
+`marketplace-soak/v7`; a v6 soak paired a start with a die by delivery order and saved the CPU
+model's text, and a v5 soak counted those observations as restarts; neither is read. The container states and the memory
 samples are read independently of the stream. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
 [steady-run.mjs](steady-run.mjs): bytes read, bytes in one row, rows read, all counted on what the
 client wrote, blank rows and escape sequences included): past a limit that observation is
@@ -406,12 +420,13 @@ most like-for-like for those cells alone (and compares page locales only if one 
 no input. It prints each cell's reading and lists every input that differs or that either side
 does not record: the commit and group, the image ID of every measured
 adapter, the fixture hash, the upstream and k6 image IDs, the CPU quota and pinning for each role
-(an unpinned side counts as missing), the host CPU model, kernel release and online CPU set, the
+(an unpinned side counts as missing), the host CPU model (by digest), kernel release and online CPU set, the
 startup timeout, the app and upstream memory limits, the response encoding, the timed warmup's 32
 users, the cold start before the load, a page warmup that rotated locales (results schema v6), and
 a timed warmup with no failed request (a round whose warmup had failures is not comparable).
 With `--convergence` nothing read from either file reaches the output unless it validated: the
-round's CPU model prints only in the form a pass saves a CPU model in; each adapter is named by
+round's CPU model is not printed (its header line says so, and the pass's model is compared with
+it only by digest); each adapter is named by
 this checkout's label, not the round's saved one (an adapter the checkout does not name gets a
 fixed text); the round's two saved limits (upstream and CPU window) print only when they are this
 checkout's text, otherwise a fixed sentence says they are not printed; and a round that is not

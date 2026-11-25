@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appBefore, appInstance, checkFixture, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, cpuModelDigest, cpuModelLimit, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
@@ -292,7 +292,10 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.options.apps = []; v.images = {}; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate http_req_duration maximum/],
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
-    [(v) => { v.schema = "marketplace-convergence/v3"; }, /not a marketplace-convergence\/v4 result/],
+    [(v) => { v.schema = "marketplace-convergence/v4"; }, /not a marketplace-convergence\/v5 result/],
+    // v5 saves the host's CPU model only as its digest: a v4-style text field is not read.
+    [(v) => { v.host = { ...v.host, cpu: "Synthetic test only" }; delete v.host.cpuModelSha256; }, /the pass's host has fields its schema does not save/],
+    [(v) => { v.host.cpuModelSha256 = "Synthetic test only"; }, /the pass's host cpuModelSha256 is not a value it saves/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
   // Every acknowledged create removed (four for the pass and three for each of its eight cells), with
   // none unacknowledged and nothing recovered, reads.
@@ -329,7 +332,11 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   // and with no evidence an unavailable stream leaves the claim not established.
   for (const [events, restarted] of [[[{ action: "kill", atSeconds: 1 }], false], [[{ action: "die", atSeconds: 1 }], false], [[{ action: "start", atSeconds: 1 }], false],
     [[{ action: "start", atSeconds: 1 }, { action: "die", atSeconds: 2 }], false], [[{ action: "kill", atSeconds: 1 }, { action: "die", atSeconds: 1.1 }, { action: "start", atSeconds: 2 }], true],
-    [[{ action: "restart", atSeconds: 1 }], true], [null, null]])
+    [[{ action: "restart", atSeconds: 1 }], true], [null, null],
+    // Paired by time, never by delivery order: a start stamped at the same time as a die, or before
+    // it though delivered after it, is not a restart; one stamped after a die delivered later is.
+    [[{ action: "die", atSeconds: 1 }, { action: "start", atSeconds: 1 }], false], [[{ action: "die", atSeconds: 2 }, { action: "start", atSeconds: 1 }], false],
+    [[{ action: "start", atSeconds: 2 }, { action: "die", atSeconds: 1 }], true]])
     assert.equal(summarizeSoak({ ...base, events }).restarts.restarted, restarted, JSON.stringify(events));
   // Only readEvents's restart-relevant list is accepted.
   assert.throws(() => summarizeSoak({ ...base, events: [{ action: "exec_start", atSeconds: 1 }] }), /readEvents's list or null/);
@@ -389,6 +396,11 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }]; }, /event stream's state contradicts its events/],
     [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }, { action: "start", atSeconds: 6 }]; v.cells[0].restarts.eventStream = "seen"; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.events = [{ action: "restart", atSeconds: 5 }]; v.cells[0].restarts.eventStream = "seen"; }, /restart claim contradicts/],
+    // A saved soak that claims a restart from a start delivered after a die but not stamped after it.
+    [(v) => { Object.assign(v.cells[0].restarts, { events: [{ action: "die", atSeconds: 5 }, { action: "start", atSeconds: 5 }], eventStream: "seen", restarted: true }); }, /restart claim contradicts/],
+    [(v) => { Object.assign(v.cells[0].restarts, { events: [{ action: "die", atSeconds: 6 }, { action: "start", atSeconds: 5 }], eventStream: "seen", restarted: true }); }, /restart claim contradicts/],
+    // Only the exact action words are saved events: a restart with detail is refused, whatever it claims.
+    [(v) => { Object.assign(v.cells[0].restarts, { events: [{ action: "restart: x", atSeconds: 5 }], eventStream: "seen", restarted: true }); }, /restarts/],
     [(v) => { v.cells[0].restarts.eventStream = "unavailable"; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.eventStream = "maybe"; }, /restarts/],
     [(v) => { v.cells[0].restarts.replaced = true; }, /restart claim contradicts/],
@@ -604,7 +616,7 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
 test("the timed reporter lists every differing or missing input and never judges the warmup", () => {
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
-  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
+  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v5, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU model: compared by its SHA-256, not printed\. One 32-user closed-loop pass .* after the timed round's cold start \(the app created, then started while a sidecar polls the target's path to its first 200\)\.$/);
   // The API-source cells have readings but are not compared: nothing in the pass shows their requests went through the upstream.
   assert.equal(lines[1], "Coverage: the pass has a reading for 4 of this round's 8 measured adapter, source and target cells (corten fixture page, corten fixture json, aspnet fixture page, aspnet fixture json); not compared, the pass does not record that the requests of these API-source cells reached the upstream: corten api page, corten api json, aspnet api page, aspnet api json.");
   assert.match(lines[2], /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* rotating page locales and a timed warmup with no failed request\. It says nothing about this round's other cells\.$/);
@@ -771,7 +783,6 @@ test("a convergence cell refuses an app that stopped, restarted, was replaced or
 test("a value from outside the checkout is saved only when it matches its pattern", () => {
   const canary = "leaked canary";
   for (const [kind, good, bad] of [
-    ["cpu", "AMD EPYC 7543 32-Core Processor", [`AMD <${canary}>`, "X".repeat(97), "AMD\u0000EPYC", "Intel(R) Xeon(R) CPU @ 2.20GHz; rm"]],
     ["kernel", "6.8.0-49-generic", [`6.8.0 ${canary}`, "linux", "6.8.0/../x"]],
     ["onlineCpus", "0-3,8-11", ["0-7;", `0-7 ${canary}`, "all"]],
     ["docker", "27.5.1", [`27.5.1 ${canary}`, "27.5.1-ce+abc", "v27.5.1"]],
@@ -790,6 +801,20 @@ test("a value from outside the checkout is saved only when it matches its patter
     assert.equal(savedValue(kind, undefined), null);
   }
   assert.throws(() => savedValue("hostname", "x"), /^AssertionError \[ERR_ASSERTION\]: unknown saved value kind$/);
+  // A CPU model is never a saved text kind; it is saved and compared only as its digest.
+  assert.throws(() => savedValue("cpu", "AMD EPYC 7543 32-Core Processor"), /unknown saved value kind/);
+});
+
+test("a host's CPU model is saved and compared only as the SHA-256 of its normalized text", () => {
+  const model = "AMD EPYC 7543 32-Core Processor", digest = cpuModelDigest(model);
+  assert.match(digest, /^[a-f0-9]{64}$/);
+  // Whitespace is normalized as savedValue normalizes it, so a probe's line and os.cpus() text agree.
+  assert.equal(cpuModelDigest(`\t${model.replace(" ", "  ")}\n`), digest);
+  assert.notEqual(cpuModelDigest(`${model} `.repeat(2).trim()), digest);
+  // Any text is hashed, never kept: a model with characters a saved value could not hold has a digest too.
+  assert.match(cpuModelDigest("Synthetic <leaked canary> | x"), /^[a-f0-9]{64}$/);
+  for (const none of [undefined, null, 7, "", "   ", "X".repeat(cpuModelLimit + 1)]) assert.equal(cpuModelDigest(none), null, String(none));
+  assert.match(cpuModelDigest("X".repeat(cpuModelLimit)), /^[a-f0-9]{64}$/);
 });
 
 test("a soak's event stream covers the load only when it shows the marker's start before and after it, and every row is read", () => {
@@ -803,6 +828,15 @@ test("a soak's event stream covers the load only when it shows the marker's star
   // Rows that are not restart-relevant are read and dropped, with any detail.
   assert.deepEqual(read(row(app, "exec_start: sh -c true", 1) + row(app, "health_status: healthy", 2).replace("\n", "\r\n")), []);
   assert.deepEqual(read(row(app, "kill", 3) + row(app, "die", 3.5) + row(app, "start", 4)), [{ action: "kill", atSeconds: 3 }, { action: "die", atSeconds: 3.5 }, { action: "start", atSeconds: 4 }]);
+  // An app row naming a restart-relevant event is that event only as the exact word: with detail
+  // after it (`restart: x`) it is no event at all, so the whole stream is unreadable, never a restart.
+  for (const action of ["start", "restart", "die", "kill", "oom"]) {
+    assert.throws(() => read(row(app, `${action}: leaked-canary`, 5)), (error) => {
+      assert.match(error.message, /^1 docker events row is not this soak's app or marker, an action and a time$/);
+      assert.ok(!error.message.includes("canary"));
+      return true;
+    }, action);
+  }
   // App events after the second marker start are teardown, past the observation.
   assert.deepEqual(readEvents(mark(-1) + mark(2000) + row(app, "kill", 2001) + row(app, "die", 2001), ids), []);
   // A response that looks clean but does not show both marker starts (a retrospective query whose

@@ -7,10 +7,11 @@ import { convergenceSchema, failureCodes, flattenRule, parseSaved, restartsSeen,
 
 // Every value printed here has been checked by validateConvergence or validateSoak first: a code
 // is printed as its text from steady-contract.mjs, and anything else is a validated number or a
-// value that matched its saved pattern.
+// value that matched its saved pattern. A host's CPU model is saved only as its SHA-256, and this
+// report never prints it.
 const ms = (v) => (v === null ? "-" : v.toFixed(1));
 const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
-  `Commit: \`${s.commit}\`. CPU: ${s.host.cpu ?? "not recorded"} (online CPUs ${s.host.onlineCpus ?? "not recorded"}). Window: ${s.startedAt} to ${s.finishedAt}.`,
+  `Commit: \`${s.commit}\`. CPU model: ${s.host.cpuModelSha256 ? "recorded as its SHA-256 only, not printed (its text is in the raw host.txt)" : "not recorded"} (online CPUs ${s.host.onlineCpus ?? "not recorded"}). Window: ${s.startedAt} to ${s.finishedAt}.`,
   s.admission ? `Adapters: those timed round ${s.admission.round} (commit \`${s.admission.commit}\`, summary SHA-256 ${s.admission.summarySha256}) admitted, of ${s.admission.selected.join(", ")}.`
     : `Adapters: ${s.options.apps.join(", ")}, as selected; no timed round's admission was checked.`,
   s.options.group ? `Group ${s.options.group}: its images and container settings.` : "No group: the ungrouped images and container settings, not a group's timed configuration.",
@@ -66,7 +67,7 @@ export function soakReport(s) {
   }
   for (const c of unmet) lines.push("", `${c.app} ${c.source} ${c.target}: the fixed ${o.rate} requests/second was not held, so this is not a fixed-rate result: its memory and p99 are under a lower or uneven load.`);
   for (const c of blind) lines.push("", `${c.app} ${c.source} ${c.target}: memory unavailable (${c.memory.unavailable}); its restart, stop and OOM observations are still reported.`);
-  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes only on evidence of a restart: a RestartCount increase, another instance (container ID or StartedAt) at the end, a restart event, or a start of the app after an exit (die) of it; no when there is none and Docker's live event stream for the app, started before the load, was read in full and showed a marker container's starts before and after the load (so it covered the load); not established when there is none and that stream could not be read or did not show that it covered the load. \"Exits, signals, OOM\" lists every other event the stream showed for the app (a signal is any kill, which need not stop the app) and an app not running or OOM-killed at the end; these are observations, not restarts.");
+  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes only on evidence of a restart: a RestartCount increase, another instance (container ID or StartedAt) at the end, a restart event, or a start of the app stamped by the daemon strictly after an exit (die) of it (events are paired by their times, not the order the stream delivered them); no when there is none and Docker's live event stream for the app, started before the load, was read in full and showed a marker container's starts before and after the load (so it covered the load); not established when there is none and that stream could not be read or did not show that it covered the load. \"Exits, signals, OOM\" lists every other event the stream showed for the app (a signal is any kill, which need not stop the app) and an app not running or OOM-killed at the end; these are observations, not restarts.");
   lines.push("", "## Intervals", "");
   for (const c of s.cells) if (c.failure === undefined) lines.push(`${c.app} ${c.source} ${c.target} p99 ms by interval: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "", `${c.app} ${c.source} ${c.target} arrivals by interval (scheduled): ${c.rate.intervals.map((i) => `${i.arrivals} (${i.scheduled})`).join(", ")}`, "");
   return lines.join("\n");

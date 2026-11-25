@@ -253,20 +253,23 @@ export const checkoutLimits = Object.freeze({
 export function checkoutLabel(app) {
   return Object.hasOwn(inventory, app) && typeof inventory[app].label === "string" ? inventory[app].label : "an adapter this checkout does not name";
 }
+/** What a report with a convergence pass prints in place of a host's CPU model. */
+export const convergenceHostCpu = "not printed with --convergence (report.mjs without it prints the model)";
 /**
  * A validated round as Markdown. `convergence(round, apps)` returns the lines stating a saved
  * convergence pass (steady-contract.mjs convergenceLines); without it the report says none was
  * provided to it (#1851): that one line is the only change to the default output. The CLI loads
  * steady-contract.mjs only for --convergence, so validating or reporting a round without a pass
- * never imports it. `hostCpu` prints a host's CPU model; the --convergence CLI passes one that
- * prints only a model of the form a pass saves (savedText), and the default prints it as saved.
+ * never imports it. With a pass, no host's CPU model text is printed (convergenceHostCpu says so in
+ * its place; a pass compares CPU models by their digest); without one it prints as saved.
  * With a pass, saved text the validator checks only for being nonempty is not printed: each
  * adapter's label is this checkout's (checkoutLabel), and each saved limit prints only when it is
  * this checkout's text (checkoutLimits), otherwise a fixed sentence says it is not printed.
  * @param {object} s a saved round
- * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null, hostCpu?: (cpu: string) => string}} [options]
+ * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null}} [options]
  */
-export function report(s, { convergence = null, hostCpu = (text) => text } = {}) {
+export function report(s, { convergence = null } = {}) {
+  const hostCpu = convergence !== null ? () => convergenceHostCpu : (text) => text;
   validateSummary(s);
   const part = s.options.part, split = s.split;
   // A part's candidates are its share; a whole or merged round's are its group's.
@@ -388,14 +391,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   else {
     // With a pass, nothing read from either file reaches the output unless it validated or matches
     // the pattern its kind is saved by: the round's JSON and validation errors are fixed messages
-    // (the default command prints the reason), and its CPU model prints only in a saved form.
-    const { convergenceLines, parseSaved, savedValue } = await import("./steady-contract.mjs");
+    // (the default command prints the reason), and its CPU model text is not printed at all.
+    const { convergenceLines, parseSaved } = await import("./steady-contract.mjs");
     const pass = parseSaved(readFileSync(args[2], "utf8"));
     const text = readFileSync(args[0], "utf8");
     let round;
     try { round = JSON.parse(text); } catch { throw new Error("the saved round is not JSON"); }
     try { validateSummary(round); } catch { throw new Error("the saved round does not validate; report.mjs without --convergence prints why"); }
-    const hostCpu = (cpu) => savedValue("cpu", cpu) ?? "not printed (not in the form a CPU model is saved in)";
-    console.log(report(round, { convergence: (r, apps) => convergenceLines(r, apps, pass), hostCpu }));
+    console.log(report(round, { convergence: (r, apps) => convergenceLines(r, apps, pass) }));
   }
 }

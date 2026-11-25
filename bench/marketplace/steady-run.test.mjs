@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clientLimits, coldOutput, coldOutputBytes, combinedRunner, eventStream, memorySampler, readBounded, runSteady } from "./steady-run.mjs";
+import { clientLimits, coldOutput, coldOutputBytes, coldResult, combinedRunner, eventStream, memorySampler, readBounded, runSteady } from "./steady-run.mjs";
 import { convergenceLines, eventFormat, intervalSchedule, ownerLabelKey, parseSteadyArgs, timedStartup, validateConvergence, validateSoak } from "./steady-contract.mjs";
 import { steadyReport } from "./steady-report.mjs";
 import { resultSchema } from "./run-contract.mjs";
@@ -155,7 +155,7 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
         if (c.kind !== "probe") return logged("app log\n", "", options);
         const app = byName(c.name.slice(0, -"-probe".length));
         const result = { first200At: new Date(Date.parse(app?.state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: c.args.at(-2) };
-        return logged(app?.state.Running ? `catalog-probe-ready\n${JSON.stringify(result)}` : "catalog-probe-ready", probeStderr, options);
+        return logged(app?.state.Running ? `catalog-probe-ready\n${JSON.stringify(result)}\n` : "catalog-probe-ready\n", probeStderr, options);
       }
       case "wait": return "0";
       case "rm": {
@@ -202,7 +202,9 @@ test("a convergence pass starts each cell with the timed round's cold start and 
   assert.equal(s.startup, timedStartup);
   assert.equal(s.finishedCommit, commit);
   assert.deepEqual(s.cleanup, { complete: true, remaining: { containers: [], networks: [] }, created: 10, removed: 10, recovered: 0, failures: 0, unacknowledged: [] });
-  assert.deepEqual([s.host.kernel, s.host.cpu, s.host.onlineCpus, s.fixtureSha256, s.tools.upstream.imageId, s.tools.k6.imageId], ["6.8.0-test", "Synthetic CPU", "0-7", "f".repeat(64), upstreamImageId, k6ImageId]);
+  // The host's CPU model is saved only as the SHA-256 of its text; the text is in host.txt alone.
+  assert.deepEqual([s.host.kernel, s.host.cpuModelSha256, s.host.onlineCpus, s.fixtureSha256, s.tools.upstream.imageId, s.tools.k6.imageId], ["6.8.0-test", sha256("Synthetic CPU"), "0-7", "f".repeat(64), upstreamImageId, k6ImageId]);
+  assert.ok(!readFileSync(join(folder("c"), "summary.json"), "utf8").includes("Synthetic CPU"));
   // The k6 version came from an owned container, created, attached and removed by ID: no docker run.
   assert.equal(s.tools.k6.version, "2.4.0");
   assert.ok(!fake.calls.some((c) => c.args[0] === "run"), "no untracked docker run");
@@ -235,7 +237,7 @@ test("a convergence pass starts each cell with the timed round's cold start and 
   assert.equal(cleanup.complete, true); assert.deepEqual(cleanup.remaining, { containers: [], networks: [] });
   assert.equal(fake.containers.size, 0); assert.equal(fake.networks.size, 0);
   // A round with the same inputs is like-for-like with what the runner recorded.
-  const round = { schema: resultSchema, commit, options: { warmup: 10, startupTimeout: 120 }, host: { cpu: s.host.cpu, release: s.host.kernel, onlineCpus: s.host.onlineCpus }, measurement: s.measurement,
+  const round = { schema: resultSchema, commit, options: { warmup: 10, startupTimeout: 120 }, host: { cpu: "Synthetic CPU", release: s.host.kernel, onlineCpus: s.host.onlineCpus }, measurement: s.measurement,
     fixtureSha256: s.fixtureSha256, tools: s.tools, apps: { corten: { imageId: s.images.corten, runs: { "fixture-json": [{ warmup: { failed: 0 } }] } } } };
   // A fixture-only pass covers half of the round's cells: like-for-like for those only, said after its coverage.
   const lines = convergenceLines(round, ["corten"], s);
@@ -570,7 +572,7 @@ test("summary.json keeps a value from Docker, the host or k6 only when it matche
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t10", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   const token = "leaked-canary-token";
-  const longCpu = `Synthetic ${"X".repeat(96)}`;
+  const longCpu = `Synthetic ${"X".repeat(300)}`;
   // Docker's server version with a suffix outside its pattern, a host probe whose kernel, CPU model
   // and online CPUs carry text outside theirs, k6's version output with trailing text (the version
   // itself matches the pin), and an extra repository digest on the k6 image.
@@ -584,7 +586,8 @@ test("summary.json keeps a value from Docker, the host or k6 only when it matche
   const s = await run(fake, options, folder("canary"));
   assert.equal(s.complete, true, JSON.stringify(s.failures));
   validateConvergence(s);
-  assert.deepEqual([s.host.docker, s.host.kernel, s.host.cpu, s.host.onlineCpus], [null, null, null, null]);
+  // The CPU model is saved as its digest whatever its text; the text is never saved.
+  assert.deepEqual([s.host.docker, s.host.kernel, s.host.cpuModelSha256, s.host.onlineCpus], [null, null, sha256(`Synthetic <${token}>`), null]);
   assert.deepEqual(s.tools.k6, { imageId: k6ImageId, version: "2.4.0" });
   const text = readFileSync(join(folder("canary"), "summary.json"), "utf8");
   assert.ok(!text.includes(token) && !text.includes("example.com"), text);
@@ -593,11 +596,11 @@ test("summary.json keeps a value from Docker, the host or k6 only when it matche
   assert.ok(readFileSync(join(folder("canary"), "host.txt"), "utf8").includes(token));
   const k6 = readFileSync(join(folder("canary"), "k6.json"), "utf8");
   assert.ok(k6.includes(token) && k6.includes("example.com"));
-  // A CPU model longer than its pattern allows is not recorded either, and the report says so.
+  // A CPU model longer than cpuModelLimit is not recorded, and the report says so.
   const long = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
     args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"] ? `6.8.0-test\nmodel name\t: ${longCpu}\n0-7` : undefined }), options, folder("long"));
-  assert.deepEqual([long.host.kernel, long.host.cpu, long.host.onlineCpus], ["6.8.0-test", null, "0-7"]);
-  assert.match(steadyReport(long), /CPU: not recorded \(online CPUs 0-7\)/);
+  assert.deepEqual([long.host.kernel, long.host.cpuModelSha256, long.host.onlineCpus], ["6.8.0-test", null, "0-7"]);
+  assert.match(steadyReport(long), /CPU model: not recorded \(online CPUs 0-7\)/);
   assert.ok(!readFileSync(join(folder("long"), "summary.json"), "utf8").includes("XXXX"));
 });
 
@@ -659,10 +662,25 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   const seen = await soak("seen", { duringLoad: (state) => state.emit(state.app().id, "kill") });
   assert.deepEqual([seen.r.eventStream, seen.r.events.map((e) => e.action), seen.r.restarted, seen.r.runningAtEnd, seen.r.replaced, seen.r.restartCount], ["seen", ["kill"], false, true, false, 0]);
   assert.match(steadyReport(seen.s), /\| signal \(kill\) at \d+ s \| no \|$/m);
-  // A die and then a start of the app is a restart.
-  const bounced = await soak("bounced", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.emit(state.app().id, "start"); } });
+  // A die and then a start of the app stamped a millisecond later is a restart.
+  const bounced = await soak("bounced", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.offset += 1; state.emit(state.app().id, "start"); } });
   assert.deepEqual([bounced.r.events.map((e) => e.action), bounced.r.restarted], [["die", "start"], true]);
   assert.match(steadyReport(bounced.s), /\| exit \(die\) at \d+ s \| yes: start at \d+ s after an exit \|$/m);
+  // Events are paired by their daemon times, not the order the stream delivered them: a start
+  // delivered after a die but stamped at the same time, or earlier, is not a restart. The stream
+  // covered the load and showed both, so the soak reads them as observations and Restarted: no.
+  const sameTime = await soak("same-time", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.emit(state.app().id, "start"); } });
+  const earlier = await soak("earlier", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.offset -= 5; state.emit(state.app().id, "start"); state.offset += 5; } });
+  for (const [name, { r, s }] of [["same-time", sameTime], ["earlier", earlier]]) {
+    assert.deepEqual([r.eventStream, r.events.map((e) => e.action), r.restarted, r.restartCount, r.replaced], ["seen", ["die", "start"], false, 0, false], name);
+    assert.match(steadyReport(s), /\| exit \(die\) at \d+ s, start at \d+ s \| no \|$/m, name);
+  }
+  // An app row naming a restart-relevant event with detail after it is not that event: `restart: x`
+  // is not a restart, so the whole stream is unreadable and the soak's restart is not established.
+  const detailed = await soak("detailed", { duringLoad: (state) => state.emit(state.app().id, "restart: leaked canary") });
+  assert.deepEqual([detailed.r.eventStream, detailed.r.events, detailed.r.restarted], ["unavailable", [], null]);
+  assert.match(errorsOf(folder("detailed")), /1 docker events row is not this soak's app or marker, an action and a time/);
+  assert.ok(!readFileSync(join(folder("detailed"), "summary.json"), "utf8").includes("canary"));
   // A kill stamped a second before the load finished, delivered in a later chunk than the marker's
   // second start: the runner reads on to the fence, the marker's exit after that start, so it is
   // still seen (stopping at that start, as the runner once did, read the stream as clean).
@@ -995,7 +1013,7 @@ test("the cold probe's readiness and result come from its stdout alone, bounded 
   const cases = [["extra", result({ note: 1 })], ["path", result({ path: "/other" })], ["attempts", result({ attempts: 0 })], ["long", "x".repeat(coldOutputBytes)]];
   for (const [name, line] of cases) {
     const bad = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "logs" && args[1] === state.ids["marketplace-test-run-corten-probe"]
-      ? `catalog-probe-ready${state.calls.some((c) => c.args[0] === "wait") ? `\n${line}` : ""}` : undefined });
+      ? `catalog-probe-ready\n${state.calls.some((c) => c.args[0] === "wait") ? `${line}\n` : ""}` : undefined });
     const b = await run(bad, options, folder(name));
     assert.deepEqual([b.cells[0].failure, b.cells[0].verdict], ["cold-start", null], name);
     assert.ok(existsSync(join(folder(name), "fixture", "corten", "page", "cold.log")), name);
@@ -1062,8 +1080,8 @@ test("a cold start with an empty first 200 fails as the timed validator fails it
   const options = parseSteadyArgs(["convergence", "t22", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   const empty = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
     if (args[0] !== "logs" || args[1] !== state.ids["marketplace-test-run-corten-probe"]) return undefined;
-    if (!state.calls.some((c) => c.args[0] === "wait")) return "catalog-probe-ready";
-    return `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(state.app().state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 0, attempts: 2, path: "/marketplace/en-US/item_1" })}`;
+    if (!state.calls.some((c) => c.args[0] === "wait")) return "catalog-probe-ready\n";
+    return `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(state.app().state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 0, attempts: 2, path: "/marketplace/en-US/item_1" })}\n`;
   } });
   const s = await run(empty, options, folder("empty"));
   assert.deepEqual([s.cells[0].failure, s.cells[0].verdict], ["cold-start", null]);
@@ -1202,4 +1220,98 @@ test("a client's row and line limits are counted on the bytes it wrote, blank ro
   await settledTurns();
   await assert.rejects(counted.marker(1), /^Error: docker events wrote more than 2 rows$/);
   await assert.rejects(counted.stop(), /so the stream is unavailable/);
+});
+
+test("a load runs only against the app instance that served the cold probe: another StartedAt or RestartCount before the load refuses the cell, and no load starts", async (t) => {
+  const folder = folderOf(t);
+  // The app's inspect answers change only once the cold probe is removed: the cold start's own
+  // inspect sees the instance that served the probe, the one before the load another.
+  const coldDone = (state) => state.calls.some((x) => x.args[0] === "rm" && x.args.at(-1) === state.ids["marketplace-test-run-corten-probe"]);
+  const changes = [
+    ["started-at", (info) => ({ ...info, State: { ...info.State, StartedAt: new Date(Date.parse(info.State.StartedAt) + 1000).toISOString() } }), "another StartedAt"],
+    ["restart-count", (info) => ({ ...info, RestartCount: 1 }), "another RestartCount"],
+  ];
+  const kinds = [
+    ["convergence", ["convergence", "t30", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], () => k6Export(flat(8)), {}],
+    ["soak", ["soak", "t31", "--apps", "corten", "--sources", "fixture", "--targets", "page"], () => soakExport(), { clockMs: 1_800_000, loadMs: 50 }],
+  ];
+  for (const [kind, args, exportFor, extra] of kinds) for (const [name, change, what] of changes) {
+    const options = parseSteadyArgs(args, apps, groupApps), at = `${kind}-${name}`;
+    const fake = fakeDocker({ exportFor, ...extra, inspected: (info, c, state) => (c.kind === "app" && coldDone(state) ? change(info) : info) });
+    let tick = 0;
+    const stats = statsClient({ delayMs: 10, rows: (a) => Array.from({ length: 180 }, () => ({ ID: a.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
+    const s = await run(fake, options, folder(at), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
+    assert.equal(s.cells[0].failure, "instance-changed", `${at}: ${JSON.stringify(s.cells[0])}`);
+    assert.ok(errorsOf(folder(at)).includes(`the app before the load is not the instance that served the cold probe: ${what}`), at);
+    // No load started: no k6 or marker container, no load run, no memory sampler.
+    assert.ok(!fake.calls.some((c) => c.args[0] === "create" && (c.args[2] === "marketplace-test-run-k6" || c.args[2].endsWith("-marker"))), at);
+    assert.ok(!fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] !== fake.ids["marketplace-test-run-host"] && c.args[2] !== fake.ids["marketplace-test-run-k6-version"]), at);
+    assert.equal(stats.spawned.length, 0, at);
+    // The failure is the cell's: the pass is complete and reads, with no reading for that cell.
+    assert.equal(s.complete, true, at);
+    (kind === "convergence" ? validateConvergence : validateSoak)(s);
+  }
+});
+
+test("the cold probe's output is read as its result only after it exits, with both lines ended by their newline", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t32", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const result = (state) => JSON.stringify({ first200At: new Date(Date.parse(state.app().state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/marketplace/en-US/item_1" });
+  // Ready (its line ended) while the readiness poll reads it; `exited(state)` once it has exited.
+  const probe = (exited) => (args, state) => (args[0] === "logs" && args[1] === state.ids["marketplace-test-run-corten-probe"]
+    ? (state.calls.some((c) => c.args[0] === "wait") ? exited(state) : "catalog-probe-ready\n") : undefined);
+  const good = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: probe((state) => `catalog-probe-ready\n${result(state)}\n`) }), options, folder("good"));
+  assert.equal(good.complete, true, JSON.stringify([good.failures, good.cells]));
+  assert.equal(good.cells[0].verdict.withinTolerance, true);
+  for (const [name, exited, message] of [
+    // A result with no newline after it, read after the probe exited: not the probe's whole output.
+    ["unterminated", (state) => `catalog-probe-ready\n${result(state)}`, /the cold probe exited without a newline after its result line; its output is in cold\.log/],
+    // An empty final read is no result at all, whatever the readiness poll saw.
+    ["empty", () => "", /the cold probe exited 0 without a result line; its output is in cold\.log/],
+    ["ready-only", () => "catalog-probe-ready\n", /the cold probe exited 0 without a result line/],
+    ["ready-unterminated", () => "catalog-probe-ready", /the cold probe exited 0 without a result line/],
+  ]) {
+    const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: probe(exited) });
+    const s = await run(fake, options, folder(name));
+    assert.deepEqual([s.cells[0].failure, s.cells[0].verdict], ["cold-start", null], name);
+    assert.match(errorsOf(folder(name)), message, name);
+    assert.ok(!existsSync(join(folder(name), "fixture", "corten", "page", "cold.json")), name);
+    assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-k6"), `${name}: no load after a refused cold start`);
+  }
+  // The final parser on its own; the readiness poll's parser still accepts a line not yet ended.
+  const line = JSON.stringify({ first200At: "2026-11-25T00:00:00.000Z", successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/p" });
+  assert.equal(coldResult(`catalog-probe-ready\n${line}\n`, "/p").bytes, 10);
+  assert.equal(coldOutput(`catalog-probe-ready\n${line}`, "/p").bytes, 10);
+  for (const [text, message] of [["", /without a result line/], ["catalog-probe-ready", /without a result line/], ["catalog-probe-ready\n", /without a result line/],
+    [`catalog-probe-ready\n${line}`, /without a newline after its result line/], [`catalog-probe-ready\n${line}\n\n`, /not one readiness line and one result line/]])
+    assert.throws(() => coldResult(text, "/p"), message, JSON.stringify(text));
+});
+
+test("a host's CPU model is saved only as its digest, even in a form a pass once saved as text, and neither report prints it", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t33", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // Letters, digits and single spaces: the form convergence v4 saved and printed as text.
+  const model = "Synthetic CanaryModel 7543";
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
+    (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"] ? `6.8.0-test\nmodel name\t: ${model}\n0-7` : undefined) });
+  const s = await run(fake, options, folder("canary"), { env: pinnedEnv });
+  assert.equal(s.complete, true, JSON.stringify(s.failures));
+  validateConvergence(s);
+  assert.equal(s.host.cpuModelSha256, sha256(model));
+  assert.ok(!readFileSync(join(folder("canary"), "summary.json"), "utf8").includes("CanaryModel"), "summary.json keeps no model text");
+  assert.ok(readFileSync(join(folder("canary"), "host.txt"), "utf8").includes(model), "the raw host receipt keeps it");
+  // steady-report.mjs prints that it is recorded, never the text.
+  const text = steadyReport(s);
+  assert.ok(!text.includes("CanaryModel"), text);
+  assert.match(text, /^Commit: .* CPU model: recorded as its SHA-256 only, not printed \(its text is in the raw host\.txt\) \(online CPUs 0-7\)\./m);
+  // report.mjs --convergence's lines: a round on the same model matches by digest, one on another
+  // differs, and neither model's text is printed.
+  const round = { schema: resultSchema, commit, options: { warmup: 10, startupTimeout: 120 }, host: { cpu: model, release: s.host.kernel, onlineCpus: s.host.onlineCpus }, measurement: s.measurement,
+    fixtureSha256: s.fixtureSha256, tools: s.tools, apps: { corten: { imageId: s.images.corten, runs: { "fixture-json": [{ warmup: { failed: 0 } }] } } } };
+  const same = convergenceLines(round, ["corten"], s);
+  assert.match(same[0], /Host CPU model: compared by its SHA-256, not printed\./);
+  assert.match(same[2], /^The pass is like-for-like with this round for its 1 cell with a reading only/);
+  const other = convergenceLines({ ...round, host: { ...round.host, cpu: "Synthetic OtherModel 1" } }, ["corten"], s);
+  assert.match(other[2], /the host CPU differs/);
+  for (const lines of [same, other]) assert.ok(!lines.join("\n").includes("CanaryModel") && !lines.join("\n").includes("OtherModel"), lines.join("\n"));
 });

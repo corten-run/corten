@@ -39,8 +39,8 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { appBefore, appInstance, checkFixture, convergenceSchema, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
-  savedOptions, savedValue, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, convergenceSchema, cpuModelDigest, eventFormat, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
+  savedOptions, savedValue, servedCold, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -312,11 +312,12 @@ async function waitHealth(url, { timeout = 20_000, now = Date.now, sleep = (ms) 
  * The cold probe's stdout (bench/catalog/cold.mjs) exactly as it wrote it: nothing until it is
  * ready, then `catalog-probe-ready`, then once it has its first 200 one result line, exactly as
  * JSON.stringify writes first200At, successfulRequestMs, bytes, attempts and the path it polled.
- * Each line ends in one newline, the last perhaps not yet; any other byte (a blank line, padding,
- * a second result) fails it. The runner reads it from a file holding the probe's stdout alone, and
- * never more than coldOutputBytes of it (readBounded); stderr reaches cold.log alone. Returns null
- * until the probe is ready, true once it is ready without a result, or the result, whose values
- * validateColdStart (report.mjs) then checks as a timed round's.
+ * Each line ends in one newline, the last perhaps not yet while the probe runs; any other byte (a
+ * blank line, padding, a second result) fails it. The runner reads it from a file holding the
+ * probe's stdout alone, and never more than coldOutputBytes of it (readBounded); stderr reaches
+ * cold.log alone. This is the readiness poll's parser: it returns null until the probe is ready,
+ * true once it is ready without a result, or the result. Once the probe has exited, the runner reads
+ * its output with coldResult instead.
  */
 export const coldOutputBytes = 4096;
 export function coldOutput(stdout, path) {
@@ -334,6 +335,18 @@ export function coldOutput(stdout, path) {
     && Number.isFinite(result.successfulRequestMs) && result.successfulRequestMs >= 0
     && Number.isSafeInteger(result.bytes) && result.bytes >= 0 && Number.isSafeInteger(result.attempts) && result.attempts >= 1 && result.path === path;
   assert.ok(ok, "the cold probe's result line is not first200At, successfulRequestMs, bytes, attempts and its path; its output is in cold.log");
+  return result;
+}
+/**
+ * The cold probe's output once it has exited: both lines, each ended by its newline, and the
+ * result, whose values validateColdStart (report.mjs) then checks as a timed round's. An exited
+ * probe whose last line has no newline, that wrote nothing, or that wrote only its readiness line
+ * fails here; coldOutput's allowance for a line still being written is for the readiness poll alone.
+ */
+export function coldResult(stdout, path) {
+  const result = coldOutput(stdout, path);
+  assert.ok(result !== null && result !== true, "the cold probe exited 0 without a result line; its output is in cold.log");
+  assert.ok(stdout.endsWith("\n"), "the cold probe exited without a newline after its result line; its output is in cold.log");
   return result;
 }
 /** A file's text, read only up to `limit` bytes: a longer file fails with `message`, with no more than limit + 1 bytes read. */
@@ -374,7 +387,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // added to it. The host's name is not kept.
   const summary = { schema: convergence ? convergenceSchema : soakSchema, name: options.name, runId, options: savedOptions(options), ...(convergence ? { rule: flattenRule } : {}),
     startedAt: new Date().toISOString(), finishedAt: null, complete: false, failures: [], cleanup: null, cells: [], admission: null, startup: timedStartup,
-    host: { platform: savedValue("platform", platform()), release: savedValue("kernel", release()), node: savedValue("node", process.version), docker: null, kernel: null, cpu: null, onlineCpus: null },
+    host: { platform: savedValue("platform", platform()), release: savedValue("kernel", release()), node: savedValue("node", process.version), docker: null, kernel: null, cpuModelSha256: null, onlineCpus: null },
     scope: passScope[options.kind],
     measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", clock: windowClock, ...(convergence ? {} : { memoryClock: soakMemoryClock }) },
     commit: null, finishedCommit: null, dirty: null, fixtureSha256: null, images: {}, tools: null };
@@ -433,7 +446,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // receipt does not keep and a pass compares.
   const snapshot = (info) => ({ ...containerReceipt(info), restartCount: info.RestartCount ?? null });
   // run.mjs coldStart: the app is created, a sidecar waits for it, then the app starts and the
-  // sidecar polls the target's own path until its first 200.
+  // sidecar polls the target's own path until its first 200. Returns the instance that served the
+  // probe, as Docker reported it then: its container ID, StartedAt and RestartCount (servedCold).
   async function coldStart(app, name, target, raw, left) {
     const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locales[0]}/item_1`;
     const stdoutFile = join(raw, "cold-stdout.log");
@@ -444,15 +458,16 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       probe = await owned.container(["--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], `${name}-probe`);
       await owned.start(probe);
       retain(join(raw, "probe-container.json"), containerReceipt(await owned.inspect(probe)));
-      // Readiness and the result come from the probe's stdout alone (coldOutput): written afresh to
-      // cold-stdout.log each time, with no stderr, and read back only up to coldOutputBytes.
+      // Readiness and the result come from the probe's stdout alone: written afresh to
+      // cold-stdout.log each time, with no stderr, and read back only up to coldOutputBytes. The
+      // readiness poll parses it with coldOutput; the exited probe's output with coldResult.
       const stdout = async () => {
         rmSync(stdoutFile, { force: true });
         await owned.logs(probe, { combined: false, file: stdoutFile, fileStderr: false, capture: false });
-        return coldOutput(readBounded(stdoutFile, coldOutputBytes, `the cold probe wrote more than ${coldOutputBytes} bytes to stdout; its output is in cold.log`), path);
+        return readBounded(stdoutFile, coldOutputBytes, `the cold probe wrote more than ${coldOutputBytes} bytes to stdout; its output is in cold.log`);
       };
       const deadline = clock.now() + 10_000;
-      while ((await stdout()) === null) {
+      while (coldOutput(await stdout(), path) === null) {
         if (interrupted()) throw new Error("interrupted");
         if (clock.now() > deadline) throw new Error("cold sidecar did not become ready");
         await clock.sleep(50);
@@ -462,9 +477,10 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       await collect();
       // The record says only whether it exited 0.
       assert.ok(exit === "0", `cold probe ${/^\d{1,3}$/.test(exit) ? `exited ${exit}` : "returned no exit status"}; its output is in cold.log`);
-      const result = await stdout();
-      assert.ok(typeof result === "object", "the cold probe exited 0 without a result line; its output is in cold.log");
+      const result = coldResult(await stdout(), path);
       const info = await owned.inspect(app);
+      // The instance that served the probe, as Docker reported it once the probe had its first 200.
+      const served = { id: info.Id, startedAt: info.State?.StartedAt, restartCount: info.RestartCount };
       const cold = { ...result, first200MsFromContainerStart: Date.parse(result.first200At) - Date.parse(info.State.StartedAt), containerStartedAt: info.State.StartedAt };
       // The timed validator's own cold-start rules; its detail goes to errors.log only.
       try { validateColdStart(cold, path, options.startupTimeout); } catch (error) {
@@ -472,6 +488,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         throw new Error("the cold probe's result is not a cold start a timed round accepts (validateColdStart); its output is in cold.log");
       }
       retain(join(raw, "cold.json"), cold);
+      return served;
     } catch (error) {
       // A failure before the probe's log was collected still collects it, through the same bounded
       // command, so cold.log exists; the original failure stands whatever that collection does.
@@ -486,12 +503,14 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     let sampler, app, k6, marker, stream, streamError;
     try {
       app = await step("container", () => owned.container(appArgs(name, cell.source, imageId), name));
-      await step("cold-start", () => coldStart(app, name, cell.target, raw, left));
+      const served = await step("cold-start", () => coldStart(app, name, cell.target, raw, left));
       if (left.length) throw coded("unsettled", new Error("the cold sidecar was not removed"));
       const before = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container.json"), snapshot(before));
       // Its ID, StartedAt, RestartCount and states in their forms, and running, before anything is compared.
-      await step("container", () => appInstance(before, "before"));
+      const instance = await step("container", () => appInstance(before, "before"));
+      // The instance the load will measure is the one that served the cold probe; otherwise no load starts.
+      await step("instance-changed", () => servedCold(served, instance));
       await step("cold-start", () => appBefore(before));
       if (!convergence) {
         // The live event stream, listening before the load: the marker's first start shows it is.
@@ -628,7 +647,8 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const hostLines = hostText.trim().split("\n").map((line) => line.trim());
       // The kernel the containers run on: run.mjs records the droplet's os.release(), the same kernel.
       summary.host.kernel = savedValue("kernel", hostLines[0]);
-      summary.host.cpu = savedValue("cpu", hostLines.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":"));
+      // The CPU model only as its digest (cpuModelDigest): its text stays in host.txt.
+      summary.host.cpuModelSha256 = cpuModelDigest(hostLines.find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":"));
       summary.host.onlineCpus = savedValue("onlineCpus", hostLines.at(-1));
     });
     if (options.admittedFrom) await step("admission", () => {

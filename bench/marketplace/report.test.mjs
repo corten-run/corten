@@ -9,8 +9,8 @@ import { createHash } from "node:crypto";
 import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
-import { checkoutLabel, checkoutLimits, report, validateSummary } from "./report.mjs";
-import { convergenceLines, flattenPoint, parseSteadyArgs } from "./steady-contract.mjs";
+import { checkoutLabel, checkoutLimits, convergenceHostCpu, report, validateSummary } from "./report.mjs";
+import { convergenceLines, cpuModelDigest, flattenPoint, parseSteadyArgs } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
@@ -627,13 +627,13 @@ test("the report states the convergence pass given to it, or that none was provi
     const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
     const requests = w.reduce((sum, x) => sum + x.requests, 0);
     return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
-  }))), { commit: s.commit, host: { cpu: s.host.cpu, kernel: s.host.release, onlineCpus: s.host.onlineCpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
+  }))), { commit: s.commit, host: { cpuModelSha256: cpuModelDigest(s.host.cpu), kernel: s.host.release, onlineCpus: s.host.onlineCpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
     measurement: { cpus: s.measurement.cpus, appMemoryBytes: s.measurement.appMemoryBytes, upstreamMemoryBytes: s.measurement.upstreamMemoryBytes, encoding: s.measurement.encoding },
     fixtureSha256: s.fixtureSha256, tools: { upstream: { imageId: s.tools.upstream.imageId }, k6: { imageId: s.tools.k6.imageId, version: "2.4.0" } } });
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v4, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v5, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
   // Like-for-like for its fixture cells only: an API-source cell is not compared.
   assert.match(text, /^The pass is like-for-like with this round for its 4 cells with a reading only, on every input compared for them: /m);
   assert.match(text, /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./m);
@@ -645,9 +645,11 @@ test("the report states the convergence pass given to it, or that none was provi
   const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Coverage|Tolerance reading|Reading|The pass is)/.test(line)).join("\n");
   assert.ok(evidence(text).length > 0);
   assert.doesNotMatch(evidence(text), /reaches|is shorter than|establish|sufficient|long enough to/);
-  // Only the convergence lines differ: the timed tables are the same with or without evidence.
+  // Only the convergence lines and the CPU model (not printed with a pass) differ: the timed tables
+  // are the same with or without evidence.
   const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Coverage|Tolerance reading|Reading|The pass is|This report does not establish whether this round|No cell)[^\n]*/g, "");
-  assert.equal(strip(text), strip(none));
+  assert.ok(!text.includes(s.host.cpu), "no CPU model text with a pass");
+  assert.equal(strip(text).replace(`CPU: ${convergenceHostCpu} (`, `CPU: ${s.host.cpu} (`), strip(none));
   const tampered = structuredClone(pass); tampered.cells[2].verdict.window = 0;
   assert.throws(() => report(s, { convergence: given(tampered) }), /saved verdict differs/);
   // A pass of the same commit is still not like-for-like when its images differ: the difference is listed.
@@ -667,8 +669,9 @@ test("the report states the convergence pass given to it, or that none was provi
     writeFileSync(round, JSON.stringify(s)); writeFileSync(file, JSON.stringify(rebuilt));
     const cli = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round, "--convergence", file], { encoding: "utf8" });
     assert.equal(cli.status, 0, cli.stderr);
-    // The round's CPU model is of the saved form, so the optional path prints it as the default does.
+    // The optional path prints no CPU model text, the round's included; the default prints it.
     assert.equal(cli.stdout, `${other}\n`);
+    assert.ok(!cli.stdout.includes(s.host.cpu) && cli.stdout.includes(`CPU: ${convergenceHostCpu} (online CPUs`), cli.stdout);
     const plain = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round], { encoding: "utf8" });
     assert.equal(plain.stdout, `${none}\n`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -734,6 +737,7 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
   refusedWithout((p) => { p.startup = canary; });
   refusedWithout((p) => { p.cells[0] = { app: "corten", source: "fixture", target: "page", failure: canary, verdict: null }; });
   refusedWithout((p) => { p.host.cpu = `CPU <${canary}>`; });
+  refusedWithout((p) => { p.host.cpuModelSha256 = `CPU <${canary}>`; });
   refusedWithout((p) => { p.host.docker = canary; });
   refusedWithout((p) => { p.options.labels = [canary]; });
   refusedWithout((p) => { p.cells[1].verdict.reason = canary; });
@@ -743,7 +747,7 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
   assert.match(report(s, { convergence: given(failedCell) }), /^Reading: corten fixture page: no reading, the cell failed \(the app did not start as the timed cold start requires\)\.$/m);
   // Values that differ between the round and the pass are named by input, never quoted from either side.
   const round = structuredClone(s); round.host.cpu = "Round CPU canaryround"; round.host.onlineCpus = "0-3";
-  const differing = structuredClone(pass); differing.host = { ...differing.host, cpu: "Pass CPU canarypass", kernel: "6.8.0-canarypass", onlineCpus: "0-5" };
+  const differing = structuredClone(pass); differing.host = { ...differing.host, cpuModelSha256: cpuModelDigest("Pass CPU canarypass"), kernel: "6.8.0-canarypass", onlineCpus: "0-5" };
   const lines = convergenceLines(round, ["corten", "aspnet"], differing);
   assert.match(lines[2], /the host CPU differs; the kernel release differs; the online CPU set differs/);
   assert.ok(!lines.slice(1).join("\n").includes("canary") && !lines.slice(1).join("\n").includes("0-3"), lines.join("\n"));
@@ -775,9 +779,17 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
     const optional = run(JSON.stringify(roundCpu));
     assert.equal(optional.status, 0, optional.stderr);
     assert.ok(!optional.stdout.includes("canary") && !optional.stderr.includes("canary"), optional.stdout);
-    assert.match(optional.stdout, /^Commit: .* CPU: not printed \(not in the form a CPU model is saved in\) \(online CPUs 0-7\)\.$/m);
+    assert.match(optional.stdout, /^Commit: .* CPU: not printed with --convergence \(report\.mjs without it prints the model\) \(online CPUs 0-7\)\.$/m);
     // The whole output is the round's report with that CPU text, and the pass's lines.
-    assert.equal(optional.stdout, `${report(roundCpu, { convergence: given(pass), hostCpu: () => "not printed (not in the form a CPU model is saved in)" })}\n`);
+    assert.equal(optional.stdout, `${report(roundCpu, { convergence: given(pass) })}\n`);
+    // A CPU model of a form a pass once saved as text (letters, digits and single spaces) is not
+    // printed with --convergence either: the pass compares it by digest and prints neither model.
+    const validCpu = structuredClone(s); validCpu.host.cpu = "Synthetic CanaryModel 7543";
+    validateSummary(validCpu);
+    const validPlain = run(JSON.stringify(validCpu), passFile, false), validOptional = run(JSON.stringify(validCpu));
+    assert.equal(validOptional.status, 0, validOptional.stderr);
+    assert.ok(validPlain.stdout.includes("CanaryModel"), "the default path prints the round's model as saved");
+    assert.ok(!validOptional.stdout.includes("CanaryModel") && !validOptional.stderr.includes("CanaryModel"), validOptional.stdout);
     assert.match(optional.stdout, /^The pass is not like-for-like with this round for its 4 cells with a reading\. Differing or missing inputs: .*the host CPU differs\.$/m);
     // The same round with a pass that is refused, a round that is not JSON, and a round that fails
     // validation on a canary value: each a fixed message, with no canary in either stream.
