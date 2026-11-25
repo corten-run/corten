@@ -220,6 +220,9 @@ side's aligned sections, its list and the second pads' lines.
     question for the rule, which the kit does not answer.
 13. `report.mjs` takes each recorded turn's counters and `wrk` result from the counts `turns.sh`
     wrote after checking them; it does not read the raw turn logs again.
+14. It neither declares nor takes the counts of the catalog's `page` and `json` that item 2 asks
+    of a plan that reads a probe across placements. The plan file has no field for them, so they
+    go in the posted plan, before the plan's first turn and before either count is taken.
 
 ## What is this host's alone
 
