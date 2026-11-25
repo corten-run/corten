@@ -117,7 +117,7 @@ are not in it.
 A run in which the probe closed any of the connections fails, says so and prints no figure.
 Corten waits 30 seconds for a connection's next request unless the app says otherwise, so a run
 reads only as many connections as open in that time. 5,000 open in 0.4 to 1.6 seconds, and
-100,000 over 16 addresses opened in 9 to 14: they read 2,641 bytes a connection before any byte
+100,000 over 16 addresses opened in 6 to 14: they read 2,641 bytes a connection before any byte
 and 8,421 after one request, on the binary `c9666dc96` and `26ab0e37f` both build. A run of
 100,000 started in the minute after another one, in the same network namespace, took 58 to 71
 seconds to open and was refused (three runs). The earlier run's connections were then still in
