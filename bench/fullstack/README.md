@@ -2231,7 +2231,11 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     `node:24-bookworm-slim` and the rest at their newest release; later rounds record their own,
     since 2026-11-24 `rust:1.100.0-trixie` and `node:26.13.1-trixie-slim` by digest, which are
     different inputs, not a measured speedup) and, for dependencies, on the network and the
-    package registries at the time. The rebuild keeps each tool's cache, which favors the tools
+    package registries at the time. Spring's Maven waits longer before it gives up on a 429 or
+    503 from Maven Central (`apps/spring/.mvn/maven.config`, added for
+    [#1763 Catalog CI: Spring image build could not resolve the pinned Maven parent POM](https://github.com/corten-run/corten/issues/1763)),
+    which changes its dependency time only when the registry throttles it, not what it downloads.
+    The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not
     carry over, as on a fresh CI runner. Peak memory is anonymous memory only: the files rustc

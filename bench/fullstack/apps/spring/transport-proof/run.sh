@@ -23,12 +23,14 @@ trap 'exit 1' HUP INT TERM
 # Extend a disposable copy, not the timed project or its existing test classpath.
 mkdir "$work/mvc" "$work/webflux"
 cp "$app/pom.xml" "$work/mvc/"
+cp -R "$app/.mvn" "$work/mvc/"
 cp -R "$app/src" "$work/mvc/"
 java_tests="$work/mvc/src/test/java/bench/itempage"
 mkdir -p "$java_tests/transport"
 cp "$proof/mvc/MarketplaceDisconnectHttpTest.java" "$java_tests/"
 cp "$proof/src/test/java/bench/itempage/transport/DisconnectSockets.java" "$java_tests/transport/"
 cp "$proof/pom.xml" "$work/webflux/"
+cp -R "$app/.mvn" "$work/webflux/"
 cp -R "$proof/src" "$work/webflux/"
 
 run_probe() {
