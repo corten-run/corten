@@ -4,6 +4,34 @@ import { join, relative, isAbsolute } from "node:path";
 import { verifyNativeReceipt } from "../json-api/contract.mjs";
 import { sha256 } from "./capture.mjs";
 
+export const djangoAsgi = Object.freeze({
+  deployment: "django-granian-asgi",
+  buildProfile: "matched-asgi",
+  command: Object.freeze(["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"]),
+  settings: "itempage.mixed_asgi_settings",
+});
+
+export function validateDeploymentOption(options) {
+  if (!Object.hasOwn(options, "djangoDeployment")) return;
+  assert.ok(options.djangoDeployment === djangoAsgi.deployment && options.profile === "matched"
+    && options.build === true && !options.images && (!options.apps || options.apps.includes("django")),
+  "Django ASGI requires a fresh matched build including Django");
+}
+
+export function nativeDeployment(options, app) {
+  return app === "django" && options.djangoDeployment === djangoAsgi.deployment ? djangoAsgi : null;
+}
+
+export function deploymentIdentity(options, app) {
+  const deployment = nativeDeployment(options, app);
+  return deployment ? { nativeDeployment: deployment.deployment, buildProfile: deployment.buildProfile } : {};
+}
+
+export function verifyImageDeployment(image, expected) {
+  assert.ok(image?.nativeDeployment === expected?.deployment && image?.buildProfile === expected?.buildProfile,
+    "native image deployment differs from the selected build");
+}
+
 export function buildInputPaths(app) {
   // Corten's Dockerfile copies the whole repository, unlike the other contexts.
   return app === "corten" ? ["."] : [`bench/fullstack/apps/${app}`];
@@ -24,6 +52,7 @@ export function sourceSnapshot(root, paths) {
 export function sourceAuditIdentity(summary, app) {
   return { app, payload: "marketplace-v2", key: "mixed-native-source", commit: summary.provenance.nativeSource.commit,
     contractSha256: summary.contractSha256, nativeProfile: summary.options.profile,
+    ...deploymentIdentity(summary.options, app),
     contextArchiveSha256: summary.apps[app].contextArchiveSha256,
     buildInputsSha256: sha256(JSON.stringify(summary.apps[app].buildInputs)) };
 }
@@ -34,6 +63,7 @@ export function verifySourceAudit(receipt, expected, snapshot, image) {
   assert.equal(image?.buildCommit, expected.commit, "native audit/image source commit differs");
   assert.equal(image.buildDirty, "false", "native audit needs a clean fresh image");
   assert.equal(image.profile, expected.nativeProfile, "native audit/image configuration differs");
+  verifyImageDeployment(image, { deployment: expected.nativeDeployment, buildProfile: expected.buildProfile });
   assert.match(expected.contextArchiveSha256 ?? "", /^[a-f0-9]{64}$/, "immutable Docker build context required");
   assert.equal(image.contextArchiveSha256, expected.contextArchiveSha256, "native image/audited Docker archive differs");
   assert.match(image.id ?? "", /^sha256:[0-9a-f]{64}$/, "immutable native image required");

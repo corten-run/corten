@@ -121,24 +121,21 @@ inside the isolated ASGI image. The image runs its own default command;
 that running app on port 8080. These diagnostics do not qualify the Mixed
 workload or replace the browser and native production gates.
 
-Official selection is not wired. A later Mixed-only integration must:
+The standalone Mixed runner accepts `--build --profile matched
+--django-deployment django-granian-asgi`. Only Django's immutable-context
+build uses `PROFILE=matched-asgi`; both sources and all stages use the same
+inspected image and retain `PROFILE=matched` at runtime. A source audit must
+name this deployment and build profile, not the WSGI deployment. The saved
+execution replay checks the image identity, startup command and settings.
 
-1. Add one fixed, explicitly selected Django deployment for both sources and
-   every stage/pass. In `bench/mixed-production/run.mjs`, pass
-   `PROFILE=matched-asgi` only to the selected Django **build**, from the existing
-   immutable Git archive; keep the runtime feature profile `matched` in both
-   the runner and `measure.mjs`. Do not select it through an unbound image tag.
-2. Bind the deployment ID and build argument separately from the feature
-   profile in the image metadata, `sourceAuditIdentity`/`verifySourceAudit`,
-   and the retained capture and measurement receipts. Extend `verify.mjs` and
-   `execution-evidence.mjs` replay to require the matching image ID, context
-   hash, startup command/settings and deployment for both sources. Bind the
-   selector in the isolated campaign options and its exact-argv replay
+The official campaign does not select this deployment yet. To integrate it:
+
+1. Bind the selector in the isolated campaign options and its exact-argv replay
    (`bench/workloads/isolated/campaign-contract.mjs`, `contract.mjs` and
    `adapters/mixed-production.mjs`), preserving verification of old receipts.
    Obtain a fresh independent native audit against the candidate's exact
    committed input manifest and archive.
-3. Give `bench/workloads/deployments.mjs` a separate Mixed-only candidate, for
+2. Give `bench/workloads/deployments.mjs` a separate Mixed-only candidate, for
    example `django-granian-asgi`, with the Docker build argument, migration and
    launcher, worker/loop configuration, checked-in settings and dependency
    sources. Do not rename the existing WSGI representative or the Uvicorn live
