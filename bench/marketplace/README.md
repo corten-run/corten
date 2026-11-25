@@ -219,9 +219,9 @@ and in that summary, for diagnosis. A saved pass is refused, whatever its `compl
 unless its removed count equals its acknowledged creates (each is removed by its ID), it has no
 unacknowledged create and recovered nothing by its label, and its acknowledged creates are the
 ones its cells imply: four for the pass
-(host probe, k6 version probe, network, upstream) and, for each cell, three (app, cold-start
-sidecar, k6) or a soak's four (with the event marker), all of them for a measured cell and at most
-that many for a failed one (`passCreates` and `cellCreates`). Each cell's
+(host probe, k6 version probe, network, upstream) and, for each cell, four (app, cold-start
+sidecar, k6 and the event marker), all of them for a measured cell and at most that many for a
+failed one (`passCreates` and `cellCreates`). Each cell's
 containers are removed before the next cell starts; a cell that leaves one behind ends the pass.
 For the production group's seven candidates a convergence pass is 28 five-minute passes, about
 two and a half hours with container starts, plus image builds (estimated, not measured). A pass
@@ -273,8 +273,8 @@ What the reading does not detect, by construction (each case is pinned in `stead
 5% and 10% are stated choices, not derived from measured noise; revisit them once saved passes show
 the window-to-window spread on the measurement host. A cell with any failed request, in a window or
 in k6's aggregate count (which includes answers completed during the graceful stop), or whose app
-stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-killed, gets no
-reading: the cell is saved with only its failure code, and a complete pass with such cells stays
+stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-killed, or whose
+event stream did not cover its load (`unconfirmed`, below), gets no reading: the cell is saved with only its failure code, and a complete pass with such cells stays
 reportable, each of them reading "no reading" with its code's text. A saved cell that has a reading
 but records a failed request is refused. k6's engine clock is checked as a timed
 phase's is (`validateLoadExecution`). A saved pass is refused if it finished at another commit,
@@ -293,9 +293,11 @@ normalized, at most 256 characters, otherwise null); the text stays in `host.txt
 model is compared with it by the same digest, and neither `steady-report.mjs` nor
 `report.mjs --convergence` prints either text (`report.mjs` without `--convergence` still prints
 the round's model as it always has). A
-convergence pass is saved as `marketplace-convergence/v6` and a soak as `marketplace-soak/v8`
-(below); a v5 convergence pass did not check its containers' settings or recheck its app just
-before the load (both below), a v4 one saved the model's text, and neither is read. A value that does not
+convergence pass is saved as `marketplace-convergence/v7` and a soak as `marketplace-soak/v9`
+(below); a v6 convergence pass checked its containers' settings only at its inspects and read no
+event stream, so a change made during its load and undone before the inspect after it went
+unseen, a v5 one did not check its containers' settings or recheck its app just before the load
+(both below), a v4 one saved the model's text, and none of them is read. A value that does not
 match is saved as null (not recorded), or, where the pass depends on it (an image ID, the k6
 version), fails that step. Adapter names (the pass's adapters and those it selected for
 admission) must be ones this checkout's adapter inventory has, and a group one of its groups; the
@@ -320,13 +322,17 @@ once the probe had its first 200 must all be unchanged (`servedCold`), or the ce
 after the load container is created and checked, the last Docker answer before the load starts
 (`atLaunch`, kept as `app-container-launch.json`): another ID, StartedAt or RestartCount, or an app
 not running or OOM-killed, there fails the cell `instance-changed` and no load starts, so a restart
-before the load is never read as one during it. A soak also fails the cell `instance-changed` when its
-event stream shows a start, restart, die, kill or OOM of the app stamped before the load container's
-StartedAt (after that last inspect, before the load), and a saved soak event is never before the
-load. It fails it too when the app's own inspect after the load shows a StartedAt other than the
-one at that last inspect and stamped before the load container's StartedAt (`startedBeforeLoad`, in
-nanoseconds), which needs no event stream, so a restart there fails the cell even when the stream
-is unavailable. The settings the summary records are checked on Docker's inspect before any reading from a
+before the load is never read as one during it. A cell of either kind also fails `instance-changed`
+when its event stream (below) shows a start, restart, die, kill or OOM of the app stamped before the
+load container's StartedAt (after that last inspect, before the load), and a saved soak event is
+never before the load. It fails it too when the app's own inspect after the load shows a StartedAt
+other than the one at that last inspect and stamped before the load container's StartedAt
+(`startedBeforeLoad`, in nanoseconds), which needs no event stream. Inspects alone cannot show how
+many starts there were after the launch check, or when: a second start overwrites the first's
+StartedAt, so a restart before the load followed by another during it leaves only the later time.
+An app whose inspect after the load shows another container ID, StartedAt or RestartCount than at
+the launch check is placed by the event stream; with the stream unavailable the cell fails
+`unconfirmed` and has no reading, never a restart accepted as the load's. The settings the summary records are checked on Docker's inspect before any reading from a
 container is kept (`appliedSettings`): the upstream's CPU quota (Docker's NanoCpus from `--cpus`,
 with no CpuQuota of its own), CPU pinning (`CpusetCpus`) and memory limit before any cell; for each
 cell the app's image ID, quota, pinning, memory limit and source (with the group's profile and
@@ -336,25 +342,38 @@ connection limit), and the load's image ID, quota, pinning, memory limit and eve
 starts and again after it ran, so the VUs and rate `validateLoadExecution` reads are the ones
 requested. Since `docker update` changes a running container's CPU quota, pinning and memory
 without a restart, the app's settings are checked again at that last inspect before the load and
-after the load, and an API cell's upstream's before the cell and after its load
-(`upstream-container-before.json`, `upstream-container-after.json`). A container that differs fails
-the cell `settings` (the upstream before any cell, the pass) with a fixed
-message naming the role and setting, never Docker's value; `load-container.json` also keeps the
-window settings. Then, for a convergence cell: the same ID
+after the load, and an API cell's upstream's before the cell, at that last inspect and after its load
+(`upstream-container-before.json`, `upstream-container-launch.json`, `upstream-container-after.json`).
+A container that differs fails the cell `settings` (the upstream before any cell, the pass) with a
+fixed message naming the role and setting, never Docker's value; `load-container.json` also keeps
+the window settings, as the pass requested them (`windowEnv.requested`) and every value Docker's
+inspect reported for each (`windowEnv.observed`, none, one or more), so a refused cell's receipt
+shows what Docker had. An inspect shows the settings only at its own moment: a change made after one
+check and undone before the next passes both. So every cell, of either kind, reads a live Docker
+event stream of its app, its load, its marker and an API cell's upstream (below), listening from
+before the launch check to after the inspect after the load. An `update` of any of those containers
+there fails the cell `settings`, even when every inspect agreed, and a start, restart, die, kill or
+OOM of the upstream fails it `instance-changed`. A cell whose stream is unavailable fails
+`unconfirmed` and has no reading, since nothing then shows the settings held through its load; when
+the stream has not shown the marker's first start, no load starts. A cell's reading therefore rests
+on its inspects matching and on a stream that covered its load with no update. Then, for a
+convergence cell: the same ID
 and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
 evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
-row of a soak's live Docker event stream, with whether it showed the marker's two starts. A saved
+row of a cell's live Docker event stream, with whether it showed the marker's two starts. A saved
 summary records their outcome (a cell that failed one has no reading) but cannot be re-verified
 from summary.json alone; the raw files beside it (`app-container.json` and
 `app-container-after.json`, which keep RestartCount, `load-container.json`, `load-clock.json`,
-`load.json`, `events.log`, `events.json`) are what they read.
+`load.json`, `events.log`, and `events.json`, which keeps whether the stream was read, its updates by
+role, the upstream's events and the app's, and which of the app's container ID, StartedAt and
+RestartCount differed from the launch check at the end) are what they read.
 
 A soak reports memory at the start and the end (the median sample in the first and last memory
 interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate),
 whether the app restarted, and, separately, any exit, signal or OOM kill. Memory and p99 are reported figures: no criterion
 says whether they held. Only the fixed rate (below) is reported as held or not. Restart events
-come from a live `docker events` stream filtered to the app and a small marker container, started
-before the load. A retrospective `docker events --since/--until` query replays only what the
+come from the cell's live `docker events` stream, filtered to the app, the load, an API cell's
+upstream and a small marker container, started before the load. A retrospective `docker events --since/--until` query replays only what the
 daemon still buffers (its last 256 events), so an empty answer to one would not show that nothing
 happened; the pass does not use one. Instead it starts the marker once the stream runs, before the
 load, and again after the app's last inspect: the stream delivers events in the order the daemon
@@ -378,20 +397,24 @@ use the full nanoseconds of the load container's StartedAt and FinishedAt and of
 marker start earlier in the same millisecond as FinishedAt is not after it. An app event is the
 load's whenever it is stamped at or before FinishedAt, even if the stream delivered it after the
 second marker start (an OOM kill stamped 15 s into the load is seen, never clean); only
-an app event both after the second marker start and stamped after FinishedAt is teardown. The stream is saved
-as one of three states: unavailable (the stream failed, did not show both marker starts and the
-fence within its bound, showed another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row that was not the app's or the
-marker's ID, an action and a nanosecond time, or was an app row naming a start, restart, die, kill or OOM
-with anything after that word, or ended with a row that has no newline, or had a blank row, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
-(with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
+an app event both after the second marker start and stamped after FinishedAt is teardown. A stream is
+unavailable when it failed, did not show both marker starts and the fence within its bound, showed
+another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row
+that was not the app's, the load's, an API cell's upstream's or the marker's ID, an action and a
+nanosecond time, or was an app or upstream row naming a start, restart, die, kill or OOM, or any
+row naming an `update`, with anything after that word, or ended with a row that has no newline, or
+had a blank row; none of its rows is then used, and the cell fails `unconfirmed` with no reading.
+A read stream is saved as clean (covering the load, with no start, restart, die, kill or OOM event
+of the app) or seen (with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
 another container ID or StartedAt at the end, a `restart` event, or a `start` of the app stamped
 strictly after a `die` of it (events are paired by their daemon times, never by the order the
-stream delivered them). It is no when there is none and the stream was read and covered the load (clean or
-seen), and not established when there is none and the stream was unavailable. A `kill` is a signal,
+stream delivered them). It is no when there is none: a soak with a reading always had its stream read and
+covering the load (clean or seen), so no restart claim is ever left unestablished. A `kill` is a signal,
 which need not stop the app (SIGCONT, for one), a `die` with no start after it is an exit, and an
 `oom` event or an app not running or OOM-killed at the end is what it says: the report lists these
 in their own column, as observations, never as a restart. A soak is saved as
-`marketplace-soak/v8`; a v7 soak did not check its containers' settings, recheck its app just before
+`marketplace-soak/v9`; a v8 soak read no update of its containers or upstream event and, with its
+stream unavailable, saved its restart claim as not established, a v7 soak did not check its containers' settings, recheck its app just before
 the load or refuse an unterminated or blank event row, a v6 soak paired a start with a die by
 delivery order and saved the CPU model's text, and a v5 soak counted those observations as
 restarts; none of them is read. The container states and the memory
@@ -401,7 +424,8 @@ client wrote, blank rows and escape sequences included): past a limit that obser
 unavailable at once, no wait on the event stream succeeds any more (not even for a marker row read
 before the limit was passed), its client is stopped through its own bounded stop, and the pass goes
 on to its teardown as usual. Any stderr from either client, up to the moment its pipes close or are
-released after its stop, makes that observation unavailable; stderr past its limit is not kept. Latency intervals start at the k6 engine's start; memory
+released after its stop, makes that observation unavailable (for the event stream, the cell then fails `unconfirmed`);
+stderr past its limit is not kept. Latency intervals start at the k6 engine's start; memory
 samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
 in intervals of their own of the same length, which lead the latency intervals by the load
 container's startup; restart events use the Docker daemon's clock. The report states both clocks.

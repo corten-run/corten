@@ -31,6 +31,13 @@
 // (atLaunch), so a change before the load fails the cell `instance-changed` and is never read as
 // one during it; a soak's app whose StartedAt after the load is a later start stamped before the
 // load's own (startedBeforeLoad) fails it too, whether or not its event stream reads.
+// Interval: inspects show the settings only at their moments, so every cell, of either kind, reads a
+// live Docker event stream of its app, its load, its marker and an API cell's upstream from before the
+// launch check to after the last inspect (readEvents): an update of any of them there fails the cell
+// `settings` even if it was undone before the inspect after the load, and a start, restart, die,
+// kill or OOM of the upstream, or of a convergence cell's app, fails it `instance-changed`. A cell
+// whose stream is unavailable keeps no reading (`unconfirmed`): nothing then shows that the settings
+// held through the load or, for a soak, that a start of its app was not before the load.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -190,9 +197,9 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
 }
 
 /**
- * A soak's live Docker event stream for its app and a marker container, by their immutable IDs
- * (steady-contract.mjs readEvents says why a live stream and what the marker shows). It runs from
- * before the load to after it. marker(n) waits at most markerMs for the stream to show the marker's
+ * A cell's live Docker event stream for its app, a marker container and `others` (the load and an
+ * API cell's upstream), by their immutable IDs (steady-contract.mjs readEvents says why a live stream
+ * and what the marker shows). It runs from before the launch check to after the last inspect. marker(n) waits at most markerMs for the stream to show the marker's
  * nth start, and fails at once if the stream has ended; fence() waits the same way for the marker's
  * next row after its second start, and resolves only when that row is the start's own exit (its die)
  * stamped later than the start, so rows the client delivers after that start are read before the
@@ -206,9 +213,10 @@ export function memorySampler({ ids, file, seconds, spawn: run = spawn, graceMs 
  * what it read is no longer kept, and it stops itself through the same stop(). Once the stream has
  * failed in any way, no wait succeeds, not even one a row read before the failure satisfied.
  */
-export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2000, boundMs = 5000, markerMs = 10_000, limits = clientLimits.events }) {
-  assert.ok(containerId.test(app) && containerId.test(marker), "the event stream follows immutable container IDs");
-  const child = run("docker", ["events", "--filter", "type=container", "--filter", `container=${app}`, "--filter", `container=${marker}`, "--format", eventFormat],
+export function eventStream({ app, marker, others = [], file, spawn: run = spawn, graceMs = 2000, boundMs = 5000, markerMs = 10_000, limits = clientLimits.events }) {
+  const ids = [app, marker, ...others];
+  assert.ok(ids.every((id) => containerId.test(id)) && new Set(ids).size === ids.length, "the event stream follows immutable container IDs");
+  const child = run("docker", ["events", "--filter", "type=container", ...ids.flatMap((id) => ["--filter", `container=${id}`]), "--format", eventFormat],
     { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const errors = [], waiting = [];
   const stderr = stderrTail(limits.stderr);
@@ -513,9 +521,10 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // returns or throws, every container it made has been removed or is listed in `left`.
   async function pass(cell, imageId, raw, left) {
     const name = `${runId}-${cell.app}`;
-    let sampler, app, k6, marker, stream, streamError;
-    // An API cell's load reaches the upstream, so its settings are checked before the cell and again
-    // after the load, like the app's: `docker update` can change them without a restart.
+    let sampler, app, k6, marker, stream;
+    // An API cell's load reaches the upstream, so its settings are checked before the cell, at the
+    // launch check and after the load, like the app's: `docker update` can change them without a
+    // restart. The event stream shows a change undone between those checks.
     const upstreamHeld = async (when) => {
       if (cell.source !== "api") return;
       const info = await step("container", () => owned.inspect(upstreamId));
@@ -540,21 +549,25 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const appSettings = { role: "app", image: imageId, quota: cpus.app.quota, cpuset: cpus.app.cpuset, memoryBytes: summary.measurement.appMemoryBytes,
         env: { MARKETPLACE_SOURCE: cell.source, ...(options.group ? { PROFILE: boundedQualificationSettings.nativeProfile, MAX_CONNECTIONS: String(boundedQualificationSettings.maxConnections) } : {}) } };
       await step("settings", () => appliedSettings(before, appSettings));
-      if (!convergence) {
-        // The live event stream, listening before the load: the marker's first start shows it is.
-        marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
-        stream = eventStream({ app, marker, file: join(raw, "events.log"), spawn: spawnEvents, ...eventBounds });
-        try { await owned.start(marker); await stream.marker(1); } catch (e) { streamError = e; }
-      }
       // What window-load.js reads (__ENV), each as this pass requests it; null is a setting it does not give.
       const loadEnv = { BASE: `http://${name}:8080`, TARGET: cell.target, LOCALE: cell.target === "page" ? "rotating" : null, MODE: convergence ? "closed" : "fixed",
         WINDOWS: String(options.windows), WINDOW_SECONDS: String(options.windowSeconds), VUS: convergence ? String(options.vus) : null, RATE: convergence ? null : String(options.rate) };
       const k6Env = Object.entries(loadEnv).flatMap(([key, value]) => (value === null ? [] : ["-e", `${key}=${value}`]));
       const loadSettings = { role: "load", image: summary.tools.k6.imageId, quota: cpus.load.quota, cpuset: cpus.load.cpuset, memoryBytes: loadMemoryBytes, env: loadEnv };
-      // The load's receipt, with the window settings containerReceipt does not keep.
-      const loadReceipt = (info) => ({ ...containerReceipt(info), windowEnv: { WINDOWS: loadEnv.WINDOWS, WINDOW_SECONDS: loadEnv.WINDOW_SECONDS } });
+      // The load's receipt, with the window settings containerReceipt does not keep: as this pass
+      // requested them, and every value Docker's inspect reports for each (none, one or more).
+      const windowKeys = ["WINDOWS", "WINDOW_SECONDS"];
+      const loadReceipt = (info) => ({ ...containerReceipt(info), windowEnv: { requested: Object.fromEntries(windowKeys.map((key) => [key, loadEnv[key]])),
+        observed: Object.fromEntries(windowKeys.map((key) => [key, (Array.isArray(info?.Config?.Env) ? info.Config.Env : []).filter((e) => typeof e === "string" && e.startsWith(`${key}=`)).map((e) => e.slice(key.length + 1))])) } });
       k6 = await step("container", () => owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
         k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`));
+      // The live event stream of the app, the load and an API cell's upstream, listening before the
+      // launch check: the marker's first start shows it is. Without it nothing would show the
+      // settings held through the load, so no load starts.
+      marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
+      stream = eventStream({ app, marker, others: [k6, ...(cell.source === "api" ? [upstreamId] : [])], file: join(raw, "events.log"), spawn: spawnEvents, ...eventBounds });
+      await step("container", () => owned.start(marker));
+      await step("unconfirmed", () => stream.marker(1));
       const phaseStartMs = clock.now();
       if (!convergence) sampler = memorySampler({ ids: [app], file: join(raw, "stats.log"), seconds: seconds + 120, spawn: spawnStats, now: clock.now, ...statsBounds });
       // The load's settings as Docker applied them, before it starts.
@@ -566,6 +579,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       retain(join(raw, "app-container-launch.json"), snapshot(launch));
       const launched = await step("instance-changed", () => atLaunch(served, launch));
       await step("settings", () => appliedSettings(launch, appSettings));
+      await upstreamHeld("launch");
       // The memory samples' origin, on the same workstation clock as their own stamps (soakMemoryClock).
       const memoryOriginMs = clock.now();
       await step("load-exit", () => owned.docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") }));
@@ -592,13 +606,52 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const { k6Summary, load, windows, tail, unrecorded, requests, iterations, latencyMaxMs, arrivals } = evidence;
       const after = await step("container", () => owned.inspect(app));
       retain(join(raw, "app-container-after.json"), snapshot(after));
-      // The settings held through the load: the app's, and an API cell's upstream's.
+      // The settings at the last inspect: the app's, and an API cell's upstream's. A change undone
+      // before it is the event stream's to show, below.
       await step("settings", () => appliedSettings(after, appSettings));
       await upstreamHeld("after");
+      // What Docker's inspect alone shows, which needs no event stream and so is kept whatever the
+      // stream does: a convergence cell's app that is not the same running instance (heldThrough),
+      // and a soak's app that started again before the load began (startedBeforeLoad).
+      if (convergence) await step("instance-changed", () => heldThrough(before, after));
+      const end = await step("container", () => appInstance(after, "after"));
+      await step("instance-changed", () => startedBeforeLoad(launched, end, loadInfo.State.StartedAt));
+      // A start of the app the inspect shows after the launch check (another ID, StartedAt or
+      // RestartCount at the end): a restart, which only the event stream can place in or before the load.
+      const restartedSinceLaunch = [end.id !== launched.id && "container ID", end.startedAt !== launched.startedAt && "StartedAt", end.restartCount !== launched.restartCount && "RestartCount"].filter(Boolean);
+      // The marker's second start, after the last inspect, shows the stream had delivered every event
+      // published before it; the fence, its exit, that what the client delivered after that start is
+      // read too. Docker's event times and the load's StartedAt and FinishedAt are all the daemon's
+      // clock, read to the nanosecond; readEvents requires the two marker starts to bracket the load.
+      // A stream that failed, did not show both marker starts and the fence, or has a row that is not
+      // this cell's app, load, upstream or marker, an action and a time, is unavailable.
+      let read = null, streamError;
+      try {
+        await owned.start(marker); await stream.marker(2); await stream.fence();
+        const text = await stream.stop();
+        read = readEvents(text, { app, marker, load: k6, upstream: cell.source === "api" ? upstreamId : null, startedAt: loadInfo.State.StartedAt, finishedAt: loadInfo.State.FinishedAt });
+      } catch (e) { streamError = e; }
+      retain(join(raw, "events.json"), { stream: read === null ? "unavailable" : "read", ...(read ?? {}), restartedSinceLaunch });
+      if (streamError) {
+        keep("docker events", streamError);
+        throw coded("unconfirmed", new Error(`Docker's event stream is unavailable (${firstLine(streamError)}), so nothing shows the settings and the app's instance held through the load${restartedSinceLaunch.length
+          ? `; the app's inspect after the load shows another ${restartedSinceLaunch.join(" and ")} than at the launch check, a restart the stream alone could place in or before the load` : ""}`));
+      }
+      // Any update of the cell's containers while the stream ran: a setting may have changed during
+      // the load and been undone before the inspect after it.
+      if (read.updates.length) {
+        const roles = [...new Set(read.updates.map((u) => u.role))].join(", ");
+        throw coded("settings", new Error(`Docker's event stream shows ${read.updates.length} update${read.updates.length === 1 ? "" : "s"} of the cell's containers (${roles}) from before its launch check to after its last inspect`));
+      }
+      if (read.upstream.length) throw coded("instance-changed", new Error(`Docker's event stream shows ${read.upstream.length} start, restart, die, kill or OOM event${read.upstream.length === 1 ? "" : "s"} of the upstream during the cell`));
+      // An app event stamped before the load started happened after the launch check and before the
+      // load: the load may not have run against the instance that served the cold probe.
+      if (read.events.some((e) => e.atSeconds < 0)) throw coded("instance-changed", new Error("the app had a start, restart, die, kill or OOM event stamped before the load started"));
       if (convergence) {
+        // A convergence cell's app must be undisturbed through its load: even a signal is not warming.
+        if (read.events.length) throw coded("instance-changed", new Error(`the app had ${read.events.length} start, restart, die, kill or OOM event${read.events.length === 1 ? "" : "s"} during the load`));
         // A failed answer can be faster than a served one, so throughput with failures says nothing
         // about warming: a failure anywhere, in a window or in the graceful stop, means no verdict.
-        await step("instance-changed", () => heldThrough(before, after));
         const inWindows = windows.reduce((sum, w) => sum + w.failed, 0);
         if (inWindows) throw coded("failed-requests", new Error(`${inWindows} requests failed in the pass's windows; no verdict`));
         if (load.failed) throw coded("failed-requests", new Error(`${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`));
@@ -607,31 +660,10 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         return Object.assign(cell, { verdict: flattenPoint(windows) });
       }
       // A memory sampling failure makes only the memory reading unavailable (summarizeSoak); the
-      // restart, stop and OOM observations below do not depend on it.
+      // restart, stop and OOM observations do not depend on it.
       if (statsError) { keep("memory samples", statsError); log(`${cell.app} ${cell.source} ${cell.target}: memory samples failed: ${firstLine(statsError)}`); }
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
-      const end = await step("container", () => appInstance(after, "after"));
-      // The app's own StartedAt, a later start than at the launch check and stamped before the load's:
-      // it restarted before the load began. Read from Docker's inspect alone, so this holds whether or
-      // not the event stream below reads.
-      await step("instance-changed", () => startedBeforeLoad(launched, end, loadInfo.State.StartedAt));
-      // The marker's second start, after the app's last inspect, shows the stream had delivered every
-      // app event published before it. Docker's event times and the load's StartedAt and FinishedAt
-      // are all the daemon's clock; readEvents requires the two marker starts to bracket the load. A stream that failed, did not show both marker starts or has a row that is not this
-      // soak's app or marker, an action and a time is saved as unavailable, apart from the memory
-      // samples and the container states.
-      let events = null, text;
-      // The fence: a marker row after that start, so what the client delivered after it is read too.
-      if (!streamError) { try { await owned.start(marker); await stream.marker(2); await stream.fence(); } catch (e) { streamError = e; } }
-      try { text = await stream.stop(); } catch (e) { streamError ??= e; }
-      // Docker's own StartedAt and FinishedAt text, read to the nanosecond as the event times are.
-      if (!streamError) { try { events = readEvents(text, { app, marker, startedAt: loadInfo.State.StartedAt, finishedAt: loadInfo.State.FinishedAt }); } catch (e) { streamError = e; } }
-      if (streamError) { keep("docker events", streamError); log(`${cell.app} ${cell.source} ${cell.target}: Docker's event stream is unavailable: ${firstLine(streamError)}`); }
-      retain(join(raw, "events.json"), events);
-      // An app event stamped before the load started happened after the launch check and before the
-      // load: the load may not have run against the instance that served the cold probe.
-      if (events?.some((e) => e.atSeconds < 0)) throw coded("instance-changed", new Error("the app had a start, restart, die, kill or OOM event stamped before the load started"));
-      Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events, rate: options.rate,
+      Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events: read.events, rate: options.rate,
         droppedIterations: readDropped(k6Summary), failedRequests: load.failed, arrivals })));
       await step("load-evidence", () => reconcileCell(cell));
       return cell;
