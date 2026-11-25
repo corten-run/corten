@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { parse as parseYaml } from "yaml";
 import { allApps } from "./apps.mjs";
 import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, rebuildTimeoutMs, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
-import { calls, compiledFirst } from "./round.mjs";
+import { calls, compiledFirst, idleMinutes } from "./round.mjs";
 import { imageBuildTimeoutMs as catalogBuildTimeoutMs } from "../catalog/contract.mjs";
 import { imageBuildTimeoutMs as marketplaceBuildTimeoutMs } from "../marketplace/run-contract.mjs";
 
@@ -636,13 +636,16 @@ function measuredStepSeconds(/** @type {string} */ source, /** @type {number} */
 
 /**
  * Whether run-all.mjs stops an unattended build call at the limit `calls()` gives it: round.mjs's
- * buildStep passes each call's limit on unchanged, and the watchdog compares the call's time with it.
+ * buildStep passes each call's limit on unchanged, and the watchdog compares the call's time with it,
+ * and a call's quiet time with round.mjs's idleMinutes.
  */
 function watchdogUses(/** @type {string} */ runAll, /** @type {string} */ round) {
   return runAll.split("const minute = 60_000;").length === 2 && runAll.split("const all = calls(").length === 2 &&
     runAll.split("await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call,").length === 2 &&
     runAll.split("const call = (/** @type {number} */ limit, /** @type {string[]} */ args) =>").length === 2 &&
     runAll.split("if (Date.now() - started > limit * minute) stopped =").length === 2 &&
+    runAll.split("else if (Date.now() - heard > idleMinutes * minute) stopped =").length === 2 &&
+    !/(?<![\w.])idleMinutes\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/.test(runAll) &&
     !/(?<![\w.])limit\s*(?:[-+*/%]|\?\?|\|\||&&)?=(?!=)/.test(runAll) &&
     round.split("for (const [step, limit, ...args] of all) {").length === 2 && round.split("const { stopped, code } = await call(limit, args);").length === 2;
 }
@@ -706,6 +709,11 @@ test("Spring bounds each Maven run inside the image build or step that contains 
   assert.ok(watchdogUses(runAll, roundSource), "run-all.mjs does not stop a build call at the limit calls() gives it");
   assert.ok(!watchdogUses(runAll.replace("started > limit * minute", "started > Math.min(limit, 15) * minute"), roundSource), "accepted a clamped watchdog");
   assert.ok(!watchdogUses(runAll, roundSource.replace("await call(limit, args);", "await call(Math.min(limit, 15), args);")), "accepted a clamped build call limit");
+  assert.ok(!watchdogUses(runAll.replace("heard > idleMinutes * minute", "heard > 15 * minute"), roundSource), "accepted a shorter idle cutoff");
+  // The watchdog also stops a call that prints nothing for idleMinutes, and build.mjs prints a measured
+  // step's output only when it returns, so a silent build-cost step is stopped then, before its two-hour
+  // deadline; that cutoff is still longer than the image's Maven runs are allowed.
+  assert.ok(idleMinutes * 60 > image, "run-all.mjs's idle cutoff stops a quiet build before the image's Maven runs can end");
   // The build-cost recipe runs quiet Maven with no bound of its own, so only build.mjs's two-hour
   // deadline on each measured step stops it; that is longer than the image's Maven runs are allowed.
   const buildCost = readFileSync(join(repo, "bench/fullstack/build.mjs"), "utf8");
