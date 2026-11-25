@@ -412,7 +412,8 @@ matching. The page as first loaded has had no save answered, and a generated dec
 optional at a call (the table at the top of this page), so that is a variant of its own, `Loaded`,
 for which `answered` dispatches nothing. A submit with no answer to draw (other than a bare `204` or
 `205`, the submit done with nothing to draw) is `corten:error` on the
-form (it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
+form (on the form in its place, or the document, when a read drew over it while the write was out;
+it bubbles, and a handler that says so itself calls `preventDefault()`, which keeps
 corten-ui's `Toaster` quiet), and a redirect's notice the page did not draw is `corten:notice` on the document
 ([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:
 `on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every

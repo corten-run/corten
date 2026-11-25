@@ -1,0 +1,2 @@
+- A `data-patch` write that fails after a navigation or the page's own read drew over its form is now said: `corten:error` goes to the form in its place (by its `id`), or to the document when there is none, where `on:document:corten:error` and the `Toaster` hear it
+  ([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)).

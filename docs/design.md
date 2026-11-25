@@ -10300,6 +10300,47 @@ rules something out.
     2026-11-07, round r16's Chromium browser pass, on `eea6adb`; 2026-11-11, round browser-4 on a
     Xeon Platinum 8358, on `3fb4b1ac`.
 
+74. <a id="choice-failure-in-place"></a>**A write's failure is said where the page hears it now: on
+    the form that sent it, the form in its place, or the document; no read waits for the write.**
+    `corten:error` goes to the `data-patch` form that sent the write. A read of the page out when
+    the button was pressed (a navigation), or started while the write was out and let go before
+    it failed (`readLater` holds back only a read that has not started), can draw over that form
+    first. An event on an element no longer in the document reaches no listener on the document,
+    where the runtime runs every handler, so neither the form's own `on:corten:error` nor the
+    page's heard it, and the user saw nothing
+    ([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)).
+    Once the form has left the page, the event goes to the form with its `id` now, the one a
+    waiting submit is sent from, else to the document, which `on:document:corten:error` and
+    corten-ui's `Toaster` hear. While the form is on the page nothing changes.
+
+    Not chosen: holding a read's draw, or dropping it, while a write of a form it would draw over
+    is out. For the page reading itself again that would serve as well, but a navigation's page
+    would wait as long as the write takes, and its draw would then take away what the failed
+    form had just shown, so the page the user went to would still need the document to say it.
+    Not chosen either: the event on the old form and again on the page, two events for one
+    failure.
+
+    Stands on: measured (the runtime grows by 46 bytes, 36 gzipped, from 45,676 and 16,389 on
+    `babd52d28`); platform (an event dispatched on a node outside the document travels through
+    its detached ancestors only: the smoke cases in `scripts/smoke/write-failures.mjs`, a
+    navigation to the same page, one to another page and a write's whole page read, each drawn
+    over a form whose write then fails, heard it only on the detached form in Playwright's
+    Chromium, Firefox and WebKit on `babd52d28`, and on the page with this change); reasoned (the
+    same `id` names the same form across draws, the rule a waiting submit follows already, so the
+    form in its place is the one the user sees, and a form a read removed has only the document
+    left on the page); reasoned (a held read would delay only a page asked for while a write was
+    out, but by the whole of that write, to draw over its failure all the same); value
+    (correctness and reliability first: a failed write is heard; performance at the user's end
+    next: no read waits; one event and one way to hear it, Values 5).
+
+    Revisit when: an app needs a failure said beside a form a navigation took away, on the page it
+    left; the runtime comes to hold back a read that has started while a write is out; or a
+    standard gives an event on a removed element a way to reach the document.
+
+    Last checked: 2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
+    27.2, the three smoke cases in `scripts/smoke/write-failures.mjs`, failing on `babd52d28`;
+    2026-11-25, the runtime's size from `npm run build:js` on `babd52d28` and with this change.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

@@ -1210,7 +1210,11 @@ a redirect, not a bare `204` or `205`.
 When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
 the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
 there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
-one or a navigation dispatches nothing. corten-ui's `Toaster` in the layout says it with its
+one or a navigation dispatches nothing. A read of the page can draw over the form while its write
+is out (a navigation started before the press, or the page reading itself again): the event then
+goes to the form in its place, found by its `id` as a waiting submit's form is, or, when the page
+has none, to the document, where `on:document:corten:error` hears it, since an event on a form no
+longer in the page reaches no handler. corten-ui's `Toaster` in the layout says it with its
 `failed` message, so no write fails silently; a screen that says it its own way (beside the
 form, as watchlist's watch form does with `on:corten:error={js::failed(..)}`, or by sending again
 from its script) calls `preventDefault()` in its handler (the event is cancelable), and the

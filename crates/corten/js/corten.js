@@ -3379,7 +3379,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         // version): the page says so with `corten:error`, and the user sends it again.
         if (pending.n) failedWrite(pending.n);
         pending.next = undefined;
-        formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
+        sayFailed(form, { status: res.status });
       }
     }
   } catch (error) {
@@ -3394,7 +3394,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.
     pending.next = undefined;
-    formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
+    sayFailed(form, { status: 0, error });
   } finally {
     // Cleared when this submit ends, but not those a newer submit of the form or the page a
     // redirect sends the browser to marked again (theirs, cleared when they end).
@@ -3410,6 +3410,30 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
 }
 
 /**
+ * The form that sent a submit while it is on the page, else the element that has its id now: the
+ * form an answer or a read drew in its place. Null for one without an id that left the page.
+ * @param {HTMLFormElement} form
+ */
+function inPlaceOf(form) {
+  const id = idOf(form);
+  return formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
+}
+
+/**
+ * Says a `data-patch` submit got no answer it can draw (`corten:error`, cancelable, with `detail`),
+ * where the page hears it: on the form that sent it, or, when a read of the page drew over that
+ * form while the write was out, on the form in its place ({@link inPlaceOf}), else on the
+ * document. An event on a form no longer in the page reaches no handler.
+ * @param {HTMLFormElement} form @param {{ status: number, error?: unknown }} detail
+ */
+function sayFailed(form, detail) {
+  const at = inPlaceOf(form);
+  const event = new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail });
+  if (at instanceof HTMLFormElement) formCall(at, "dispatchEvent", event);
+  else document.dispatchEvent(event);
+}
+
+/**
  * Sends the submit that waited for a write's answer, from the form as it is now, without a
  * second `submit` event (its handlers ran at the press) and without the browser's constraint
  * validation again (the server checks what it gets). A form the answer replaced is found by its
@@ -3420,8 +3444,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
  * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
  */
 function sendAgain(form, submitter, within) {
-  const id = idOf(form);
-  const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
+  const now = inPlaceOf(form);
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
   const by =
