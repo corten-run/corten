@@ -6579,17 +6579,44 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above the
-    24,287.261 instructions accepted here on the same harness (that count is the baseline; the
-    2.1 above is not a regression still to fix); a compiler or code change lets the one loop poll
-    the plain task at the 24,285.154 it cost before, which removes the residual; an app needs a
+    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
+    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
+    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
+    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
+    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
+    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
+    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
+    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
+    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
+    count on one connection with glibc's allocator changed level by about 370 with no change to
+    what a request does; the 2.1 above is not a regression still to fix); a compiler or code
+    change lets the one loop poll the plain task at what it cost before the metadata path, which
+    removes the residual (the rerun of Last checked counts the two the same and cannot say whether
+    the later compiler or the rebuilt harness is why, so this may already hold); an app needs a
     connection value that cannot be cheaply cloned or shared; or the framework changes its
     connection service or request-extension ownership model.
 
     Last checked: 2026-11-17, before `6c5f17b11` (merged as `b08c48d23`), and the metadata
     path's Rust sources matching `caebfa19d` in the counts above, the connection-info
     integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
-    OpenAPI test of a documented route taking it.
+    OpenAPI test of a documented route taking it; 2026-11-25, the plain HTTP count alone, on the
+    harness built again from the description above, since the one those counts were made with is
+    not in the repository (a crate of its own with one typed `GET /` answering `served`, served by
+    `corten::serve` on a current-thread runtime, default features off, thin LTO and one codegen
+    unit, glibc's allocator, a client outside Callgrind that sends the request line and `host`
+    alone on one socket and checks every status and body, three rounds alternating, 200 requests
+    from 1,200 over 1,000, Callgrind 3.24.0 and rustc 1.100.0 with Tokio 1.54.1, so a count here is
+    not one of the counts above): `6c5f17b11` 23,073.241 instructions (range
+    23,073.221-23,077.401) and `caebfa19d` 23,073.192 (range 23,073.121-23,073.754), which is no
+    residual, and the rerun cannot say whether the later compiler or the rebuilt harness is why,
+    then `main` at `8d5160be2` 17,771.037 (range 17,770.049-17,771.622) and `9060dfb2a`, where a
+    connection's wait for shutdown is polled only when it was woken, 17,552.817 (range
+    17,552.342-17,552.875), then the last two again in a second session of three rounds,
+    17,771.565 (range 17,771.150-17,771.818) and 17,554.409 (range 17,553.815-17,556.855), where
+    the first session's binary of this change was built from `9060dfb2a` and the second's from
+    `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
+    that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
