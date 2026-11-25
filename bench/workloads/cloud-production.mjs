@@ -231,8 +231,15 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
       throw error;
     }
+    const guardDispatch = args[6];
+    if (guardDispatch !== undefined) {
+      assert.ok(args[0] === "doctl" && args[1][2] === "delete" && args[4] !== undefined);
+      // The controller's local custody must still match after this last await,
+      // before the private worker receives the mutation.
+      guardDispatch();
+    }
     let result, failure;
-    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
+    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
     // Hand custody back before cancellation: take the stream handle, record
     // the acknowledged command exit, or clear a positively unsent DELETE.
     if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
@@ -351,14 +358,14 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (locked.subject.recovery?.policy === handoffRetirementPolicy) entered = true;
     return locked.subject;
   };
-  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
+  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
       await authorizeLocked();
       entered = true;
     }
-    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
+    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
     // Use the controller's complete, account-bracketed pre-create list, not
     // just the rows that still carry their original benchmark name or tags.
     if (historicalIds.size && historicalHostsAbsent === undefined && binary === "doctl"

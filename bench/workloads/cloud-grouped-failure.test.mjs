@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
@@ -241,11 +241,15 @@ async function handoffFixture(t, flags = {}) {
       parts[parts.length - 1] = options.input.slice(JSON.stringify(request).length)
         .replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
       const result = f.run(binary, parts, options.timeout);
-      if (knobs.expire && f.probes === 3) knobs.expire();
+      if (f.probes === 3) {
+        knobs.expire?.();
+        knobs.finalFence?.();
+      }
       return { ...result, stderr: `CORTEN_CONTROL ${id} ${"a".repeat(64)}\nCORTEN_RESULT ${id} ${result.status}\n` };
     },
     providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, expiry) => {
       assert.equal(createMode, null); launched.push(["provider", ...argv]);
+      if (argv[0] === "account" && h.saved().deletionIntentAt) knobs.dispatchAccount?.();
       if (knobs.failExactRead && argv[2] === "get")
         return { status: 1, providerDiagnostic: { code: "get-http", httpStatus: 500 } };
       if (argv[2] === "delete") {
@@ -253,7 +257,7 @@ async function handoffFixture(t, flags = {}) {
         assert.ok(existsSync(join(h.local, "failed-native-host.json")));
       }
       return f.run("doctl", argv, timeout, allowFail, expiry);
-    }, { close: async () => {} }),
+    }, { close: async () => { knobs.close?.(); } }),
   };
   return { f, launched, knobs,
     async preview() { assert.equal(await productionMain([...args, "--print-approval"], deps), 3); return approval; },
@@ -392,6 +396,72 @@ test("handoff refuses changed remote custody, a busy guest, or an expired final 
   finally { clock.mock.restore(); }
   assert.equal(expiry.f.probes, 3); assert.equal(expiry.f.h.deletes, 0);
   assert.equal(expiry.f.h.saved().deletionIntentAt, undefined);
+});
+
+test("handoff refuses a byte-only capture change during the final fence before intent", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "failed-native-capture.json"), approved = await preview();
+  const changed = Buffer.concat([readFileSync(path), Buffer.from("\n")]);
+  knobs.finalFence = () => appendFileSync(path, "\n");
+  const error = await retire(approved).catch(e => e);
+  assert.equal(h.deletes, 0);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+  assert.deepEqual(readFileSync(path), changed);
+  assert.equal(f.probes, 3);
+  assert.match(error?.message ?? "", /approved original handoff capture changed/);
+});
+
+test("handoff refuses a same-byte operation lock replacement during the final fence and preserves it", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "operation.lock"), moved = join(h.temp, "moved-operation-lock"), approved = await preview();
+  let replacement;
+  knobs.finalFence = () => {
+    renameSync(path, moved);
+    writeFileSync(path, readFileSync(moved), { flag: "wx" });
+    replacement = lstatSync(path, { bigint: true });
+    assert.notEqual(replacement.ino, lstatSync(moved, { bigint: true }).ino);
+  };
+  const error = await retire(approved).catch(e => e);
+  assert.deepEqual({ deletes: h.deletes, intent: !!h.saved().deletionIntentAt, replacementKept: existsSync(path) },
+    { deletes: 0, intent: false, replacementKept: true });
+  assert.ok(!existsSync(join(h.local, "failed-native-host.json")));
+  assert.equal(lstatSync(path, { bigint: true }).ino, replacement.ino);
+  assert.deepEqual(readFileSync(path), readFileSync(moved));
+  assert.equal(f.probes, 3);
+  assert.match(error?.message ?? "", /handoff operation lock changed/);
+});
+
+test("handoff refuses capture drift across the last production dispatch checkpoint", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t);
+  const { h } = f, path = join(h.local, "failed-native-capture.json"), approved = await preview();
+  knobs.dispatchAccount = () => {
+    delete knobs.dispatchAccount;
+    // The account-return checkpoint crosses two turns. Mutate in the next
+    // turn, after the controller's local check but before worker dispatch.
+    setImmediate(() => setImmediate(() => setImmediate(() => appendFileSync(path, "\n"))));
+  };
+  await assert.rejects(retire(approved), /approved original handoff capture changed/);
+  assert.equal(h.deletes, 0);
+  assert.ok(h.saved().deletionIntentAt, "the already written intent is retained");
+  assert.equal(h.saved().destroyedAt, undefined);
+  assert.equal(f.probes, 3);
+});
+
+test("handoff teardown preserves a lock replaced during provider settlement", async (t) => {
+  const { f, knobs, preview, retire } = await handoffFixture(t, { busyFence: true });
+  const { h } = f, path = join(h.local, "operation.lock"), moved = join(h.temp, "settling-operation-lock"), approved = await preview();
+  const replacement = "synthetic replacement lock\n";
+  knobs.close = () => {
+    delete knobs.close;
+    renameSync(path, moved);
+    writeFileSync(path, replacement, { flag: "wx" });
+  };
+  await assert.rejects(retire(approved), /handoff operation lock changed/);
+  assert.equal(h.deletes, 0);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.equal(readFileSync(path, "utf8"), replacement);
+  assert.ok(existsSync(moved));
 });
 
 test("preplan preview binds preserved wrapper, measured registry and consumed single-child intent", async (t) => {
