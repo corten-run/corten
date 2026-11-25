@@ -26,33 +26,4 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
-  <build>
-    <plugins>
-      <plugin>
-        <groupId>org.codehaus.mojo</groupId>
-        <artifactId>build-helper-maven-plugin</artifactId>
-        <version>3.6.1</version>
-        <executions>
-          <execution>
-            <id>socket-fixture</id>
-            <phase>generate-test-sources</phase>
-            <goals><goal>add-test-source</goal></goals>
-            <configuration>
-              <sources><source>${project.basedir}/../src/test/java</source></sources>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <configuration>
-          <testIncludes>
-            <testInclude>bench/itempage/transport/DisconnectSockets.java</testInclude>
-            <testInclude>bench/itempage/transport/WebFluxDisconnectHttpTest.java</testInclude>
-          </testIncludes>
-        </configuration>
-      </plugin>
-    </plugins>
-  </build>
 </project>

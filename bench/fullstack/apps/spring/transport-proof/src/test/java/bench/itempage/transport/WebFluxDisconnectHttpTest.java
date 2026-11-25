@@ -3,11 +3,14 @@ package bench.itempage.transport;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.StringReader;
+import java.net.SocketException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -51,16 +54,35 @@ class WebFluxDisconnectHttpTest {
         }
     }
 
-    @ParameterizedTest(name = "caller abort, upstream body started: {0}")
-    @ValueSource(booleans = {false, true})
-    void abortClosesTheHeldExchange(boolean partialBody) throws Exception {
-        observe(partialBody, true);
+    @Test void abortClosesHeldHeaders() throws Exception { observe(false, true); }
+
+    @Test void abortClosesPartialBody() throws Exception { observe(true, true); }
+
+    @Test void connectedCallerKeepsHeldHeadersPending() throws Exception { observe(false, false); }
+
+    @Test void connectedCallerKeepsPartialBodyPending() throws Exception { observe(true, false); }
+
+    @Test void onlyEofOrPeerResetCountsAsClose() throws Exception {
+        try (var eof = new BufferedReader(new StringReader(""))) {
+            DisconnectSockets.assertPeerClosed(eof);
+        }
+        for (String message : new String[] {"Connection reset", "Connection reset by peer"}) {
+            try (var reset = failingRead(new SocketException(message))) {
+                DisconnectSockets.assertPeerClosed(reset);
+            }
+        }
+        for (String message : new String[] {"Network is unreachable", "Socket is closed", null}) {
+            var failure = new SocketException(message);
+            try (var read = failingRead(failure)) {
+                assertSame(failure, assertThrows(SocketException.class, () -> DisconnectSockets.assertPeerClosed(read)));
+            }
+        }
     }
 
-    @ParameterizedTest(name = "caller stays, upstream body started: {0}")
-    @ValueSource(booleans = {false, true})
-    void connectedCallerKeepsTheSameExchangePendingUntilRelease(boolean partialBody) throws Exception {
-        observe(partialBody, false);
+    private static BufferedReader failingRead(SocketException failure) {
+        return new BufferedReader(new StringReader("")) {
+            @Override public int read() throws IOException { throw failure; }
+        };
     }
 
     private void observe(boolean partialBody, boolean abort) throws Exception {

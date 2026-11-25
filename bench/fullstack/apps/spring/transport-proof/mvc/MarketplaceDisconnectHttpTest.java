@@ -3,9 +3,8 @@ package bench.itempage;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import bench.itempage.transport.DisconnectSockets;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
@@ -21,9 +20,11 @@ class MarketplaceDisconnectHttpTest {
     @Import(MarketplaceController.class)
     static class TestApplication {}
 
-    @ParameterizedTest(name = "caller aborts: {0}")
-    @ValueSource(booleans = {true, false})
-    void mvcKeepsTheMatchedReadPendingWhetherOrNotTheCallerLeaves(boolean abort) throws Exception {
+    @Test void mvcCallerAbortLeavesUpstreamPending() throws Exception { observe(true); }
+
+    @Test void mvcConnectedCallerWaitsForRelease() throws Exception { observe(false); }
+
+    private void observe(boolean abort) throws Exception {
         var json = JsonMapper.builder().propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE).build();
         byte[] body = json.writeValueAsBytes(MarketplaceTest.sample());
         try (var upstream = new DisconnectSockets();

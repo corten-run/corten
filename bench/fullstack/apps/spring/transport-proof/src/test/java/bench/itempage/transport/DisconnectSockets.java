@@ -111,6 +111,16 @@ public final class DisconnectSockets implements AutoCloseable {
 
     @Override public void close() throws IOException { listener.close(); }
 
+    static void assertPeerClosed(BufferedReader input) throws IOException {
+        try {
+            assertEquals(-1, input.read(), "upstream received request bytes rather than peer close");
+        } catch (SocketException failure) {
+            // These are the JDK socket messages for peer reset; other socket errors are not evidence of it.
+            String message = failure.getMessage();
+            if (!"Connection reset".equals(message) && !"Connection reset by peer".equals(message)) throw failure;
+        }
+    }
+
     public static final class Exchange implements AutoCloseable {
         private final Socket socket;
         private final BufferedReader input;
@@ -162,13 +172,11 @@ public final class DisconnectSockets implements AutoCloseable {
             assertTrue(remaining > 0, "500 ms observation elapsed before upstream read");
             socket.setSoTimeout((int) Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining - 1) + 1));
             try {
-                assertEquals(-1, input.read(), "upstream received request bytes rather than peer close");
+                assertPeerClosed(input);
             } catch (SocketTimeoutException failure) {
                 fail("upstream still pending 500 ms after caller abort", failure);
-            } catch (SocketException reset) {
-                // The fixture has not closed either upstream socket; a peer reset also proves closure.
-                assertFalse(socket.isClosed() || Thread.currentThread().isInterrupted(), "probe closed or interrupted locally");
             }
+            assertFalse(socket.isClosed() || Thread.currentThread().isInterrupted(), "probe closed or interrupted locally");
             assertTrue(System.nanoTime() - abortNanos <= limit, "upstream closed outside the 500 ms observation");
         }
 
