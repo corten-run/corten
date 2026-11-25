@@ -424,10 +424,10 @@ link) before a swap can reach nothing and send nothing
 The second write of the check that a failed write stays shown after the page read itself whole is
 the exception: it is clicked, the click must land within five seconds of being asked for, and its
 write must reach the stand-in within five seconds of the click returning. A press in one page task
-can come between a whole read's answer and its draw, and the runtime then says that write failed
-on the form the draw replaced, where the page does not hear it
-([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)).
-This check does not cover that order: it clicks only once the whole read before the click is
+can come between a whole read's answer and its draw, which replaces the form while the write is
+out; the runtime then says the failure on the form's successor or the document
+([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)),
+and other cases test that. This check does not cover that order: it clicks only once the whole read before the click is
 drawn, which it tells from the write's own page by a mark the stand-in puts in each whole page
 after the write (the page's first read of itself after the stand-in answered the first write,
 asked within five seconds of that answer, and drawn as below). A write's own `<main>` they wait

@@ -1051,10 +1051,10 @@ export async function pageWrites(page, browser) {
       const wholeDrawn = wholeAt !== null && (await drawnBy(own, wholeAt, seen.askedAt[wholeAt] + 5000)) !== null;
       seen.fail = true;
       // Clicked as before, not pressed in one page task (`pressWrite`): that press can come between
-      // a whole read's answer and its draw, which replaces the form while the write is out, and the
-      // runtime then says the write failed on the form it replaced, where the page does not hear it
-      // (#2068). This check does not cover that order: its click comes once the read before it is
-      // drawn. The click must land within 5 s of being asked for, and its write reach the stand-in
+      // a whole read's answer and its draw, which replaces the form while the write is out (the
+      // runtime then says the failure on the form's successor or the document, #2068, which other
+      // cases test). This check does not cover that order: its click comes once the read before it
+      // is drawn. The click must land within 5 s of being asked for, and its write reach the stand-in
       // within 5 s of the click returning.
       let sentSecond = false;
       let failed = false;
