@@ -9314,17 +9314,30 @@ rules something out.
     the decision is
     [a comment on the third](https://github.com/corten-run/corten/pull/2066#issuecomment-7173404420),
     posted in the same words on the other three), and Pull requests states it as the rule for a
-    plan declared once it is on `main`. The probe decides. Where a plan reads one or more
-    workloads across placements on a probe, each on the path the change touches, those workloads
-    are what item 2 asks of the change's cycles, held as the plan declares them and as the rule
-    says: no margin, A/A or placement is loosened. That is the reading this Choice takes for a
-    change's cost on a touched workload, each side at K placements with an A/A that says what
-    the run resolves. A count on one build of each side inside the band says where the image's
+    plan declared once it is on `main`. The probe decides: the workloads a plan reads across
+    placements on a probe are the reading this Choice takes for a change's cost on a touched
+    workload, each side at K placements with an A/A that says what the run resolves. A count on
+    one build of each side inside the band says where the image's
     code landed, not what the change costs (The default band, above), and it had no reading
-    across placements to go to. What is still counted and when it is declared, what binds, what
-    a count inside the band is reported as and where a failed count goes are in
+    across placements to go to. Which plans the case covers, what is still counted and when it
+    is declared, what binds, what a count inside the band is reported as and where a failed
+    count goes are in
     [Pull requests](../CONTRIBUTING.md#pull-requests) (item 2, with the default band) and are
-    not said again here; these are the reasons. The count is kept for what a probe is not: it
+    not said again here; these are the reasons. The plan names, for each target the change
+    exercises, the probe workload that runs the changed code that target's request runs, with a
+    reason the review accepts, as a negative control's is. The decision's "on the path the
+    change touches" would by itself be met by a workload that reaches the changed code on
+    another branch than the target's request takes, or runs it once where the request runs it
+    many times, and such a workload says little of what the change costs the target. A workload
+    on that path may be read across placements for the case whatever a single build of it read.
+    The rule leaves a placement run only the thresholds one build read inside, so a change
+    whose probe workloads one build each read outside its spread or the band would have no
+    reading across placements, and its counts inside the band could not pass though nothing
+    about them differs. What that build read still binds, so the reading made for the case decides nothing
+    for the workload, and it is asked to resolve and meet the margin because it is what stands
+    in for the image. The maintainer decided both, on the first review of
+    [#2109 Let a probe read across placements decide a change's cycles, and count the catalog's page and JSON once under such a plan](https://github.com/corten-run/corten/pull/2109),
+    whose description records the answers. The count is kept for what a probe is not: it
     is the only reading of the change in the catalog's own image, and outside the band it binds
     for the margin as it did, whatever the probe read. It is declared before the plan's first
     turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
@@ -9334,14 +9347,14 @@ rules something out.
     would be chosen by its result, as a placement run again for its result would be.
 
     The limit of that case: the catalog's image is never read across placements. A cost that
-    only that image shows, and that leaves the count's distance inside the band (for the
-    margin, a bound up to +4.33% today), is seen by no reading, and the change passes with it
-    (Stands on, bet). The case is no wider than its words: the two targets alone; the default
-    band, no spread being recorded for that image; and a plan that reads a workload on the
-    changed path across placements on a probe. Under a plan that reads none, as for a change to
-    code that only the catalog's image runs and no probe has, the two targets are held as any
-    other workload is: inside does not pass, and the reading across placements they would go to
-    is still to build. A plan declared before the case was on `main` is read by the rule as it
+    only that image shows, or that it shows more of than the workload named for the target
+    does, and that leaves the count's distance inside the band (for the margin, a bound up to
+    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). The
+    case is no wider than its words: the two targets alone; the default band, no spread being
+    recorded for that image; and a target for which the plan names a probe workload read across
+    placements. A change to code that only the catalog's image runs has no such workload until
+    a probe has a request that runs it, and the reading across placements its targets would go
+    to is still to build. A plan declared before the case was on `main` is read by the rule as it
     then stood; the four pull requests' plans go by the decision as it was posted.
 
     How many placements. A plan declares each workload's K before the run, for at most a 5% chance
@@ -10077,9 +10090,13 @@ rules something out.
     two at any distance, which holds the catalog's image to less than a probe and lets a plan
     gain by choosing what reads a workload; the two counts dropped under such a plan, which
     leaves a cost on the catalog's image unread at any size, where a count outside the band
-    still binds; and such a change held until a tool reads the image across placements, which
+    still binds; such a change held until a tool reads the image across placements, which
     holds it for a tool and not for a cost, when a probe workload on its path is read across
-    placements under the rule as it is.
+    placements under the rule as it is; the match left at the decision's "on the path the
+    change touches", which a workload that runs the changed code on another branch than the
+    target's request takes would meet; and the case kept from a change whose probe workloads
+    one build each read outside the band, which would hold back the changes whose probe
+    workloads read most clearly.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
@@ -10144,8 +10161,10 @@ rules something out.
     a request belongs to the change that set it for as long as later builds keep it; a count of
     one build of each side of the catalog's image inside the default band is a reading
     placement has been seen to account for, as any single build's is, so it says where the
-    image's code landed, while the change read across placements on a probe workload on its
-    path is the reading this Choice takes for a change's cost; and a count declared before the
+    image's code landed, while the change read across placements on the probe workload its
+    plan names for the target is the reading this Choice takes for a change's cost; a workload
+    read across placements for that case after one build read it outside the band clears
+    nothing, that build's reading still binding; and a count declared before the
     plan's first turn and before it is taken, and taken once for a pull request, is not chosen
     by its result);
     bet
@@ -10185,10 +10204,12 @@ rules something out.
     with two for a run with one; where a listed function lies in a line, which the pads
     leave at one place or at two 32 bytes apart, moves a request's cycles by little beside
     +1%: no run has measured it; and a cost a change adds to the catalog's `page` or `json`
-    that leaves its count inside the default band is one a probe workload on the changed path
-    shows across placements too, so that what the catalog's image alone shows is small beside
-    +1% or large enough to leave the band: nothing has read a change on a probe and on that
-    image side by side, and no tool reads the image across placements);
+    that leaves its count inside the default band is one the probe workload its plan names for
+    that target shows across placements too, the match resting on a reason a review read and
+    accepted and no run measured, so that what the catalog's image shows alone, or shows more
+    of than that workload, is small beside +1% or large enough to leave the band: nothing has
+    read a change on a probe and on that image side by side, and no tool reads the image across
+    placements);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not

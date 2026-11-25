@@ -667,14 +667,23 @@ establish a general ranking.
       the reading by the rules above, binding by policy, not because placement is shown unable to
       move it. Each threshold a plan declared for a workload, its margin and a reduction, is
       tested on its own distance: one outside stays as one build read it, whatever a placement
-      run then reads, and that run reads only those left inside.
+      run then reads, and that run reads only those left inside, but for the case that follows.
       One case is read otherwise, the catalog's `page` and `json`, since no tool reads the image
       `count.mjs` starts across placements
       ([design Choice 72](docs/design.md#choice-placement-runs)). Where a plan reads one or more
       workloads across placements on a probe, each on the path the change touches (an unaffected
-      route does not count, as above), those workloads are what item 2 asks of the change's
-      cycles, held as the plan declares them and as this item says: no margin, A/A or placement
-      is loosened. `page` and `json`, whichever the change exercises, are still counted, once
+      route does not count, as above), and names before the run, for each of `page` and `json`
+      the change exercises, which of those workloads runs the changed code that target's request
+      runs, with the reason, which the pull request's review accepts, those workloads are what
+      item 2 asks of the change's cycles, held as the plan declares them and as this item says:
+      no margin, A/A or placement is loosened. A target the plan names no such workload for, as
+      where its probe has no request that runs that code, is not under this case until the
+      plan's probe has one: it is held as any other workload is, and inside does not pass. For
+      this case such a workload may be read across placements whatever a single build of it
+      read. Where one build read it outside its spread or the band, that reading still binds, as
+      above: the reading across placements then changes nothing for the workload, and brings a
+      target under the case only if its A/A resolves and its bound is under +1%.
+      `page` and `json`, whichever the change exercises, are still counted, once
       for that plan, with `count.mjs`: one build of each side, declared in the plan with its
       pairs and its checks before the plan's first turn and before the count is taken, and each
       bound reported with where its distance from +1% lands against the default band as `main`
