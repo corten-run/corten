@@ -1644,6 +1644,10 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     replaceKeeping(old, part, null, false, !!stay);
   }
   main.replaceChildren(content);
+  // A page at another address is a turn: a failed write sent from a form before it is not said
+  // on one of its forms ({@link sayFailed}).
+  const at = pageKey(new URL(location.href));
+  if (at !== shownAt) (shownAt = at), (turns += 1);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
   if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
   layout?.apply();
@@ -2333,6 +2337,14 @@ function prefetch(target) {
 
 /** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
 let fetching = null;
+/**
+ * Navigations on their way: a write's failure waits for the last to end ({@link sayFailed}). The
+ * page reading itself again is not one: a whole read again puts itself off while a failure is
+ * undrawn ({@link deferWholeRead}).
+ */
+let reading = 0;
+/** What waits for that, each run in a task of its own once no navigation is on its way. @type {(() => void)[]} */
+const afterReads = [];
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let hoverTimer;
@@ -2385,6 +2397,7 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
   };
   signal.addEventListener("abort", idle);
   if (going) fetching = going;
+  if (!again) reading += 1;
   try {
     /** @type {Response} */
     let res;
@@ -2460,6 +2473,8 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
     signal.removeEventListener("abort", idle);
     idle();
     if (fetching === going) fetching = null;
+    // After the navigation's own end (its focus reset, its scroll), in a task.
+    if (!again && !--reading) for (const run of afterReads.splice(0)) setTimeout(run);
   }
 }
 
@@ -2923,6 +2938,9 @@ const typedIn = new Map();
 
 /** The key of the history entry whose page `<main>` shows. */
 let drawnFor = navigation?.currentEntry?.key ?? "";
+/** The address (`pageKey`) of the page `<main>` shows, and how many times it has changed. */
+let shownAt = pageKey(new URL(location.href));
+let turns = 0;
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
 // that was there.
 navigation?.addEventListener("currententrychange", () => {
@@ -3141,6 +3159,8 @@ addEventListener("pagehide", () => (left += 1));
  * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
+/** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
+const sentFrom = new WeakSet();
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
 const DRAWS_WHOLE = "corten-draws=whole";
@@ -3204,6 +3224,8 @@ function asking(form, submitter) {
  *   for a write's answer, which read it at the press
  */
 async function send(form, submitter, sends, within = asking(form, submitter)) {
+  sentFrom.add(form);
+  const turn = turns;
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
@@ -3379,7 +3401,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         // version): the page says so with `corten:error`, and the user sends it again.
         if (pending.n) failedWrite(pending.n);
         pending.next = undefined;
-        sayFailed(form, { status: res.status });
+        sayFailed(form, { status: res.status }, turn);
       }
     }
   } catch (error) {
@@ -3394,7 +3416,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.
     pending.next = undefined;
-    sayFailed(form, { status: 0, error });
+    sayFailed(form, { status: 0, error }, turn);
   } finally {
     // Cleared when this submit ends, but not those a newer submit of the form or the page a
     // redirect sends the browser to marked again (theirs, cleared when they end).
@@ -3421,15 +3443,28 @@ function inPlaceOf(form) {
 
 /**
  * Says a `data-patch` submit got no answer it can draw (`corten:error`, cancelable, with `detail`),
- * where the page hears it: on the form that sent it, or, when a read of the page drew over that
- * form while the write was out, on the form in its place ({@link inPlaceOf}), else on the
- * document. An event on a form no longer in the page reaches no handler.
- * @param {HTMLFormElement} form @param {{ status: number, error?: unknown }} detail
+ * where the page hears it, once no navigation is on its way: its draw would take away what a
+ * handler showed. Then on the form that sent it, while that is in the page; else on the form a
+ * read drew in its place: the one with its id now ({@link inPlaceOf}), with the same `action` and
+ * `method`, drawn with no page at another address since the press (`turn`), that has sent no
+ * submit itself. Else on the document: an event on a form no longer in the page reaches no
+ * handler, and a form of another page, or one used since, did not send this write.
+ * @param {HTMLFormElement} form @param {{ status: number, error?: unknown }} detail @param {number} turn
  */
-function sayFailed(form, detail) {
+function sayFailed(form, detail, turn) {
+  if (reading) {
+    afterReads.push(() => sayFailed(form, detail, turn));
+    return;
+  }
   const at = inPlaceOf(form);
   const event = new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail });
-  if (at instanceof HTMLFormElement) formCall(at, "dispatchEvent", event);
+  const successor =
+    at instanceof HTMLFormElement &&
+    turn === turns &&
+    hasAttr(at, "data-patch") &&
+    !sentFrom.has(at) &&
+    /** @type {const} */ (["action", "method"]).every((name) => formProperty(at, name) === formProperty(form, name));
+  if (at === form || successor) formCall(/** @type {HTMLFormElement} */ (at), "dispatchEvent", event);
   else document.dispatchEvent(event);
 }
 
