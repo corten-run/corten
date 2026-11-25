@@ -968,14 +968,16 @@ On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. Supervised marketplace
-timing and untimed JSON preparation can
+proved by saved Linux stat flags and matching PID/start identity. An authenticated monitored
+or offline-handoff campaign can
 [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
-after sealed command termination if every new user-space identity is a proved udev worker.
-Marketplace timing still requires worker birth after the terminal cutoff; JSON preparation
-permits birth after its pre-phase census. The bounded wait, worker exit and ordinary whole-host
-boundary checks must all pass. This cannot repair old evidence or discount activity during
-measurement. This is benchmark-host preparation, not app deployment advice.
+after official timing or untimed JSON preparation, once the last native command's sealed
+lifetime verifies termination and an empty accounting scope, and every new user-space identity
+is a proved udev worker. Timing requires worker birth strictly after the sealed terminal cutoff;
+untimed JSON preparation uses its pre-phase census cutoff instead. The bounded wait, worker exit
+and ordinary whole-host boundary checks must all pass. Replay uses the measured checkout: this
+cannot qualify old evidence that lacks the proof or discount activity during measurement.
+This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)

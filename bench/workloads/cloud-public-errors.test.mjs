@@ -26,6 +26,9 @@ test("public errors never evaluate accessors or reflect unknown diagnostic value
   assert.equal(publicError(inherited), base);
   for (const diagnostic of [{ code: "list-response-count", detail: raw },
     { code: "list-response-count", detail: "terminal-count-mismatch", raw },
+    { code: "bootstrap-marker" }, { code: "bootstrap-marker", detail: raw },
+    { code: "bootstrap-marker", detail: "local-control-uncertain", raw },
+    { code: "bootstrap-marker", get detail() { throw new Error(raw); } },
     { code: "get-http", httpStatus: 499 }, { get code() { throw new Error(raw); } }]) {
     assert.equal(publicError({ controllerStage: raw, providerDiagnostic: diagnostic }), base);
   }

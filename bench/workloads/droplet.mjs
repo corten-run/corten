@@ -18,7 +18,7 @@ import { failedNativeArchive, failedNativeObservation, failedNativeScript, group
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
   verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
+import { controlCheckpoint, controlResultFailure, pinnedHostOptions } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -617,6 +617,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     controlEpoch = "collection";
   }
   async function commonBootstrap() {
+    const markerFailure = (error, detail) => Object.assign(error, { providerDiagnostic: { code: "bootstrap-marker", detail } });
     const deadline = now() + 45 * 60000; let previous = deadline - 45 * 60000;
     const remaining = () => {
       const current = now();
@@ -628,17 +629,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await requireActiveStartup("first group ended before common bootstrap admission; collect its evidence");
       const offline = state.fleet?.single?.offlineHandoff;
       const observation = offline ? bootstrapReadScript + "\ncat /proc/sys/kernel/random/boot_id" : bootstrapReadScript;
-      const result = await ssh(observation, Math.min(30000, remaining()), true);
+      let result;
+      try { result = await ssh(observation, Math.min(30000, remaining()), true); }
+      catch (error) {
+        const detail = controlResultFailure(error);
+        throw detail ? markerFailure(error, detail) : error;
+      }
       remaining();
       if (result.status === 0 && !result.error) {
-        assert.ok(Buffer.byteLength(result.stdout) <= 1024, "bounded bootstrap marker required");
         let marker = result.stdout, bootId;
-        if (offline) {
-          const parts = /^(.*\n)([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\n$/.exec(marker);
-          assert.ok(parts, "bootstrap marker and host boot identity required");
-          [, marker, bootId] = parts;
-        }
-        assert.deepEqual(JSON.parse(marker), bootstrapMarker(state), "common bootstrap identity differs");
+        try {
+          assert.ok(Buffer.byteLength(marker) <= 1024, "bounded bootstrap marker required");
+          if (offline) {
+            const parts = /^(.*\n)([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\n$/.exec(marker);
+            assert.ok(parts, "bootstrap marker and host boot identity required");
+            [, marker, bootId] = parts;
+          }
+          assert.deepEqual(JSON.parse(marker), bootstrapMarker(state), "common bootstrap identity differs");
+        } catch (error) { throw markerFailure(error, "marker-invalid"); }
         if (state.group !== undefined && state.group === state.fleet.jobs[0].group) {
           state.bootstrapReady = { sha256: digest(marker), observedAt: new Date().toISOString(), ...(offline ? { bootId } : {}) }; save();
         }
@@ -656,7 +664,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         await sealControl("bootstrap", remaining); return;
       }
-      assert.equal(result.status, 3, "common bootstrap marker observation failed");
+      try { assert.equal(result.status, 3, "common bootstrap marker observation failed"); }
+      catch (error) { throw markerFailure(error, "acknowledged-exit-refused"); }
       await sleep(Math.min(30000, remaining()));
     }
   }
@@ -1080,7 +1089,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);
           assert.equal(providerAccount(account), state.provider.accountId, "provider account identity changed; preserve uncertainty");
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
-          assert.ok(Number.isSafeInteger(limit) && existing.length < limit, "account capacity unavailable");
+          assert.ok(Number.isSafeInteger(limit) && limit >= 0, "account capacity unavailable");
+          if (existing.length >= limit) throw Object.assign(new Error("account capacity unavailable"),
+            { providerDiagnostic: { code: "account-capacity" } });
           if (fleet) {
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
@@ -1541,7 +1552,8 @@ export function publicError(error) {
     + (stage ? ` Controller stage: ${stage}.` : "") + ` Provider failure: ${diagnostic.code}.`;
   return "Controller stopped; retained state/evidence requires inspection. Host/deletion state may be uncertain. Never relaunch."
     + (stage ? ` Controller stage: ${stage}.` : "") + route
-    + (diagnostic ? ` Provider failure: ${diagnostic.code}${detail}.` : "");
+    + (diagnostic?.code === "bootstrap-marker" ? ` Bootstrap marker: ${diagnostic.detail}.`
+      : diagnostic ? ` Provider failure: ${diagnostic.code}${detail}.` : "");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   import("./cloud-production.mjs").then((native) => native.productionCli(process.argv.slice(2)))

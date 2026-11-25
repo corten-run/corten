@@ -6,14 +6,14 @@ import { roundName, savedLoadLayout, savedPlacement, selection, terminalUnit, va
 // A disposition of one fenced DELETE, not a diagnostic or permission to retry.
 export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
-  "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
+  "account-request", "account-http", "account-capacity", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
   "list-response-links", "list-response-pages", "list-response-next", "list-response-count", "list-response-bounds",
   "catalog-request", "catalog-http", "catalog-response",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
   "create-action-response", "create-action-pending", "create-action-errored", "create-errored-absent", "delete-request", "delete-http",
-  "action-request", "action-http", "action-response"];
+  "action-request", "action-http", "action-response", "bootstrap-marker"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
 export const catalogClosureDetails = Object.freeze(["request-error", "response-error", "response-aborted"]);
 const providerDetails = {
@@ -23,6 +23,8 @@ const providerDetails = {
   "create-link-href": ["non-string", "malformed-uri", "credentials-or-fragment", "foreign-origin",
     "semantically-same-canonical-uri", "query-or-trailing-slash", "wrong-action-or-resource"],
   "list-response-count": ["terminal-count-mismatch", "total-changed"],
+  // The existing report envelope also carries the launch's marker diagnosis.
+  "bootstrap-marker": ["local-control-uncertain", "remote-completion-unconfirmed", "acknowledged-exit-refused", "marker-invalid"],
 };
 // This is the entire public diagnostic vocabulary, not an acceptance/retry policy.
 // Reconstruct data properties only; never copy native exceptions or raw values.
@@ -36,7 +38,7 @@ export function providerDiagnostic(value) {
     const detail = fields.detail.value;
     return providerDetails[code]?.includes(detail) ? { code, detail } : undefined;
   }
-  if (!fields.httpStatus) return { code };
+  if (!fields.httpStatus) return code === "bootstrap-marker" ? undefined : { code };
   const httpStatus = fields.httpStatus.value;
   if (!code.endsWith("-http") || !providerStatuses.includes(httpStatus)) return undefined;
   return { code, httpStatus };

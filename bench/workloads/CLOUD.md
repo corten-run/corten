@@ -371,6 +371,14 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+`account-capacity` is a code-only launch refusal: the complete census for the
+verified account reached or exceeded its valid droplet limit. The direct CLI and
+grouped receipt expose neither the limit nor the inventory. This guard stops
+before create intent, POST or bootstrap; it does not free capacity, permit a
+retry or change reservation custody. A malformed limit or a separate refusal
+to cover the reserved fleet does not carry this code. The code does not identify
+the failing guard of an older launch whose receipt lacks it.
+
 Create-link refusals distinguish three consumed-field predicates:
 `create-link-shape` (actions is not an array), `create-link-count` (not exactly one
 entry) and `create-link-id` (missing or invalid positive safe-integer ID).
@@ -399,6 +407,22 @@ The direct CLI renders that same closed controller stage and the provider's
 allowlisted code-specific detail or HTTP status. It never prints a native error's
 message, stack, response or accessor. These labels identify the stopped operation,
 not its cause or successful cleanup; the retained state still governs recovery.
+For the common-bootstrap marker read, `controller-launch` can also report
+`Bootstrap marker: LOCAL-LABEL` (the same closed detail in the fleet receipt's
+`providerDiagnostic` field, under code `bootstrap-marker`):
+
+- `local-control-uncertain`: the local SSH invocation did not provide a valid
+  process result. Its process tree is not proved gone.
+- `remote-completion-unconfirmed`: the local process result did not prove the
+  registered remote command's completion. This does not say whether it ran.
+- `acknowledged-exit-refused`: an acknowledged exit other than ready (0) or
+  not yet ready (3).
+- `marker-invalid`: an acknowledged ready read did not pass marker validation.
+
+The first two retain custody and never poll again. Only an acknowledged exit 3
+uses the existing bounded poll. These labels do not attest to monitor
+registration, establish a cause for r64, or grant a recovery action.
+
 For `offline-never-started` and `create-errored-contradicted` it adds fixed text
 naming the pinned route, `--collect --unused-bootstrap-known-hosts`; for
 `create-contradiction-unpublished` it names the custody step and the
@@ -625,6 +649,23 @@ and free account capacity still have to pass. An unknown or unconfirmed
 benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
 An earlier controller that did not record peer leases cannot be treated as a
 running peer. Never clear a lock or recreate a group to force overlap.
+
+New monitored and offline-handoff timing phases for official groups use the
+same post-terminal host-boundary proof. A first-after census containing only
+new sleeping workers of the same baseline `systemd-udevd` can trigger one
+five-second settle observation. Each worker needs matching cgroup, parent
+identity and executable provenance, and a start strictly after the sealed
+terminal clock of the verified empty command lifetime. Both clocks must
+support the wait, the workers must be gone, and the final boundary must pass
+the ordinary cleanup checks. In-window workers, missing proof, survivors and
+foreign processes still block advancement. The untimed JSON preparation
+keeps its existing pre-phase cutoff. The offline timing phase's zero-SYN
+qualification fence stays open through the settle wait and second census.
+A denied SYN after native command exit can still disqualify the phase; keep
+probes stopped throughout the fenced phase, not just during measurement.
+This does not change the measured workload window or qualify older evidence:
+replay uses the measured checkout, and r68 does not contain the terminal and
+executable proof needed for a settle.
 
 ### Offline handoff
 
