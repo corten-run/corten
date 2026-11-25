@@ -24,7 +24,13 @@
 //! A server that never stops working on a stream never lets the test end (time here is tokio's
 //! own, which passes only when every task waits), so a hang fails it too.
 //!
-//! **The differences on the list**: none. Any difference fails the gate.
+//! **The differences on the list**, which is the whole of it ([`Verdict::Listed`]):
+//! 1. A head that reaches the app's limit unfinished and is malformed further on is refused by
+//!    both, with 400 by one and 431 by the other, and nothing else differs. Which of the two hyper
+//!    answers depends on where its reads ended: 400 if the malformed bytes had arrived with the
+//!    ones before the limit, 431 if they had not. Corten's own connection reads a head no further
+//!    than the limit, and other bytes in reads of other sizes, so the same stream can be cut
+//!    differently for it.
 //!
 //! The servers run in the test's own thread, over pipes in memory, with tokio's time paused: a
 //! client that waits for the server to go quiet waits until every task is idle, not for a guess
@@ -148,6 +154,11 @@ async fn receive(client: &mut DuplexStream) -> (String, bool) {
     }
 }
 
+/// The request sent behind a stream.
+fn last_request(index: usize) -> String {
+    format!("GET /seen?last={index} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+}
+
 /// Sends a stream to a server, each write once the server has done all it will with the one
 /// before, then the last request if the connection is still open and the client's side of it is.
 async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, stream: &Stream) -> Outcome {
@@ -165,8 +176,7 @@ async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, st
     let (before, closed) = receive(&mut client).await;
     let (mut after, mut closed_after) = (String::new(), closed);
     if !closed && !stream.closes {
-        let last = format!("GET /seen?last={} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n", stream.index);
-        if client.write_all(last.as_bytes()).await.is_ok() {
+        if client.write_all(last_request(stream.index).as_bytes()).await.is_ok() {
             (after, closed_after) = receive(&mut client).await;
         }
     }
@@ -203,14 +213,40 @@ enum Verdict {
     Same,
     /// Corten's own connection is laxer than hyper's.
     Laxer(&'static str),
-    /// Any other difference. No class of difference is let through: the list the gate keeps
-    /// (`docs/design.md#choice-own-http1`) is empty.
+    /// A difference on the list the gate keeps (this file's comment, and
+    /// `docs/design.md#choice-own-http1`).
+    Listed(&'static str),
+    /// Any other difference.
     Unlisted(&'static str),
 }
 
-fn judge(hyper: &Outcome, own: &Outcome) -> Verdict {
+/// The one class of difference on the list.
+const LIMIT_OR_GRAMMAR: &str = "a head that reaches the limit and is malformed further on: 400 from one, 431 from the other";
+
+/// `outcome` with the status line of its last answer made the same whichever of the two it is,
+/// where that answer is the server's own refusal of a head as malformed (400) or as too long
+/// (431). `None` where its last answer is not one of those.
+fn refusal_alike(outcome: &Outcome) -> Option<Outcome> {
+    let alike = |sent: &str| {
+        let at = sent.rfind("HTTP/1.")?;
+        let end = at + sent[at..].find("\r\n")?;
+        let (version, status) = (sent.get(at..at + 8)?, sent.get(at + 8..end)?);
+        let refusal = matches!(status, " 400 Bad Request" | " 431 Request Header Fields Too Large");
+        let servers = answers(&sent[at..]).last().is_some_and(|answer| !answer.apps);
+        (refusal && servers).then(|| format!("{}{version} 4xx{}", &sent[..at], &sent[end..]))
+    };
+    let (before, after) = (outcome.before.clone(), outcome.after.clone());
+    let (before, after) = if answers(&after).is_empty() { (alike(&before)?, after) } else { (before, alike(&after)?) };
+    Some(Outcome { before, closed: outcome.closed, after, closed_after: outcome.closed_after })
+}
+
+/// `reaches_limit`: the client sent as many bytes as the app's limit on a head, or more.
+fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
     if hyper == own {
         return Verdict::Same;
+    }
+    if reaches_limit && refusal_alike(hyper).is_some_and(|hyper| Some(hyper) == refusal_alike(own)) {
+        return Verdict::Listed(LIMIT_OR_GRAMMAR);
     }
     let all = |outcome: &Outcome| {
         let mut all = answers(&outcome.before);
@@ -664,6 +700,9 @@ struct Found {
     answered: usize,
     /// Streams the last request was sent on, and those where it found the connection closed.
     asked: usize,
+    /// Streams whose outcomes differ by a class on the list, and the first of them.
+    listed: usize,
+    first_listed: Option<String>,
     failures: Vec<String>,
 }
 
@@ -673,7 +712,8 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
     count_panics();
     let bases = bases();
     // Hyper's connection and Corten's own, for each limit.
-    let servers = [(serve(false, 32 * 1024), serve(true, 32 * 1024)), (serve(false, 700), serve(true, 700))];
+    let limits = [32 * 1024, 700];
+    let servers = limits.map(|limit| (serve(false, limit), serve(true, limit)));
     let mut found = Found::default();
     let panics = PANICS.get();
     for index in which {
@@ -682,13 +722,14 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
         let (theirs, ours) = (exchange(hyper, &stream).await, exchange(own, &stream).await);
         found.streams += 1;
         found.asked += usize::from(!ours.after.is_empty());
-        let verdict = judge(&theirs, &ours);
+        let asked = if theirs.after.is_empty() && ours.after.is_empty() { 0 } else { last_request(index).len() };
+        let verdict = judge(&theirs, &ours, stream.bytes().len() + asked >= limits[index % 2]);
         let describe = |what: &str| {
             let sent = String::from_utf8_lossy(&stream.bytes()).into_owned();
             let writes: Vec<usize> = stream.writes.iter().map(Vec::len).collect();
             format!(
                 "stream {index} (seed {seed}, head limit {}): {what}\n  sent {sent:?}\n  in writes of {writes:?}, closed behind: {}\n  hyper: {theirs:?}\n  own:   {ours:?}",
-                if index % 2 == 0 { "32 KiB" } else { "700" },
+                limits[index % 2],
                 stream.closes
             )
         };
@@ -696,6 +737,10 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
             Verdict::Same => {
                 found.same += 1;
                 found.answered += usize::from(answers(&ours.before).iter().any(|answer| answer.apps));
+            }
+            Verdict::Listed(class) => {
+                found.listed += 1;
+                found.first_listed.get_or_insert_with(|| describe(class));
             }
             Verdict::Unlisted(class) => found.failures.push(describe(class)),
             Verdict::Laxer(class) => found.failures.push(describe(&format!("OWN IS LAXER: {class}"))),
@@ -709,11 +754,14 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
 }
 
 fn report(seed: u64, found: &Found) {
-    let Found { streams, same, answered, asked, failures } = found;
+    let Found { streams, same, answered, asked, listed, first_listed, failures } = found;
     eprintln!(
-        "H1 FUZZ seed={seed} streams={streams} same={same} (the app answered in {answered}) failed={} last_request_sent={asked}",
+        "H1 FUZZ seed={seed} streams={streams} same={same} (the app answered in {answered}) listed={listed} failed={} last_request_sent={asked}",
         failures.len()
     );
+    if let Some(first) = first_listed {
+        eprintln!("the first listed difference: {first}");
+    }
     for failure in failures.iter().take(20) {
         eprintln!("{failure}");
     }
@@ -726,6 +774,8 @@ async fn own_and_hyper_answer_every_stream_alike() {
     let found = run(SEED, 0..fixed(&bases()) + IN_SUITE).await;
     report(SEED, &found);
     assert!(found.failures.is_empty(), "{} of {} streams fail the gate; the first:\n{}", found.failures.len(), found.streams, found.failures[0]);
+    // The list lets through a few streams, not the run.
+    assert!(found.listed * 100 < found.streams, "{} of {} streams differ by a listed class", found.listed, found.streams);
     // The run is of streams that reach the app, and that reach the end of what was sent.
     assert!(found.answered * 2 > found.streams, "the app answered in {} of {} streams", found.answered, found.streams);
     assert!(found.asked * 3 > found.streams, "the last request was sent on {} of {} streams", found.asked, found.streams);
@@ -757,11 +807,14 @@ fn own_and_hyper_answer_every_stream_of_a_long_run_alike() {
         all.same += found.same;
         all.answered += found.answered;
         all.asked += found.asked;
+        all.listed += found.listed;
+        all.first_listed = all.first_listed.or(found.first_listed);
         all.failures.extend(found.failures);
     }
     report(seed, &all);
     assert_eq!(all.streams, streams, "every stream was sent");
     assert!(all.failures.is_empty(), "{} of {} streams fail the gate", all.failures.len(), all.streams);
+    assert!(all.listed * 100 < all.streams, "{} of {} streams differ by a listed class", all.listed, all.streams);
 }
 
 /// The judge fails what the gate says it fails: a difference is never taken for none, and a
@@ -777,6 +830,8 @@ fn the_judge_names_each_kind_of_difference() {
         closed_after: true,
     };
     let (one, two) = (app(200, "hi"), app(200, "hi") + &app(200, "hi"));
+    let short = judge;
+    let judge = |hyper: &Outcome, own: &Outcome| short(hyper, own, true);
     assert_eq!(judge(&outcome(&one, false, &one), &outcome(&one, false, &one)), Verdict::Same);
     let laxer = [
         (outcome(&one, true, ""), outcome(&two, true, "")),
@@ -799,4 +854,22 @@ fn the_judge_names_each_kind_of_difference() {
     for (hyper, own) in unlisted {
         assert!(matches!(judge(&hyper, &own), Verdict::Unlisted(_)), "{hyper:?} against {own:?}");
     }
+    // The one class on the list: the server's own refusal, as malformed by one and as too long by
+    // the other, of a stream as long as the limit, and nothing else different.
+    let long = refusal.replace("400 Bad Request", "431 Request Header Fields Too Large");
+    let behind = |refusal: &str| outcome(&(one.clone() + refusal), true, "");
+    for (hyper, own) in [(&refusal, &long), (&long, &refusal)] {
+        assert_eq!(judge(&outcome(hyper, true, ""), &outcome(own, true, "")), Verdict::Listed(LIMIT_OR_GRAMMAR));
+        assert_eq!(judge(&behind(hyper), &behind(own)), Verdict::Listed(LIMIT_OR_GRAMMAR));
+        assert_eq!(judge(&outcome(&one, false, hyper), &outcome(&one, false, own)), Verdict::Listed(LIMIT_OR_GRAMMAR));
+        // Not of a stream shorter than the limit.
+        assert!(matches!(short(&outcome(hyper, true, ""), &outcome(own, true, ""), false), Verdict::Unlisted(_)));
+        // Not with anything else different: an answer before it, or what closes.
+        assert!(matches!(judge(&behind(hyper), &outcome(own, true, "")), Verdict::Unlisted(_)));
+        assert!(matches!(judge(&outcome(hyper, true, ""), &behind(own)), Verdict::Laxer(_)));
+        assert!(matches!(judge(&outcome(&one, false, hyper), &outcome(&one, true, own)), Verdict::Unlisted(_)));
+    }
+    // Not an answer of the app's with either status.
+    let (bad, large) = (app(400, ""), app(431, ""));
+    assert!(matches!(judge(&outcome(&bad, true, ""), &outcome(&large, true, "")), Verdict::Unlisted(_)));
 }

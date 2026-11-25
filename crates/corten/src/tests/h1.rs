@@ -75,15 +75,28 @@ async fn read(client: &mut TcpStream, wait: Duration) -> (String, bool) {
 
 /// One answer that says its length, as `client` receives it.
 async fn one(client: &mut TcpStream) -> String {
+    several(client, 1).await
+}
+
+/// `count` answers that say their lengths, as `client` receives them: in one read or in several,
+/// which is the server's to choose.
+async fn several(client: &mut TcpStream, count: usize) -> String {
     let mut got = Vec::new();
     let mut buf = vec![0u8; 16 * 1024];
     loop {
-        if let Some(end) = got.windows(4).position(|window| window == b"\r\n\r\n") {
-            let head = String::from_utf8_lossy(&got[..end]);
+        let (mut at, mut whole) = (0, 0);
+        while let Some(end) = got[at..].windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&got[at..at + end]);
             let length = head.lines().find_map(|line| line.strip_prefix("content-length: "));
-            if got.len() - (end + 4) >= length.map_or(0, |length| length.parse().unwrap()) {
-                return String::from_utf8_lossy(&got).into_owned();
+            let length: usize = length.map_or(0, |length| length.parse().unwrap());
+            if got.len() - (at + end + 4) < length {
+                break;
             }
+            at += end + 4 + length;
+            whole += 1;
+        }
+        if whole >= count {
+            return String::from_utf8_lossy(&got).into_owned();
         }
         let read = tokio::time::timeout(SOON, client.read(&mut buf)).await;
         let read = read.unwrap_or_else(|_| panic!("no answer after {:?}", String::from_utf8_lossy(&got))).unwrap();
@@ -908,8 +921,7 @@ async fn a_request_that_is_hypers_takes_the_rest_of_its_connection() {
         let mut client = TcpStream::connect(addr).await.unwrap();
         let body = "b".repeat(100_000);
         client.write_all(format!("{GET}{GET}{}", &post("/read", &body)[..5_000]).as_bytes()).await.unwrap();
-        got.push(one(&mut client).await);
-        got.push(one(&mut client).await);
+        got.push(several(&mut client, 2).await);
         client.write_all(&post("/read", &body).as_bytes()[5_000..]).await.unwrap();
         let answer = one(&mut client).await;
         assert!(answer.ends_with("read 100000"), "own: {own}: {answer}");
