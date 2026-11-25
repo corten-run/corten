@@ -82,10 +82,14 @@ test("an answer that never comes, the connection still open, is an error once no
   const server = await standIn((n) => (n === 2 ? "" : ok("3")));
   const connection = await Connection.open(server.port);
   connection.patience = 150;
+  // A client that waits without end must fail this test, not keep it waiting: after 5 seconds
+  // the socket is destroyed, which ends the wait with another error than the one expected.
+  const bound = setTimeout(() => connection.socket.destroy(), 5000);
   try {
     await assert.rejects(send(connection, "get", 12), /no answer from the probe in 0\.15 s/);
     assert.equal(connection.closed, false);
   } finally {
+    clearTimeout(bound);
     connection.socket.destroy();
     await server.close();
   }
