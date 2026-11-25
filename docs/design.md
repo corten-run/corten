@@ -9284,8 +9284,10 @@ rules something out.
     pads, the unpadded link's map recorded, each placement checked, K sized from a pilot or an eligible A/A, and the change and
     its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
-    did any of it (`df9242b56`); and no run has read the image `count.mjs` starts across
-    placements, so the first catalog target the band leaves not decided has that to build. The
+    did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
+    no run has been read from it; and no run has read the image `count.mjs` starts across
+    placements, which that kit does not read either, so the first catalog target the band leaves
+    not decided has that to build. The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
 
@@ -10233,7 +10235,12 @@ rules something out.
     (`0c0c599cb`), `evidence/stage-header-checks-2002` (`2fb31fbaa`) and
     `evidence/placement-sizing-1999` (`912199b97`), and the third and fourth runs' time a
     placement, from the `progress.log`s under the last two (120 placements in 124 minutes 46
-    seconds on the third's API host, 132 a median 101 s apart in the fourth).
+    seconds on the third's API host, 132 a median 101 s apart in the fourth); 2026-11-25,
+    `bench/placement` run as a dry run, read for nothing, on a c-8 (a Xeon Platinum 8358, Linux
+    6.12.117, rustc 1.100.0 with LLD 23.1.5): `e2d0c464e` against itself through a pilot part
+    and a gated part of 6 placements each, and that commit against head `498291116` linked with
+    second pads and checked, nothing started, its plans and results at `16406ee3e` (tag
+    `evidence/placement-kit`).
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
