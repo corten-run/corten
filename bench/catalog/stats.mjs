@@ -10,7 +10,12 @@ export function memoryMiB(value) {
   return Number(m[1]) * units[m[2]];
 }
 export const steadySampleWindow = (count) => [Math.floor(count * 0.15), Math.ceil(count * 0.95)];
-export const statsPipeReleaseMessage = "docker stats client pipes did not close within the stop grace";
+export const statsInfrastructure = Object.freeze({
+  deadline: "stats sampler exceeded its deadline",
+  "pipe-release-timeout": "docker stats client pipes did not close within the stop grace",
+  "shutdown-signal": "docker stats client signal failed",
+  "client-process": "docker stats client process failed",
+});
 export function summarizeSamples(samples) {
   if (!samples.length) throw new Error("docker stats produced no samples");
   for (const s of samples) if (!Number.isFinite(s.mem) || !Number.isFinite(s.cpu)) throw new Error("invalid docker stats sample");
@@ -24,7 +29,9 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
   // Each error with when it happened: the marketplace runner tells one after an app's container
   // stopped from one before it (#1128). stop() throws them joined, as it always has.
   const errors = [];
-  const failed = (message, kind) => errors.push({ message, at: new Date().toISOString(), kind });
+  const record = (kind, message) => errors.push({ message, at: new Date().toISOString(), kind });
+  const observed = (message) => record("stats", message);
+  const infrastructure = (kind) => record(kind, statsInfrastructure[kind]);
   let buffer = "";
   let raw = "";
   let stopping = false;
@@ -41,23 +48,24 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
         const s = JSON.parse(line);
         if (!samples[s.Name]) throw new Error(`unexpected stats container ${s.Name}`);
         samples[s.Name].push({ t: Date.now(), cpu: parseFloat(s.CPUPerc), mem: memoryMiB(s.MemUsage.split("/")[0]) });
-      } catch (e) { failed(e.message); }
+      } catch (e) { observed(e.message); }
     }
   });
-  child.stderr.on("data", (chunk) => { if (!stopping) failed(chunk.toString()); });
-  child.on("error", (error) => failed(error.message));
+  child.stderr.on("data", (chunk) => { if (!stopping) observed(chunk.toString()); });
+  child.on("error", (error) => infrastructure(error.syscall === "kill" ? "shutdown-signal" : "client-process"));
   let closed = false, exited = false, settle, escalation, release;
   const done = new Promise((resolve) => { settle = resolve; });
   child.once("exit", () => { exited = true; });
   child.once("close", (code) => {
     closed = true;
     clearTimeout(escalation); clearTimeout(release);
-    if (!stopping) failed(`docker stats stopped early: ${code}`);
+    if (!stopping) observed(`docker stats stopped early: ${code}`);
     settle();
   });
   const signal = (name) => {
     if (closed || exited) return;
-    try { child.kill(name); } catch (error) { failed(error.message); }
+    // false without an error means the process may already have exited.
+    try { child.kill(name); } catch { infrastructure("shutdown-signal"); }
   };
   const terminate = () => {
     if (closed || release !== undefined) return;
@@ -65,13 +73,13 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
     release = setTimeout(() => {
       // An exited CLI can be reaped while descendants still hold its pipes.
       // Retain any captured bytes but never summarize truncated evidence.
-      failed(statsPipeReleaseMessage, "pipe-release-timeout");
+      infrastructure("pipe-release-timeout");
       child.stdout.destroy(); child.stderr.destroy(); child.unref();
       settle();
     }, pipeGraceMs);
     signal("SIGTERM");
   };
-  const timer = setTimeout(() => { failed("stats sampler exceeded its deadline"); terminate(); }, seconds * 1000);
+  const timer = setTimeout(() => { infrastructure("deadline"); terminate(); }, seconds * 1000);
   return {
     async stop() {
       stopping = true;
@@ -79,7 +87,7 @@ export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGrac
       terminate();
       await done;
       writeFileSync(file, raw);
-      if (buffer.length) failed("stats ended with an incomplete JSON record");
+      if (buffer.length) observed("stats ended with an incomplete JSON record");
       if (errors.length) throw Object.assign(new Error(errors.map((e) => e.message).join("; ")), { errors });
       const summary = Object.fromEntries(names.map((name) => [name, summarizeSamples(samples[name])]));
       writeFileSync(`${file}.json`, JSON.stringify({ summary, samples }, null, 2));

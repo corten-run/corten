@@ -400,6 +400,18 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   writeFileSync(path, JSON.stringify(raw));
   assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
     && e.cause?.message === "synthetic pipe-release fault");
+  for (const [step, error, expected, kind] of [
+    ["stats", "kill EPERM", "docker stats client signal failed"],
+    ["sampler", "kill EINVAL", "docker stats client signal failed"],
+    ["stats", "spawn docker ENOENT", "docker stats client process failed"],
+    ["sampler", "synthetic-private-process-detail", "docker stats client signal failed", "shutdown-signal"],
+    ["stats", "synthetic-private-process-detail", "docker stats client signal failed", "shutdown-signal"],
+  ]) {
+    raw.seen.errors = [{ ...postExitError, step, error, kind }];
+    writeFileSync(path, JSON.stringify(raw));
+    assert.throws(() => validateSaved(args), (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID"
+      && e.cause?.message === expected && !e.message.includes("synthetic-private-process-detail"), `${step}: ${kind ?? error}`);
+  }
   raw.seen.errors = [];
   writeFileSync(path, original);
   for (const mutate of [

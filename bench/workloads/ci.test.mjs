@@ -102,12 +102,15 @@ const resourceProbeMocks = String.raw`
   _label=corten.json.resource-probe-attempt
   _waits=0
   timeout() {
-    [[ "$1" == --kill-after=* && "$2" =~ ^[0-9]+s$ ]] || return 98
+    [[ "$1" =~ ^--kill-after=([0-9]+)s$ ]] || return 98
+    local grace=$((BASH_REMATCH[1]))
+    [[ "$2" =~ ^([0-9]+)s$ ]] || return 98
+    printf 'budget:%d\n' "$((BASH_REMATCH[1] + grace))" >&2
     _bound=$2
     shift 2
     case "$1" in docker|node) "$@" ;; *) return 98 ;; esac
   }
-  sleep() { [[ "$*" == 1 ]] || return 98; _waits=$((_waits + 1)); }
+  sleep() { [[ "$*" == 1 ]] || return 98; _waits=$((_waits + 1)); printf 'budget:1\n' >&2; }
   node() {
     if [[ "$1" == -p ]]; then
       [[ "$2" == 'require("node:crypto").randomUUID()' ]] || return 98
@@ -127,7 +130,7 @@ const resourceProbeMocks = String.raw`
         printf 'create\n' >&2
         [[ "$*" == *" --label corten.json.resource-probe=1 --label $_label=$ATTEMPT "* ]] || return 98
         case "$MODE" in
-          ok|probeFailed|removeFailed) printf '%s\n' "$_owned" ;;
+          ok|probeFailed|removeFailed|ackInspectDelayed) printf '%s\n' "$_owned" ;;
           foreignAck) printf '%s\n' "$_foreign" ;;
           *) return 124 ;;
         esac
@@ -142,13 +145,21 @@ const resourceProbeMocks = String.raw`
           short) printf '0123456789ab\n' ;;
           multiple) printf '%s\n' "$_owned" "$_foreign" ;;
           foreign) printf '%s\n' "$_foreign" ;;
+          changed) if (( _waits )); then printf '%s\n' "$_foreign"; else printf '%s\n' "$_owned"; fi ;;
+          ambiguousAfterRetry) if (( _waits )); then printf '%s\n' "$_owned" "$_foreign"; else printf '%s\n' "$_owned"; fi ;;
+          malformedAfterRetry) if (( _waits )); then printf '0123456789ab\n'; else printf '%s\n' "$_owned"; fi ;;
           *) printf '%s\n' "$_owned" ;;
         esac
         ;;
       container)
         [[ "$_bound" == 3s && "$2" == inspect && "$3" == --format && "$4" == '{{.Id}} {{index .Config.Labels "corten.json.resource-probe"}} {{index .Config.Labels "corten.json.resource-probe-attempt"}}' ]] || return 98
         printf 'inspect:%s\n' "$5" >&2
-        if [[ "$MODE" == wrongId ]]; then
+        case "$MODE" in
+          inspectDelayed|ackInspectDelayed) if (( _waits < 3 )); then return 124; fi ;;
+          inspectUnavailable) return 124 ;;
+          changed|ambiguousAfterRetry|malformedAfterRetry|wrongIdAfterRetry) if (( _waits == 0 )); then return 124; fi ;;
+        esac
+        if [[ "$MODE" == wrongId || "$MODE" == wrongIdAfterRetry ]]; then
           printf '%s 1 %s\n' "$_foreign" "$ATTEMPT"
         elif [[ "$5" == "$_foreign" ]]; then
           printf '%s 1 foreign-attempt\n' "$_foreign"
@@ -170,12 +181,18 @@ test("the synthetic JSON resource probe cleans up a create whose acknowledgment 
   const owned = "1".padStart(64, "0"), foreign = "2".padStart(64, "0");
   const inspect = `inspect:${owned}`, inspectForeign = `inspect:${foreign}`, remove = `remove:${owned}`, probe = `probe:${owned}`;
   const refused = "Synthetic JSON resource probe cleanup could not confirm one owned container";
+  const fullSearch = Array(4).fill(["lookup", inspect]).flat();
   const cases = [
     ["ok", 0, [inspect, probe, inspect, remove]],
     ["probeFailed", 1, [inspect, probe, inspect, remove]],
     ["removeFailed", 1, [inspect, probe, inspect, remove]],
     ["foreignAck", 1, [inspectForeign, "lookup", inspect, remove]],
     ["lost", 124, ["lookup", "lookup", "lookup", inspect, remove]],
+    ["inspectDelayed", 124, [...fullSearch, remove], 145],
+    ["ackInspectDelayed", 1, [inspect, ...fullSearch, remove], 150],
+    ["inspectUnavailable", 124, [...fullSearch, refused], 133],
+    ...["changed", "ambiguousAfterRetry", "malformedAfterRetry"].map((mode) => [mode, 124, ["lookup", inspect, "lookup", refused]]),
+    ["wrongIdAfterRetry", 124, ["lookup", inspect, "lookup", inspect, refused]],
     ["absent", 124, [...Array(4).fill("lookup"), refused]],
     ["lookupFailed", 124, [...Array(4).fill("lookup"), refused]],
     ["short", 124, ["lookup", refused]],
@@ -183,12 +200,16 @@ test("the synthetic JSON resource probe cleans up a create whose acknowledgment 
     ["foreign", 124, ["lookup", inspectForeign, refused]],
     ["wrongId", 124, ["lookup", inspect, refused]],
   ];
-  for (const [mode, status, trace] of cases) {
+  for (const [mode, status, trace, budget] of cases) {
     const result = spawnSync(resourceProbeBash, ["-e", "-o", "pipefail", "-c", resourceProbeMocks + step.run],
       { cwd: root, env: { ...process.env, MODE: mode, ATTEMPT: randomUUID() }, encoding: "utf8", timeout: 5000, windowsHide: true });
     assert.ifError(result.error);
     assert.equal(result.status, status, `${mode}: ${result.stderr}`);
-    assert.deepEqual(result.stderr.trim().split(/\r?\n/), ["create", ...trace], mode);
+    const lines = result.stderr.trim().split(/\r?\n/), budgetLines = lines.filter((line) => line.startsWith("budget:"));
+    assert.deepEqual(lines.filter((line) => !line.startsWith("budget:")), ["create", ...trace], mode);
+    const boundedSeconds = budgetLines.reduce((sum, line) => sum + Number(line.slice(7)), 0);
+    assert.ok(boundedSeconds < 60 * step["timeout-minutes"], `${mode}: no time left for the shell and UUID generation`);
+    if (budget !== undefined) assert.equal(boundedSeconds, budget, mode);
   }
 });
 

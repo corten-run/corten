@@ -1124,12 +1124,12 @@ test("stats retains its raw prefix and fails when an exited client's pipes never
       assert.match(error.message, /stats client pipes did not close/);
       assert.equal(error.errors[0].kind, "pipe-release-timeout");
       const errors = statsPhaseErrors(error);
-      assert.deepEqual(errors.map((e) => e.step), ["sampler"]);
+      assert.deepEqual(errors.map(({ step, kind }) => [step, kind]), [["sampler", "pipe-release-timeout"]]);
       const at = Date.parse(errors[0].at);
       const seen = { pass: 1, phase: "fixed", phaseStart: new Date(at - 5000).toISOString(),
         app: { Running: false, OOMKilled: false, ExitCode: 1, FinishedAt: new Date(at - 1000).toISOString() } };
       assert.deepEqual(phaseEnd({ ...seen, errors: statsPhaseErrors({ errors: [
-        { message: "docker stats stopped early: 1", at: errors[0].at },
+        { kind: "stats", message: "docker stats stopped early: 1", at: errors[0].at },
       ] }) }), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
       assert.throws(() => phaseEnd({ ...seen, errors }), /pipes did not close/);
       return true;
@@ -1145,3 +1145,60 @@ test("stats retains its raw prefix and fails when an exited client's pipes never
     assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true });
   }
 });
+
+for (const failure of ["TERM throw", "KILL throw", "emitted signal error", "emitted spawn error", "deadline", "exit race", "ordinary stderr"]) {
+  test(`stats sampler distinguishes ${failure} from ordinary stats after app exit`, async (t) => {
+    const folder = mkdtempSync(join(tmpdir(), "catalog-stats-shutdown-")), path = join(folder, "stats.log");
+    const fake = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
+    const prefix = '{"Name":"app","CPUPerc":"50%","MemUsage":"8MiB / 1GiB"}\n';
+    const privateDetail = "synthetic-private-process-detail";
+    const close = () => setImmediate(() => { fake.emit("exit", 0); fake.emit("close", 0); });
+    const spawned = t.mock.method(childProcess, "spawn", () => fake);
+    syncBuiltinESMExports();
+    t.after(() => {
+      spawned.mock.restore(); syncBuiltinESMExports();
+      fake.stdout.destroy(); fake.stderr.destroy();
+      assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true });
+    });
+    let allowDeadline;
+    const startStop = new Promise((resolve) => { allowDeadline = resolve; });
+    fake.kill = (signal) => {
+      if (failure === "KILL throw" && signal === "SIGTERM") return true;
+      close();
+      allowDeadline();
+      if (failure === "TERM throw" || failure === "KILL throw") throw new Error(privateDetail);
+      if (failure === "emitted signal error") {
+        fake.emit("error", Object.assign(new Error(privateDetail), { syscall: "kill", code: "EPERM" }));
+        return false;
+      }
+      return failure !== "exit race";
+    };
+    const sampler = sampleStats(["app"], path, failure === "deadline" ? 0 : 10, { termGraceMs: 5, pipeGraceMs: 100 });
+    fake.stdout.write(prefix);
+    if (failure === "emitted spawn error") fake.emit("error", Object.assign(new Error(privateDetail), { syscall: "spawn docker", code: "ENOENT" }));
+    if (failure === "ordinary stderr") fake.stderr.write("kill EPERM\n");
+    if (failure === "deadline") await startStop;
+    if (failure === "exit race") {
+      assert.equal((await sampler.stop()).app.samples, 1, "no signal error when the child just raced with exit");
+    } else {
+      await assert.rejects(sampler.stop(), (error) => {
+        const errors = statsPhaseErrors(error);
+        const at = Date.parse(errors[0].at);
+        const seen = { pass: 1, phase: "fixed", phaseStart: new Date(at - 5000).toISOString(),
+          app: { Running: false, OOMKilled: false, ExitCode: 1, FinishedAt: new Date(at - 1000).toISOString() }, errors };
+        if (failure === "ordinary stderr") {
+          assert.equal(errors[0].step, "stats");
+          assert.deepEqual(phaseEnd(seen), { pass: 1, phase: "fixed", exitCode: 1, oomKilled: false });
+        } else {
+          assert.throws(() => phaseEnd(seen), /docker stats client signal failed|docker stats client process failed|stats sampler exceeded its deadline/);
+          assert.deepEqual([errors[0].step, errors[0].kind], ["sampler", failure === "deadline"
+            ? "deadline" : failure === "emitted spawn error" ? "client-process" : "shutdown-signal"]);
+        }
+        assert.doesNotMatch(error.message, /synthetic-private-process-detail/);
+        return true;
+      });
+      assert.equal(existsSync(`${path}.json`), false);
+    }
+    assert.equal(readFileSync(path, "utf8"), prefix);
+  });
+}
