@@ -4,7 +4,10 @@
 //!
 //! A stream is one to four requests made from a grammar of what clients and attackers send
 //! (methods, targets, versions, `Host` lines, every way to frame a body and to get one wrong,
-//! header lines the grammar does not have, line ends), then changed at random three times in
+//! header lines the grammar does not have, line ends). In half the streams every request is one
+//! a client that follows HTTP sends, so the answers of the two are compared and not only their
+//! refusals; in the other half each request is as likely to be made from the whole grammar. A
+//! stream is then changed at random three times in
 //! ten (a byte flipped, dropped or added, a line doubled, dropped or moved, the stream cut), cut
 //! into several writes one time in three, and its client's side closed behind it one time in
 //! twelve. The streams before those are fixed: each of a few requests cut in two writes at every
@@ -316,6 +319,9 @@ fn pick<'a, T: ?Sized>(dice: &mut Dice, of: &[&'a T]) -> &'a T {
     of[dice.below(of.len())]
 }
 
+// Each list begins with what a client that follows HTTP sends: [`request`] says how many of its
+// entries those are.
+
 /// True `in_hundred` times in a hundred.
 fn chance(dice: &mut Dice, in_hundred: usize) -> bool {
     dice.below(100) < in_hundred
@@ -545,8 +551,16 @@ const CODING_NAMES: &[&str] = &[
     "transfer-encoding\0",
 ];
 
-/// A request's framing lines and its body.
-fn framing(dice: &mut Dice) -> (Vec<String>, String) {
+/// A request's framing lines and its body. `wild`: from the whole grammar, and otherwise as a
+/// client that follows HTTP frames a body.
+fn framing(dice: &mut Dice, wild: bool) -> (Vec<String>, String) {
+    if !wild {
+        return match dice.below(10) {
+            0..=5 => (Vec::new(), String::new()),
+            6 | 7 => (vec!["content-length: 5".to_owned()], "hello".to_owned()),
+            _ => (vec!["transfer-encoding: chunked".to_owned()], pick(dice, &CHUNKED[..5]).to_owned()),
+        };
+    }
     let length = |dice: &mut Dice| format!("{}: {}", pick(dice, LENGTH_NAMES), pick(dice, LENGTHS));
     let coding = |dice: &mut Dice| format!("{}: {}", pick(dice, CODING_NAMES), pick(dice, CODINGS));
     match dice.below(20) {
@@ -563,21 +577,24 @@ fn framing(dice: &mut Dice) -> (Vec<String>, String) {
     }
 }
 
-/// One request from the grammar.
-fn request(dice: &mut Dice) -> Vec<u8> {
-    let mut lines = vec![format!("{} {} {}", pick(dice, METHODS), pick(dice, TARGETS), pick(dice, VERSIONS))];
-    let (frames, body) = framing(dice);
+/// One request from the grammar. `wild`: from the whole of it, and otherwise one a client that
+/// follows HTTP sends, made of the first entries of each list.
+fn request(dice: &mut Dice, wild: bool) -> Vec<u8> {
+    let of = |dice: &mut Dice, all: &[&'static str], plain: usize| pick(dice, if wild { all } else { &all[..plain] });
+    let mut lines = vec![format!("{} {} {}", of(dice, METHODS, 11), of(dice, TARGETS, 12), of(dice, VERSIONS, 8))];
+    let (frames, body) = framing(dice, wild);
     let mut headers: Vec<String> = Vec::new();
-    headers.extend([pick(dice, HOSTS), pick(dice, CONNECTIONS), pick(dice, ASKS)].into_iter().filter(|line| !line.is_empty()).map(str::to_owned));
+    let asks = [of(dice, HOSTS, 8), of(dice, CONNECTIONS, 6), of(dice, ASKS, ASKS.len())];
+    headers.extend(asks.into_iter().filter(|line| !line.is_empty()).map(str::to_owned));
     for _ in 0..dice.below(4) {
-        headers.push(pick(dice, LINES).to_owned());
+        headers.push(of(dice, LINES, 11).to_owned());
     }
     // A long line, of a length around the lower of the two limits on a head.
     if chance(dice, 6) {
         headers.push(format!("x-long: {}", "v".repeat(dice.below(1_500))));
     }
     // More headers than a head may have, once in a while.
-    if chance(dice, 1) {
+    if wild && chance(dice, 3) {
         headers.extend((0..90 + dice.below(20)).map(|at| format!("x-{at}: 1")));
     }
     headers.extend(frames);
@@ -587,13 +604,14 @@ fn request(dice: &mut Dice) -> Vec<u8> {
     }
     lines.extend(headers);
     let end = match dice.below(40) {
+        _ if !wild => "\r\n",
         0..=35 => "\r\n",
         36 | 37 => "\n",
         38 => "\r",
         _ => "\n\r",
     };
     let mut bytes = Vec::new();
-    if chance(dice, 4) {
+    if wild && chance(dice, 8) {
         bytes.extend_from_slice(pick(dice, &["\r\n", "\r\n\r\n", "\n", " ", "\r"]).as_bytes());
     }
     for line in lines {
@@ -646,8 +664,12 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     }
     let mut dice = Dice(seed.wrapping_mul(1_000_003).wrapping_add(index as u64));
     let mut bytes = Vec::new();
+    // Half the streams are of requests a client that follows HTTP sends, so both connections
+    // answer them; in the others each request is as likely to be made from the whole grammar.
+    let plain = chance(&mut dice, 50);
     for _ in 0..1 + dice.below(4) {
-        bytes.extend(request(&mut dice));
+        let wild = !plain && chance(&mut dice, 50);
+        bytes.extend(request(&mut dice, wild));
     }
     if chance(&mut dice, 30) {
         bytes = mutate(&mut dice, bytes);
