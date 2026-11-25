@@ -2087,9 +2087,10 @@ where
             // The wait for shutdown has a waker of its own ([`Heard`]) and is polled only when
             // that waker has fired, and at first. So a wake of the task for the connection (every
             // read and write) asks only whether it has, one load, where polling the wait again
-            // took a lock every connection on every thread shares: the mutex of one of the lists
-            // the channel keeps its waiters in. The task is spawned above, so the waker it is
-            // polled with here is its own for as long as it runs.
+            // took a lock connections on every thread share: the mutex of one of the lists the
+            // channel keeps its waiters in (tokio has eight, and a wait is put on one at random).
+            // The task is spawned above, so the waker it is polled with here is its own for as
+            // long as it runs.
             let closing = {
                 let task = std::future::poll_fn(|cx| std::task::Poll::Ready(cx.waker().clone())).await;
                 let heard = Arc::new(Heard { woken: std::sync::atomic::AtomicBool::new(true), task });
