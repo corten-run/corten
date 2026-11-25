@@ -1,0 +1,4 @@
+answers: a wrong answer stopped the placement before any turn (exit 1, no counts file): turns: plain: A and B answer differently
+failed: a turn with failed requests recorded nothing (exit 1, 0 rows): turns: plain: errors in pair w1 base: requests 76691, connect 0, read 0, write 0, status 76691, timeout 0
+limit: a placement past its time limit was stopped (exit 124), with no recorded pair and no server left
+SELFTEST-OK

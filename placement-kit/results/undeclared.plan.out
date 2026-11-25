@@ -1,0 +1,3 @@
+plan.mjs: /m/ev/undeclared/plan.json is not a usable plan:
+  base: a full commit id. A plan that does not name the commits it reads, the change's base and head, is not declared (CONTRIBUTING.md, Pull requests, item 2)
+  head: a full commit id. A plan that does not name the commits it reads, the change's base and head, is not declared (CONTRIBUTING.md, Pull requests, item 2)

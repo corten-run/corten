@@ -1,0 +1,2 @@
+mask.mjs: etag: two starts sent it 0 and 0 times; a masked value is one each start sends once
+VERIFY FAILED: the plan's mask

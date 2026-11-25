@@ -1,0 +1,12 @@
+== run 2bd4a520-3d45-4e14-8f5c-c16ee958071c: pilot plain, plan 92e3750eb702f886441586dc04df767c2d4e77d721d6b2719d32293827dc4a1c; verify start 00:37:51
+verify: 12 placements answer as their unpadded binary
+== turns start 00:37:54; 6 placements to run
+1 pilot-plain p003 ok 00:38:03
+2 pilot-plain p005 ok 00:38:12
+3 pilot-plain p001 ok 00:38:21
+4 pilot-plain p002 ok 00:38:30
+5 pilot-plain p004 ok 00:38:39
+6 pilot-plain p006 ok 00:38:48
+failed (their comparison has no bound; nothing is run again): none
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

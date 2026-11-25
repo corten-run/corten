@@ -1,0 +1,2 @@
+.text: 3252 input sections and 3324 symbols of the unpadded link between a first pad of 15120 bytes and a second of 64; 3213 of the 3213 sections before the first aligned beyond 16 bytes moved by exactly the pad, with 3285 symbols; .data at 0x3a0520, 32 bytes into a line
+JSON {"ok":true,"why":[],"pad":15120,"second":64,"inputs":3252,"symbols":3324,"sectionsBeforeAligned":3213,"sectionsBeforeAlignedMovedByPad":3213,"symbolsBeforeAlignedMovedByPad":3285,"dataAt":3802400,"dataOffset":32}

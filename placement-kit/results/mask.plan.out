@@ -1,0 +1,9 @@
+plan placement-kit-dry-mask, sha256 ccbe303d9e5d00e8af98e87cf5fc3a5bf3beceb21293b444c5711007878f678a: base e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc, head e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc
+pilot plain (DRY RUN: a test of the scripts, read for nothing): K = 6 placements, R = 2 recorded pairs each after one that is not, 1 s turns; comparisons pilot-plain
+a pilot: an A/A of the base read only for the spread of its placement medians, to size K; it reads no threshold
+the bound is the 6th smallest of the 6 placement medians, the lower bound the 1st; the order is drawn from seed 2026112401
+pads p (base and head in the change, the A/A's first side): 320 15120 25824 40624 10304 21008
+pads q (the A/A's second side): 22848 12160 38336 27648 12880 2192
+12 distinct sizes from 320 to 40624 bytes; p by 64-byte-line phase (0, 16, 32, 48): 2, 2, 1, 1, by quarter of a page: 2, 1, 2, 1; q: 4, 2, 0, 0 and 1, 1, 2, 2
+the pairs: 6 ordered combinations of the line phases of p and q; q - p mod 4096 takes 6 distinct values, 1, 2, 2, 1 by quarter of a page (at least 0 asked in each)
+written: /m/w/mask/plan

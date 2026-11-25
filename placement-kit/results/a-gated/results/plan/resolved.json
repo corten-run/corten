@@ -1,0 +1,210 @@
+{
+ "name": "placement-example",
+ "part": "gated",
+ "workload": "plain",
+ "dry": {
+  "K": 6,
+  "R": 2,
+  "seconds": 1
+ },
+ "K": 6,
+ "declaredK": "pilot",
+ "R": 2,
+ "seconds": 1,
+ "seed": 2026112401,
+ "rank": 6,
+ "lowerRank": 1,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    2,
+    2,
+    1,
+    1
+   ],
+   "pageQuarters": [
+    2,
+    1,
+    2,
+    1
+   ],
+   "pages": [
+    1,
+    0,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    4,
+    2,
+    0,
+    0
+   ],
+   "pageQuarters": [
+    1,
+    1,
+    2,
+    2
+   ],
+   "pages": [
+    1,
+    0,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+   ],
+   "min": 2192,
+   "max": 38336
+  },
+  "linePairCombos": 6,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664
+  ],
+  "distinctDiffs": 6,
+  "diffQuarters": [
+   1,
+   2,
+   2,
+   1
+  ]
+ },
+ "sides": [
+  "base",
+  "head"
+ ],
+ "comparisons": [
+  "aa-plain",
+  "change-plain"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "aa-plain",
+   "i": 3
+  },
+  {
+   "seq": 2,
+   "comparison": "change-plain",
+   "i": 3
+  },
+  {
+   "seq": 3,
+   "comparison": "change-plain",
+   "i": 5
+  },
+  {
+   "seq": 4,
+   "comparison": "aa-plain",
+   "i": 5
+  },
+  {
+   "seq": 5,
+   "comparison": "aa-plain",
+   "i": 1
+  },
+  {
+   "seq": 6,
+   "comparison": "change-plain",
+   "i": 1
+  },
+  {
+   "seq": 7,
+   "comparison": "change-plain",
+   "i": 2
+  },
+  {
+   "seq": 8,
+   "comparison": "aa-plain",
+   "i": 2
+  },
+  {
+   "seq": 9,
+   "comparison": "aa-plain",
+   "i": 4
+  },
+  {
+   "seq": 10,
+   "comparison": "change-plain",
+   "i": 4
+  },
+  {
+   "seq": 11,
+   "comparison": "change-plain",
+   "i": 6
+  },
+  {
+   "seq": 12,
+   "comparison": "aa-plain",
+   "i": 6
+  }
+ ],
+ "base": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+ "head": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+ "reduction": null,
+ "reads": [
+  "margin"
+ ],
+ "recordsSpread": false,
+ "declared": "GET /private to the probe's configuration plain, no request header of its own: the record page for one visitor, about 6 KB, not kept. An example: main against itself, so it reads no change.",
+ "plan": "92e3750eb702f886441586dc04df767c2d4e77d721d6b2719d32293827dc4a1c",
+ "sized": null,
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "host": {
+  "cpuModel": null,
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "mask": [],
+ "request": {
+  "path": "/private",
+  "headers": []
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

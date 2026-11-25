@@ -1,0 +1,18 @@
+== run 731e86aa-2f69-4606-a10f-35c1da63e533: gated plain, plan 92e3750eb702f886441586dc04df767c2d4e77d721d6b2719d32293827dc4a1c; verify start 00:40:35
+verify: 18 placements answer as their unpadded binary
+== turns start 00:40:40; 12 placements to run
+1 aa-plain p003 ok 00:40:49
+2 change-plain p003 ok 00:40:58
+3 change-plain p005 ok 00:41:07
+4 aa-plain p005 ok 00:41:16
+5 aa-plain p001 ok 00:41:25
+6 change-plain p001 ok 00:41:34
+7 change-plain p002 ok 00:41:43
+8 aa-plain p002 ok 00:41:52
+9 aa-plain p004 ok 00:42:01
+10 change-plain p004 ok 00:42:10
+11 change-plain p006 ok 00:42:19
+12 aa-plain p006 ok 00:42:28
+failed (their comparison has no bound; nothing is run again): none
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

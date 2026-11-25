@@ -1,0 +1,21 @@
+== (a) main against itself: the pilot part, then the gated part
+00:36:57 a-pilot.plan: exit 0: written: /m/w/a-pilot/plan
+00:37:50 a-pilot.build: exit 0: BUILD-DONE
+00:38:48 a-pilot.run: exit 0: ALL-DONE
+00:38:48 a-gated.plan: exit 0: written: /m/w/a-gated/plan
+00:40:34 a-gated.build: exit 0: BUILD-DONE
+00:42:28 a-gated.run: exit 0: ALL-DONE
+== (c) a wrong answer, a failed request, a placement past its time limit
+00:42:33 a-gated.selftest: exit 0: SELFTEST-OK
+== (b) a head with code aligned beyond 16 bytes: linked and checked, nothing started
+00:42:33 b.plan: exit 0: written: /m/w/b/plan
+00:44:51 b.build: exit 0: BUILD-DONE
+00:44:56 b.selftest: exit 0: SELFTEST-OK
+== mask: a masked header that does not differ between starts (run.sh must end verify-failed, exit 1)
+00:44:57 mask.plan: exit 0: written: /m/w/mask/plan
+00:45:50 mask.build: exit 0: BUILD-DONE
+00:45:51 mask.run: exit 1: ALL-DONE
+== undeclared: a plan that does not name full commits (plan.mjs must exit 1)
+00:45:52 undeclared.plan: exit 1:   head: a full commit id. A plan that does not name the commits it reads, the change's base and head, is not declared (CONTRIBUTING.md, Pull requests, item 2)
+what (b) left running or recorded as a turn: 0 counts, turn logs or server logs under its work directory
+DRY-RUN-DONE

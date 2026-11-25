@@ -1,0 +1,36 @@
+{
+  "plan": 1,
+  "name": "placement-kit-dry-b",
+  "base": "e2d0c464e7d7b56ea69b59c8fe7e8c9c2078d5bc",
+  "head": "498291116fe5d3e3088bb3a663d1afc4dd998898",
+  "probe": {
+    "dir": "probe",
+    "tree": ["Cargo.toml", "Cargo.lock", "README.md", "crates", "docs"],
+    "toolchain": "1.100.0",
+    "env": { "ZSTD_SYS_USE_PKG_CONFIG": "1" },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain"
+  },
+  "host": {
+    "cpuModel": null,
+    "cpus": { "server": 2, "load": [4, 5], "driver": 7 }
+  },
+  "load": { "threads": 2, "connections": 64, "seconds": 3 },
+  "R": 8,
+  "placementSeconds": 600,
+  "workloads": [
+    {
+      "name": "gzbr",
+      "declared": "A dry run of the kit's link steps, read for nothing and never turned: GET /private as a client that accepts gzip and brotli and not zstd, the request whose answer the head's libdeflate code makes. Only plan.mjs, build.sh and the selftest's map case are run on it; no server is started and no cycle counted.",
+      "request": { "path": "/private", "headers": ["Accept-Encoding: gzip, br"] },
+      "status": 200,
+      "mask": [],
+      "K": 30,
+      "seed": 2026112402,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    }
+  ]
+}

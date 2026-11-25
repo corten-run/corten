@@ -1,0 +1,3 @@
+.text: 3252 input sections and 3324 symbols of the unpadded link between a first pad of 320 bytes and a second of 64; 3213 of the 3213 sections before the first aligned beyond 16 bytes moved by exactly the pad, with 3285 symbols; .data at 0x39cb20, 32 bytes into a line
+JSON {"ok":false,"why":[".data begins 32 bytes into a 64-byte line, not 16, the unpadded link's offset plus the first pad's size"],"pad":320,"second":64,"inputs":3252,"symbols":3324,"sectionsBeforeAligned":3213,"sectionsBeforeAlignedMovedByPad":3213,"symbolsBeforeAlignedMovedByPad":3285,"dataAt":3787552,"dataOffset":32}
+map.mjs: .data begins 32 bytes into a 64-byte line, not 16, the unpadded link's offset plus the first pad's size

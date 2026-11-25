@@ -1,0 +1,2 @@
+functions in both: 3221; moved by exactly the pad: 3219 (not asked: the map's check stands in); neighbours kept: 3152 of 3152; only in the placement: corten_layout_pad, corten_layout_pad2
+JSON {"ok":true,"why":[],"pad":10304,"second":true,"functions":3221,"exact":3219,"neighbours":3152,"neighboursKept":3152,"onlyA":0,"onlyB":["corten_layout_pad","corten_layout_pad2"]}

@@ -1,0 +1,3 @@
+#!/bin/sh
+unset LD_PRELOAD
+exec node /m/corten/bench/placement/selftest/wrong.mjs "$1"
