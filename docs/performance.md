@@ -58,11 +58,12 @@ ETag and downstream-readiness exceptions are disclosed in the group contract.
 
 Report these as short-window medians and ranges, with errors, utilization and headroom limits;
 they do not guarantee a finish by 7 am or establish small differences without repeatability.
-No saved evidence shows that each adapter, the JIT runtimes in particular, had stopped getting
-faster by the end of the 10-second warmup, or that any app's memory and tail latency hold over
+No saved evidence shows that each adapter, the JIT runtimes in particular, had stopped changing
+by the end of the 10-second warmup, or that any app's memory and tail latency hold over
 longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
 collect that evidence outside the nightly, and the timed warmup is to be set from a saved
-convergence pass. None has been run yet, so these results make no claim either way about warmth.
+convergence pass that is like-for-like with the round (same commit, images, CPU settings, host CPU
+and the warmup's 32 users). None has been saved yet, so these results make no claim either way about warmth.
 Build times, instructions, bytes and interactive timing are not measured by this suite yet.
 The older measurements below remain historical evidence for their own workloads, not v2
 results. The nonlocalized [catalog](../bench/catalog/README.md) remains an optional, separate
@@ -135,7 +136,7 @@ Feature contract: marketplace-production/v1. Popular and performance-oriented ca
 
 Warning: Short 15s phase windows (10s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.
 
-Convergence evidence: none exists for this round. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 10s warmup; the timed numbers may include warming.
+Convergence evidence: none provided to this report. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 10s warmup; the timed numbers may include warming.
 
 ### en-US
 

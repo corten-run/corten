@@ -11,7 +11,6 @@ import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureP
 import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v3Schema, v5Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
 import { maxStatsSamples } from "./raw-contract.mjs";
-import { convergenceLines } from "./steady-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
 function loadEvidence(p) {
@@ -232,8 +231,12 @@ export function validateSummary(s) {
   return s;
 }
 /**
- * A validated round as Markdown. `convergence` is a saved convergence pass (steady.mjs) the report
- * states it used; without one the report says none exists for the round (#1851).
+ * A validated round as Markdown. `convergence(round, apps)` returns the lines stating a saved
+ * convergence pass (steady-contract.mjs convergenceLines); without it the report says none was
+ * provided to it (#1851). The CLI loads steady-contract.mjs only for --convergence, so validating
+ * or reporting a round without a pass never imports it.
+ * @param {object} s a saved round
+ * @param {{convergence?: ((round: object, apps: string[]) => string[]) | null}} [options]
  */
 export function report(s, { convergence = null } = {}) {
   validateSummary(s);
@@ -277,7 +280,9 @@ export function report(s, { convergence = null } = {}) {
   if (s.options.duration < 60) warnings.push(`Short ${s.options.duration}s phase windows (${s.options.warmup}s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.`);
   if (Object.values(s.measurement.cpus).some((c) => !c.cpuset)) warnings.push("CPU quotas without disjoint pinning do not prove CPU isolation.");
   for (const warning of warnings) lines.push("", `Warning: ${warning}`);
-  for (const line of convergenceLines(s, apps, convergence)) lines.push("", line);
+  const convergenceText = convergence ? convergence(s, apps)
+    : [`Convergence evidence: none provided to this report. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its ${s.options.warmup}s warmup; the timed numbers may include warming.`];
+  for (const line of convergenceText) lines.push("", line);
   // The rows of every table: a split round's, each droplet's Corten and its admitted candidates,
   // each beside its own Corten (#816); otherwise the measured adapters, in the group's order.
   const rows = split ? split.parts.flatMap((p) => p.apps.filter((app) => app === splitSubject || admitted(s.apps[app])).map((app) => ({ app, a: app === splitSubject ? p.corten : s.apps[app],
@@ -347,6 +352,11 @@ function betweenLines(s, cell) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   assert.ok(args.length === 1 || (args.length === 3 && args[1] === "--convergence"), "usage: node bench/marketplace/report.mjs summary.json [--convergence convergence-summary.json]");
-  const convergence = args.length === 3 ? JSON.parse(readFileSync(args[2], "utf8")) : null;
+  let convergence = null;
+  if (args.length === 3) {
+    const pass = JSON.parse(readFileSync(args[2], "utf8"));
+    const { convergenceLines } = await import("./steady-contract.mjs");
+    convergence = (round, apps) => convergenceLines(round, apps, pass);
+  }
   console.log(report(JSON.parse(readFileSync(args[0], "utf8")), { convergence }));
 }

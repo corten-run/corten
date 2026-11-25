@@ -156,14 +156,14 @@ not a guaranteed finish by 7 am or an unsupported claim about small differences.
 
 ### Convergence and soak passes
 
-Nothing saved yet shows that each adapter has stopped getting faster by the end of the timed
+Nothing saved yet shows that each adapter has stopped changing by the end of the timed
 10-second warmup, or that its memory and tail latency hold over time
 ([#1851 Load phases run 15 s after a 10 s warmup, and nothing shows the JIT runtimes had reached steady state or that any app's memory holds over time](https://github.com/corten-run/corten/issues/1851)).
 Two passes, separate from the timed rounds, collect that evidence. Neither changes a timed
 phase, the warmup, the rate, the droplet job or a saved round, and neither is part of the nightly.
 
 ```sh
-# One closed loop per adapter, source and target: 64 users for 5 minutes in 15 s windows.
+# One closed loop per adapter, source and target: the timed warmup's 32 users for 5 minutes in 15 s windows.
 node bench/marketplace/steady.mjs convergence w3 --group production --build
 # A fixed 150 requests/second for 30 to 60 minutes, in 60 s intervals.
 node bench/marketplace/steady.mjs soak w4 --group production --minutes 30
@@ -180,28 +180,41 @@ runs and the report says admission was not checked. `--minutes`, `--window` (con
 beside its ownership label. Like a timed round, a pass refuses to start without the current
 generated fixture (`node bench/marketplace/fixtures.mjs`). Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
+Every container is read, logged and removed by the ID Docker printed for it, after its owner label
+is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
 For the production group's seven candidates a convergence pass is 28 five-minute passes, about
 two and a half hours with container starts, plus image builds (estimated, not measured); it
 needs repeating only when an adapter's runtime or framework version changes.
 
 A convergence pass keeps each window's throughput, p95 and p99, and applies one stated rule
-(`flattenRule` in [steady-contract.mjs](steady-contract.mjs)): compare the median throughput of the
-last four windows with the four before; more than 5% higher means the adapter was still getting
-faster when the pass ended. Otherwise it flattened at the first window of the longest final run
-whose three-window medians stay within 5% below that tail, provided the run holds at least four
-windows. A pass with a failed request, or whose app stopped, gets no verdict. A soak reports
-memory at the start and the end (the median sample in the first and last interval), p99 per
-interval, failed requests and any restart, stop or OOM kill.
+(`flattenRule` in [steady-contract.mjs](steady-contract.mjs)), counted in seconds so the window length
+does not change it (`--window` must divide 60). The tail is the median throughput of the last
+60 s. More than 5% above the 60 s before it: not shown steady at the end. The 60 s before it, or
+the first 60 s, more than 5% above the tail: not shown steady, slower at the end; a pass that got
+slower is never flattened. Otherwise the adapter flattened at the first window of the longest final
+run whose three-window medians stay within 5% of the tail on either side, provided that run lasts
+at least 60 s. 5% is a stated choice, not derived from measured noise: wide enough that a window's
+sampling noise is not read as change, narrow enough that a runtime still moving by more than a
+twentieth is not called steady; it is to be revisited once saved passes show the window-to-window
+spread. The median of three lets one outlier window neither start nor end the steady run, while two
+in a row still count. A pass with a failed request, or whose app stopped, restarted or was
+OOM-killed, gets no verdict. A soak reports memory at the start and the end (the median sample in
+the first and last interval), p99 per interval, failed requests and any restart, stop or OOM kill.
+If k6 dropped iterations, the fixed rate was not met: the soak report says so and does not present
+that cell as a fixed-rate result.
 
 The timed warmup is to be set from a saved convergence pass: `steady-report.mjs` prints the
 shortest warmup the pass supports, the latest flatten window's start over every adapter, source
 and target, or none if any never flattened. Changing the nightly's `--warmup` is its own reviewed
 change to the droplet contract. `report.mjs <summary.json> --convergence <pass>/summary.json`
-states which pass a round's report used, each measured adapter's flatten window and whether the
-round's warmup reaches the slowest; without `--convergence` the report says no convergence
-evidence exists for that round, as it does for every saved round today. A pass run with another
-group than the round's (for example `--apps` against a `--group production` round) measured other
-images and container settings: the report says so and does not count it toward the warmup. No
+states which pass a round's report used and each measured adapter's flatten window. It says
+whether the round's warmup reaches the slowest only when the pass is like-for-like with the round:
+the same commit and group, the same image ID for every measured adapter (the pass records them as
+the round does), the same CPU quotas and pinning, the same host CPU model and the timed warmup's 32
+users. A pass that differs in any of these, or a round that does not record one of them, gets its
+flatten times printed as context only, with the differences, and the report says the pass does not
+establish that round's warmup. `--vus` other than 32 is for exploration. Without `--convergence`
+the report says no convergence pass was provided to it, as it does for every saved round today. No
 convergence pass has been saved for any round, so nothing here says whether any adapter is warm
 after 10 seconds.
 

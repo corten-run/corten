@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfilesFor, v4Schema, v5Schema } from "./run-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
-import { convergenceSchema, flattenPoint, flattenRule } from "./steady-contract.mjs";
+import { convergenceLines, convergenceSchema, flattenPoint, flattenRule, timedWarmupVus } from "./steady-contract.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
@@ -195,10 +199,10 @@ test("r20 still validates and renders its actual per-locale measurements", () =>
   const saved = (name) => readFileSync(new URL(`./results/r20/${name}`, import.meta.url), "utf8");
   const s = JSON.parse(saved("summary.json"));
   assert.equal(s.schema, v5Schema);
-  // The saved report, plus only the statement that no convergence evidence exists for r20 (#1851).
+  // The saved report, plus only the statement that no convergence pass was provided to it (#1851).
   const original = saved("report.md").replaceAll("\r\n", "\n"), at = original.indexOf("\n\n## ", original.indexOf("Warning: Short 15s phase windows"));
   assert.ok(at > 0);
-  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none exists for this round. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 10s warmup; the timed numbers may include warming.${original.slice(at)}`);
+  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none provided to this report. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 10s warmup; the timed numbers may include warming.${original.slice(at)}`);
   // The regression key produced by the v5 reader for this saved round.
   assert.equal(comparisonKey(s), "ac1de5eaa9eabbfd993d3dc68eab0526eed883f240a2aac9cf2988e759b3d853");
   const next = grouped("production", "r21");
@@ -599,29 +603,53 @@ test("a v3 baseline compares with a v4 round, and a stop in the v4 round is a ne
   assert.equal(compare(asV3(synthetic(v4Schema), "r20"), baseline).compatible, true, "two v3 rounds still compare");
 });
 
-test("the report states the convergence pass it used, or that none exists for the round", () => {
+test("the report states the convergence pass given to it, or that none was provided", async () => {
   const s = grouped("production", "r21");
   const probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
   // Corten and ASP.NET Core are measured; the other candidates are excluded, not timed.
   for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
   validateSummary(s);
   const none = report(s);
-  assert.match(none, /^Convergence evidence: none exists for this round\. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 30s warmup/m);
+  assert.match(none, /^Convergence evidence: none provided to this report\. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 30s warmup/m);
   const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
-  const options = { kind: "convergence", name: "w5", group: "production", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: 64 };
-  const convergence = { schema: convergenceSchema, name: "w5", options, rule: flattenRule, commit: s.commit, dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
-    host: { cpu: "Synthetic test only" }, cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
+  // Like-for-like with the round: its commit, group, image IDs, CPU settings, host CPU and the timed warmup's users.
+  const options = { kind: "convergence", name: "w5", group: "production", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: timedWarmupVus };
+  const pass = { schema: convergenceSchema, name: "w5", options, rule: flattenRule, commit: s.commit, dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
+    host: { cpu: s.host.cpu }, measurement: { cpus: s.measurement.cpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
+    cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
       const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
       return { app, source, target, windows: w, tail: 0, unrecorded: 0, verdict: flattenPoint(w) };
     }))) };
-  const text = report(s, { convergence });
-  assert.doesNotMatch(text, /none exists for this round/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v1, rule marketplace-flatten\/v1\), measured at commit `a{40}`, this round's commit/m);
+  const given = (p) => (round, apps) => convergenceLines(round, apps, p);
+  const text = report(s, { convergence: given(pass) });
+  assert.doesNotMatch(text, /none provided to this report/);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v1, rule marketplace-flatten\/v2\), measured at commit `a{40}`/m);
+  assert.match(text, /^The pass is like-for-like with this round: the same commit, group, images, CPU settings and host CPU, and the timed warmup's 32 users\.$/m);
   assert.match(text, /^Flatten: aspnet api json: window 3 \(45 s\)\.$/m);
   assert.match(text, /^The slowest measured adapter flattened at 45 s \(aspnet fixture page\); this round's 30s warmup is shorter than that point\./m);
   // Only the convergence lines differ: the timed tables are the same with or without evidence.
-  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Flatten|The slowest|No convergence|Not every)[^\n]*/g, "");
+  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Flatten|The slowest|The pass is|This pass|No convergence|Not every)[^\n]*/g, "");
   assert.equal(strip(text), strip(none));
-  const tampered = structuredClone(convergence); tampered.cells[2].verdict.window = 0;
-  assert.throws(() => report(s, { convergence: tampered }), /saved verdict differs/);
+  const tampered = structuredClone(pass); tampered.cells[2].verdict.window = 0;
+  assert.throws(() => report(s, { convergence: given(tampered) }), /saved verdict differs/);
+  // A pass of the same commit is still not like-for-like when its images differ: context only.
+  const rebuilt = structuredClone(pass); rebuilt.images.aspnet = `sha256:${"9".repeat(64)}`;
+  const other = report(s, { convergence: given(rebuilt) });
+  assert.match(other, /^The pass is not like-for-like with this round, so its flatten times below are context only: the image IDs differ for aspnet\.$/m);
+  assert.match(other, /^Flatten: aspnet api json: window 3 \(45 s\)\.$/m);
+  assert.match(other, /^This pass does not establish this round's 30s warmup\.$/m);
+  assert.doesNotMatch(other, /reaches|is shorter than/);
+  // The replay's validateSummary closure must not load steady-contract.mjs: report.mjs imports it only on the --convergence CLI path.
+  const source = readFileSync(new URL("./report.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /^import[^\n]*steady-contract/m);
+  assert.match(source, /await import\("\.\/steady-contract\.mjs"\)/);
+  const dir = mkdtempSync(join(tmpdir(), "marketplace-report-")), round = join(dir, "round.json"), file = join(dir, "pass.json");
+  try {
+    writeFileSync(round, JSON.stringify(s)); writeFileSync(file, JSON.stringify(rebuilt));
+    const cli = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round, "--convergence", file], { encoding: "utf8" });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(cli.stdout, `${other}\n`);
+    const plain = spawnSync(process.execPath, [fileURLToPath(new URL("./report.mjs", import.meta.url)), round], { encoding: "utf8" });
+    assert.equal(plain.stdout, `${none}\n`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

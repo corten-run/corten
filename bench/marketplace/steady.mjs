@@ -2,9 +2,10 @@
 // runner changes no timed phase, warmup, rate, droplet job or saved round. Each adapter, source and
 // target gets a fresh container, started as run.mjs starts it, a readiness request and then one
 // long k6 pass (window-load.js) whose answers are counted per window.
-//   convergence: a closed loop (64 users, 5 minutes in 15 s windows by default); the flatten rule
-//                in steady-contract.mjs names the window each adapter stopped getting faster in.
-//                A pass with a failed request, or whose app stopped, gets no verdict.
+//   convergence: a closed loop (the timed warmup's 32 users, 5 minutes in 15 s windows by default);
+//                the flatten rule in steady-contract.mjs names the window each adapter stopped
+//                changing in. A pass with a failed request, or whose app stopped, restarted or was
+//                OOM-killed, gets no verdict.
 //   soak:        a fixed rate (150 requests/second, 30 minutes in 60 s intervals by default), with
 //                memory at the start and end, p99 per interval and any restart.
 // node bench/marketplace/steady.mjs convergence w3 --group production --build
@@ -27,7 +28,7 @@ import { retainLoadEvidence } from "./load-evidence.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
-import { checkFixture, convergenceSchema, flattenPoint, flattenRule, ownerLabelKey, parseSteadyArgs, readWindows, soakSchema, summarizeSoak } from "./steady-contract.mjs";
+import { checkFixture, convergenceSchema, flattenPoint, flattenRule, heldThrough, ownerLabelKey, parseSteadyArgs, readDropped, readWindows, soakSchema, summarizeSoak, verdictText } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -62,36 +63,44 @@ let interrupted = false;
 const { command, interrupt } = commandRunner({ cwd: repo, interrupted: () => interrupted, interruptMessage: `marketplace ${options.kind} pass interrupted` });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; interrupt(); });
 const docker = (args, opts) => command("docker", args, opts);
-const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
+const containerId = /^[a-f0-9]{64}$/;
+const inspect = async (id, cleanup = false) => { assert.match(id, containerId, "containers are inspected by their immutable ID"); return JSON.parse(await docker(["inspect", "--type", "container", id], { cleanup }))[0]; };
+// Creates a container and returns the immutable ID Docker printed for it. Every later inspect, log,
+// start and removal uses that ID, never the name; the name is only for DNS on the pass's network.
+// A create whose ID never came back is found by the owner-label sweep at teardown.
 const owned = async (args, name) => {
-  active.add(name);
-  await docker([args[0], "--name", name, ...ownerArgs, ...args.slice(1)]);
-  const info = await inspect(name);
-  created.push({ kind: "container", id: info.Id, name });
+  const id = await docker([args[0], "--name", name, ...ownerArgs, ...args.slice(1)]);
+  assert.match(id, containerId, `docker ${args[0]} ${name} did not print a container ID`);
+  active.add(id);
+  const info = await inspect(id);
+  assert.equal(info.Id, id); assert.equal(info.Name, `/${name}`); assert.equal(info.Config.Labels?.[label], runId, `${name} lacks the pass's owner label`);
+  created.push({ kind: "container", id, name });
   for (const m of info.Mounts.filter((m) => m.Type === "volume")) {
     assert.match(m.Name, /^[a-f0-9]{64}$/);
     created.push({ kind: "volume", id: m.Name, name: m.Name });
   }
-  return name;
+  return id;
 };
-async function remove(name) {
-  const list = await docker(["ps", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"], { cleanup: true });
+async function remove(id, { recovered = false } = {}) {
+  assert.match(id, containerId, "containers are removed by their immutable ID");
+  const list = await docker(["ps", "-a", "--no-trunc", "--filter", `id=${id}`, "--format", "{{.ID}}"], { cleanup: true });
   if (list) {
-    const info = await inspect(name, true);
-    assert.equal(info.Config.Labels?.[label], runId, `refusing cleanup of unowned ${name}`);
-    assert.equal(await docker(["rm", "-f", "-v", info.Id], { cleanup: true }), info.Id);
-    removed.push({ kind: "container", id: info.Id, name });
+    assert.equal(list, id, "container lookup by ID returned another container");
+    const info = await inspect(id, true);
+    assert.equal(info.Config.Labels?.[label], runId, `refusing cleanup of unowned container ${id}`);
+    assert.equal(await docker(["rm", "-f", "-v", id], { cleanup: true }), id);
+    removed.push({ kind: "container", id, name: info.Name.replace(/^\//, ""), ...(recovered ? { recovered } : {}) });
     for (const m of info.Mounts.filter((m) => m.Type === "volume")) {
       assert.equal(await docker(["volume", "ls", "--filter", `name=^${m.Name}$`, "--format", "{{.Name}}"], { cleanup: true }), "", "anonymous volume survived container cleanup");
       removed.push({ kind: "volume", id: m.Name, name: m.Name });
     }
   }
-  active.delete(name);
+  active.delete(id);
 }
-async function portOf(name) {
-  const info = await inspect(name);
+async function portOf(id) {
+  const info = await inspect(id);
   const port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
-  assert.ok(port, `${name}: no private host port`);
+  assert.ok(port, `${info.Name}: no private host port`);
   return `http://127.0.0.1:${port}`;
 }
 const fixtureDir = join(here, "fixtures");
@@ -123,19 +132,20 @@ async function ready(base) {
 const state = (info) => ({ restartCount: info.RestartCount, running: info.State.Running, oomKilled: info.State.OOMKilled, exitCode: info.State.ExitCode });
 // One adapter, source and target: a fresh container, readiness, one long k6 pass.
 async function pass(cell, imageId, raw) {
-  const name = `${runId}-${cell.app}`, k6 = `${runId}-k6`;
-  let sampler;
+  const name = `${runId}-${cell.app}`;
+  let sampler, app, k6;
   try {
-    await owned(["run", "-d", ...appArgs(name, cell.source, imageId)], name);
-    await ready(await portOf(name));
-    const before = await inspect(name);
+    app = await owned(["run", "-d", ...appArgs(name, cell.source, imageId)], name);
+    await ready(await portOf(app));
+    const before = await inspect(app);
     retain(join(raw, "app-container.json"), containerReceipt(before));
     const env = ["-e", `BASE=http://${name}:8080`, "-e", `TARGET=${cell.target}`, ...(cell.target === "page" ? ["-e", "LOCALE=rotating"] : []),
       "-e", `MODE=${convergence ? "closed" : "fixed"}`, "-e", `WINDOWS=${options.windows}`, "-e", `WINDOW_SECONDS=${options.windowSeconds}`,
       ...(convergence ? ["-e", `VUS=${options.vus}`] : ["-e", `RATE=${options.rate}`])];
-    await owned(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...env,
-      k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], k6);
+    k6 = await owned(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...env,
+      k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`);
     const phaseStartMs = Date.now();
+    // docker stats keys its samples by container name; the name is bound to this pass's ID above.
     if (!convergence) sampler = sampleStats([name], join(raw, "stats.log"), seconds + 120);
     await docker(["start", "-a", k6], { timeout: (seconds + 60) * 1000, file: join(raw, "load.log") });
     const stats = sampler; sampler = undefined;
@@ -147,12 +157,12 @@ async function pass(cell, imageId, raw) {
     const k6Summary = await retainLoadEvidence(docker, k6, raw, "load");
     readLoadSummary(k6Summary);
     const { windows, tail, unrecorded } = readWindows(k6Summary, options);
-    const after = await inspect(name);
+    const after = await inspect(app);
     retain(join(raw, "app-container-after.json"), containerReceipt(after));
     if (convergence) {
       // A failed answer can be faster than a served one, so throughput with failures says nothing about
       // warming: such a cell gets no verdict. Its windows stay in load.json.
-      assert.ok(after.State.Running && after.RestartCount === before.RestartCount, `app container stopped or restarted during the pass: ${JSON.stringify(state(after))}`);
+      heldThrough(before, after);
       const failed = windows.reduce((sum, w) => sum + w.failed, 0);
       assert.equal(failed, 0, `${failed} requests failed during the pass; no verdict`);
       return Object.assign(cell, { windows, tail, unrecorded, verdict: flattenPoint(windows) });
@@ -160,15 +170,15 @@ async function pass(cell, imageId, raw) {
     if (statsError) throw new Error(`memory samples failed: ${statsError.message}; container ${JSON.stringify(state(after))}`);
     const startedMs = Date.parse(loadInfo.State.StartedAt);
     const samples = JSON.parse(readFileSync(join(raw, "stats.log.json"), "utf8")).samples[name].map((s) => ({ atSeconds: (s.t - startedMs) / 1000, mib: s.mem }));
-    const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${name}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
+    const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${app}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
     const events = lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), atSeconds: (Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 - startedMs) / 1000 }));
     retain(join(raw, "events.json"), events);
-    return Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, memory: samples, before: state(before), after: state(after), events }));
+    return Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, memory: samples, before: state(before), after: state(after), events, rate: options.rate, droppedIterations: readDropped(k6Summary) }));
   } finally {
     if (sampler) { try { await sampler.stop(); } catch {} }
-    try { writeFileSync(join(raw, "app.log"), await docker(["logs", name])); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); }
-    await remove(k6);
-    await remove(name);
+    if (app) { try { writeFileSync(join(raw, "app.log"), await docker(["logs", app])); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); } }
+    if (k6) await remove(k6);
+    if (app) await remove(app);
   }
 }
 
@@ -183,12 +193,11 @@ try {
   summary.fixtureSha256 = checkFixture(fixture, records(), validateMarketplace);
   summary.host.docker = await docker(["version", "--format", "{{.Server.Version}}"]);
   summary.host.node = process.version;
-  const hostProbe = `${runId}-host`;
-  let hostText;
+  let hostText, hostProbe;
   try {
-    await owned(["create", "--network", "none", nodeImage, "sh", "-c", "uname -a; grep -m1 'model name' /proc/cpuinfo; cat /sys/devices/system/cpu/online"], hostProbe);
+    hostProbe = await owned(["create", "--network", "none", nodeImage, "sh", "-c", "uname -a; grep -m1 'model name' /proc/cpuinfo; cat /sys/devices/system/cpu/online"], `${runId}-host`);
     hostText = await docker(["start", "-a", hostProbe]);
-  } finally { await remove(hostProbe); }
+  } finally { if (hostProbe) await remove(hostProbe); }
   writeFileSync(join(folder, "host.txt"), hostText + "\n");
   summary.host.cpu = hostText.split("\n").find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim() ?? null;
   summary.host.onlineCpus = hostText.trim().split("\n").at(-1).trim();
@@ -220,17 +229,19 @@ try {
     images[app] = imageReceipt(info);
   }
   retain(join(folder, "images.json"), images);
+  // The image IDs a timed round records too (summary.apps[app].imageId): report.mjs compares them.
+  summary.images = Object.fromEntries(options.apps.map((app) => [app, images[app].id]));
   save();
   summary.tools = { k6: await describeK6(docker, ownerArgs, { pullLog: join(folder, "pull-k6.log") }) };
   await docker(["network", "create", ...ownerArgs, network]);
   const networkInfo = JSON.parse(await docker(["network", "inspect", network]))[0];
   created.push({ kind: "network", id: networkInfo.Id, name: network });
-  await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
+  const upstreamId = await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
     "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
-  const upstreamInfo = await inspect(upstreamName);
+  const upstreamInfo = await inspect(upstreamId);
   retain(join(folder, "upstream-container.json"), containerReceipt(upstreamInfo));
   summary.tools.upstream = { image: nodeImage, imageId: upstreamInfo.Image };
-  const upstream = await portOf(upstreamName);
+  const upstream = await portOf(upstreamId);
   const upstreamDeadline = Date.now() + 20000;
   while (true) {
     try { const response = await fetch(`${upstream}/health`, { signal: AbortSignal.timeout(1000) }); await response.text(); if (response.ok) break; } catch {}
@@ -247,7 +258,7 @@ try {
     try {
       if (interrupted) throw new Error("interrupted");
       await pass(cell, images[app].id, raw);
-      if (convergence) log(`${app} ${source} ${target}: ${cell.verdict.flattened ? `flattened at window ${cell.verdict.window}` : `never flattened (${cell.verdict.reason})`}`);
+      if (convergence) log(`${app} ${source} ${target}: ${verdictText(cell.verdict)}`);
     } catch (e) {
       // This cell has no verdict; the pass goes on to the next one.
       for (const key of Object.keys(cell)) if (!["app", "source", "target"].includes(key)) delete cell[key];
@@ -265,9 +276,15 @@ try {
   summary.failures.push({ stage: "suite", error: e.stack ?? String(e) });
   log(`suite FAILED: ${e.message ?? e}`);
 } finally {
-  for (const name of [...active].reverse()) {
-    try { await remove(name); } catch (e) { summary.cleanupFailures.push({ resource: name, error: e.message }); }
+  for (const id of [...active].reverse()) {
+    try { await remove(id); } catch (e) { summary.cleanupFailures.push({ resource: id, error: e.message }); }
   }
+  // A create whose ID never came back still carries the owner label: remove what the label finds, by
+  // its ID after remove() confirms the label again.
+  try {
+    const found = (await docker(["ps", "-a", "--no-trunc", "--filter", `label=${label}=${runId}`, "--format", "{{.ID}}"], { cleanup: true })).split("\n").filter(Boolean);
+    for (const id of found) await remove(id, { recovered: true });
+  } catch (e) { summary.cleanupFailures.push({ resource: `containers labelled ${label}=${runId}`, error: e.message }); }
   try {
     const found = await docker(["network", "ls", "--filter", `name=^${network}$`, "--format", "{{.ID}}"], { cleanup: true });
     if (found) {
