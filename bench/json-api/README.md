@@ -122,6 +122,59 @@ The CPU sidecar reads cgroup v2 counters. Docker stats provide raw CPU/memory sa
 Each payload's upstream is one Node process; its CPU limit does not imply parallelism.
 Low app utilization or a busy upstream can limit throughput, not establish app capacity.
 
+#### Stand-alone load resource acquisition probe
+
+[#2056 JSON API r67 rejects 91 timing attempts on late load-resource rows](https://github.com/corten-run/corten/issues/2056)
+has a prototype for the load container only. It is **not** called by the benchmark,
+does not change runner or replay inputs, and does not reclassify saved r67 rows.
+Run it on the Linux Docker host itself, in the daemon's host PID/cgroup namespaces
+with the full cgroup v2 mount. A Docker socket mounted into a build container does
+not provide those namespaces. Live Docker inspection by exact container ID is the
+PID authority; replay never opens a path from saved data. The read-only sampler
+holds the process and cgroup directories open and compares device/inode, PID start
+ticks, exact membership path, and populated status across each read. All samples
+must belong to the same process and cgroup. This assumes a dedicated host without
+privileged process migration or mount manipulation. It cannot see between-read state.
+
+Host timestamps bracket all kernel reads, not stdout arrival. The upper bound
+includes the complete final millisecond and must fit in Docker's nanosecond
+lifetime, with no grace. Every declared one-second slot must have exactly one
+complete acquisition, with the existing five-second bound on both edges and all
+gaps. CPU is the upper bound on percent of a core: the difference in cgroup
+`usage_usec` divided by the shortest possible elapsed interval (times 100 after
+unit conversion). The first observation anchors CPU without inventing a value
+and still supplies memory. This is not Docker's host CPU-counter/online-CPU
+calculation or rounded CLI output. Memory subtracts cgroup v2 `inactive_file`
+from `memory.current` only when it is strictly smaller, matching Docker's cache
+rule, but uses unrounded bytes and separate reads, not an atomic snapshot.
+Memory must be positive and below budget. The CPU upper bound must stay strictly
+below 80% of quota for load headroom. No missing read is skipped.
+
+After approval for one disposable host probe, set `PROBE_IMAGE_ID` to a locally
+present immutable Node image ID. This short synthetic process has no network and
+does not run a benchmark. Start it and invoke the probe immediately. The probe
+only inspects and waits for that container; capture it by ID and keep it until the
+terminal inspection finishes. Then remove only that synthetic container.
+
+```sh
+docker_local() { docker --host unix:///var/run/docker.sock "$@"; }
+id=$(docker_local run -d --pull=never --network none --cpus 1 --memory 128m \
+  --restart=no --label corten.json.resource-probe=1 --entrypoint node "${PROBE_IMAGE_ID:?}" \
+  -e 'const mem = Buffer.alloc(8 * 1024 * 1024, 1);
+      const work = setInterval(() => {
+        const until = performance.now() + 10;
+        while (performance.now() < until) mem[0] ^= 1;
+      }, 100);
+      setTimeout(() => clearInterval(work), 9000);') &&
+timeout --kill-after=2s 30s node bench/json-api/load-resource-probe.mjs "$id"
+```
+
+The probe replays all six reads after exit plus 120 ms. Success prints six samples,
+five CPU intervals, positive CPU and memory, and `loadHasHeadroom: true`. The
+experiment must succeed on the intended Linux setup before the prototype can
+inform an official sampler change. Neither this probe nor the fake tests establish
+timing equivalence or qualify saved results.
+
 Every load phase retains host start/end clocks and k6's measured `testRunDurationMs` via
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).
 The k6 duration must cover the configured interval without exceeding its existing 10-second
