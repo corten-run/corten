@@ -10300,6 +10300,59 @@ rules something out.
     2026-11-07, round r16's Chromium browser pass, on `eea6adb`; 2026-11-11, round browser-4 on a
     Xeon Platinum 8358, on `3fb4b1ac`.
 
+74. <a id="choice-allowed-origin-schemes"></a>**An allowed origin is an `http` or `https` origin
+    as RFC 6454 writes it, or another scheme's `scheme://host[:port]` as its webview or extension
+    sends it.** `Policy::allow_origin` and `Api::allow_origin` read their setting with one parser
+    and keep it as a browser writes `Origin`, which a request's is then compared with as it is.
+    For `http` and `https` that is RFC 6454 section 6.1 and the URL Standard's serializer: the
+    scheme and name lowercased, an address in its standard form, the default port left out.
+    Another scheme has no such form: the URL Standard gives a URL whose scheme it does not know an
+    opaque origin, written `null`. Yet the pages of an app's webview and of a browser extension
+    send their own scheme in `Origin`: `capacitor://localhost` from Capacitor on iOS, which may not
+    serve its pages as `https`, `tauri://localhost` from Tauri on macOS, Linux and iOS,
+    `chrome-extension://<id>` and `moz-extension://<uuid>` from extensions. So a scheme RFC 3986
+    allows (a letter, then letters, digits, `+`, `-` and `.`) is kept as `scheme://host[:port]`,
+    lowercased, with any port written, since no default is known for it. `ftp`, `ws` and `wss` have
+    tuple origins in the URL Standard, but no page is served from them, so they are kept the same
+    way rather than given defaults no `Origin` uses. For every scheme a user, a path beyond one
+    trailing `/`, a query, a fragment, `*`, a list, an empty host and `null` refuse to start, and a
+    name is ASCII letters, digits, `-`, `_` and `.`: a browser sends a Unicode name in its `xn--`
+    form, and `_` as it is.
+
+    `Policy` takes them too, though there an allowed origin's writes carry the user's cookies: a
+    Capacitor or Tauri app whose pages sign in to the server is the case it serves. The grant is
+    one exact origin the app names, the same an `https` partner gets, and a page cannot send
+    another page's `Origin`, so it reaches only pages served under that origin. A default such as
+    `capacitor://localhost` is every Capacitor app's on iOS; another app sending it holds none of
+    this app's cookies, but an app that wants its own origin sets its own name (Capacitor's
+    `server.hostname`), and an `Api` that needs to tell callers apart does it by their token.
+
+    Not chosen: refusing every scheme but `http` and `https`, which refuses at startup the
+    webview and extension clients an `Api` served before; matching `null`, which every sandboxed
+    frame and `file:` page sends; and a scheme's own rules (a default port, a host form), which
+    nothing standard gives for these.
+
+    Stands on: platform (Capacitor on iOS serves its pages from `capacitor://localhost` by default,
+    with its configured `server.hostname` in place of `localhost`; Tauri serves them from
+    `tauri://localhost` on macOS, Linux and iOS; Chromium sends `chrome-extension://<id>` on an
+    extension's `POST`; the URL Standard's origin of an unknown scheme is opaque and serializes as
+    `null`; RFC 6454 section 6.1 writes `http` and `https` origins); bet (a webview's cookies are
+    its own app's, since each app's storage is its own on iOS and Android, so another app sharing
+    the default origin holds none of this app's sessions; not probed here); reasoned (a
+    non-browser client can send any `Origin`, but one that sends none already passes the write
+    check, so allowing an origin grants it nothing more); value (the platform's `Origin` is read
+    as browsers send it, not replaced, Values 2; a mistyped setting is a startup error, not a 403
+    on every write, Values 1).
+
+    Revisit when: Capacitor, Tauri or a browser's extensions start sending `null` or an `https`
+    origin in place of their own scheme, the URL Standard gives these schemes a tuple origin, or an
+    app needs an allowed origin this form refuses.
+
+    Last checked: 2026-11-25, Ionic's CORS guide, Capacitor's configuration reference
+    (`server.hostname`, `iosScheme`), Tauri 2's webview reference, a chromium-extensions thread on
+    a background `POST`'s `Origin` and the URL Standard's origin section (updated 19 November
+    2026), read at `49b6e79eb`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

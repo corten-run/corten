@@ -406,8 +406,9 @@ impl<P: Prefix> Api<P> {
     /// authenticates with a token: a write from it that carries cookies is refused, and no
     /// `Access-Control-Allow-Credentials` is sent. It takes an origin as
     /// [`crate::security::Policy::allow_origin`] does, and keeps it as a browser writes it in
-    /// `Origin` (`https://partner.example:443/` is `https://partner.example`); anything else is
-    /// a startup panic.
+    /// `Origin` (`https://partner.example:443/` is `https://partner.example`), including the
+    /// scheme an app's webview or a browser extension sends (`capacitor://localhost`,
+    /// `chrome-extension://<id>`); anything else is a startup panic.
     pub fn allow_origin(mut self, origin: &str) -> Self {
         self.origins.push(crate::security::allowed_origin("Api::allow_origin", origin));
         self
@@ -797,8 +798,14 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "corten: Api::allow_origin takes one origin")]
-    fn an_allowed_origin_is_http_or_https() {
-        let _ = Api::<ApiRoot>::new().allow_origin("capacitor://localhost");
+    fn an_allowed_origin_is_not_null() {
+        let _ = Api::<ApiRoot>::new().allow_origin("null");
+    }
+
+    #[test]
+    #[should_panic(expected = "write the name in its xn-- (punycode) form")]
+    fn an_allowed_origin_names_its_host_in_ascii() {
+        let _ = Api::<ApiRoot>::new().allow_origin("https://b\u{fc}cher.example");
     }
 
     #[test]
@@ -806,8 +813,51 @@ mod tests {
         let api = Api::<ApiRoot>::new()
             .allow_origin("HTTPS://Partner.Example:443/")
             .allow_origin("https://a.example:8443")
-            .allow_origin("http://[::1]:80");
-        assert_eq!(api.origins, ["https://partner.example", "https://a.example:8443", "http://[::1]"]);
+            .allow_origin("http://[::1]:80")
+            .allow_origin("https://my_app.partner.example")
+            .allow_origin("Capacitor://LocalHost/")
+            .allow_origin("tauri://localhost")
+            .allow_origin("chrome-extension://abcdefghijklmnopabcdefghijklmnop")
+            .allow_origin("moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b")
+            .allow_origin("capacitor://localhost:80");
+        assert_eq!(
+            api.origins,
+            [
+                "https://partner.example",
+                "https://a.example:8443",
+                "http://[::1]",
+                "https://my_app.partner.example",
+                "capacitor://localhost",
+                "tauri://localhost",
+                "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                "moz-extension://0b7d2b6e-6d2f-4b8e-9f0a-1c2d3e4f5a6b",
+                "capacitor://localhost:80",
+            ]
+        );
+    }
+
+    /// Each of these is a startup panic: none is an `Origin` a browser could send. All but
+    /// `null`, the empty host and the path used to start, when the setting was any
+    /// `scheme://host`.
+    #[test]
+    fn an_allowed_origin_that_no_browser_sends_does_not_start() {
+        for bad in [
+            "null",
+            "https://u@partner.example",
+            "https://partner.example?x",
+            "https://partner.example:",
+            "https://partner.1",
+            "https://b\u{fc}cher.example",
+            "capacitor://localhost?x",
+            "capacitor://u@localhost",
+            "capacitor://localhost/app",
+            "capacitor://localhost#x",
+            "capacitor://",
+            "1app://localhost",
+        ] {
+            let started = std::panic::catch_unwind(|| Api::<ApiRoot>::new().allow_origin(bad));
+            assert!(started.is_err(), "{bad:?}");
+        }
     }
 
     #[test]
