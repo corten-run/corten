@@ -73,7 +73,7 @@ readings at different window lengths are not comparable. k6's raw engine clock a
 container's before-and-after inspect are checked only while a pass runs; its saved summary records
 the outcome but cannot re-verify them. A soak reports memory at the start and end and p99 per
 interval as figures, with no criterion for whether they held; only its fixed rate is reported as
-held or not. No report concludes from a pass that a
+held (sustained in every interval) or not. No report concludes from a pass that a
 timed warmup is long enough: the timed warmup is set only by a separate reviewed change from a
 saved pass that is like-for-like with the rounds it will time (the same commit, adapter images,
 fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, startup timeout,

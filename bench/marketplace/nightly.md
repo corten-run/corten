@@ -113,7 +113,10 @@ are not guaranteed to finish by the morning check.
    provided to it. Change the warmup only by a separate reviewed
    change from a saved like-for-like convergence pass, and keep convergence and soak passes out
    of the nightly ([Convergence and soak passes](README.md#convergence-and-soak-passes)).
-   The droplet job does not run them.
+   The droplet job does not run them. A soak says its fixed rate held only when every interval
+   sustained it, and a restart "no" only when its live event stream showed it covered the load;
+   a report with `--convergence` compares the pass with the round only for the cells the pass
+   has a reading for.
 4. Dedicated c-8: CPU 0 system, 1 app, 2-3 upstream, 4-7 generator, with recorded quotas and
    disjoint pinning. The single Node upstream can saturate one core despite its two-core
    quota. Report upstream CPU at least 80% and app CPU below 95% as limits, across phases.

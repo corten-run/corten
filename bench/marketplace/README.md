@@ -265,32 +265,51 @@ report's like-for-like list names each differing or missing input and quotes nei
 Some checks are made only while a pass runs, because the saved summary does not keep what they
 read: k6's raw engine clock against the load container's own run (`validateLoadExecution`, from
 the raw `load-clock.json` and container receipts), the app container's before and after inspect
-(for a convergence cell: the same ID and StartedAt, running, not restarted or OOM-killed,
-`heldThrough`; for a soak: the restart, stop and OOM observations it saves), the cold-start
-clock, the k6 export's metric names and every row of a soak's Docker event stream. A saved summary records their outcome (a cell that failed
-one has no reading) but cannot be re-verified from summary.json alone; the raw files beside it
-(`app-container.json`, `app-container-after.json`, `load-container.json`, `load-clock.json`,
-`load-summary.json`, `events.log`) are what they read.
+(each must record a 64-hex container ID, a StartedAt timestamp that is a real start, a
+RestartCount and its running and OOM states, and the app must be running and not OOM-killed
+before the load, `appInstance` and `appBefore`; a missing counter or malformed timestamp on
+either side fails the cell rather than comparing equal. Then, for a convergence cell: the same ID
+and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart,
+stop and OOM observations it saves), the cold-start clock, the k6 export's metric names and every
+row of a soak's live Docker event stream, with whether it showed the marker's two starts. A saved
+summary records their outcome (a cell that failed one has no reading) but cannot be re-verified
+from summary.json alone; the raw files beside it (`app-container.json` and
+`app-container-after.json`, which keep RestartCount, `load-container.json`, `load-clock.json`,
+`load.json`, `events.log`, `events.json`) are what they read.
 
 A soak reports memory at the start and the end (the median sample in the first and last memory
 interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate) and
 any restart, replacement, stop or OOM kill. Memory and p99 are reported figures: no criterion
-says whether they held. Only the fixed rate (below) is reported as held or not. Docker's event
-stream for the app is saved as one of three states: unavailable (the command failed, or any row
-was not an action and a nanosecond time, so none of its rows is used), clean (read, with no start,
-restart, die, kill or OOM event) or seen (with those events). "Restarted" is yes on any sign of a
-restart, no only when the stream was clean and nothing else showed one, and not established when
-the stream was unavailable and nothing else showed one; the container states and the memory
-samples are read independently of it. Latency intervals start at the k6 engine's start; memory
+says whether they held. Only the fixed rate (below) is reported as held or not. Restart events
+come from a live `docker events` stream filtered to the app and a small marker container, started
+before the load. A retrospective `docker events --since/--until` query replays only what the
+daemon still buffers (its last 256 events), so an empty answer to one would not show that nothing
+happened; the pass does not use one. Instead it starts the marker once the stream runs, before the
+load, and again after the app's last inspect: the stream delivers events in the order the daemon
+publishes them, so a stream that shows both marker starts was listening before the load began and
+had delivered every app event published before it ended. The stream is saved as one of three
+states: unavailable (the stream failed, did not show both marker starts within its bound, or had a
+row that was not the app's or the marker's ID, an action and a nanosecond time, so none of its rows
+is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
+(with those events). "Restarted" is yes on any sign of a restart, no only when the stream was
+clean and nothing else showed one, and not established when the stream was unavailable and
+nothing else showed one; the container states and the memory samples are read independently of
+it. Latency intervals start at the k6 engine's start; memory
 samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
 in intervals of their own of the same length, which lead the latency intervals by the load
 container's startup; restart events use the Docker daemon's clock. The report states both clocks.
 The fixed rate is reconciled against its schedule: k6's constant-arrival-rate starts one request
 per tick of floor(1e9 / rate) ns from slot 0, at most floor(duration / tick) + 1 over the soak.
-The report says "held" only when k6 dropped no iteration and its recorded requests fall short of
-that schedule by at most one second of arrivals plus the boundary slot (the allowance for an
-iteration the engine's stop cut off); otherwise it reports the shortfall and does not present the
-cell as a fixed-rate result. The counts it prints are k6's own, never the schedule's. Memory is
+`window-load.js` also counts each iteration in the interval k6's engine started it in
+(`window_N_arrivals`), and the soak saves those counts with each interval's share of the
+schedule. The report says "held" only when the rate was sustained throughout: k6 dropped no
+iteration, its recorded requests fall short of the schedule by at most one second of arrivals plus
+the boundary slot (the allowance for an iteration the engine's stop cut off), and every interval's
+arrivals are within that same allowance of its share of the schedule. A soak whose 270,000
+requests all arrived in its first minute did not hold the rate, even though its totals match.
+Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
+schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
+interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is
 reported as unavailable, with the reason, when sampling failed, a sample had no positive size or
 the first or last interval had none; the restart, stop and OOM observations are reported either
 way. A saved soak whose rate, memory, p99, restart or state claims contradict its counters is
@@ -299,14 +318,22 @@ refused.
 No report concludes that a timed warmup is long enough. A timed warmup is set only by a separate
 reviewed change to the droplet contract, made from a saved pass that is like-for-like with the
 rounds it will time. `steady-report.mjs` prints each cell's reading and that the pass sets no
-warmup. `report.mjs <summary.json> --convergence <pass>/summary.json` prints, per measured cell,
-the pass's reading and whether the pass is like-for-like with the round, listing every input that
-differs or that either side does not record: the commit and group, the image ID of every measured
+warmup. `report.mjs <summary.json> --convergence <pass>/summary.json` first states which of the round's
+measured adapter, source and target cells the pass has a reading for, which failed and which it
+lacks, then compares inputs only for the cells with a reading: a pass with a reading for every
+cell can be like-for-like with the round, one with some is at most like-for-like for those cells
+alone (and compares page locales only if one of them is a page), and one with none is compared on
+no input. It prints each cell's reading and lists every input that differs or that either side
+does not record: the commit and group, the image ID of every measured
 adapter, the fixture hash, the upstream and k6 image IDs, the CPU quota and pinning for each role
 (an unpinned side counts as missing), the host CPU model, kernel release and online CPU set, the
 startup timeout, the app and upstream memory limits, the response encoding, the timed warmup's 32
 users, the cold start before the load, a page warmup that rotated locales (results schema v6), and
 a timed warmup with no failed request (a round whose warmup had failures is not comparable).
+With `--convergence` nothing read from either file reaches the output unless it validated: the
+round's CPU model prints only in the form a pass saves a CPU model in, and a round that is not
+JSON or does not validate is refused with a fixed message (the report without `--convergence`
+prints the reason, and its output is unchanged).
 `--vus` other than 32 is for exploration. Without `--convergence` the report says no convergence
 pass was provided to it. No convergence pass has been saved for any round, so nothing here says
 whether any adapter is warm after 10 seconds.
