@@ -10328,9 +10328,12 @@ rules something out.
     that is not abandoned and hangs (an answer or a stylesheet that never comes) holds the failure
     as long as it hangs, and the user sees it busy; no timer says the failure sooner, as one would
     say it under a draw still to come. The page reading itself again is not waited for: a whole
-    read again already puts itself off while a failed write is undrawn, and one of `<main>` alone
-    draws only an answer that changed, which can still draw over a note the failure put in
-    `<main>`, as before. The event goes to the form that sent it while that is in the page. Else
+    read again already puts itself off while a write that failed and may have been applied (no
+    answer, or a 5xx) is undrawn, and one of `<main>` alone draws only an answer that changed,
+    which can still draw over a note the failure put in `<main>`, as before. A failure that
+    cannot have been applied, an answer below 500 the runtime does not draw (a proxy's 413 or
+    429), leaves nothing undrawn, so a whole read again is not put off for it and can draw over
+    its note, as before. The event goes to the form that sent it while that is in the page. Else
     to its verified successor: the form with its `id` now, marked `data-patch`, with the same
     `action` and `method`, drawn with no navigation to another address (`pageKey`) since the
     press, and that has sent no submit itself. A count of turns tells the address: a navigation
@@ -10373,30 +10376,35 @@ rules something out.
     each drawn before the write fails, and a navigation to the same page that draws after it
     fails, two runs of each in each of Playwright's Chromium, Firefox and WebKit with the runtime
     of `babd52d28`, heard the failure only on the detached form, or on the form the draw then
-    replaced); measured (the ninth case, a navigation abandoned while its section stylesheet
+    replaced); measured (the eleventh case, a navigation abandoned while its section stylesheet
     loads for one to the same page that draws, heard nothing within 5 s of the failure with the
     runtime of `4752cff6d`, one run in each of the three browsers; with one rule taken out at a
     time from the runtime of `a919f7e71`, one run in each of the three, only that rule's cases
-    failed: the count let go on abort the ninth, the same `action` and a successor that has sent
+    failed: the count let go on abort the eleventh, the same `action` and a successor that has sent
     nothing each its own case, and the wait while a navigation is on its way both cases where the
     write fails before the draw); platform (WebKit 27.2 changes the address as a navigation
-    starts; Chromium 159 and Firefox 159 wait for the answer, `precommitHandler`: the tenth case,
+    starts; Chromium 159 and Firefox 159 wait for the answer, `precommitHandler`: the twelfth case,
     a write sent from a write's own page drawn while a navigation to another address with a form
     of the same `id` is on its way, heard the failure on that address's form in WebKit and on the
     document in the other two with the runtime of `a919f7e71`, one run in each); measured (with
-    this change, five runs of each of the fifteen cases in each of the three heard it once, where
-    the case says; with one new rule taken out at a time, one run in each of the three, only that
-    rule's cases failed, in all three unless named: the turn read from `location`, the tenth in
-    WebKit and the eleventh, Back to another address, which every browser commits as it starts;
-    a form outside `<main>` said at once, the twelfth, which heard nothing within 5 s with the
-    read held; the wait while a whole page is on its way, the thirteenth, and a page's part known
-    by an `id` it had, the fourteenth, each heard with the read held; the address a script put in
-    taken as the page's, the fifteenth, the page reading itself again at that address, which then
+    this change, five runs of each case but the eighth and ninth, which came later, in each of the
+    three heard it once, where the case says; with one new rule taken out at a time, one run in each
+    of the three, only that rule's cases failed, in all three unless named: the turn read from
+    `location`, the twelfth in WebKit and the thirteenth, Back to another address, which every
+    browser commits as it starts; a form outside `<main>` said at once, the fourteenth, which heard
+    nothing within 5 s with the read held; the wait while a whole page is on its way, the
+    fifteenth, and a page's part known by an `id` it had, the sixteenth, each heard with the read held; the address a script put in
+    taken as the page's, the seventeenth, the page reading itself again at that address, which then
     said the failure on the document, as the runtime of `77e21c1e1` did (one run of that variant
-    also stopped the ninth case in WebKit at its stylesheet wait, and two runs again passed it);
+    also stopped the eleventh case in WebKit at its stylesheet wait, and two runs again passed it);
     and what waits run in a task rather than at once, the four cases where the write fails before
-    the draw, whose handler's scroll the navigation's own scroll then undid. The `page` mark has
-    no case of its own: an element marked when the page loads or a navigation draws is known by its `id` too.
+    the draw, whose handler's scroll the navigation's own scroll then undid); measured (the eighth
+    and ninth cases, the seventh's form in its place drawn with another `method` and without
+    `data-patch`, each failed alone, hearing the failure on that form, with only its check (the
+    same `method`, the `data-patch` mark) taken out of the runtime of `ab1025517`, and with neither
+    taken out all seventeen cases passed, one run in each of the three; so the mark and both halves
+    of the comparison have cases. The `page` mark has no case of its own: an element marked when the
+    page loads or a navigation draws is known by its `id` too.
     The count released at once for a navigation abandoned before it starts has no case: two
     navigations started in one task, a microtask apart, or a link's and a script's, never started
     a visit with its signal aborted in Chromium or WebKit, and Firefox was not tried); reasoned
@@ -10414,19 +10422,21 @@ rules something out.
     Revisit when: an app needs a failure said beside a form a navigation took away, on the page it
     left; two forms on one address need telling apart by more than `id`, `action` and `method`; a
     retry from a successor must be the same submission (its key carried over); a read of the page
-    again is seen to draw over a failure's note; the runtime comes to hold back a read that has
-    started while a write is out; a navigation is seen to hang long enough that a failure held
-    behind it goes unsaid while the user acts on the page; a navigation that does not read the
-    whole page comes to draw over an element outside `<main>` and the page's parts; an app's
+    again is seen to draw over a failure's note, as a whole one can over the note of an answer below
+    500 the runtime does not draw (a proxy's 413 or 429); the runtime comes to hold back a read that
+    has started while a write is out; a navigation is seen to hang long enough that a failure held
+    behind it goes unsaid while the user acts on the page; a navigation that does not read the whole
+    page comes to draw over an element outside `<main>` and the page's parts; an app's
     `GET` `data-patch` form draws another path's `<main>` whose form shares an `id`, `action`
     and `method` with one on the page it replaces; or a standard
     gives an event on a removed element a way to reach the document.
 
     Last checked: 2026-11-25, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
-    27.2, the fifteen smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing
-    with the runtime of `babd52d28`, the ninth with that of `4752cff6d`, the tenth (in WebKit)
-    and the twelfth with that of `a919f7e71`, the fifteenth with that of `77e21c1e1`, and each of
-    the other new ones with its rule taken out;
+    27.2, the seventeen smoke cases in `scripts/smoke/write-failures.mjs`, the first five failing
+    with the runtime of `babd52d28`, the eleventh with that of `4752cff6d`, the twelfth (in
+    WebKit) and the fourteenth with that of `a919f7e71`, the seventeenth with that of
+    `77e21c1e1`, and each of the other new ones, the eighth and ninth included, with its rule taken
+    out;
     2026-11-25, the runtime's size from `npm run build:js` on `babd52d28` and with this change.
 
 ## Rules

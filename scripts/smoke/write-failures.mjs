@@ -17,25 +17,26 @@ const plainly = (route) => ({ ...route.request().headers(), "accept-encoding": "
  * its way, held at the route; the write fails once the read has drawn (`after`) or while it is
  * still held (`before`), and is heard once, on the form in its place or on the document.
  * `abandoned` first starts a navigation to `/alerts` whose section stylesheet never loads, which
- * the read of `to` abandons before the press. `action` draws the form in its place
- * with another `action`; `pressed` presses the form in its place (its write held) before the first fails.
+ * the read of `to` abandons before the press. `differs` draws the form in its place with another
+ * `action` or `method`, or without `data-patch`; `pressed` presses the form in its place (its
+ * write held) before the first fails.
  * `own` answers the first write with its own whole page while the read is on its way, and presses
  * the form that page drew; that second write is the one that fails. `outside` presses a form outside
  * `<main>` instead: one added to the body, which the read does not draw over, so its failure is heard
  * on it while the read is still held; one added to the layout's header while the read is the whole
  * page; or one in the layout's element that is the page's (the sector nav), drawn again without its
  * `page` mark as a patch may draw it. The last two are held until the read has drawn.
- * @typedef {{ name: string, to: string, start: "link" | "script" | "write" | "back", fails: "after" | "before", at: "successor" | "document" | "sent", abandoned?: boolean, action?: boolean, pressed?: boolean, own?: boolean, outside?: "body" | "header" | "part" }} Case
+ * @typedef {{ name: string, to: string, start: "link" | "script" | "write" | "back", fails: "after" | "before", at: "successor" | "document" | "sent", abandoned?: boolean, differs?: "action" | "method" | "patch", pressed?: boolean, own?: boolean, outside?: "body" | "header" | "part" }} Case
  */
 
 /**
  * A write whose answer never comes, while a read of the page draws over the form that sent it:
  * the page the read drew still says the write failed, once, where it hears it (#2068). The form a
- * read drew in its place hears it when the read drew the same page, with the same `action`, and it
- * has sent nothing since; the document does otherwise, a page with a form of the same id included.
- * A failure that comes while the read is still on its way is said once the read has drawn, so the
- * draw does not take it away; one that comes after a navigation was abandoned for the read is said
- * at once, while what the abandoned one waited for is still held. A failure said once the read has
+ * read drew in its place hears it when the read drew the same page, marked `data-patch`, with the
+ * same `action` and `method`, and it has sent nothing since; the document does otherwise, a page
+ * with a form of the same id included. A failure that comes while the read is still on its way is
+ * said once the read has drawn, so the draw does not take it away; one that comes after a
+ * navigation was abandoned for the read is said at once, while what the abandoned one waited for is still held. A failure said once the read has
  * drawn comes after the navigation's own scroll, so a handler that scrolls keeps its place. A form
  * outside `<main>`, which the read does not draw over, hears its failure while the read is held;
  * one the read may draw over (in the layout while the whole page is read, or in the layout's element
@@ -68,7 +69,23 @@ export async function writeFailures(browser) {
       start: "link",
       fails: "after",
       at: "document",
-      action: true,
+      differs: "action",
+    },
+    {
+      name: "a write that fails after a navigation drew the same page with its form sending by another method says so on the document, not on that form",
+      to: "/",
+      start: "link",
+      fails: "after",
+      at: "document",
+      differs: "method",
+    },
+    {
+      name: "a write that fails after a navigation drew the same page with its form not marked data-patch says so on the document, not on that form",
+      to: "/",
+      start: "link",
+      fails: "after",
+      at: "document",
+      differs: "patch",
     },
     {
       name: "a write that fails after the user pressed the form a navigation drew in its place says so on the document, not on that form",
@@ -131,7 +148,7 @@ export async function writeFailures(browser) {
       outside: "part",
     },
   ];
-  for (const { name, to, start, fails, at, abandoned, action, pressed, own, outside } of cases) {
+  for (const { name, to, start, fails, at, abandoned, differs, pressed, own, outside } of cases) {
     const whole = start === "write";
     /** @type {() => void} */
     let releaseRead = () => {};
@@ -184,10 +201,14 @@ export async function writeFailures(browser) {
               if (route.request().headers().corten !== (whole ? "page" : "nav")) return route.continue().catch(() => {});
               readHeard();
               await readLetGo;
-              if (!action) return route.continue().catch(() => {});
-              // The same page, its form sending to another address.
+              if (!differs) return route.continue().catch(() => {});
+              // The same page, its form sending to another address, by another method, or not
+              // marked `data-patch`. Were the markup not found, the form would be drawn as it was
+              // and hear the failure, failing the case.
               const answer = await route.fetch({ headers: plainly(route) });
-              const body = (await answer.text()).replace('id="watch-form" method="post" action="/watch"', 'id="watch-form" method="post" action="/watch?elsewhere"');
+              const form = 'id="watch-form" method="post" action="/watch" data-patch';
+              const changed = { action: 'id="watch-form" method="post" action="/watch?elsewhere" data-patch', method: 'id="watch-form" method="get" action="/watch" data-patch', patch: 'id="watch-form" method="post" action="/watch"' };
+              const body = (await answer.text()).replace(form, changed[differs]);
               const headers = Object.fromEntries(Object.entries(answer.headers()).filter(([key]) => !["content-length", "content-encoding"].includes(key)));
               await route.fulfill({ status: answer.status(), headers, body }).catch(() => {});
             },
