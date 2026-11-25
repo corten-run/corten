@@ -397,7 +397,9 @@ answer that asks again takes the place of the page's tag needs an answer that as
 lands 1.5 s after it is sent and the part's first read comes a second after the page loads, so a
 loaded browser can find it landed. A first read that finds it landed is answered as the server
 answers one while it lands (its status line saying so, and a tag asking again from the same
-address); the check requires an answer that asked, and every later read is the server's.
+address); the check requires an answer that asked, and every later read is the server's. The
+link a failed slow part shows is pressed in the page too, and the page it opens must commit
+within five seconds of the press.
 
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
