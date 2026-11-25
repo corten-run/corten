@@ -408,7 +408,8 @@ impl<P: Prefix> Api<P> {
     /// [`crate::security::Policy::allow_origin`] does, and keeps it as a browser writes it in
     /// `Origin` (`https://partner.example:443/` is `https://partner.example`), including the
     /// scheme an app's webview or a browser extension sends (`capacitor://localhost`,
-    /// `chrome-extension://<id>`); anything else is a startup panic.
+    /// `chrome-extension://<id>`); anything else, including a scheme no page sends from (`file`,
+    /// `ws`, `ftp`, ...), is a startup panic.
     pub fn allow_origin(mut self, origin: &str) -> Self {
         self.origins.push(crate::security::allowed_origin("Api::allow_origin", origin));
         self
@@ -809,6 +810,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "corten: Api::allow_origin takes one origin a browser sends in Origin")]
+    fn an_allowed_origin_is_not_a_websocket_url() {
+        let _ = Api::<ApiRoot>::new().allow_origin("wss://partner.example");
+    }
+
+    #[test]
     fn an_allowed_origin_is_kept_as_a_browser_sends_it() {
         let api = Api::<ApiRoot>::new()
             .allow_origin("HTTPS://Partner.Example:443/")
@@ -837,7 +844,7 @@ mod tests {
     }
 
     /// Each of these is a startup panic: none is an `Origin` a browser could send. All but
-    /// `null`, the empty host and the path used to start, when the setting was any
+    /// `null`, the empty host, the path and `file:` used to start, when the setting was any
     /// `scheme://host`.
     #[test]
     fn an_allowed_origin_that_no_browser_sends_does_not_start() {
@@ -854,6 +861,10 @@ mod tests {
             "capacitor://localhost#x",
             "capacitor://",
             "1app://localhost",
+            "file:///",
+            "wss://partner.example",
+            "ftp://partner.example",
+            "blob:https://partner.example",
         ] {
             let started = std::panic::catch_unwind(|| Api::<ApiRoot>::new().allow_origin(bad));
             assert!(started.is_err(), "{bad:?}");

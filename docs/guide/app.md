@@ -2012,10 +2012,14 @@ Under the prefix:
    `https://partner.example` and `https://partner.example:8443` keeps its port. An app webview's
    or a browser extension's own scheme is kept the same way with any port it names, so
    `capacitor://localhost`, `tauri://localhost` or `chrome-extension://<id>` can be allowed
-   ([why](../design.md#choice-allowed-origin-schemes)). A name may hold `_`; a Unicode name is
-   written in its `xn--` form, as browsers send it. A value no `Origin` could equal (no scheme,
-   a path, a query, a user, a wildcard, a comma-separated list, `null`) panics at startup and
-   names the setter.
+   ([why](../design.md#choice-allowed-origin-schemes)). `capacitor://localhost` is every
+   Capacitor iOS app's default origin, so prefer a distinct `server.hostname`; Capacitor on
+   Android defaults to `https://localhost` and Tauri on Windows to `http://tauri.localhost` (or
+   `https://`), loopback origins any local server can also serve in an ordinary browser. A name
+   may hold `_`; a Unicode name is written in its `xn--` form, as browsers send it. A value no
+   `Origin` could equal (no scheme, a path, a query, a user, a wildcard, a comma-separated list,
+   `null`, or a scheme no page sends from: `file`, `data`, `blob`, `javascript`, `about`,
+   `ws`, `wss`, `ftp`) panics at startup and names the setter.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
    `FromJson` (item 8) with the value and the rejections axum's `Json` gave (recorded from axum
    0.8.9 and held by a test): a body with a JSON content type (`application/json`,
