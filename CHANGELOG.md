@@ -737,6 +737,9 @@ builds against.
 
 ### Other changes
 
+- A `data-patch` write that fails after a navigation or the page's own read drew over its form is now said once no navigation is on its way: on the form drawn in its place on the same page, or else on the document, where `on:document:corten:error` and the `Toaster` hear it
+  ([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)).
+
 - A failed catalog benchmark app start or log collection now saves a receipt (client lifetime, partial log hash, and the owned container's state and events) before cleanup, and a client whose pipes outlive it no longer hangs the runner. [#1487 Catalog parity CI: detached TanStack container start exceeds 30-second command bound](https://github.com/corten-run/corten/issues/1487)
 
 - Grouped benchmark launch preflight checks the official workload's CPU roles
