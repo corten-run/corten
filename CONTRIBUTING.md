@@ -473,6 +473,15 @@ the page it opens must commit within five seconds counted from just before the p
 the press task shares, and have its part read in within five seconds of the check seeing that
 commit.
 
+The account page's posts without JavaScript (the name, the refused name and the picture) each
+press their button only once the page the previous post led to has loaded. That load, the press,
+the post being sent, its answer and the load of the page it leads to share 30 seconds counted from
+just before the first of them, the timeout each wait had alone before; a step that fails, runs out
+of that time or settles only after it fails the post's check with the step that did not happen,
+instead of stopping the smoke with a wait that timed out and no reason
+([#2078 The no-JavaScript refused-name smoke case can lose its press under load and time out after 30 s with no reason](https://github.com/corten-run/corten/issues/2078)).
+No later post is pressed once one has failed.
+
 The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
 same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
 link from it loads the document in full instead of swapping the page. A visible control on that

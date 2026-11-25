@@ -1,4 +1,4 @@
-import { base, engine, skip, check } from "./helpers.mjs";
+import { base, engine, skip, check, steps } from "./helpers.mjs";
 
 export async function patchUploads(errors, page, part) {
   const errorsBeforeUpload = errors.length;
@@ -668,33 +668,73 @@ export async function uploads(page, live, errors, signsIn) {
     await noScript.addCookies(await page.context().cookies());
     const plainAccount = await noScript.newPage();
     await plainAccount.goto(`${base}/account`);
-    /** Presses `button` and gives the post's answer once the page it leads to has loaded. @param {string} button */
-    const post = (button) =>
-      Promise.all([plainAccount.waitForResponse((r) => r.request().method() === "POST"), plainAccount.waitForNavigation(), plainAccount.click(button)]).then(([answer]) => answer);
+    /** Why the posts stopped: the step an earlier post missed, or "" while they go on. */
+    let stopped = "";
+    /**
+     * Presses `button` once the page the last post led to has loaded, and gives the post's answer
+     * once the page it leads to has loaded, or names the step that did not happen (`missed`). That
+     * load, the press (done once Playwright has pressed, not once the navigation it starts has
+     * committed), the post being sent, its answer and the next page's load share 30 s counted from
+     * just before the first of them (the timeout each wait had alone before; a loaded Firefox has
+     * taken over 4 s to answer a post, #1149), each a step of `steps`: one that fails, runs out or
+     * settles after them fails the post, and no step starts once one has failed. A press that sends
+     * nothing fails its check naming the step it stopped at, rather than stopping the smoke as a wait
+     * that timed out with no reason (#2078). Once a post has failed no later one is pressed, as the
+     * failed press could still land late.
+     * @param {string} button
+     * @returns {Promise<{ answer: import("playwright").Response | null, missed: string }>}
+     */
+    const post = async (button) => {
+      if (stopped) return { answer: null, missed: `not pressed: ${stopped}` };
+      const press = steps(30_000, "its 30 s ran out");
+      let step = "the page the last post led to did not finish loading";
+      try {
+        await press.step(() => plainAccount.waitForLoadState("load", { timeout: 30_000 }));
+        const sent = plainAccount.waitForRequest((r) => r.method() === "POST", { timeout: 30_000 });
+        const answered = plainAccount.waitForResponse((r) => r.request().method() === "POST", { timeout: 30_000 });
+        const loaded = plainAccount.waitForNavigation({ timeout: 30_000 });
+        // Their rejections are the steps', if the steps are reached.
+        sent.catch(() => {});
+        answered.catch(() => {});
+        loaded.catch(() => {});
+        step = `${button} was not pressed`;
+        await press.step(() => plainAccount.click(button, { timeout: 30_000, noWaitAfter: true }));
+        step = "the post was not sent";
+        await press.step(() => sent);
+        step = "the post was not answered";
+        const answer = await press.step(() => answered);
+        step = "the page the post led to did not load";
+        await press.step(() => loaded);
+        return { answer, missed: "" };
+      } catch {
+        stopped = `${step} (${press.over}), at ${plainAccount.url()}`;
+        return { answer: null, missed: stopped };
+      }
+    };
     const nameButton = "main form:has(input[name=name]) button";
     await plainAccount.fill("main input[name=name]", "Ada");
-    const renamed = await post(nameButton);
+    const { answer: renamed, missed: renameMissed } = await post(nameButton);
     const at = new URL(plainAccount.url());
     check(
       "without JavaScript the name's urlencoded post goes to do=name and the browser back to the page",
-      new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "" && ((await plainAccount.textContent("main")) ?? "").includes("Signed in as Ada."),
-      `${renamed.url()} ${renamed.status()} ${plainAccount.url()}`,
+      !!renamed && new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "" && ((await plainAccount.textContent("main")) ?? "").includes("Signed in as Ada."),
+      renamed ? `${renamed.url()} ${renamed.status()} ${plainAccount.url()}` : renameMissed,
     );
-    await plainAccount.fill("main input[name=name]", " ");
-    const refused = await post(nameButton);
+    if (!stopped) await plainAccount.fill("main input[name=name]", " ");
+    const { answer: refused, missed: refuseMissed } = await post(nameButton);
     check(
       "without JavaScript a refused name is the page at its post's address, the reason in it",
-      refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && (await plainAccount.textContent("#name-result")) === "Choose a name of 1 to 40 characters.",
-      `${refused.status()} ${plainAccount.url()} ${await plainAccount.textContent("#name-result")}`,
+      !!refused && refused.status() === 422 && new URL(plainAccount.url()).search === "?do=name" && (await plainAccount.textContent("#name-result")) === "Choose a name of 1 to 40 characters.",
+      refused ? `${refused.status()} ${plainAccount.url()} ${await plainAccount.textContent("#name-result")}` : refuseMissed,
     );
     // From the page drawn at do=name, the picture's form still posts to its own address.
-    await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
-    const uploadedPlain = await post("main form[enctype] button");
-    const plainType = (await uploadedPlain.request().headerValue("content-type")) ?? "";
+    if (!stopped) await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+    const { answer: uploadedPlain, missed: uploadMissed } = await post("main form[enctype] button");
+    const plainType = uploadedPlain ? ((await uploadedPlain.request().headerValue("content-type")) ?? "") : "";
     check(
       "without JavaScript the picture's multipart post goes to do=picture, from the page drawn at do=name",
-      new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
-      `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}`,
+      !!uploadedPlain && new URL(uploadedPlain.url()).search === "?do=picture" && plainType.startsWith("multipart/form-data") && uploadedPlain.status() === 200 && (await plainAccount.textContent("#avatar-result")) === "Saved card.png as your picture.",
+      uploadedPlain ? `${uploadedPlain.url()} ${plainType} ${uploadedPlain.status()} ${await plainAccount.textContent("#avatar-result")}` : uploadMissed,
     );
     await noScript.close();
   }
