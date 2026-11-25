@@ -9,6 +9,18 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 ## 0.3.0 (2026-11-25)
 
+Upgrading from 0.2.0: each of the 35 entries under [Breaking changes](#breaking-changes) says what
+to change. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
+of 1,024 bytes or more, for its shared lifetime instead of running the handler for every request
+(`App::kept_answers`); that a write answering its own page is drawn whole with its layout reads,
+and a direct patch comes from `req.action()`; and that `html!` and component stylesheets refuse
+more markup and selectors a browser would read differently, while values a script reads move from
+`data-` attributes to typed refs (copied `corten-ui` kits update with `corten ui add --merge`).
+`corten build --profile-from` makes a profile-guided release build, which the image `corten new`
+writes can use. Apps need Rust 1.89 or later and, with scripts, TypeScript 6.0 or later;
+`corten-cluster` apps move to async-nats 0.53. Entries about `bench/` and CI change nothing an app
+builds against.
+
 ### Breaking changes
 
 - **Breaking:** Move layout values an app skipped when `req.mode.swaps()` to a `LayoutRead` so
@@ -131,22 +143,25 @@ Pending entries are in [changelog.d/](changelog.d/).
 - **Breaking:** The router no longer sets `Content-Length` on an answer the server writes it for. hyper writes the same line from the body's exact size, so a page, a file or JSON from Corten's server says the same length as before, and a request makes two allocations fewer. An answer Corten's server did not send (a test with `App::test()`, a request sent through `app.router()`, or an app's own loop that serves the router) no longer carries the header unless it answers a `HEAD` or its handler set it: read `answer.bytes().len()` or the body's `size_hint()`, and have a server that does not write the length from the body set the header. Three answers change on the wire, each to what HTTP asks: a `101`, `204` or `304` given a body with bytes no longer says its length, a `HEAD` no longer says `Content-Length: 0` for one of those (RFC 9110 8.6), and an answer whose handler set `Transfer-Encoding` over a body of known size is sent chunked, with no length in its `HEAD`, where the client got no answer because hyper refused to send the two headers together.
 
 - **Breaking:** `corten build` refuses an argument it does not take. Before, it ignored every argument and built, so `corten build --release` or a misspelled flag passed as an ordinary build; a script that passes one now fails and says which.
+  Drop the argument: `corten build` is already a release build, and it takes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, and `--profile-from` ([deploy guide](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-guided-build)).
 
 - **Breaking:** `corten check` no longer uses a local Corten checkout's own TypeScript for an app built against that checkout. If your app relied on it, install TypeScript 6.0 or later in the app or on the PATH. ([#1475 The benchmark harness holds the root TypeScript at 5.9.3 although 6.0.3 has the same classic API, so corten check carries a checkout-only compiler lookup to step around it](https://github.com/corten-run/corten/issues/1475))
 
 - **Breaking:** The app keeps a `Public` page and gives it again until its shared lifetime ends, so its handler no longer runs for every request without credentials; middleware still does. `App::kept_answers(0)` keeps none.
+  To upgrade: count views in a middleware rather than in the handler, give a page whose data must show at once a short lifetime or leave it private, and set `.kept_answers(0)` in a test that changes what a `Public` page shows other than by a write through the app ([The pages the app keeps](https://github.com/corten-run/corten/blob/main/docs/guide/app.md#the-pages-the-app-keeps))
   ([#1780 Corten keeps none of the answers it tells every shared cache to keep: on a prototype, a stored page costs 20% fewer cycles a request not compressed and 54% fewer compressed](https://github.com/corten-run/corten/issues/1780))
 
-- **Breaking:** The app keeps a `Public` JSON or text answer it compresses (1,024 bytes or more, with the `compress` feature) as it keeps a `Public` page, so its handler no longer runs for every request without credentials; middleware still does, and an API's CORS headers are still written for each request. `App::kept_answers(0)` keeps none.
+- **Breaking:** The app keeps a `Public` JSON or text answer it compresses (1,024 bytes or more, with the `compress` feature) as it keeps a `Public` page, so its handler no longer runs for every request without credentials; middleware still does, and an API's CORS headers are still written for each request. `App::kept_answers(0)` keeps none. Upgrade such a route as a kept page above.
   ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
 
-- **Breaking:** The app keeps a `Public` file it compresses as it keeps `Public` JSON and text: a `Media` of a type it compresses (a CSV, an SVG) or a sitemap, of 1,024 bytes or more, with the `compress` feature, so its handler no longer runs for every such request. A PNG, a stream and a `Public::immutable` file are made each time as before.
+- **Breaking:** The app keeps a `Public` file it compresses as it keeps `Public` JSON and text: a `Media` of a type it compresses (a CSV, an SVG) or a sitemap, of 1,024 bytes or more, with the `compress` feature, so its handler no longer runs for every such request. A PNG, a stream and a `Public::immutable` file are made each time as before (until the next entry). Upgrade such a route as a kept page above.
   ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
 
-- **Breaking:** The app keeps a `Public` body (JSON, text, a file) of 1,024 bytes or more whatever its type, also without `compress`: a `Public` PNG or PDF is held for its lifetime and its handler no longer runs for each request.
+- **Breaking:** The app keeps a `Public` body (JSON, text, a file) of 1,024 bytes or more whatever its type, also without `compress`: a `Public` PNG or PDF is held for its lifetime and its handler no longer runs for each request. Upgrade such a route as a kept page above, and send a large file that never changes at a URL that names its content (`Public::immutable`), which is not kept.
   ([#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877))
 
 - **Breaking:** A `Public` page is no longer kept when its handler takes an input Corten does not fill: an `Option` of one, or a `Form` before the last argument. The hidden trait behind `Params` is sealed, and a `Form` of a type Corten cannot read no longer compiles in a `Public` handler. [#1803 A hand-written impl of a doc-hidden route trait can read a header under Params](https://github.com/corten-run/corten/issues/1803)
+  To keep such a page, take the input without `Option` and put a `Form` last. A `Form` in a `Public` handler needs a type that implements `serde::Deserialize`, and a route needs `#[derive(Route)]` rather than a hand-written impl of the hidden trait.
 
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
@@ -205,12 +220,15 @@ Pending entries are in [changelog.d/](changelog.d/).
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
   Version comparisons include prerelease ordering: a 6.0.0 prerelease is below the minimum.
+  Install TypeScript 6.0 or later in the app or on the PATH
+  ([Getting started](https://github.com/corten-run/corten/blob/main/docs/guide/getting-started.md#install-and-create-an-app)).
 
 - **Breaking:** Raise the minimum supported Rust from 1.88 to 1.89 so `corten-cluster` and
   listings-feed can use async-nats 0.52. It fixes a received header containing a carriage
   return panicking the subscriber's connection task; 0.51 also fixes JetStream hangs and
   spurious missing-heartbeat errors. [Choice 51](docs/design.md#choice-msrv) records when the
   floor moves and why SQLx stays on 0.8.
+  Build the app with Rust 1.89 or later.
 
 - **Breaking:** An app using `corten-cluster` must depend on async-nats 0.52, since
   `Cluster::start` takes an `async_nats::Client`. 0.52 removes `From<&str>` and
@@ -221,6 +239,7 @@ Pending entries are in [changelog.d/](changelog.d/).
   the only bound on its API requests (upstream's breaking changes for
   [0.52](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#breaking-changes) and [0.51](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#breaking-changes-1), and 0.51's
   [behaviour changes](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md#behaviour-changes-1)).
+  This release goes on to async-nats 0.53: depend on that, as the `corten-cluster` entry above says.
 
 - **Breaking:** Require matchit `=0.9.2` exactly, so a fresh app resolves the matcher Corten's
   tests run
@@ -260,7 +279,8 @@ Pending entries are in [changelog.d/](changelog.d/).
   skipped `data-vars`, so pairs that wrote them are dropped; it costs at most five length-checked
   comparisons per pair, on pair spreads only. corten-ui's `rows::sort` still reads the `data-sort`
   an app writes (moving it onto ref values is
-  [#1387](https://github.com/corten-run/corten/issues/1387)).
+  [#1387 corten-ui's sort and combo box read data-* attributes by name instead of ref values](https://github.com/corten-run/corten/issues/1387),
+  done later in this release: see the copied table kit entries above).
 
 - A debug build answers a browser's plain request (no `data-patch`, asking for HTML) that a
   handler answered with `req.patch` or `req.patch_with_status` with a 500 that names the method
@@ -274,7 +294,9 @@ Pending entries are in [changelog.d/](changelog.d/).
   gets a 500, as does `corten dev` when a browser loads that route itself. To move: answer with
   `req.patch_or(view, || async { .. })`, which draws the page or a redirect for a plain request,
   or return the patch only when `req.mode == Mode::Action`; a test that means the runtime's
-  request sends `.mode(Mode::Action)`. A request whose fetch metadata says it is not a top-level
+  request sends `.mode(Mode::Action)`. (Later in this release `req.patch` and
+  `req.patch_with_status` are removed: a direct patch comes from `req.action()`, which a plain
+  request does not get; see that entry above.) A request whose fetch metadata says it is not a top-level
   navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
   `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends), a relayed upstream answer
   and an `unstaged` route are not checked, by this check or by the one for a page at a path with
@@ -355,7 +377,9 @@ Pending entries are in [changelog.d/](changelog.d/).
   (were `::<ForOne>`), `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` and
   `req.invalid::<ForOne, AnyAnswer, _, _>(..)` (were `::<ForOne, _, _>`), and
   `req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(..)`, six type arguments with its lifetime
-  left out (was `::<ForOne, _, _, _, _>`). A closure handler whose result nothing else fixes
+  left out (was `::<ForOne, _, _, _, _>`). (`req.patch` and `req.patch_with_status` became
+  `action.patch` and `action.patch_with_status` later in this release, with the same type
+  arguments: see the `req.action()` entry above.) A closure handler whose result nothing else fixes
   names them too, `get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(..) })`, and is
   `E0283` (type annotations needed) without them, as is a handler that hides its answer,
   `corten::Result<impl Answer<Inputs = AnyInputs>>`, and calls them directly (one that returns
@@ -438,7 +462,7 @@ Pending entries are in [changelog.d/](changelog.d/).
   stylesheets, is now right for that path, and its messages say it was a patch. **Breaking:**
   every patch whose handler is under an area with a stylesheet ends with that `<link>`, so an
   app's test that compares such a patch's body whole changes (the watchlist's Load more test now
-  splits it off)
+  splits it off; split the `<link>` off before comparing)
   ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
 
 - A WebSocket handshake of a version other than 13, or of none, is answered 426 with
@@ -454,7 +478,7 @@ Pending entries are in [changelog.d/](changelog.d/).
   connection that cannot switch (HTTP/2, `app.test()`), get a 400 where they got a 426 without
   the `Upgrade` header a 426 must have, and an HTTP/1.0 request with `Upgrade` to an
   `Option<Upgrade>` route gets that route's page where it got a 426 (RFC 9110, 7.8), so a client,
-  health check or app test that expects the old status sees the new one
+  health check or app test that expects the old status sees the new one; update what it expects
   ([#1239 A WebSocket route's refusals lack the headers the standards require: a 426 has no Upgrade, and a handshake of another version gets a 400 without Sec-WebSocket-Version](https://github.com/corten-run/corten/issues/1239)).
 
 ### Other changes
