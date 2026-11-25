@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acquireLoadResources, replayLoadResources } from "./load-resource-proof.mjs";
+import { acquireLoadResources, loadResourceCaptureSchema, loadResourceFirstSlot, replayLoadResources, replayScheduledLoadResources } from "./load-resource-proof.mjs";
 
 const id = "a".repeat(64), pid = 42, path = `/system.slice/docker-${id}.scope`;
 const mount = "36 27 0:29 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw";
@@ -101,6 +101,28 @@ test("six probe samples cover a nine-second participant, not twelve seconds", ()
   assert.equal(replayLoadResources(rows, bounds).samples, 6);
   assert.throws(() => replayLoadResources(rows, { ...bounds, finishedAt: stamp(12000) }),
     /uncovered load resource finish/);
+});
+
+test("scheduled resource replay derives mandatory slots from Docker, not the submitted count", () => {
+  const start = stamp(0).replace("Z", "000001Z");
+  const life = { containerId: id, startedAt: start, finishedAt: stamp(5500) };
+  const budget = { memoryBytes: 32 * 2 ** 20, quota: 4 };
+  assert.equal(loadResourceFirstSlot(start), epoch + 1001);
+  const rows = Array.from({ length: 5 }, (_, i) => {
+    const row = capture(i);
+    for (const clock of [row.begin, row.end]) { clock.at += 901; clock.monotonic += 901; }
+    return row;
+  });
+  const captureEvidence = { schema: loadResourceCaptureSchema, live: { id, pid, startedAt: start }, rows };
+  const replay = (r, overrides = {}) => replayScheduledLoadResources({ ...captureEvidence, rows: r }, { ...life, ...overrides }, budget);
+  assert.equal(replay(rows.slice(0, 4)).samples, 4, "terminal partial slot without a sample");
+  assert.equal(replay(rows).samples, 5, "terminal partial slot with a complete bracket");
+  assert.throws(() => replay(rows.slice(0, 3)), /scheduled load resource coverage/);
+  assert.throws(() => replay(rows.slice(1)), /duplicate, missing or unordered/);
+  assert.throws(() => replay(rows, { finishedAt: stamp(5001) }), /scheduled load resource coverage/);
+  assert.throws(() => replay(rows, { finishedAt: stamp(5002) }), /outside container lifetime/);
+  assert.throws(() => replay(rows, { containerId: "b".repeat(64) }), /live resource observation differs/);
+  assert.throws(() => replay(rows, { startedAt: stamp(0) }), /live resource observation differs/);
 });
 
 test("missing, zero, at-budget, reset, and inconsistent clock evidence cannot qualify", () => {

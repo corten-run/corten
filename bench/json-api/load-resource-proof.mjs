@@ -5,6 +5,7 @@ import { timestampNs } from "./fixed-stream.mjs";
 
 const root = "/sys/fs/cgroup", cgroup2 = 0x63677270;
 export const loadResourcePeriodMs = 1000;
+export const loadResourceCaptureSchema = "json-api-load-resources/v1";
 const edgeNs = 5_000_000_000n;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
 const natural = (n) => Number.isSafeInteger(n) && n >= 0;
@@ -176,4 +177,32 @@ export function replayLoadResources(rows, { id, pid, startedAt, finishedAt, memo
   assert.ok(exited - msNs(previous.begin.at) <= edgeNs, "uncovered load resource finish");
   return { samples: rows.length, cpuIntervals: rows.length - 1, memMaxBytes, cpuMaxPctUpper,
     loadHasHeadroom: cpuMaxPctUpper < quota * 80 };
+}
+
+// Give the created participant one period to initialize. The live observation
+// and terminal replay use the same schedule anchored to Docker's start clock.
+export function loadResourceFirstSlot(startedAt) {
+  const firstAt = Number((timestampNs(startedAt) + 999_999n) / 1_000_000n) + loadResourcePeriodMs;
+  assert.ok(positive(firstAt), "invalid load acquisition start slot");
+  return firstAt;
+}
+
+export function replayScheduledLoadResources(capture, life, { memoryBytes, quota }) {
+  assert.ok(capture?.schema === loadResourceCaptureSchema, "missing scheduled load resource evidence");
+  assert.deepEqual(Object.keys(capture).sort(), ["live", "rows", "schema"], "invalid scheduled load resource fields");
+  const { live, rows } = capture;
+  assert.ok(live?.id === life.containerId && live.startedAt === life.startedAt && positive(live.pid),
+    "live resource observation differs from terminal Docker lifetime");
+  assert.deepEqual(Object.keys(live).sort(), ["id", "pid", "startedAt"], "invalid live resource observation fields");
+  const firstAt = loadResourceFirstSlot(life.startedAt), finished = timestampNs(life.finishedAt);
+  const span = finished - msNs(firstAt), period = msNs(loadResourcePeriodMs);
+  assert.ok(span >= 0n, "load stopped before the first resource slot");
+  const full = Number(span / period), partial = span % period !== 0n;
+  // The producer cannot choose how many full slots to retain. It may also
+  // retain a sample from the last partial slot; its brackets still have to
+  // fit the exact lifetime and every earlier slot still has to be present.
+  assert.ok(Array.isArray(rows) && (rows.length === full || partial && rows.length === full + 1),
+    "scheduled load resource coverage differs from terminal Docker lifetime");
+  return replayLoadResources(rows, { id: live.id, pid: live.pid, startedAt: life.startedAt,
+    finishedAt: life.finishedAt, memoryBytes, quota, plan: { firstAt, count: rows.length } });
 }
