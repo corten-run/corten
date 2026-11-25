@@ -470,8 +470,10 @@ function fakeOfflineFenceCommands(t, binding, packets, commandCount = 2) {
     } else {
       assert.equal(program, "/usr/bin/taskset");
       assert.deepEqual(args.slice(0, 3), ["-c", "0", "/usr/sbin/nft"]);
-      events.push(args[3]);
-      if (args[3] === "-f") assert.equal(opts.input, controlAdmission.offlineFenceRules);
+      // The fence installs as one argv batch with no stdin input.
+      const install = args.length === 4 && args[3] === controlAdmission.offlineFenceRules;
+      events.push(install ? "install" : args[3]);
+      if (install) assert.equal(opts.input, "");
       else assert.deepEqual(args.slice(-3), ["table", "inet", table]);
       if (args[3] === "-j" && events.includes("window-close"))
         policy.nftables[3].rule.expr[3].counter = { packets, bytes: 60 * packets };
@@ -509,7 +511,7 @@ test("offline timed probe hits preserve evidence but disqualify an otherwise ver
   assert.equal(status.outcomes[0].outcome, "blocked");
   assert.equal(status.outcomes[0].nativeStatus, "verified");
   assert.ok(status.outcomes[0].appOutcomes.every(({ comparisonEligible }) => !comparisonEligible));
-  assert.deepEqual(events, ["-f", "-j", "window-open", "window-close", "-j", "delete"]);
+  assert.deepEqual(events, ["install", "-j", "window-open", "window-close", "-j", "delete"]);
   writeFileSync(collection, JSON.stringify(s.campaign.collect(handle)));
   const saved = await validate();
   assert.equal(saved.status, "blocked", JSON.stringify(saved));
@@ -598,7 +600,7 @@ for (const group of ["live-delivery", "recoverable-live"]) for (const offline of
     const status = await campaign.advance(handle);
     assert.equal(status.state, "finished"); assert.equal(status.executionVersion, offline ? 6 : 5);
     assert.deepEqual(events.filter((kind) => kind !== "check"), offline
-      ? ["-f", "-j", "window-open", "settled-census", "window-close", "-j", "delete"]
+      ? ["install", "-j", "window-open", "settled-census", "window-close", "-j", "delete"]
       : ["open", "window-open", "settled-census", "window-close", "close", "seal"], "control window must cover the settled census");
     assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "10601" }]);
     assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, resources, cleanupComplete }) => [status, resources, cleanupComplete]),
