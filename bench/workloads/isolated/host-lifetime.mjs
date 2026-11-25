@@ -163,7 +163,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
       const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
       observing("process-membership", () => assert.equal(groupPath(cgroup), current));
-      const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`, "utf8"), () => readlinkSync(`${at}/exe`)));
+      const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`).toString("utf8"), () => readlinkSync(`${at}/exe`)));
       const closingStat = observing("process-stat-recheck", () => readFileSync(`${at}/stat`, "utf8"));
       const rechecked = observing("process-stat-recheck", () => processIdentity(closingStat));
       if (successor?.parent && identity.pid === successor.identity.pid) observing("executable-recheck-successor", () => {

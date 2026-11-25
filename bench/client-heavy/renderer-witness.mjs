@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 const rendererArg = "--type=renderer";
 function cmdlineShape(text) {
@@ -86,6 +87,10 @@ async function within(operation, milliseconds) {
 function shutdownBrowser(server, milliseconds = 4000) {
   const child = server.process();
   const exited = () => child.exitCode !== null || child.signalCode !== null;
+  const releaseChild = () => {
+    for (const pipe of child.stdio ?? []) pipe?.destroy();
+    child.unref();
+  };
   async function confirmExit(operation) {
     let onExit;
     const exit = exited() ? Promise.resolve() : new Promise((resolve) => {
@@ -100,18 +105,27 @@ function shutdownBrowser(server, milliseconds = 4000) {
   }
   let finishing;
   return () => finishing ??= (async () => {
+    if (exited()) {
+      releaseChild();
+      throw new Error("Chromium witness browser exited before shutdown");
+    }
     try { await confirmExit(() => server.close()); }
     catch {
-      try { await confirmExit(() => server.kill()); }
+      try {
+        await confirmExit(async () => {
+          // Playwright waits for pipe closure, which can lag exit. Check
+          // outside libuv's reap/callback batch, then signal synchronously.
+          await nextTurn();
+          if (exited()) releaseChild();
+          else await server.kill();
+        });
+      }
       catch {
         // Playwright normally kills the owned browser group; if its cleanup
         // does not settle, use only the original child handle, never a PID.
         try {
           if (!exited()) await confirmExit(() => child.kill("SIGKILL"));
-        } finally {
-          for (const pipe of child.stdio ?? []) pipe?.destroy();
-          child.unref();
-        }
+        } finally { releaseChild(); }
       }
       throw new Error("Chromium witness required forced browser shutdown");
     }
@@ -150,6 +164,23 @@ test("renderer witness kills the original handle and releases owned pipes if Pla
   await assert.rejects(close(), { message: "Chromium witness required forced browser shutdown" });
   assert.equal(child.signalCode, "SIGKILL");
   assert.deepEqual([kills, stopped, released, child.listenerCount("exit")], [1, 1, 1, 0]);
+});
+
+test("renderer witness releases a held pipe and never signals an exited leader", async () => {
+  let calls = 0, stopped = 0, released = 0;
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null, signalCode: null,
+    stdio: [null, { destroy() { stopped++; } }],
+    unref() { released++; },
+    kill() { calls++; },
+  });
+  const close = shutdownBrowser({
+    process: () => child,
+    close() { child.exitCode = 0; child.emit("exit"); return new Promise(() => {}); },
+    async kill() { calls++; },
+  }, 20);
+  await assert.rejects(close(), { message: "Chromium witness required forced browser shutdown" });
+  assert.deepEqual([calls, stopped, released, child.listenerCount("exit")], [0, 1, 1, 0]);
 });
 
 test("Linux Chromium renderer witness with one visible page", { skip: process.platform !== "linux", timeout: 45000 }, async (t) => {
