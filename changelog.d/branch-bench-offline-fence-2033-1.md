@@ -1,0 +1,1 @@
+- The offline benchmark handoff installs its guest SSH fence as one `nft` argument instead of on standard input, which Noble's nftables refused, and a fence refusal names its operation and outcome class. [#2033 Marketplace r62 halts before timing with native SSH fence unavailable after offline handoff](https://github.com/corten-run/corten/issues/2033)

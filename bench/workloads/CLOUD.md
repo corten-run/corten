@@ -696,6 +696,18 @@ probes, other SSH packets at the fence, a changed rule, or an actual unexpected
 login/guardian intrusion still refuse the phase. The fence reopens at phase end;
 the service's stop hook removes it on an interrupted phase.
 
+The campaign passes the rule set to `nft` as one argument: a single atomic
+batch that refuses an existing table, followed by the same readback and policy
+check. It never feeds rules on standard input, because Node gives a child a
+socket there and Noble's nftables refuses `nft -f -` on a socket. That refusal
+was the confirmed pre-timing setup failure in
+[#2033 Marketplace r62 halts before timing with native SSH fence unavailable after offline handoff](https://github.com/corten-run/corten/issues/2033);
+it is separate from the post-terminal failure in
+[#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051).
+r62 remains an invalid attempt. A refusal now names the fence operation
+(install, readback or remove) and its outcome class (error code, signal or exit
+status), never nft's output.
+
 For first qualification, arrange the independent audit rendezvous before
 timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
 the existing [read-only owned-host observation](#independent-native-audits)
