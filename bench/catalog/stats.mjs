@@ -17,7 +17,7 @@ export function summarizeSamples(samples) {
   const avg = (key) => steady.reduce((sum, s) => sum + s[key], 0) / steady.length;
   return { samples: samples.length, cpuAvgPct: avg("cpu"), cpuMaxPct: Math.max(...samples.map((s) => s.cpu)), memAvgMiB: avg("mem"), memMaxMiB: Math.max(...samples.map((s) => s.mem)) };
 }
-export function sampleStats(names, file, seconds) {
+export function sampleStats(names, file, seconds, { termGraceMs = 2000, pipeGraceMs = 5000 } = {}) {
   const child = spawn("docker", ["stats", "--format", "{{json .}}", ...names], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const samples = Object.fromEntries(names.map((n) => [n, []]));
   // Each error with when it happened: the marketplace runner tells one after an app's container
@@ -45,17 +45,38 @@ export function sampleStats(names, file, seconds) {
   });
   child.stderr.on("data", (chunk) => { if (!stopping) failed(chunk.toString()); });
   child.on("error", (error) => failed(error.message));
-  let closed = false;
-  const done = new Promise((resolve) => child.on("close", (code) => { closed = true; if (!stopping) failed(`docker stats stopped early: ${code}`); resolve(); }));
-  const timer = setTimeout(() => { failed("stats sampler exceeded its deadline"); child.kill(); }, seconds * 1000);
+  let closed = false, exited = false, settle, escalation, release;
+  const done = new Promise((resolve) => { settle = resolve; });
+  child.once("exit", () => { exited = true; });
+  child.once("close", (code) => {
+    closed = true;
+    clearTimeout(escalation); clearTimeout(release);
+    if (!stopping) failed(`docker stats stopped early: ${code}`);
+    settle();
+  });
+  const signal = (name) => {
+    if (closed || exited) return;
+    try { child.kill(name); } catch (error) { failed(error.message); }
+  };
+  const terminate = () => {
+    if (closed || release !== undefined) return;
+    escalation = setTimeout(() => signal("SIGKILL"), termGraceMs);
+    release = setTimeout(() => {
+      // An exited CLI can be reaped while descendants still hold its pipes.
+      // Retain any captured bytes but never summarize truncated evidence.
+      failed("docker stats client pipes did not close within the stop grace");
+      child.stdout.destroy(); child.stderr.destroy(); child.unref();
+      settle();
+    }, pipeGraceMs);
+    signal("SIGTERM");
+  };
+  const timer = setTimeout(() => { failed("stats sampler exceeded its deadline"); terminate(); }, seconds * 1000);
   return {
     async stop() {
       stopping = true;
       clearTimeout(timer);
-      if (!closed) child.kill();
-      const kill = setTimeout(() => child.kill("SIGKILL"), 2000);
+      terminate();
       await done;
-      clearTimeout(kill);
       writeFileSync(file, raw);
       if (buffer.length) failed("stats ended with an incomplete JSON record");
       if (errors.length) throw Object.assign(new Error(errors.map((e) => e.message).join("; ")), { errors });

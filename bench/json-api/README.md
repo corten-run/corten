@@ -144,7 +144,10 @@ lifetime, with no grace. Slots start one second after the rounded-up Docker star
 timestamp. Replay derives the schedule from the exact lifetime and requires a
 complete acquisition for each full slot. A final partial slot can contribute a
 sample only if the entire acquisition fits. A process or cgroup disappearance
-before a read completes fails the phase, even in the last partial slot. The
+during a read fails the phase, even in the last partial slot. A PID directory
+already absent before any resource read can end sampling only if an exact,
+clean Docker exit for the same start is observed, the final receipt agrees,
+and no full slot is missing. No wall-clock inference excuses a failed read. The
 attached client's exit stops new reads without waiting for its output pipes to
 close. A late scheduler wake without a read is acceptable only if no full slot
 is missing. The existing

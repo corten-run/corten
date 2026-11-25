@@ -3,7 +3,10 @@ import { appendFileSync } from "node:fs";
 
 export function commands(cwd, { spawnClient = spawn, pipeGrace = 5000 } = {}) {
   const children = new Map(), terminations = new Map(); let interrupted = false;
-  const kill = (child) => {
+  const signalHandle = (child, signal, report) => {
+    try { child.kill(signal); } catch (error) { report(error); }
+  };
+  const kill = (child, report) => {
     if (terminations.has(child) || child.exitCode !== null || child.signalCode !== null) return;
     const termination = {}; terminations.set(child, termination);
     if (process.platform === "win32" && child.pid) {
@@ -14,14 +17,17 @@ export function commands(cwd, { spawnClient = spawn, pipeGrace = 5000 } = {}) {
         const settled = () => { clearTimeout(bound); resolve(true); };
         killer.once("close", settled); killer.once("error", settled);
       });
-      killer.on("error", () => child.kill("SIGKILL"));
-    } else if (child.pid) { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+      killer.on("error", (error) => {
+        report(error);
+        if (child.exitCode === null && child.signalCode === null) signalHandle(child, "SIGKILL", report);
+      });
+    } else if (child.pid) { try { process.kill(-child.pid, "SIGTERM"); } catch { signalHandle(child, "SIGTERM", report); } }
     termination.timer = setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) {
-        if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
-        else child.kill("SIGKILL");
+        if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { signalHandle(child, "SIGKILL", report); } }
+        else signalHandle(child, "SIGKILL", report);
       }
-      if (termination.helper?.exitCode === null && termination.helper.signalCode === null) termination.helper.kill("SIGKILL");
+      if (termination.helper?.exitCode === null && termination.helper.signalCode === null) signalHandle(termination.helper, "SIGKILL", report);
     }, 2000); termination.timer.unref();
   };
   const interrupt = () => { interrupted = true; for (const stop of children.values()) stop(); };
@@ -37,23 +43,27 @@ export function commands(cwd, { spawnClient = spawn, pipeGrace = 5000 } = {}) {
       const startedAt = Date.now();
       const child = spawnClient(binary, args, { cwd, windowsHide: true, detached: process.platform !== "win32", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
       let output = "", error = "", expired = false;
-      let inputError, stdoutBytes = 0, stderrBytes = 0, release, settle;
+      let inputError, stdoutBytes = 0, stderrBytes = 0, release, settle, timer;
       const ioErrors = [];
+      const report = (failure) => { ioErrors.push(failure.message); };
       const stop = () => {
         if (release !== undefined) return;
+        clearTimeout(timer);
         release = setTimeout(() => {
           ioErrors.push("command did not close within the stop grace; output incomplete");
           child.stdin?.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref();
           settle(child.exitCode, child.signalCode);
         }, pipeGrace);
-        try { kill(child); }
-        catch (failure) { ioErrors.push(failure.message); }
+        try { kill(child, report); }
+        catch (failure) { report(failure); }
       };
-      const ioFailure = (failure) => { ioErrors.push(failure.message); stop(); };
+      const ioFailure = (failure) => { report(failure); stop(); };
       children.set(child, stop);
-      const result = new Promise((resolve, reject) => {
+      const result = new Promise((resolve) => {
         settle = (code, signal) => resolve({ code, signal, expired, interrupted: interrupted && !cleanup });
-        child.once("error", reject); child.once("close", settle);
+        // Node also emits `error` when a signal fails. Retain it as evidence;
+        // closing pipes or the accepted stop's grace must decide settlement.
+        child.on("error", ioFailure); child.once("close", settle);
         if (onExit) child.once("exit", () => { try { onExit(); } catch (failure) { ioFailure(failure); } });
       });
       if (input !== undefined) {
@@ -81,7 +91,7 @@ export function commands(cwd, { spawnClient = spawn, pipeGrace = 5000 } = {}) {
           if (file) appendFileSync(file, c);
         } catch (failure) { ioFailure(failure); }
       });
-      const timer = setTimeout(() => { expired = true; stop(); }, timeout);
+      timer = setTimeout(() => { expired = true; stop(); }, timeout);
       try {
         const exit = await result;
         const clock = { startedAt, finishedAt: Date.now() };
@@ -99,7 +109,7 @@ export function commands(cwd, { spawnClient = spawn, pipeGrace = 5000 } = {}) {
         if (termination) {
           // taskkill may outlive an already closed target. Do not leak its owned
           // process handle, or hide it by unref'ing an unfinished child.
-          if (termination.helper?.exitCode === null && termination.helper.signalCode === null) termination.helper.kill("SIGKILL");
+          if (termination.helper?.exitCode === null && termination.helper.signalCode === null) signalHandle(termination.helper, "SIGKILL", report);
           if (termination.done) await termination.done;
           clearTimeout(termination.timer); terminations.delete(child);
         }

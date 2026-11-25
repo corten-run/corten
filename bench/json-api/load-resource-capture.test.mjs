@@ -78,6 +78,30 @@ test("a failed resource read is never waived by a clean terminal receipt", async
   assert.deepEqual(fault.ids, [id]);
 });
 
+test("a pre-read absent PID plus matching Docker exit permits only the unneeded tail", async () => {
+  const { LoadProcessAbsentBeforeRead } = await import("./load-resource-proof.mjs");
+  const beforeRead = new LoadProcessAbsentBeforeRead("load PID absent before opening its process directory");
+  for (const [finish, proof, qualifies] of [
+    [2999, info("exited"), true],
+    [4000, info("exited", { FinishedAt: stamp(4000) }), false],
+    [2999, info("running"), false],
+    [2999, info("exited", { StartedAt: stamp(1) }), false],
+    [2999, { ...info("exited"), Id: "b".repeat(64) }, false],
+    [2998, info("exited"), false],
+  ]) {
+    const f = fixture({ observations: [info("running"), proof], collect({ sequence }) {
+      if (sequence === 2) throw beforeRead;
+      return { sequence, begin: { at: epoch + (sequence + 1) * 1000 }, end: { at: epoch + (sequence + 1) * 1000 } };
+    } });
+    await new Promise(setImmediate);
+    const result = await f.capture.stop();
+    const after = terminal({ finishedAt: stamp(finish) });
+    assert.deepEqual(f.ids, [id, id], "only the exact container is inspected at the ambiguous edge");
+    if (qualifies) assert.equal(finalizeLoadResourceCapture(result, after).rows.length, 2);
+    else assert.throws(() => finalizeLoadResourceCapture(result, after));
+  }
+});
+
 test("a later exit during unwind or a wall-clock step cannot excuse disappearance", async () => {
   const fault = Object.assign(new Error("synthetic process vanished"), { code: "ENOENT" });
   for (const jump of [false, true]) {

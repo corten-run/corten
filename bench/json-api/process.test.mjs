@@ -65,3 +65,18 @@ test("command exit stops the sampler before pipes close; held pipes fail and rel
     assert.ok(child.unreferenced && child.stdout.destroyed && child.stderr.destroyed);
   } finally { io.dispose(); }
 });
+
+test("an owned child signal error after the deadline does not replace timeout or disarm pipe release", async (t) => {
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
+    stdout: new PassThrough(), stderr: new PassThrough(), unref() { this.unreferenced = true; } });
+  const io = commands(process.cwd(), { spawnClient: () => child, pipeGrace: 80 });
+  t.after(() => { io.dispose(); child.stdout.destroy(); child.stderr.destroy(); });
+  const result = io.command("synthetic-inspect", [], { timeout: 5, observeExit: true });
+  const signalError = setTimeout(() => child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" })), 25);
+  try {
+    await assert.rejects(result, (error) => error.exit?.expired === true && /: timeout\n/.test(error.message)
+      && error.ioErrors.includes("kill EPERM")
+      && error.ioErrors.includes("command did not close within the stop grace; output incomplete"));
+    assert.ok(child.unreferenced && child.stdout.destroyed && child.stderr.destroyed);
+  } finally { clearTimeout(signalError); }
+});

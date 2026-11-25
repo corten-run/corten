@@ -1100,3 +1100,33 @@ test("native sampler rejects a trailing incomplete record and retains its bytes"
     assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true });
   }
 });
+
+test("stats retains its raw prefix and fails when an exited client's pipes never close", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "catalog-stats-held-pipe-")), path = join(folder, "stats.log");
+  const old = childProcess.spawn;
+  const fake = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
+    stdout: new PassThrough(), stderr: new PassThrough(), unref() { this.unreferenced = true; } });
+  const signals = [];
+  fake.kill = (signal) => { signals.push(signal); return true; };
+  childProcess.spawn = () => fake; syncBuiltinESMExports();
+  let deadline, stopping;
+  try {
+    const sampler = sampleStats(["app"], path, 10, { termGraceMs: 5, pipeGraceMs: 15 });
+    const prefix = '{"Name":"app","CPUPerc":"50%","MemUsage":"8MiB / 1GiB"}\n';
+    fake.stdout.write(prefix);
+    fake.exitCode = 0;
+    fake.emit("exit", 0, null);
+    stopping = sampler.stop();
+    await assert.rejects(Promise.race([stopping, new Promise((_, reject) => {
+      deadline = setTimeout(() => reject(new Error("test stop observation expired")), 400);
+    })]), /stats client pipes did not close/);
+    assert.deepEqual(signals, [], "do not signal an already exited child");
+    assert.ok(fake.stdout.destroyed && fake.stderr.destroyed && fake.unreferenced);
+    assert.equal(readFileSync(path, "utf8"), prefix);
+  } finally {
+    clearTimeout(deadline); fake.emit("close", 0); await stopping?.catch(() => {});
+    fake.stdout.destroy(); fake.stderr.destroy();
+    childProcess.spawn = old; syncBuiltinESMExports();
+    assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true });
+  }
+});

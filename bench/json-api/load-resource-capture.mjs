@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { timestampNs } from "./fixed-stream.mjs";
-import { acquireLoadResources, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
+import { acquireLoadResources, LoadProcessAbsentBeforeRead, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourcePeriodMs } from "./load-resource-proof.mjs";
 
 const maxRows = 360;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
@@ -46,7 +46,18 @@ export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadRes
       assert.ok(sequence < maxRows, "excess scheduled load acquisition");
       if (now() >= slot + loadResourcePeriodMs)
         return { capture, missed: { sequence, error: new Error("missing scheduled load acquisition") } };
-      capture.rows.push(acquire({ id, pid: capture.live.pid, sequence }));
+      try { capture.rows.push(acquire({ id, pid: capture.live.pid, sequence })); }
+      catch (error) {
+        if (!(error instanceof LoadProcessAbsentBeforeRead)) throw error;
+        // No resource read began. An exact clean exit corroborates the missing
+        // PID independently of the relative wall-clock readings. Replay still
+        // requires every full slot and the later terminal receipt must agree.
+        const state = stateOf(await inspect(id), id);
+        if (state.Status !== "exited" || state.Running !== false || state.Pid !== 0
+          || state.StartedAt !== capture.live.startedAt || ![0, 99].includes(state.ExitCode)) throw error;
+        timestampNs(state.FinishedAt);
+        return { capture, missed: { sequence, error, exit: { finishedAt: state.FinishedAt, exitCode: state.ExitCode } } };
+      }
     }
     return { capture };
   }
@@ -66,6 +77,7 @@ export function finalizeLoadResourceCapture({ capture, missed, error }, terminal
     && terminal.oomKilled === false && terminal.dead === false && terminal.paused === false && terminal.restarting === false
     && terminal.restartCount === 0 && terminal.error === "" && [0, 99].includes(terminal.exitCode),
   "load capture lacks the exact clean terminal lifetime");
+  if (missed?.exit && (terminal.finishedAt !== missed.exit.finishedAt || terminal.exitCode !== missed.exit.exitCode)) throw missed.error;
   const firstAt = loadResourceFirstSlot(capture.live.startedAt), finished = timestampNs(terminal.finishedAt);
   const span = finished - msNs(firstAt), period = msNs(loadResourcePeriodMs);
   if (span < 0n) {

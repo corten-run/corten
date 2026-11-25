@@ -14,6 +14,7 @@ const containerId = (id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id);
 const objectId = (id) => typeof id === "string" && /^\d{1,20}:[1-9]\d{0,19}$/.test(id);
 const fdPath = (fd) => `/proc/self/fd/${fd}`;
 export class LoadResourceLifetimeEnded extends Error {}
+export class LoadProcessAbsentBeforeRead extends LoadResourceLifetimeEnded {}
 
 function pathParts(path, id) {
   assert.ok(containerId(id) && typeof path === "string" && path.length <= 4096 && path.startsWith("/"), "invalid load cgroup path");
@@ -64,10 +65,17 @@ const linux = {
   withProcess(pid, fn) {
     assert.equal(process.platform, "linux", "load sampler requires the Docker host's Linux PID namespace");
     const path = `/proc/${pid}`;
-    return withDir(path, (fd) => fn({
-      identity() { samePath(path, fd); return inode(fd); },
-      read: (name) => readSmall(`${fdPath(fd)}/${name}`),
-    }));
+    let opened = false;
+    try {
+      return withDir(path, (fd) => {
+        opened = true;
+        return fn({ identity() { samePath(path, fd); return inode(fd); }, read: (name) => readSmall(`${fdPath(fd)}/${name}`) });
+      });
+    } catch (error) {
+      // Only the first PID-directory open can prove no acquisition began.
+      if (!opened && error?.code === "ENOENT") throw new LoadProcessAbsentBeforeRead("load PID absent before opening its process directory", { cause: error });
+      throw error;
+    }
   },
   withGroup(parts, fn) {
     return withDir(root, (base) => {
