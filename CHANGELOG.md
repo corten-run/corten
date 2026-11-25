@@ -7,6 +7,771 @@ Corten is pre-1.0, so any minor version may change the API.
 
 Pending entries are in [changelog.d/](changelog.d/).
 
+## 0.3.0 (2026-11-25)
+
+- **Breaking:** Move layout values an app skipped when `req.mode.swaps()` to a `LayoutRead` so
+  they are drawn on a write's own whole page. An `Ahead` is for a read the page itself awaits.
+  `corten::testing` now sends the whole-page preference for `.mode(Mode::Action)`, so tests that
+  expect a `<main>` swap from a write's `req.page` must opt out with
+  `.header(HeaderName::from_static("prefer"), "corten-draws=main")`, which puts the old
+  preference first. A `data-patch` write that answers with its own page (`req.page` for a method other than `GET`
+  or `HEAD`, a form drawn again with what it refused, a partial result) gets the whole document
+  with JavaScript too, its layout reads started and `give` honored, and the runtime draws it as the
+  page a write redirects to: `<main>` and each element around it that changed, in the same
+  document. A layout value the write changed (a cart count) is now current with JavaScript as
+  without; before, only `<main>` was swapped and the count kept its value from before the write. A
+  `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
+  answer must change one answers its page
+  ([design Choice 66](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-write-own-page-whole)). The reads start once the handler
+  has answered with the page, so they see what the write did, and a write that answers anything
+  else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
+  `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
+  alone, as before, and a server that does not know it ignores it. The page uses the mode and
+  drawing preference as middleware leaves them, so middleware can still ask for a fragment.
+  A handler that then explicitly sets `req.mode = Mode::Document` still fills its whole page's
+  layout reads. When a write is forwarded to another app, its layout reads use that app's own
+  deadline. Set the inner deadline no longer than the outer one if a slow place should be left
+  empty rather than the enclosing app timing out.
+  A mismatched shell key still
+  reloads the current address without resending the write; across a mixed-version deploy this can
+  lose the write's answer, including a refusal. A typed write route whose handler
+  answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) may return
+  `HtmlResult<Patches>` to skip the route's copy of the request head, and with no middleware it
+  skips whole-page negotiation and late filling too. Middleware taking `Req` from its own
+  request head and raw `Table` handlers taking `Req` can still copy it.
+  In historical Callgrind comparisons with earlier revisions of `main`, a write's own whole-page
+  answer took about 62,600 instructions where its `<main>` swap took 24,781 (two layout reads),
+  and the same write without JavaScript 57,595; with
+  a 20 ms read it answers in 21.3 ms where `<main>` took 0.04 ms. In an app with layout reads a
+  route whose answer can be a page (`HtmlResult`) keeps a copy of the request's head, so its patch
+  takes about 31,300 where it took 22,900; one that answers patches alone (`HtmlResult<Patches>`)
+  skips the route's copy, about 25,900 where it took 23,532. A navigation takes 22,358 where it took 22,221, a whole
+  document 53,072 where it took 52,782, a patch in an app without layout reads 23,269 where it took
+  22,752. A read an `Ahead` starts
+  before the handler may not see the write. With two writes out at once, whichever page is drawn
+  last may be older than the other write, a patch to a layout element included, so the next
+  navigation reads the whole page; so does one after a write a navigation cut off before its
+  answer, or one that failed in view (the network failed, a 5xx, its answer cut off after its
+  headers), either of which the server may have applied. If another write drew while an answer's
+  body was on its way, a cut body or completed 5xx makes it undrawn again when the failure is
+  shown. While a failure is undrawn, same-page polls use a partial response and in-flight whole
+  polls are skipped and retried. A partial draw
+  may replace `<main>` and page-owned layout parts; browsers without the Navigation API reload.
+  If a write's page has a different frame, its page-owned parts still draw even when a form
+  has a control named `closest` or `parentElement`.
+  A patch that refuses a field with a 422 scrolls it into view when focusing it.
+  A page the app's or an area's middleware makes with `Req` in the route's place is
+  filled too, within the request's deadline, including a replacement page made with a
+  retained request head after the route answers ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+
+- **Breaking:** a component stylesheet's selector compiles only when the element it styles, or
+  one that element is inside, has one of the file's classes, in every selector of the list and
+  every matchable arm of an `:is()` or `:where()` that supplies the class. A class only in
+  `:not()` or `:has()`, or reached through `+` or `~` (`.list + main`), no longer counts.
+  A nested selector is checked where its `&` stands (`.list { :not(&) { .. } }`). An owned
+  `@scope` root supplies the proof for its body. An inner root under an unowned scope needs its
+  own class anchor to supply that proof; otherwise it only filters independently anchored rules.
+  Malformed strings, unquoted `url()` tokens and mismatched selector blocks fail before forgiving
+  arms are ignored. Component class names must be unescaped ASCII.
+  Comments between two parts of a selector or an `@scope` prelude need whitespace on at least
+  one side. Escaped trailing whitespace in declaration values is preserved.
+  A custom-property value with a `{ ... }` block at its outer level now reports a compile
+  error instead of being silently mangled as a nested rule; a block inside a function or
+  square brackets is kept as written.
+  At-rule names follow CSS whitespace rules: a nonbreaking space is part of the name,
+  not a separator. Non-ASCII at-rule names are refused with an escaped diagnostic.
+  Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
+  `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
+  `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this
+  way; `corten ui diff stepper` shows the change for a copy, and
+  `corten ui add --merge stepper` upgrades it.
+
+- **Breaking:** direct patch answers require `Some(action)` from `req.action()`, then
+  `action.patch(view)` or `action.patch_with_status(status, view)`. The unchecked
+  `Req::patch` and `Req::patch_with_status` methods are removed. `patch_or_with` passes
+  this builder to its part closure: `|action| async move { action.patch(view) }`. The builder
+  is `corten::Action`, not in the prelude, where a bare `Action` would clash with a post's
+  address (`route::Action`) under glob imports.
+  `patch_or`, `invalid` and `invalid_with` keep their APIs; the plain-request debug guard still
+  covers explicit mode overrides and raw marked responses.
+
+- **Breaking:** For tables using a copied kit `SortHeader` or a custom header with `rows::sort`, declare `let cell = refs();` in the table's component, replace `data-sort={value}` with `ref={cell.with(value)}` on the cell, and change that column's handler to `rows::sortByNumber(event, target, cell)` or `rows::sortByText(event, target, cell)`. Headers that sort by cell contents or on the server do not need to change. ComboBox search terms now use an internal typed ref; its Rust API is unchanged.
+
+- **Breaking:** `Types::components` now declares named `ToJson` handler arguments and their
+  nested types, so they no longer need `Types::add`. TypeScript generation fails if a handler
+  imports a different name from its Rust type's declaration in the file being generated.
+  `Types::sync` skips a handler only when its import resolves on disk to a different file.
+  `Types::json_schema` exports all collected schemas without checking imported names. With the
+  `types` feature, named handler argument types must implement `ToJsonSchema`: add that impl
+  alongside a hand-written `ToJson`, or replace the hand-written impl with `#[derive(ToJson)]`
+  to get both. Hand-built `corten::Script` values now need `types: &[]` when they have no
+  handler argument schemas.
+
+- **Breaking:** `corten-cluster` uses async-nats 0.53 for its TLS and server-discovery fixes.
+  Set `async-nats = "0.53"` in the app's `Cargo.toml` so its client matches `Cluster::start`.
+  Review the [async-nats 0.53 release notes](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0)
+  for changes to connection settings.
+
+- **Breaking:** Update a copied table kit with `corten ui add --merge table`. For client sorting, pass the two typed `SortLinks` refs to each `SortHeader` as `links`, bind `on:ReadSortLinks={rows::read(event, up, down)}` on the referenced `<thead>`, and pass that head to `rows::sort*` after `target`. `ordered::send` and `ordered::link` still take table IDs and read the current routes even after a redraw. A custom header can wrap the sort link inside its cell. Without the route wiring, the built-in sort handlers leave the link alone. For server sorting or an independent custom handler, pass `links={None}`.
+
+- **Breaking:** `html!` preserves literal `<` and `&` in SVG and MathML `<style>` and `<script>`
+  text. Replace hand-written character references such as `&lt;` in foreign literals with
+  the characters you meant the browser to receive. Known HTML raw text is unchanged,
+  including a direct literal fallback stylesheet in a known HTML `<noscript>` when its
+  tag boundaries are clear.
+  Literals containing `<` or `&` in an unknown context (root fragments, component children
+  or slots, or after opaque output) now fail to compile. Move them to markup with a known
+  context, a component's CSS file or `#[component(js)]`. For a static data block passed to
+  a fixed HTML-only slot, pass the complete tag via trusted `raw`, without untrusted input.
+
+- **Breaking:** Hand-written named schemas calling the old hidden `Generator::define` helper now use `Generator::define::<Self>(read, name, make)`, without a string identity argument. Schema names must be ASCII TypeScript identifiers without a dollar sign that can be referenced by name, so they also work as JSON Schema references and OpenAPI component keys. The derives check the shared name rules at compile time; TypeScript generation rejects `as` as a type alias name but keeps it as an interface name. Generate separate JSON Schema and TypeScript definitions for distinct Rust types whose paths print the same, including types from different versions of one dependency. Reject a JSDoc import during declaration generation if it names the wrong definition.
+
+- **Breaking:** The router no longer sets `Content-Length` on an answer the server writes it for. hyper writes the same line from the body's exact size, so a page, a file or JSON from Corten's server says the same length as before, and a request makes two allocations fewer. An answer Corten's server did not send (a test with `App::test()`, a request sent through `app.router()`, or an app's own loop that serves the router) no longer carries the header unless it answers a `HEAD` or its handler set it: read `answer.bytes().len()` or the body's `size_hint()`, and have a server that does not write the length from the body set the header. Three answers change on the wire, each to what HTTP asks: a `101`, `204` or `304` given a body with bytes no longer says its length, a `HEAD` no longer says `Content-Length: 0` for one of those (RFC 9110 8.6), and an answer whose handler set `Transfer-Encoding` over a body of known size is sent chunked, with no length in its `HEAD`, where the client got no answer because hyper refused to send the two headers together.
+
+- **Breaking:** `corten build` refuses an argument it does not take. Before, it ignored every argument and built, so `corten build --release` or a misspelled flag passed as an ordinary build; a script that passes one now fails and says which.
+
+- **Breaking:** `corten check` no longer uses a local Corten checkout's own TypeScript for an app built against that checkout. If your app relied on it, install TypeScript 6.0 or later in the app or on the PATH. ([#1475 The benchmark harness holds the root TypeScript at 5.9.3 although 6.0.3 has the same classic API, so corten check carries a checkout-only compiler lookup to step around it](https://github.com/corten-run/corten/issues/1475))
+
+- **Breaking:** The app keeps a `Public` page and gives it again until its shared lifetime ends, so its handler no longer runs for every request without credentials; middleware still does. `App::kept_answers(0)` keeps none.
+  ([#1780 Corten keeps none of the answers it tells every shared cache to keep: on a prototype, a stored page costs 20% fewer cycles a request not compressed and 54% fewer compressed](https://github.com/corten-run/corten/issues/1780))
+
+- **Breaking:** The app keeps a `Public` JSON or text answer it compresses (1,024 bytes or more, with the `compress` feature) as it keeps a `Public` page, so its handler no longer runs for every request without credentials; middleware still does, and an API's CORS headers are still written for each request. `App::kept_answers(0)` keeps none.
+  ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
+
+- **Breaking:** The app keeps a `Public` file it compresses as it keeps `Public` JSON and text: a `Media` of a type it compresses (a CSV, an SVG) or a sitemap, of 1,024 bytes or more, with the `compress` feature, so its handler no longer runs for every such request. A PNG, a stream and a `Public::immutable` file are made each time as before.
+  ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
+
+- **Breaking:** The app keeps a `Public` body (JSON, text, a file) of 1,024 bytes or more whatever its type, also without `compress`: a `Public` PNG or PDF is held for its lifetime and its handler no longer runs for each request.
+  ([#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877))
+
+- **Breaking:** A `Public` page is no longer kept when its handler takes an input Corten does not fill: an `Option` of one, or a `Form` before the last argument. The hidden trait behind `Params` is sealed, and a `Form` of a type Corten cannot read no longer compiles in a `Public` handler. [#1803 A hand-written impl of a doc-hidden route trait can read a header under Params](https://github.com/corten-run/corten/issues/1803)
+
+- A failed catalog benchmark app start or log collection now saves a receipt (client lifetime, partial log hash, and the owned container's state and events) before cleanup, and a client whose pipes outlive it no longer hangs the runner. [#1487 Catalog parity CI: detached TanStack container start exceeds 30-second command bound](https://github.com/corten-run/corten/issues/1487)
+
+- Grouped benchmark launch preflight checks the official workload's CPU roles
+  before provisioning. Client-heavy, both live groups and bounded hardening
+  replay actual actor placement. Connection-flood resistance is not measured
+  ([#1840 Benchmark groups: check actual workload CPU roles before provisioning non-throughput groups](https://github.com/corten-run/corten/issues/1840)).
+
+- Report whether a pinned benchmark executable recheck failed on its capture
+  reference, device or inode, size or mtime, or ctime alone. Catalog sampling
+  can now follow an already observed process replacing its executable when a
+  fresh census confirms the exact successor within the original deadline and
+  both images retain digest proof. Uncertain transitions still block the run.
+
+- Mixed-production benchmarks record container IDs before starting participants and distinguish create failures from start failures.
+  Fresh archived checkouts provide the mount point for read-only tool dependencies.
+  ([#1838 Benchmark r24: mixed production cannot create the source upstream for any of nine adapters](https://github.com/corten-run/corten/issues/1838))
+
+- Mixed-production benchmarks clean up only attempted containers with verified ownership and confirm absence before reporting cleanup success.
+  ([#1837 Benchmark r24: mixed production leaves 18 containers on the host after failed qualification](https://github.com/corten-run/corten/issues/1837))
+
+- The grouped benchmark collector can preserve a finished run and its recorded target failures after systemd forgets the exit metadata. [Collection procedure](https://github.com/corten-run/corten/blob/main/bench/workloads/CLOUD.md)
+
+- The matched Topcoat benchmark app sends a typed 503 on deadline and Marketplace errors as HTML or Problem Details, exposes source-independent liveness, refuses unknown hosts, and serves native Marketplace pages with a no-eval script policy. [#1305 Benchmark parity: Topcoat in approved workload groups](https://github.com/corten-run/corten/issues/1305)
+
+- The benchmark apps are set to drop a pooled upstream connection idle 4 seconds (1 for Spring), under the upstreams' 5-second keep-alive, and the catalog load counts each failed request by class. [#1569 Benchmark r21 lean catalog: Corten HTTP page returns 500 on an upstream connection reset](https://github.com/corten-run/corten/issues/1569)
+
+- The benchmark CI image retries transient Git package downloads and stops at the index update if a required package source remains unavailable.
+
+- The catalog-page runner can qualify a dedicated 16-vCPU placement with twelve CPUs for the load generator. The app keeps one CPU, the upstream keeps two, and the default fleet is unchanged.
+
+- A hosted Linux diagnostic can exercise Corten's catalog image build under the benchmark's process observer without renting a benchmark droplet. It checks both catalog sources but does not measure throughput.
+
+- The catalog benchmark prepares its pinned upstream image separately so a first-time download cannot consume the container startup deadline ([#1760 Catalog CI: downloading the shared Node image can exhaust the upstream startup timeout](https://github.com/corten-run/corten/issues/1760)).
+
+- `docs/architecture.md` (Agents) records what WebMCP does with a Corten page in Chromium 159:
+  a tool a script registers works as it is, a form with `toolname` that posts with no
+  `data-patch` is a tool with one write, and a `data-patch` form should not be made a tool yet.
+  ([#695 WebMCP: wait for the declarative form API before Corten offers anything, and record when to revisit](https://github.com/corten-run/corten/issues/695))
+
+- The marketplace benchmark's browser gate no longer stalls waiting for a JavaScript-disabled alert message that arrives after the POST document starts, and Catalog Contract repeats React Router's English phone alert forms in both sources. [#1251 Benchmark r19: React Router fixture correctness times out waiting for an alert-form message](https://github.com/corten-run/corten/issues/1251)
+
+- New benchmark builds take the security fixes in Ruby 4.0.10, Rack 3.2.9, Phoenix 1.8.17, LiveView 1.2.15, Plug 1.20.4, Temurin 27.0.1.1 and the live Gin app's Go modules; earlier rounds keep their versions.
+  [#1376 bench/fullstack runs Rails, Phoenix, Gin and Nuxt on releases with published security fixes, so its production comparison is not each framework's supported configuration](https://github.com/corten-run/corten/issues/1376)
+
+- The header timeout counts from when an answer's last bytes reach the socket, not from when hyper takes its body, so a slow download is no longer cut partway, and with `send_timeout(None)` it no longer closes a client that stops reading a whole body.
+  ([#1746 The header timeout starts when hyper takes an answer's body, not when it is sent, so a slow download is cut partway (plain and TLS)](https://github.com/corten-run/corten/issues/1746))
+
+- Card-market's push smoke checks Chromium's display, the plain-data destination, and a
+  pending `waitUntil` promise that later fulfills, without listing notifications or retrying.
+  ([#1747 card-market's push smoke misses both sends of a message on CI runners far more often than its 1-in-500 estimate, failing the required browser job](https://github.com/corten-run/corten/issues/1747))
+
+- The staged page's future size test passes again after shared header reads moved the request's page
+  snapshot into the stage future; no app behavior changed.
+  ([#1753 Measure the stage future at the size shared header reads gave it](https://github.com/corten-run/corten/pull/1753))
+
+- Collecting grouped benchmark results allows time to verify large archives without changing framework timings or skipping checks. [#1783 Grouped benchmark replay times out on Windows before one complete catalog evidence scan finishes](https://github.com/corten-run/corten/issues/1783).
+
+- The watchlist and ui-gallery browser smokes gate the first navigation on a new Linux WebKit
+  page, so the process swap for a fast COOP response does not cancel the navigation. The real
+  response, timeout and assertions stay unchanged.
+
+- Benchmark observers retain a process that exits while its executable is being read. A failed observer now records its helper source line for diagnosis without qualifying the run.
+
+- Fresh dedicated benchmark hosts block unrelated SSH traffic before measurement and keep controller cleanup available from the provisioning address.
+  [#1572 Benchmark r21 lean catalog: final host boundary detects 13 new SSH-associated processes](https://github.com/corten-run/corten/issues/1572)
+
+- Let the catalog benchmark verify a newly forked child's first executable
+  change when the parent and its original image are independently observed
+  before and after. Unverified changes still stop the run.
+
+- The benchmark control stream records which check stopped a run and reads Linux process identities even when the kernel truncates a multibyte process name.
+
+- Marketplace and mixed-production qualification can retain Corten's default Trusted Types policy and permission denials without changing the headers sent to browsers. [#1833 Benchmark r24: marketplace qualification rejects a Corten CSP directive on both sources](https://github.com/corten-run/corten/issues/1833)
+
+- A field the server marked invalid in a `data-patch` form's answer is scrolled into view again as
+  the runtime focuses it; since the runtime read form members through the platform's prototypes
+  (the entry on controls named after DOM members), it was focused without scrolling, so a refused
+  field below the fold was focused out of sight.
+
+- Decimal fields can use `Bounds::<f64>::any_step` (also for `f32`) for `step="any"`,
+  with optional exclusive endpoints. Constants reject non-finite, reversed, or empty ranges.
+  The browser gets endpoints as advisory hints; the server enforces exclusivity and refuses
+  an endpoint with the field's error.
+  `Bounds::input_value` shares `NumberField`'s exponent notation for tiny prefills with plain
+  number inputs. Existing stepped fields and standalone `Entry` attributes keep their formatting.
+  See [Choice 64](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-exclusive-ends) and
+  [#1412 Bounds cannot say step any or an exclusive end (above 0, below 1), so most decimal fields keep hand-written rules beside their Entry](https://github.com/corten-run/corten/issues/1412).
+
+- Accept component-local `@position-try` definitions and rewrite their fallback references
+  without renaming global options or treating them as registered custom properties. Document
+  the component CSS at-rule inventory, including raw bodies and global names.
+
+- `corten check` refuses a missing or stale `Cargo.lock` before formatting or compiling and
+  keeps lint, build and tests locked. Run `cargo build` or `corten dev`, then commit the lock
+  (at the workspace root for workspace members). `corten new` writes the app's lock and
+  `corten ui add` updates it when it adds `corten-ui`, so `corten check` passes straight after
+  either. The starter and example images build with `--locked` too, instead of resolving a
+  different graph during deployment.
+  [#1582 Require a fresh Cargo.lock in corten check and starter images](https://github.com/corten-run/corten/pull/1582)
+
+- Parse `Accept-Language` and `Accept-Encoding` weights with the same RFC 9110 qvalue
+  grammar (0 to 1, at most three decimals). Ignore items with malformed or repeated weights instead of
+  accepting float syntax or treating a malformed compression weight as `1`. Ignore apparent
+  weights and list separators inside an unrelated quoted parameter. Skip an item with an
+  unterminated quote and split the remaining text on commas to recover valid alternatives.
+
+- `corten dev`'s closed-dialog and popover check keeps explicit `@scope` roots, including for
+  `:scope`, `&` and declarations on a root, when it can compose the
+  [whole selector chain](https://github.com/corten-run/corten/blob/main/docs/guide/styles.md#styles). Unscoped rules, unsupported scopes,
+  false `@supports` groups and `@starting-style` still use the existing selector match.
+
+- Document the starter's zstd C compiler requirement, how to turn compression off, and the
+  measurements that would justify removing Brotli.
+
+- Document and test that `Json<T>` reports the same field path in a 422 with the derived
+  and serde-only readers.
+
+- `corten-cluster` checks feed keys at creation, write and lookup. Corten's rule is stricter
+  than what the NATS broker accepts: it rejects names such as `a*b` and keys containing a
+  non-breaking space to follow the documented subject rules, excludes control characters, and
+  caps keys at 1,024 bytes so they fit NATS publish lines and Postgres indexes. Invalid keys
+  return `InvalidFeedKey` at `create_feed` and `begin`, and `None` at `Cluster::feed`.
+  Subject prefixes follow the same rules with a 255-byte limit. Startup also refuses custom
+  NATS reply inbox prefixes over 2,729 bytes at the default control-line limit. The relay
+  logs and drops pending rows with invalid legacy keys instead of stopping other feeds.
+  No schema change; publish and acknowledgement errors still retry.
+
+- Put unreleased changelog entries in separate files so pull requests no longer conflict over
+  the changelog. Release preparation collects and removes those files; a release cannot ship
+  with entries still pending.
+
+- `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`, `try_from`
+  or `into`, using serde's compile error messages. It also reports `from` and `try_from`
+  together as a conflict instead of an unsupported attribute, after checking that each conversion
+  has a string literal argument.
+
+- Remove two unused workspace dependency entries and have Cargo 1.100 or later wait three days
+  before selecting newly published dependency versions in the Corten checkout; `corten new` does
+  not write the setting into new apps.
+
+- The grouped benchmark controller waits for SSH before sending tracked setup, and can
+  retire an unused allocation after an unacknowledged first SSH no-op without retrying it.
+
+- If a patch draws a modal opened by `corten-ui`'s dialog widget closed, the widget restores
+  focus to its opener when available and dispatches one `close` on the surviving same-id dialog
+  drawn by that patch. Open redraws keep the opener. Native closes keep their result, but a
+  vetoed open does not swallow a patch close. Navigation and unrelated same-id controls do not
+  receive a patch close.
+
+- Catalog Contract scopes a push to `main` by its push diff, so a merge that changes no
+  benchmark input or framework crate runs no parity jobs. A push whose before commit is unknown
+  or not its ancestor still runs every job.
+
+- Make the benchmark CI startup-deadline test deterministic by expiring the deadline only after the
+  sample open is pending, without changing the benchmark supervisor.
+
+- Run framework CI on Node 26.13.1, refresh Playwright and its browser builds and the OpenAPI validator, and update the release attestation action. The Playwright refresh moves every browser check that installs from the root lockfile, including the Catalog harness and Benchmark Evidence, from Chromium 156.0.8078.4 to 159.0.8154.6; earlier measurements keep the browser version they were taken with.
+
+- Use the root Playwright version for Django benchmark qualification and require an explicit
+  matching base for the benchmark test-tools image, so upgrades do not leave stale image tags.
+
+- `corten-cluster` publishes a compact reload marker when JetStream or the NATS
+  client's cached payload limit refuses a patch. Followers reload committed data from
+  Postgres even when the refused patch was the feed's last. The patch stays in the
+  outbox for replay until normal pruning, and the relay does not force a reconnect.
+  A marker that cannot be sent or acknowledged before the marker deadline leaves its row
+  pending without blocking retirement of other acknowledged rows.
+
+- Wait for launch settlement before removing the supervised benchmark audit fixture after a startup failure. Uncertain controllers still intentionally retain their locks.
+
+- A `#[component(js)]` can export typed refs with an unconditional `let name: Ref<El> = refs();` and pass its read-only `ComponentNameRefs` bundle to a part rendered on the page or by itself as a patch. The part writes the ref with `ref={bundle.name()}`.
+
+- Fix component `@property` scoping so a registered custom property no longer
+  renames same-spelled anchors, containers, timelines, view transitions, or font palettes.
+  Preserve literal `style()` tests supplied to an `if()` condition by CSS substitutions.
+
+- Stop Nuxt catalog pages from prefetching the unrelated home chunk, which Chromium could
+  cancel during catalog navigation. Keep the Home link, keyboard focus and browser resource
+  checks intact. Cover the catalog and non-catalog prefetch behavior in the Nuxt parity job.
+
+- Developer markup checks share an HTML scanner. They count a lone `<` as text,
+  skip markup-like text inside quoted end tags and scripts, and distinguish inert
+  templates from attached shadow roots when checking form hints and submit keys.
+  The development-mode `data-vars` check also covers no-script fallbacks.
+
+- The catalog benchmark pins executable identities during sampling and hashes the file contents after the final sample. It still checks each process listed in a sample and enforces the one-second sampling limit.
+
+- The lean catalog-page benchmark requires its contenders to return equivalent document security headers and an explicit cache policy with HTML from either data source. Earlier results did not check header parity. New ungrouped reports separate contenders with and without these checks rather than ranking them together.
+
+- Document that a mid-batch cluster relay disconnect or a delayed reload marker can reorder JetStream messages, and that Corten followers recover from sequence gaps and ignore already-applied updates.
+
+- Failed catalog process censuses now distinguish time before the sampling callback from time spent reading and retrying the census. The benchmark's one-second continuity limit is unchanged.
+
+- Builds without `compress` no longer generate page ETags for `GET` requests that do not explicitly
+  accept a non-identity content coding, unless the request sends `If-None-Match`. In both builds,
+  eligible `HEAD` responses carry an ETag so a shared cache cannot freshen an untagged page based
+  on length alone.
+
+- Keep `Failure` exhaustive so an app's error page notices new variants at compile time.
+  Use `Failure::default_text()` for Corten's default title and message in your own layout.
+
+- Share CSS tokenization between component stylesheet compilation and the startup
+  custom-property check. Preserve URL payloads and comment boundaries, reject
+  mismatched delimiters, and enforce registered-property priority after nested
+  rules. Reject escaped percents as percentage initial values. Check declarations directly
+  in `@scope`, reads in recognized container size features and page margin boxes, and
+  recognize registrations after a static stylesheet's UTF-8 BOM.
+  `var()` lookups with fallbacks are optional even when the name is brace-wrapped.
+
+- Fix the listings-feed failover benchmark so it can kill and restart instances.
+
+- `corten dev` warns when a document's adopted stylesheet gives a closed dialog or popover a
+  display at a breakpoint, including in supported explicit `@scope` rules.
+
+- The app guide's OpenAPI example is tested only with `types`, so it no longer breaks doctests with `json` alone.
+
+- Replace connection pressure in the hardening benchmark with a fixed-rate marketplace read test that measures recovery after a temporary upstream slowdown. Fixture-backed apps serve as controls.
+
+- The stage future holds one request instead of moving it through each nested future. Stages
+  hand off a handle that cannot be used again after dispatch. CI bounds the stage and small
+  typed page handler future sizes on x86-64 Linux.
+
+- Pin new grouped benchmark fleets to DigitalOcean's sfo3 region without changing their c-8 size or the region of historical catalog runs.
+
+- Keep Corten UI widgets working when a form control is named after a DOM member such as `addEventListener`, `elements` or `getAttribute`.
+
+- The `zones` feature uses Jiff 1 and bundles IANA tzdb 2026f without changing Corten's public API.
+  Jiff now handles fractional timestamps before 1970 without Corten's workaround. Corten shares
+  getrandom 0.4 with its feed and WebSocket dependencies, card-market uses reqwest 0.13 without
+  enabling TLS, and the workspace lockfile refreshes compatible dependencies without raising the
+  Rust 1.89 floor.
+
+- The deploy guide now lists what a proxy passes on for a page's tag and its `304`, with how to check it: a page `GET` is tagged only for a request that accepts a coding or names a tag, so behind a proxy that takes `Accept-Encoding` off a browser that holds no tag is never sent one and gets the whole page each time; and nginx passes no `If-None-Match` from a location with `proxy_cache`, so a page it does not store is sent whole there on every reload.
+
+- The deploy guide gains a section on a profile-guided release build: the toolchain's steps, and what one gained on the lean catalog page (a quarter fewer cycles a request), where 12 rounds did not tell a profile taken from other requests to the same route from one taken from the measured load.
+
+- Developer markup checks now respect browser boundaries when closing paragraphs, list items,
+  and definition items, ignore nested form starts the browser drops, and skip no-script style
+  values inside inert templates. The server check for a missing `data-vars` rule runs only
+  with debug assertions. A normal release build no longer returns that error even with
+  `CORTEN_DEV=1`; browser diagnostics are still available in development mode.
+
+- Use the named `c16-generator-v1` layout for the grouped fleet's catalog-page benchmark only, with the existing correctness and replay gates and unchanged historical reservations.
+
+- The cluster relay closes abandoned reply inboxes so retries do not accumulate reply
+  registrations in the NATS client. It uses one reply subscription even when recovering
+  with a small client queue or a broker subscription limit. After a partial patch reply
+  timeout it retries with one outstanding reply at a time, retiring acknowledged rows
+  before the relay lease expires.
+
+- Stop the benchmark progress monitor when a job exits before publishing its first campaign state. An early exit produces no performance result.
+
+- The deploy guide's nginx sample and the site config limit shared caching to versioned public assets, leaving private pages free to return `304` on reload.
+
+- A ref-taking focus handler no longer interrupts a dialog close when one patch redraws both
+  the modal and its ancestor. The surviving same-id dialog gets one `close` with the old result,
+  and later connect handlers see the updated refs after removal signals abort and the patch
+  applies styles and current nav links.
+
+- `corten new` and the examples now build and run on Debian 13 (trixie).
+
+- The Corten catalog benchmark app parses `API_BASE` once at startup, follows no redirect from its
+  upstream and reads only a successful answer as a record, as the axum + Maud contender does. An
+  `API_BASE` that is empty, not a URL or one no path can be added to now stops the app at startup;
+  before, every request that fetched a record failed.
+
+- Let the root user manager exit naturally on dedicated benchmark hosts. SSH and SFTP keep their normal login sessions, and an unexpected process still blocks timing.
+
+- Record why Corten keeps its fixed request stages without per-group flags and clarify when a page GET gets an ETag.
+
+- The full-stack counter reports user and kernel cycles and user L1 instruction-cache misses
+  alongside instructions per request. Request-path changes now report the count and cycles
+  under load; optional counters without full coverage are marked, and the count can retry
+  with instructions only.
+
+- Report a fixed reason when the grouped benchmark launcher cannot validate its installed Git HEAD, without exposing raw Git diagnostics or changing evidence validation.
+
+- Match component stylesheet statement at-rules ASCII case-insensitively. Preserve the case
+  of copied `@layer` statements and give `@import` and `@custom-media` the same diagnostics
+  regardless of case.
+
+- Staged requests share their incoming header reads across cache, security and error handling.
+  Handler extractors still see header changes made by middleware or earlier extractors.
+
+- `corten build --profile-from <command>` builds the release binary with a profile of the app at work: it builds an instrumented copy under `target/corten-profile`, starts it on a free port, runs `<command>` with that port in `PORT` to send it requests, stops the copy with `SIGTERM`, merges the profile it wrote with the toolchain's `llvm-profdata` (`rustup component add llvm-tools`), and builds `target/release` with it. `target/release` never holds the instrumented copy, and a step that fails leaves it as it was. The build is refused before its first step on a system that is not Unix, while another profiled build runs in the same target directory, when the command is not there or the toolchain lacks `llvm-profdata`, and when a Cargo configuration sets `rustflags` (or includes another file) while neither `RUSTFLAGS` nor `CARGO_ENCODED_RUSTFLAGS` is set, since the profile's flag would replace them.
+
+- Builds now reject a literal `html!` sent as a whole patch when its top-level elements show that
+  a browser would drop or wrap a sibling, such as a table row after a paragraph. Request method
+  bounds are unchanged, and debug builds still check composed patches when sent.
+
+- Find older releases from the changelog's archive links and scan shorter notes for new changes.
+  ([#1717 Changelog entries run to design-note length, so CHANGELOG.md grows far faster than the changes it lists](https://github.com/corten-run/corten/issues/1717);
+  [#1718 CHANGELOG.md keeps every release in one file; move released sections to per-version files at release](https://github.com/corten-run/corten/issues/1718))
+
+- The watchlist and UI gallery browser smoke checks are organized by behavior and widget.
+  Their commands and check order stay the same. ([#1737 Split the browser smoke scripts by area](https://github.com/corten-run/corten/pull/1737))
+
+- Run the HTTP/2 idle, queued DATA and socket write watches on one path in the standalone probe.
+  The 17 original controls passed every round, but the socket watch closed a steady slow reader
+  in 1 of 7, so the evidence is incomplete and
+  [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686)
+  stays open. Shipping Corten still uses HTTP/1.1.
+
+- Split the framework's crate-level tests by area so unrelated test changes no longer edit the same file.
+  ([#1740 Split the crate's tests by area](https://github.com/corten-run/corten/pull/1740))
+
+- The test that bounds the stage and small typed page handler future sizes on x86-64 Linux
+  holds each within the size of one request of what its build profile measured, so a stage
+  that holds the request again across the stages after it fails the test.
+
+- Grouped benchmark provisioning can continue after one closed account connection reset without repeating a provisioning step. [#1743 Benchmark r21: a settled provider account-read error interrupts catalog provisioning before start](https://github.com/corten-run/corten/issues/1743)
+
+- The grouped benchmark can retire an unused host after interrupted setup uploads once the exact
+  host and drained sessions are proved. This does not publish benchmark results.
+  [#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)
+
+- Benchmark operators can run the existing Linux check on the measured commit without repeating successful evidence suites or starting a droplet. [#1754 Allow on-demand Benchmark Evidence checks for the exact merged benchmark source](https://github.com/corten-run/corten/issues/1754)
+
+- `send_timeout`'s wait now starts over each time the connection reports room, so a TLS write or flush still sending its bytes is cut only after a whole timeout with no room reported ([#1756 send timeout over TLS](https://github.com/corten-run/corten/pull/1756)). A slow client that reads its socket in bursts, as TLS clients reading whole records do, can still be cut at a short timeout.
+
+- Corten needs tokio 1.44 or later ([#1756 send timeout over TLS](https://github.com/corten-run/corten/pull/1756)).
+
+- `corten build` passes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from`, to each build it runs, so a profiled release can have features, a package, one binary or the lock ([#1759](https://github.com/corten-run/corten/pull/1759)). Any other argument is still refused.
+
+- card-market's example image now builds with `cargo build --locked`, like the starter's and the other examples', so a missing or stale `Cargo.lock` fails the image build instead of being repaired inside it. [#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)
+
+- A flush that waited and then went through, with no write or close waiting, now ends its send-timeout wait, so a later write that waits gets its own `send_timeout` instead of closing at once. Only an app's own IO under `serve_wrapped` could hit this. [#1762 A flush or close that waits and then goes through leaves the send timeout's stall start set, so a later wait may be cut early](https://github.com/corten-run/corten/issues/1762)
+
+- The Dockerfile `corten new` writes builds the image's binary with a profile of the app at work when its build is given the app's script: `docker build --build-arg PROFILE_FROM=train.sh .`. Without the argument it builds as before ([deploying](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-in-the-image), [#1732](https://github.com/corten-run/corten/issues/1732)).
+
+- The failover, edge and nodelay benchmarks now run nginx 1.31.9, pinned by digest, with earlier results keeping their versions; the deploy guide's nginx sample, unchanged, was rechecked on it. [#1765 The failover, edge and nodelay benchmarks and the deploy guide's nginx check run nginx 1.27 and 1.29, lines nginx no longer patches, while 1.31.9 is current](https://github.com/corten-run/corten/issues/1765)
+
+- CI, CONTRIBUTING's cluster tests and the listings-feed example now run on PostgreSQL 19 (`postgres:19-alpine`), and the failover benchmark moves from 16 to 19. [#1766 CI, CONTRIBUTING and the cluster docs test on PostgreSQL 18 and the listings-feed failover benchmark runs 16, while PostgreSQL 19.0 shipped on 2026-11-19](https://github.com/corten-run/corten/issues/1766)
+
+- The runtime is minified with terser 5.51.3 (was 5.51.2). Every built module is byte for byte the same, so no size changes. [#1768 The runtime is minified with terser pinned at 5.51.2, while 5.51.3 fixes template-tag yield/await output](https://github.com/corten-run/corten/issues/1768)
+
+- corten-site's OpenTofu lock moves the DigitalOcean provider from 2.107.0 to 2.109.0. [#1769 corten-site's OpenTofu lock holds the DigitalOcean provider at 2.107.0 while 2.109.0 is out within its 2.107 requirement](https://github.com/corten-run/corten/issues/1769)
+
+- Behind nginx with several instances and `max_fails`, give stream addresses an `upstream` of their own with `max_fails=0`: a stream holds nginx's trial open, so reconnects can get 502s for seconds (live-data guide). [#1775 The failover benchmark sometimes gets a second of 502s after a kill, and the clients that hit them take up to 18 s to reconnect](https://github.com/corten-run/corten/issues/1775)
+
+- `subscribe()` retries a failed snapshot or a stream answered with an HTTP error after 1, 1, 1,
+  2, 2, 4, 4 s and on up to 30 s, not 1, 2, 4, 8 and 16 s, so live pages recover sooner from many
+  short outages ([#1787 subscribe() waits 1, 2, 4, 8, 16 then 30 s between failed reconnects, with no jitter, so a restart of the only instance can leave live pages waiting about twice the outage](https://github.com/corten-run/corten/issues/1787)).
+
+- The hardening benchmark now compares request deadlines, limits and dependency recovery across the same frameworks. Localized marketplace and mixed production keep their timed workloads and use bounded HTTP prechecks. Connection-flood resistance: not measured. [#1805 Replace connection pressure with bounded benchmark recovery and functional prechecks](https://github.com/corten-run/corten/pull/1805).
+
+- The catalog, marketplace, live and nodelay benchmark apps now lock the Rust crates they share with the workspace at its versions (brotli 9.1.3, zstd 0.14.4); saved results are unchanged. [#1767 The catalog and marketplace Corten apps lock brotli 9.1.1 and zstd 0.14.3 behind the workspace lock, so those benchmarks time a compression stack CI no longer tests](https://github.com/corten-run/corten/issues/1767)
+
+- The express-bun deployment benchmark builds on Bun 1.4.5, pinned by digest, so its next run compares the current Bun release. [#1770 The express-bun deployment benchmark pins Bun 1.4.4 while Bun 1.4.5 shipped on 2026-11-19](https://github.com/corten-run/corten/issues/1770)
+
+- Grouped benchmarks now check every required host size against both provider listings before spending and reserve one supported placement for the whole fleet. See [#1812 Benchmark fleet: check every group's droplet size and region before starting the first paid host](https://github.com/corten-run/corten/issues/1812).
+
+- Catalog CI now builds Gin's recovery test separately so a Go compiler failure is distinguishable from a failed application test. Benchmark limits are unchanged. [#1727 Catalog CI: Gin lean recovery test can stop at compile time with signal: killed](https://github.com/corten-run/corten/issues/1727)
+
+- An answer that reads messages with `req.t()` in the language `Accept-Language` asks for now says `Vary: accept-language` however it is made (a page without `App::messages`, read before or after it was built, JSON, a redirect, a kept page a middleware gave its own `Vary`), so a cache keeps a copy per language. [#1800 Messages read without App::messages follow Accept-Language, and the answer does not say so](https://github.com/corten-run/corten/issues/1800)
+
+- A `Public` page that draws a new submit key (`SubmitKey::field`) now goes out `private` (with `no-store` if it says one) without the CDN caching headers the caching guide lists; other names and edge rules are the deployment's. A live stream that may draw a key must say `private` and send no CDN override.
+  ([#1802 A Public page that draws a submit key is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1802))
+
+- A kept `Public` page is given again with less work: the request's headers are read in one pass
+  to decide whether the kept page can answer it, and the kept head is copied with room for the
+  headers the stages add. Which requests a kept page answers is unchanged.
+  ([#1798 A kept page still costs 84% of the cycles of the page made by its handler: what the rest is has not been measured](https://github.com/corten-run/corten/issues/1798))
+
+- The ui-gallery, deck-builder and card-market no-script smokes wait for a posted form's page to load before the next step.
+  No app changes are needed.
+  ([#1804 The ui-gallery smoke can start its next navigation while a posted form's page is still loading](https://github.com/corten-run/corten/issues/1804))
+
+- An app with no `Public` page no longer counts each write for kept pages, so its writes skip that work without `.kept_answers(0)`. Apps with a `Public` page are unchanged. [#1817 Every write in every app pays for the kept-page count, even with no Public page](https://github.com/corten-run/corten/issues/1817)
+
+- Grouped benchmarks check for an available region again when the remaining groups are ready. A capacity change during catalog no longer requires rerunning catalog in a new-format fleet. See [#1827 Benchmark fleet: a region losing c-8 after catalog completes strands the eight unstarted groups](https://github.com/corten-run/corten/issues/1827).
+
+- JSON benchmark preparation can reach independent review when Docker omits an image's working directory.
+  The audit and timing requirements are unchanged.
+  ([#1835 Preserve omitted Docker working directories in JSON benchmark audit evidence](https://github.com/corten-run/corten/pull/1835))
+
+- Supervised full-stack browser benchmarks now enforce and verify separate CPU sets for
+  Chromium and its driver, the application, and the upstream, including observed workers
+  in child cgroups. This does not change the journeys or qualify results
+  ([#1830 Benchmark r24: full-stack browser stops before timing because its native CPU partition is absent](https://github.com/corten-run/corten/issues/1830)).
+
+-   The supervised marketplace benchmark now checks once more after cleanup for udev workers proved to start after the command ended. It keeps the original host evidence, verifies the wait, and still rejects persistent or unexplained processes. [#1834 Benchmark r24: marketplace host cleanup stops on 16 new udev worker processes](https://github.com/corten-run/corten/issues/1834)
+
+- Benchmark collection on the measured checkout now retains the wrapper and complete native
+  output of a terminal failed group before retiring its host. Failed output never qualifies
+  as a benchmark result. See [benchmark fleet cleanup](https://github.com/corten-run/corten/issues/1832).
+
+- Once the kept `Public` pages are within an eighth of the bound, an answer is kept only when
+  its URL was asked for before: a URL asked for once is not copied into the store, and a page's
+  handler runs twice before its page is kept. Below that nothing changes.
+  ([#1824 A Public page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824))
+
+- Benchmark CI checks runtime pins, client-heavy and live replay, native wire fixtures, htmx source,
+  and simulated launch and cleanup failures without starting benchmark apps.
+  ([#1583 Eight hermetic benchmark test files run in no check, and one of them, node-runtime.test.mjs, has failed unnoticed since the catalog's Node pin moved to raw.mjs](https://github.com/corten-run/corten/issues/1583))
+
+- Marketplace benchmark collection checks for delayed droplet removal using a saved doctl context and resumes confirmation without resending DELETE.
+  ([#1313 Benchmark collection: terminal droplet deletion initially reports unconfirmed](https://github.com/corten-run/corten/issues/1313))
+
+- Benchmark reports can carry forward verified groups from a partial round and run only the missing groups. Each result names its own measured commit and configuration. [#1857 Benchmark groups: carry verified results forward and run only missing groups after an incomplete round](https://github.com/corten-run/corten/issues/1857)
+
+- A kept `Public` answer's URL is hashed once for the store's table, and its URL, `Host` and
+  (when it varies on it) `Accept-Language` go in one allocation built when it is kept: a miss
+  that is not kept never builds that key. The bound counts the URL once, not twice, so a long
+  URL near its share may now be kept.
+  ([#1824 A Public page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824))
+
+- Missing benchmark groups in the same continuation can measure on separate droplets at the same time and be collected independently. [#1864 Run independent benchmark groups on separate droplets while their measurements overlap](https://github.com/corten-run/corten/issues/1864)
+
+- The native Linux benchmark evidence test now drives its fault-injection samples directly, so the observer's periodic timer cannot add failures to the test's exact count. [#1868 Make the benchmark observer fault-injection test drive its own timer](https://github.com/corten-run/corten/issues/1868)
+
+- Supervised JSON benchmark preparation can proceed to audit when a bounded cleanup check proves that new udev workers have exited. Timed phases are unchanged. [#1870 JSON preparation halts before timing when transient udev workers appear outside the marketplace group](https://github.com/corten-run/corten/issues/1870)
+
+- A `Public` page that placed a submit key it had rendered to a string (`raw`) was kept by the app, so every visitor got the first request's key; the app no longer keeps one. Caches in front are still sent it as `public`
+  ([#1863 A Public answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)).
+  ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
+
+- The browser benchmark can verify ordinary no-JS full-document navigation while retaining
+  native parser assets and blocked preload failures, without inventing retired-page counts.
+  See [#1319 Benchmark groups: migrate full-stack browser journeys without flattening native framework behavior](https://github.com/corten-run/corten/issues/1319).
+
+- The client-heavy benchmark can retain and verify the larger Node executable used on its Linux
+  host without raising the limits on ordinary files or changing what the benchmark measures.
+  ([#1876 The client-heavy collector cannot retain the 143 MiB Node executable used by its official Linux host](https://github.com/corten-run/corten/issues/1876))
+
+- The benchmark checks and Chromium examples run on separate CI runners so one does not use
+  the other's time limit. Both still have to pass.
+  ([#1878 Benchmark apparatus and Chromium example smokes share a 30-minute CI job that expires at deck-builder](https://github.com/corten-run/corten/issues/1878))
+
+- A write in an app whose `Public` routes have kept nothing yet (JSON or text all too small to keep, or a page not yet asked for) no longer pays to be counted by its path. Writes are counted by path from the first answer the app may keep.
+  ([#1874 A write is counted for the app's store before anything is kept](https://github.com/corten-run/corten/issues/1874))
+
+- Saved hardening benchmark replay uses the same Git build-context archive settings as the runner, so valid non-Corten build receipts are not rejected over tar timestamps. [#1882 Hardening benchmark replay recreates non-Corten build archives with the wrong timestamp](https://github.com/corten-run/corten/issues/1882)
+
+- Prepare an unlaunched benchmark group at a repaired commit in a higher round without allocating a host for the old round. [#1881 A prepared benchmark group that never launched cannot move to a repaired commit](https://github.com/corten-run/corten/issues/1881).
+
+- Independent grouped benchmark detach now names the stage of a pre-intent refusal without printing private details. [#1886 Mixed-production r29 stops before host creation with only fleet-operation-failed](https://github.com/corten-run/corten/issues/1886)
+
+- The browser benchmark can replay proved JS-enabled document replacement without
+  inventing old-realm counts or relaxing same-document checks.
+  [#1889 JS-enabled browser journeys cannot qualify after proved full-document realm replacement](https://github.com/corten-run/corten/issues/1889)
+
+- Marketplace saved-result replay accepts a decimal memory mean rounded just above the peak only when it matches the retained samples. [#1892 Marketplace replay rejects a constant memory sample when its floating-point mean exceeds its maximum](https://github.com/corten-run/corten/issues/1892)
+
+- Return JSON 405 for POST to the Next.js marketplace record. The enhanced form uses a separate native alert endpoint, and plain HTML forms still post to the page. [#1303 Benchmark parity: Next.js in approved workload groups](https://github.com/corten-run/corten/issues/1303).
+
+- The Leptos marketplace benchmark returns problem JSON for unsupported record methods and, in its matched profile, checks configured hosts and serves a liveness endpoint ([#1306 Benchmark parity: Leptos in approved workload groups](https://github.com/corten-run/corten/issues/1306)).
+
+- The matched Drogon marketplace adapter now serves strict response headers, honors configured hosts, and answers liveness without consulting the record source. Failed upstream page reads return HTML instead of an empty response ([#1300 Benchmark parity: Drogon in approved workload groups](https://github.com/corten-run/corten/issues/1300)).
+
+- Bounded live fan-out captures use the selected app's wire binding, fixing
+  [the fan-out capture error for Corten and ASP.NET](https://github.com/corten-run/corten/issues/1902).
+
+- The live benchmark opens Chromium separately for each adapter. A lost browser stays a
+  [reported case failure](https://github.com/corten-run/corten/issues/1900) instead of also
+  failing later adapters before their pages open. A cancelled round retains what actually ran
+  for replay without treating unattempted cases as failures or qualifying the round.
+
+- Isolated live benchmark campaigns seal their generated result files outside the source
+  checkout before the final clean-source check, including results from failed apps.
+  [#1901 Live campaign rejects its own untracked result files during final checkout validation](https://github.com/corten-run/corten/issues/1901)
+
+- The runtime is minified with terser 5.51.4 (was 5.51.3). Every built module is byte for byte the same, so no size changes. [#1819 The runtime is minified with terser pinned at 5.51.3 while 5.51.4 is out](https://github.com/corten-run/corten/issues/1819)
+
+- The workspace lock, which the examples build from, moves bytes to 1.12.2 and jiff to 1.0.1. In bytes 1.12.2, a `Bytes` truncated to zero length drops its own reference to the shared buffer. An app takes them with `cargo update -p bytes`, adding `-p jiff` if its lock has jiff
+  ([#1818 Cargo.lock builds bytes 1.12.1 and jiff 1.0.0 while 1.12.2 and 1.0.1 have cleared the 3-day publish age](https://github.com/corten-run/corten/issues/1818)).
+
+- A failed benchmark monitor can retain its failure status even if an earlier state write left a temporary file. The run stays ineligible for publication.
+  [#1911 Browser benchmark r36 loses its monitor after registration and ordinary collection cannot settle the retained host](https://github.com/corten-run/corten/issues/1911)
+
+- `ReadError` (`corten/read`) declares its `status` and `redirected` fields, so a misspelled write
+  to them fails the type check. Types and values are unchanged; the module is 18 bytes larger.
+  [#1862 Design Choice 5 says the runtime has one hand-written class, but read() added ReadError, which sets fields it does not declare, so a premise is stale and a Revisit-when condition reads as met](https://github.com/corten-run/corten/issues/1862)
+
+- A benchmark group that stops before saving its plan can preserve its partial files and retire its idle host without publishing results.
+  ([#1911 Browser benchmark r36 loses its monitor after registration and ordinary collection cannot settle the retained host](https://github.com/corten-run/corten/issues/1911))
+
+- On Windows, a grouped benchmark launch can retry local publication of an
+  acknowledged bootstrap seal after a transient file-sharing denial without
+  issuing SSH again ([#1911 Browser benchmark r36 loses its monitor after registration and ordinary collection cannot settle the retained host](https://github.com/corten-run/corten/issues/1911)).
+
+- The workspace lock moves url to 2.5.9 for RUSTSEC-2026-0592 (a stack overflow in `Url::origin` on nested `blob:` URLs), and regex, zeroize and smallvec to their latest patches. `corten` does not depend on url; an app that does takes the fix with `cargo update -p url`
+  ([#1916 Cargo.lock builds url 2.5.8 (RUSTSEC-2026-0592, stack overflow in Url::origin) and regex 1.13.1 while 2.5.9 and 1.13.2 are out](https://github.com/corten-run/corten/issues/1916)).
+
+- A `2xx` to `CONNECT` whose route set `Content-Length` or `Transfer-Encoding` now opens its tunnel: the router removes both headers along with the body, where before the client got a closed connection and no answer.
+  ([#1915 A 2xx to CONNECT that says Content-Length or Transfer-Encoding gets no answer: the router empties its body but keeps the headers hyper refuses](https://github.com/corten-run/corten/issues/1915))
+
+- Starting an unfinished benchmark group no longer requires replaying other groups' results. The publication report still checks every group's original evidence.
+  ([#1888 A reused Windows process ID makes a retained benchmark fleet look active during group preparation](https://github.com/corten-run/corten/issues/1888))
+
+- Historical benchmark reports can replay saved evidence when Windows has reused
+  the process ID in a retained lock. Admission and cleanup still use their original lock checks.
+  [#1888 A reused Windows process ID makes a retained benchmark fleet look active during group preparation](https://github.com/corten-run/corten/issues/1888).
+
+- Dedicated client-heavy benchmarks now measure qualified apps in three blocks
+  and report per-action ranges only after policy and host replay pass.
+  [#1322 Benchmark parity: qualify React, Vue, Solid, Svelte and Remix client-heavy screens](https://github.com/corten-run/corten/issues/1322).
+
+- The isolated client-heavy benchmark keeps its fresh Cargo target until the host seals sampled executable bytes, so normal build cleanup does not invalidate the browser run's host proof ([#1926 Client-heavy r40 loses the host executable proof after the browser screens finish](https://github.com/corten-run/corten/issues/1926)).
+
+- Benchmark preparation now names the failed placement check without printing account data or
+  provider response bodies ([#1928 Live-delivery preparation refuses placement twice without identifying the failed check](https://github.com/corten-run/corten/issues/1928)).
+
+- Benchmark group retries can read the verified retirement of a previous host even when Windows has reused its monitor process ID.
+  [#1931 An unrelated process reusing a retired JSON controller PID blocks the next independent group run](https://github.com/corten-run/corten/issues/1931).
+
+- An unrelated benchmark group can proceed after an archived setup failure when the provider confirms the old host is gone. The failed group is not retried or counted as a result.
+  ([#1943 A deleted standalone group host blocks every unrelated benchmark from starting](https://github.com/corten-run/corten/issues/1943))
+
+- Grouped benchmark logs distinguish why the post-terminal monitor drain could not be verified
+  ([#1945 Marketplace r41 records a campaign drain fault after the group and stream have sealed](https://github.com/corten-run/corten/issues/1945)).
+
+- Dedicated benchmark hosts now get an SSH-free window to let the root user
+  manager exit before provisioning, without stopping competing work or changing
+  the measured workload.
+  [#1941 Recoverable-live setup waits for the root user manager until timeout before any adapter runs](https://github.com/corten-run/corten/issues/1941).
+
+- Benchmark collection preserves an acknowledged failed setup query and reports missing cleanup proof without repeating the query or deleting the host ([#1942 Failed-setup collection saves the r44 archive but leaves its idle paid host allocated](https://github.com/corten-run/corten/issues/1942)).
+
+- Bound the Next.js benchmark image's dependency install and log package fetches and npm errors.
+  [Marketplace r41 times out installing Next.js dependencies before any adapter reaches load testing](https://github.com/corten-run/corten/issues/1946).
+
+- New client-heavy builds use Remix 3.3.0, Svelte 5.59.1 and Vue 3.5.46. Solid 2 still lacks a compatible stable compiler for the benchmark. [Client-heavy dependency refresh](https://github.com/corten-run/corten/issues/1385)
+
+- The marketplace benchmark times one localized page mix and one neutral JSON endpoint per source. All three locales still have to pass correctness checks. Earlier per-locale timings remain separate
+  ([#1952 Time one rotating localized marketplace page per source](https://github.com/corten-run/corten/pull/1952)).
+
+- Fresh hardening benchmark hosts now prepare the fixed tool images before the first cell, so an empty Docker image store no longer stops the run at image inspection ([#1953 Fresh hardening hosts never pull the checker, edge, or certificate images](https://github.com/corten-run/corten/issues/1953)).
+
+- A kept page or body given again makes three fewer allocations: about 500 to 1,300 fewer instructions a request for a kept answer, by how it is counted, with no gain in cycles shown.
+  ([#1925 A kept Public body costs a request that names no coding 1.5% to 5.0% more cycles than its handler where the handler makes nothing, and the kernel's part of that is not explained](https://github.com/corten-run/corten/issues/1925))
+
+- Allow a benchmark group stopped in setup to try a new round on a different commit after verified host cleanup, without rewriting the failed attempt.
+  ([#1956 Recoverable-live cannot start a new round after its failed setup host was verifiably deleted](https://github.com/corten-run/corten/issues/1956))
+
+- Marketplace benchmark continuation can verify a destroyed host's pre-rotation failure evidence without treating it as a benchmark result. [#1959 Marketplace continuation rejects retired native evidence after the timed locale registry changes](https://github.com/corten-run/corten/issues/1959)
+
+- A text or bytes answer (`String`, `&'static str`, `Bytes`, a `Media`, a static file) makes its header
+  map once, with room for the headers the app adds, so the security headers no longer grow it on every request.
+  An `unstaged` text answer gets the same room and costs slightly more
+  ([#1962 Reserve a text or bytes answer's header map once](https://github.com/corten-run/corten/pull/1962)).
+
+- Catalog CI keeps the Corten build and JSON checks for controller-only edits without rebuilding unrelated apps.
+  [#1957 Controller-only changes schedule all 20 Catalog parity builds on both the PR and main](https://github.com/corten-run/corten/issues/1957).
+
+- Dedicated benchmark startup now lets the root login that starts the job drain before checking for an idle host. [#1967 Dedicated bootstrap reopens root SSH after its quiet window and r51 fails the first idle check](https://github.com/corten-run/corten/issues/1967)
+
+- New dedicated benchmark hosts install their root user-manager policy at boot, before the controller's SSH setup. A held root session still blocks startup. [#1970 Clean Ubuntu benchmark host retains its original root user manager through the post-start quiet period](https://github.com/corten-run/corten/issues/1970)
+
+- A link, form or redirect the runtime follows to a `#fragment` now gets the browser's own fragment scroll, as a full load does:
+  the element matches `:target`, an `<a name>` is found, and a focusable element gets focus.
+  Firefox may only scroll there, with `:target` unset or stale and focus unmoved
+  ([#1940 A page the runtime draws at a #fragment never matches :target, and an a name anchor is not scrolled to](https://github.com/corten-run/corten/issues/1940)).
+
+- A JSON answer writes a number of one digit where its field is written, without a call; the bytes are the same.
+  ([#1974 A JSON answer writes each number by a call of 49 instructions and tests each string by a call of 66: the writer is 52% of the 54,400 instructions a marketplace record takes, on the row where Corten leads by least](https://github.com/corten-run/corten/issues/1974))
+
+- The image `corten new` writes sets jemalloc's thread cache to 512 KiB (`tcache_max:524288`, was 64 KiB): long
+  brotli pages cost less to send and the app keeps more memory at rest, which the app guide sizes. An app made
+  before this gets it by editing that line of its own Dockerfile.
+  ([#1979 Keep brotli's buffers for a long page with a 512 KiB jemalloc thread cache in the starter's image](https://github.com/corten-run/corten/pull/1979))
+
+- A kept page or body takes less memory: its headers are held as a list of their own size and its `Cache-Control` at its own length. What counts against `App::kept_answers` is unchanged. An answer with more than 1,024 distinct header names when it would be kept is now its handler's for every request
+  ([#1824 A Public page asked for once costs 44% more cycles than the same page not kept](https://github.com/corten-run/corten/issues/1824)).
+
+- A benchmark host can be retired as unused after the first upload loses its reply if the measured controller proves the job file was never written and no transfer can resume.
+  ([#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)).
+
+- A new isolated benchmark group can finish after an acknowledged handoff even if the launcher disconnects. Independent review and terminal collection remain separate. [Offline handoff](https://github.com/corten-run/corten/blob/main/bench/workloads/CLOUD.md#offline-handoff)
+
+- Offline benchmark launches can retire the exact unused host after a lost first upload reply, but only with proof that the upload never wrote the job. [#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)
+
+- The ui-gallery smoke presses every key corten-ui's widgets take: thirteen had no browser
+  check. The app guide says why an accessibility audit, and a checker that dispatches key
+  events from a script, do not cover a widget's keys.
+  ([#1990 Press every key corten-ui's widgets take in the ui-gallery smoke](https://github.com/corten-run/corten/pull/1990))
+
+- The CI browser tools build a pinned, signed upstream Git release, so a cold Benchmark Evidence run no longer needs the Git PPA or a previous run's cache. Measured hosts are unchanged.
+  ([#1987 Benchmark Evidence cannot build its test image when the Git PPA returns 503](https://github.com/corten-run/corten/issues/1987)).
+
+- Newly reserved benchmark guests build Git from a pinned, verified upstream release rather than Launchpad; saved reservations keep their original startup recipe. [#1993 Fresh benchmark guests depend on the unavailable Git PPA before checkout](https://github.com/corten-run/corten/issues/1993)
+
+- A request through the stages compares the header lines most requests carry (the default `Cache-Control`, a
+  browser's `Accept-Encoding` and `Accept`, a page's own `Vary`) before it searches or parses them, and the
+  stages no longer look up the mode of a request under an API (a handler's `Req` still does). No answer changes
+  ([#2002 Compare the header lines most requests carry before searching or parsing them](https://github.com/corten-run/corten/pull/2002)).
+
+- New Client-heavy benchmark attempts can qualify Solid 2 with its published native JSX compiler and the existing browser checks. Earlier results keep their recorded inputs and outcomes.
+  [#1322 Benchmark parity: qualify React, Vue, Solid, Svelte and Remix client-heavy screens](https://github.com/corten-run/corten/issues/1322)
+
+- The benchmark launcher now distinguishes a busy lock, unresolved custody and other admission checks without printing private state. [#1961 The first browser launch preview refused r45 without identifying the failed continuation check](https://github.com/corten-run/corten/issues/1961)
+
+- `corten build --port 8443 --profile-from sh train.sh` profiles an app that binds a port of its
+  own and never reads `PORT`: the copy is looked for on the port `--port` names, and a `PORT` in
+  the environment is still not read
+  ([#2020 Profile an app that binds a port of its own with corten build --port](https://github.com/corten-run/corten/pull/2020)).
+
+- The deploy guide says what the command given to `corten build --profile-from` must cover:
+  every route whose cost matters, in every response coding its readers get. A route or coding it
+  leaves out can cost more instructions a request than a build with no profile (card-market)
+  ([#2021 Say in the deploy guide what a profile's training command must cover, and what a route or coding it leaves out costs](https://github.com/corten-run/corten/pull/2021)).
+
+- A stopped Marketplace command now fails after a grace period even if a descendant keeps its output pipes open. Marketplace uses the bounded runner from [#1995 Save a failure receipt for a catalog app start or log collection, and settle a command whose pipes outlive its client](https://github.com/corten-run/corten/pull/1995).
+
+- The guide now says how a `Public` page reads a value the URL alone gives (a page number, a filter) and stays eligible to be kept: through `Params`, as a query field of its route or a `FromQuery` type, or from `Uri`. An extractor of the app's own still makes the page for every request. No behavior changes. [#1799 A page whose handler takes an extractor of the app's own is never kept](https://github.com/corten-run/corten/issues/1799)
+
+- A grouped benchmark launch stopped by a catalog read can release its locks before create, but only after the native request and worker are proved closed. Ambiguous failures still retain custody. [#2036 Marketplace r63 stops before droplet create on a locked catalog request and retains launch custody](https://github.com/corten-run/corten/issues/2036)
+
+- Benchmark launch errors now distinguish an unproved local SSH process result from missing remote acknowledgement of the bootstrap marker, without changing retry or custody. [#2040 Live Delivery r64 loses bootstrap-marker acknowledgement before monitor registration](https://github.com/corten-run/corten/issues/2040)
+
+- Official benchmark timing groups can retain a clean host boundary after a proved post-terminal udev settle; this does not qualify earlier results ([#2045 Live Delivery r68 aborts after observing two new udev workers at the host boundary](https://github.com/corten-run/corten/issues/2045)).
+
+- Benchmark launches report when the droplet account is full without revealing its inventory or limit ([#2050 Benchmark launch hides an exhausted droplet account behind a generic controller error](https://github.com/corten-run/corten/issues/2050)).
+
+- Record the failed observation stage and a safe error code for the first
+  missing Docker participant snapshot in a benchmark run. Missing snapshots still
+  cancel the run ([#2052 Fullstack Browser r70 is cancelled after builds and before any browser case runs](https://github.com/corten-run/corten/issues/2052)).
+
+- JSON API benchmark replay recognizes k6's wrapped request-timeout warning when
+  the captured metrics account for it. The run still fails its load threshold
+  ([#2058 JSON API r67 rejects k6’s wrapped request timeout warning despite counted timeouts](https://github.com/corten-run/corten/issues/2058)).
+
+- JSON API benchmark reports now verify load-generator CPU and memory samples
+  against the exact Docker container lifetime, rather than timing when Docker
+  stats reached the runner. [#2056 JSON API r67 rejects 91 timing attempts on late load-resource rows](https://github.com/corten-run/corten/issues/2056).
+
 - CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
   for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:

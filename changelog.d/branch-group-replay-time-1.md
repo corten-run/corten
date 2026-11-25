@@ -1,1 +1,0 @@
-- Collecting grouped benchmark results allows time to verify large archives without changing framework timings or skipping checks. [#1783 Grouped benchmark replay times out on Windows before one complete catalog evidence scan finishes](https://github.com/corten-run/corten/issues/1783).
