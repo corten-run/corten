@@ -51,7 +51,7 @@ function readWitnessFile(path) {
   return result.value === null ? { status: "capped" } : result;
 }
 
-function inspectChromiumProcess(processIdentity, pid, parentImage, ownCgroup, members) {
+function inspectChromiumProcess(processIdentity, processRole, pid, parentImage, ownCgroup, members) {
   const at = `/proc/${pid}`, first = readWitnessFile(`${at}/stat`);
   if (first.status !== "ok") return { process: first.status };
   const exe = kernelRead(() => fs.statSync(`${at}/exe`, { bigint: true }));
@@ -63,11 +63,14 @@ function inspectChromiumProcess(processIdentity, pid, parentImage, ownCgroup, me
     return a.pid === pid && b.pid === pid && a.startTicks === b.startTicks;
   });
   if (stable.value !== true) return { process: "unstable" };
+  const productionRole = cmdline.status === "ok"
+    ? kernelRead(() => processRole(cmdline.value, () => fs.readlinkSync(`${at}/exe`))) : { status: cmdline.status };
   return { process: "stable", executable: exe.status,
     sameBrowserImage: exe.value && parentImage ? exe.value.dev === parentImage.dev && exe.value.ino === parentImage.ino : null,
     cgroup: cgroup.status, sameCgroup: cgroup.status === "ok" && ownCgroup !== undefined ? cgroup.value === ownCgroup : null,
     listed: members ? members.has(String(pid)) : null,
-    cmdline: cmdline.status === "ok" ? cmdlineShape(cmdline.value) : { status: cmdline.status } };
+    cmdline: cmdline.status === "ok" ? cmdlineShape(cmdline.value) : { status: cmdline.status },
+    productionRole: productionRole.status !== "ok" ? "unreadable" : productionRole.value === "--type=renderer" ? "renderer" : "not-renderer" };
 }
 
 test("Linux Chromium renderer witness with one visible page", { skip: process.platform !== "linux", timeout: 45000 }, async (t) => {
@@ -75,7 +78,7 @@ test("Linux Chromium renderer witness with one visible page", { skip: process.pl
   try {
     const { chromium } = await import("playwright");
     const { launchBrowser } = await import("./launch.mjs");
-    const { processIdentity } = await import("../workloads/isolated/host-lifetime.mjs");
+    const { processIdentity, processRole } = await import("../workloads/isolated/host-lifetime.mjs");
     launched = await launchBrowser(chromium);
     stage = "visible page";
     context = await launched.browser.newContext({ viewport: { width: 1100, height: 800 }, serviceWorkers: "block" });
@@ -101,7 +104,7 @@ test("Linux Chromium renderer witness with one visible page", { skip: process.pl
     // Only interpret absence if this mount's census can see the test and its known browser.
     const members = ids?.has(String(process.pid)) && ids.has(String(pid)) ? ids : null;
     const image = kernelRead(() => fs.statSync(`/proc/${pid}/exe`, { bigint: true })).value;
-    const inspect = (id) => inspectChromiumProcess(processIdentity, id, image, group.value, members);
+    const inspect = (id) => inspectChromiumProcess(processIdentity, processRole, id, image, group.value, members);
     report = { parentMatchesInventory: processInfo.some(({ type, id }) => type === "browser" && id === pid),
       census: ids && !members ? "different-view" : census.status,
       parent: inspect(pid), renderers: [...new Set(renderers)].filter((id) => id !== pid).map(inspect) };
@@ -118,7 +121,7 @@ test("Linux Chromium renderer witness with one visible page", { skip: process.pl
   assert.ok(!closeFailed, "Chromium renderer witness could not close its browser");
   const { parent, renderers } = report;
   assert.ok(report.parentMatchesInventory && parent.process === "stable" && parent.sameBrowserImage && parent.sameCgroup
-    && !parent.cmdline.status && parent.cmdline.renderer !== "exact", "browser parent negative control failed");
+    && parent.productionRole === "not-renderer", "browser parent negative control failed");
   assert.ok(renderers.some((p) => p.process === "stable" && p.sameBrowserImage && p.sameCgroup && p.listed !== false
-    && p.cmdline.role === "renderer"), "no live Chromium renderer matched the observer's exact role and scope");
+    && p.productionRole === "renderer"), "no live Chromium renderer matched the observer's role and scope");
 });
