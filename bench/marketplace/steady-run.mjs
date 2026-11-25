@@ -34,7 +34,7 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { checkFixture, convergenceSchema, flattenPoint, flattenRule, heldThrough, ownerLabelKey, readDropped, readWindows, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, verdictText } from "./steady-contract.mjs";
+import { checkFixture, convergenceSchema, flattenPoint, flattenRule, heldThrough, ownerLabelKey, readDropped, readWindows, reconcileCell, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, verdictText } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -263,7 +263,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       validateLoadExecution({ load: containerReceipt(loadInfo), summary: k6Summary, clock: parsed(readFileSync(join(raw, "load-clock.json"), "utf8"), "the k6 engine clock export"), start: phaseStartMs, end: clock.now(), seconds });
       // k6's aggregate: every request, including those answered during the graceful stop.
       const load = readLoadSummary(k6Summary);
-      const { windows, tail, unrecorded, requests, iterations } = readWindows(k6Summary, options);
+      const { windows, tail, unrecorded, requests, iterations, latencyMaxMs } = readWindows(k6Summary, options);
       const after = await owned.inspect(app);
       retain(join(raw, "app-container-after.json"), containerReceipt(after));
       if (convergence) {
@@ -273,17 +273,23 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         const inWindows = windows.reduce((sum, w) => sum + w.failed, 0);
         assert.equal(inWindows, 0, `${inWindows} requests failed in the pass's windows; no verdict`);
         assert.equal(load.failed, 0, `${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`);
-        return Object.assign(cell, { windows, tail, unrecorded, requests, iterations, failedRequests: load.failed, verdict: flattenPoint(windows) });
+        Object.assign(cell, { windows, tail, unrecorded, requests, iterations, latencyMaxMs, failedRequests: load.failed });
+        reconcileCell(cell);
+        return Object.assign(cell, { verdict: flattenPoint(windows) });
       }
-      if (statsError) { keep("memory samples", statsError); throw new Error(`memory samples failed: ${firstLine(statsError)}`); }
+      // A memory sampling failure makes only the memory reading unavailable (summarizeSoak); the
+      // restart, stop and OOM observations below do not depend on it.
+      if (statsError) { keep("memory samples", statsError); log(`${cell.app} ${cell.source} ${cell.target}: memory samples failed: ${firstLine(statsError)}`); }
       const startedMs = Date.parse(loadInfo.State.StartedAt);
-      const samples = stats.samples[app].map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
+      const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
       // Docker's event times and StartedAt are both the daemon's clock.
       const lines = await owned.docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${app}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
       const events = lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), atSeconds: (Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 - startedMs) / 1000 }));
       retain(join(raw, "events.json"), events);
-      return Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, requests, iterations, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
+      Object.assign(cell, summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: state(before), after: state(after), events, rate: options.rate,
         droppedIterations: readDropped(k6Summary), failedRequests: load.failed }));
+      reconcileCell(cell);
+      return cell;
     } finally {
       if (sampler) { try { await sampler.stop(); } catch {} }
       if (app) { try { writeFileSync(join(raw, "app.log"), await owned.logs(app)); } catch (e) { log(`${cell.app} ${cell.source} ${cell.target}: app log unavailable: ${e.message}`); } }

@@ -58,15 +58,18 @@ ETag and downstream-readiness exceptions are disclosed in the group contract.
 
 Report these as short-window medians and ranges, with errors, utilization and headroom limits;
 they do not guarantee a finish by 7 am or establish small differences without repeatability.
-No saved evidence shows that each adapter, the JIT runtimes in particular, had stopped changing
-by the end of the 10-second warmup, or that any app's memory and tail latency hold over
-longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
-collect that evidence outside the nightly. A convergence pass gives each cell a screening reading
-of throughput, not a certificate of steady state: within a stated tolerance from a named window
+These results do not establish whether each adapter, the JIT runtimes in particular, had stopped
+changing by the end of the 10-second warmup, or whether any app's memory and tail latency hold
+over longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
+take screening readings toward those questions outside the nightly; they do not establish
+either. A convergence pass gives each cell a screening reading of throughput, not a certificate
+of steady state: within a stated tolerance from a named window
 to the end (every window within 10% of the tail median, three-window medians within 5%, trend
 within 5%), or not within it at the end. Oscillation or drift inside those bounds reads as within
-tolerance, a last-window shift under 10% is not detected, the onset is resolved to one window, and
-readings at different window lengths are not comparable. No report concludes from a pass that a
+tolerance, a last-window shift under 10% can go undetected, the onset is resolved to one window, and
+readings at different window lengths are not comparable. k6's raw engine clock and the app
+container's before-and-after inspect are checked only while a pass runs; its saved summary records
+the outcome but cannot re-verify them. No report concludes from a pass that a
 timed warmup is long enough: the timed warmup is set only by a separate reviewed change from a
 saved pass that is like-for-like with the rounds it will time (the same commit, adapter images,
 fixture, upstream and k6 images, CPU settings, host CPU, kernel and online CPUs, startup timeout,
@@ -146,7 +149,7 @@ Feature contract: marketplace-production/v1. Popular and performance-oriented ca
 
 Warning: Short 15s phase windows (10s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.
 
-Convergence evidence: none provided to this report. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 10s warmup; the timed numbers may include warming.
+Convergence evidence: none provided to this report. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.
 
 ### en-US
 

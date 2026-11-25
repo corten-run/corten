@@ -28,7 +28,8 @@ const pinnedEnv = { MARKETPLACE_APP_CPUS: "1", MARKETPLACE_LOAD_CPUS: "4-7", MAR
 function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_000 } = {}) {
   const total = counts.reduce((a, b) => a + b, 0) + graceFailed;
   const failed = graceFailed + Object.values(windowFailed).reduce((a, b) => a + b, 0);
-  const latency = { avg: 1, "p(50)": 1, "p(95)": 1, "p(99)": 1, max: 1 };
+  // The aggregate covers every request, so its maximum is at least every window's p99 below.
+  const latency = { avg: 5, "p(50)": 4, "p(95)": 9, "p(99)": 20, max: 30 };
   const rate = (count) => count / (clockMs / 1000);
   const metrics = { http_reqs: { count: total, rate: rate(total) }, iterations: { count: total, rate: rate(total) }, vus_max: { value: 32, min: 32, max: 32 },
     http_req_duration: latency, iteration_duration: latency, http_req_failed: { passes: failed, fails: total - failed, value: failed / total },
@@ -325,9 +326,53 @@ test("a soak samples its app's memory by the container's ID, on the workstation 
   assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
   validateSoak(s);
   const [cell] = s.cells;
-  assert.deepEqual([cell.memory.samples, cell.memory.startMiB, cell.memory.endMiB, cell.rate.met, cell.failedRequests, cell.restarts.restarted, cell.requests], [180, 102.5, 276.5, true, 0, false, 270_000]);
+  assert.deepEqual([cell.memory.samples, cell.memory.startMiB, cell.memory.endMiB, cell.rate.held, cell.failedRequests, cell.restarts.restarted, cell.requests], [180, 102.5, 276.5, true, 0, false, 270_000]);
   assert.deepEqual(stats.spawned.map((x) => x.args), [["stats", "--no-trunc", "--format", "{{json .}}", fake.ids["marketplace-test-run-corten"]]]);
   assert.ok(!stats.spawned[0].args.includes("marketplace-test-run-corten"));
+});
+
+test("a soak whose app was OOM-killed keeps its stop and OOM observations when its memory cannot be read", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["soak", "t7", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  const load = () => k6Export(Array(30).fill(150 * 60), { clockMs: 1_800_000 });
+  // The after-inspect says OOMKilled and not running, and the last memory sample reads 0 B.
+  let tick = 0;
+  const fake = fakeDocker({ exportFor: load, clockMs: 1_800_000, loadMs: 50, oomOnLoad: true });
+  const zero = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, (_, i) => ({ ID: args.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: `${i === 179 ? "0B" : `${100 + i}MiB`} / 1GiB` })) });
+  const s = await run(fake, options, folder("zero"), { spawnStats: zero.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
+  assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
+  validateSoak(s);
+  const [cell] = s.cells;
+  assert.equal(cell.failure, undefined, "the cell keeps its observations");
+  assert.deepEqual(cell.memory, { samples: 180, unavailable: "1 memory sample had no time or no positive size", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
+  assert.deepEqual([cell.restarts.restarted, cell.restarts.runningAtEnd, cell.restarts.oomKilled], [true, false, true]);
+  // A sampler that fails outright (its client holds its pipes past the bound): memory sampling
+  // failed, and the same observations are still reported.
+  const held = statsClient({ holds: true });
+  const fake2 = fakeDocker({ exportFor: load, clockMs: 1_800_000, loadMs: 50, oomOnLoad: true });
+  const s2 = await run(fake2, options, folder("held"), { spawnStats: held.spawn, statsBounds: { graceMs: 5, boundMs: 20 } });
+  validateSoak(s2);
+  assert.equal(s2.cells[0].memory.unavailable, "memory sampling failed");
+  assert.deepEqual([s2.cells[0].restarts.runningAtEnd, s2.cells[0].restarts.oomKilled], [false, true]);
+});
+
+test("a soak cell whose k6 aggregate failures exceed every request outside its intervals is refused at capture", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["soak", "t8", "--apps", "corten", "--sources", "fixture", "--targets", "page"], apps, groupApps);
+  // Three failures in k6's aggregate, none in an interval, and no request in the graceful-stop tail.
+  const load = () => {
+    const e = k6Export(Array(30).fill(150 * 60), { clockMs: 1_800_000 }), total = e.metrics.http_reqs.count;
+    e.metrics.http_req_failed = { passes: 3, fails: total - 3, value: 3 / total };
+    e.metrics.checks = { passes: 2 * total - 3, fails: 3, value: (2 * total - 3) / (2 * total) };
+    e.root_group.checks["marketplace status 200"] = { passes: total - 3, fails: 3 };
+    return e;
+  };
+  let tick = 0;
+  const fake = fakeDocker({ exportFor: load, clockMs: 1_800_000, loadMs: 50 });
+  const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, () => ({ ID: args.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
+  const s = await run(fake, options, folder("failed"), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
+  assert.equal(s.cells[0].failure, "corten fixture page: k6's aggregate failures are fewer than its windows' or more than its windows' plus the requests outside them");
+  assert.equal(s.cells[0].windows, undefined);
 });
 
 test("the memory sampler refuses names and settles at its bound when something holds its pipes", async (t) => {

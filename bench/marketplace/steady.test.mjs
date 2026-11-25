@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkFixture, convergenceLines, convergenceSchema, flattenPoint, flattenRule, heldThrough, parseSteadyArgs, readDropped, readWindows, ruleText, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { checkFixture, convergenceLines, convergenceSchema, flattenPoint, flattenRule, heldThrough, parseSteadyArgs, readDropped, readWindows, ruleText, soakArrivals, soakMemoryClock, soakSchema, summarizeSoak, timedStartup, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
 import { groupApps } from "./groups.mjs";
@@ -41,11 +41,13 @@ test("a falling last window is never described as rising", () => {
   assert.doesNotMatch(text, /ris|higher|faster|climb|getting|goes up/);
   // A stretch at least 60 s long with no onset: the line's direction is stated as a line, not as the end.
   const up = verdictText({ withinTolerance: false, reason: "trend-up", tailRps: 1000, previousRps: 1000, headRps: 1000 });
-  const down = verdictText({ withinTolerance: false, reason: "trend-down", tailRps: 1000, previousRps: 1000, headRps: 1000 });
+  const down = verdictText({ withinTolerance: false, reason: "trend-not-up", tailRps: 1000, previousRps: 1000, headRps: 1000 });
   assert.match(up, /lasts at least 60 s, but no window in it .* the least-squares line through the whole stretch goes up$/);
   assert.match(down, /the least-squares line through the whole stretch does not go up$/);
   for (const t of [up, down]) assert.doesNotMatch(t, /higher at the end|lower at the end|rising|slower|faster/);
   assert.throws(() => verdictText({ withinTolerance: false, reason: "still-rising" }), /unknown reading/);
+  // The old code for a nonpositive slope, which also covered a flat line, is refused.
+  assert.throws(() => verdictText({ withinTolerance: false, reason: "trend-down", tailRps: 1000, previousRps: 1000, headRps: 1000 }), /unknown reading/);
 });
 test("variation inside the stated bounds reads as within tolerance; a window beyond them is not hidden", () => {
   assert.equal(flattenPoint(windows(Array.from({ length: 16 }, (_, i) => (i % 2 ? 1030 : 970)))).window, 0);
@@ -68,7 +70,7 @@ test("the reviewer's four constructed passes read as the documented limits say",
   //    of the tail and every three-window median is the tail, so it reads within tolerance; only
   //    the first window (920) is too far off to be the onset.
   assert.deepEqual(flattenPoint(windows(Array.from({ length: 5 }, () => [920, 1000, 1080, 1000]).flat())), within(1, 30, 1000, 1000, 1000));
-  // 2. A last-window shift under 10% is not detected: nineteen at 1000 then 1090.
+  // 2. A last-window shift under 10% can go undetected: nineteen at 1000 then 1090.
   assert.deepEqual(flattenPoint(windows([...Array(19).fill(1000), 1090])), within(0, 15, 1000, 1000, 1000));
   // 3. Drift inside the bounds: a steady climb from 1000 to 1076 reads within tolerance from the
   //    window whose remaining climb is under 5% of the tail.
@@ -80,13 +82,17 @@ test("the reviewer's four constructed passes read as the documented limits say",
   assert.equal(verdictText(started), "not within tolerance at the end: the median of the first 60 s is more than 5% above the last 60 s median");
   // The stated bounds and limits are what the report prints.
   for (const text of ["not a certificate of steady state", "within 10% of the median of the last 60 s", "every three-window median within 5%", "changed by at most 5% of the tail",
-    "Oscillation or drift inside those bounds reads as within tolerance", "a shift of under 10% in the last window is not detected", "resolved to one window and given as that window's end", "readings at different window lengths are not comparable"])
+    "Oscillation or drift inside those bounds reads as within tolerance", "a shift of under 10% in the last window can go undetected", "resolved to one window and given as that window's end", "readings at different window lengths are not comparable"])
     assert.ok(ruleText.includes(text), text);
 });
 test("short, empty and degrading passes give no reading or a stated one", () => {
   assert.deepEqual(flattenPoint(windows([1000, 1000, 1000, 1000, 1000, 1000, 1000])), { withinTolerance: false, reason: "too-few-windows" });
   assert.equal(verdictText(flattenPoint(windows([1000, 1000, 1000, 1000, 1000, 1000, 1000]))), "no reading: too few windows");
-  assert.equal(verdictText(flattenPoint(windows([1000, 1000, 1000, 1000, 0, 0, 0, 0]))), "no reading: nothing served at the end");
+  assert.equal(verdictText(flattenPoint(windows([1000, 1000, 1000, 1000, 0, 0, 0, 0]))), "no reading: the last 60 s median is zero");
+  // The last window served requests, but the median of the last 60 s is zero: the text says the median.
+  const lastServed = flattenPoint(windows([1000, 1000, 1000, 1000, 0, 0, 0, 5]));
+  assert.equal(lastServed.reason, "no-throughput");
+  assert.equal(verdictText(lastServed), "no reading: the last 60 s median is zero");
   assert.deepEqual(flattenPoint(windows([800, 800, 800, 800, 1000, 1000, 600, 600, 1000, 1000, 600, 600])), { withinTolerance: false, reason: "short", tailRps: 800, previousRps: 800, headRps: 800 });
   assert.deepEqual(flattenPoint(windows([1500, 1400, 1300, 1200, 1100, 1000, 1000, 1000, 1000, 1000, 1000, 1000])), { withinTolerance: false, reason: "earlier-above-tail", tailRps: 1000, previousRps: 1000, headRps: 1350 });
   assert.throws(() => flattenPoint(windows([1, 2, 3, 4, 5, 6, 7, 8]), { ...flattenRule, tolerance: 0.5 }), /stated tolerance rule/);
@@ -113,7 +119,8 @@ test("the reading's spans are in seconds, but its onset is resolved to one windo
 
 // A k6 summary export from window-load.js with these per-window request counts.
 function k6Summary(counts, { tail = 0, failed = {}, extra = {}, unfinished = 0 } = {}) {
-  const metrics = { http_reqs: { count: counts.reduce((a, b) => a + b, 0) + tail + unfinished, rate: 1 }, iterations: { count: counts.reduce((a, b) => a + b, 0) + tail } };
+  const metrics = { http_reqs: { count: counts.reduce((a, b) => a + b, 0) + tail + unfinished, rate: 1 }, iterations: { count: counts.reduce((a, b) => a + b, 0) + tail },
+    http_req_duration: { avg: 5, "p(95)": 9, "p(99)": 20, max: 30 + counts.length } };
   counts.forEach((n, i) => {
     if (!n) return;
     metrics[`window_${i}_requests`] = { count: n, rate: 1 };
@@ -125,7 +132,7 @@ function k6Summary(counts, { tail = 0, failed = {}, extra = {}, unfinished = 0 }
 }
 test("readWindows keeps every window's throughput and latency and accounts for every request", () => {
   const read = readWindows(k6Summary([150, 300, 0, 450], { tail: 7, failed: { 1: 3 } }), { windows: 4, windowSeconds: 15 });
-  assert.deepEqual([read.tail, read.unrecorded, read.requests, read.iterations], [7, 0, 907, 907]);
+  assert.deepEqual([read.tail, read.unrecorded, read.requests, read.iterations, read.latencyMaxMs], [7, 0, 907, 907, 34]);
   assert.deepEqual(read.windows.map((w) => [w.startSeconds, w.requests, w.failed, w.rps, w.p95, w.p99]), [[0, 150, 0, 10, 9, 20], [15, 300, 3, 20, 10, 21], [30, 0, 0, 0, null, null], [45, 450, 0, 30, 12, 23]]);
   // A request whose iteration the graceful stop cut off before it was counted.
   assert.equal(readWindows(k6Summary([150, 150], { unfinished: 1 }), { windows: 2, windowSeconds: 15 }).unrecorded, 1);
@@ -135,6 +142,9 @@ test("readWindows keeps every window's throughput and latency and accounts for e
     [k6Summary([150, 150], { extra: { window_2_requests: { count: 1, rate: 1 } } }), /^Error: 1 k6 window metric is not among this pass's windows$/],
     [k6Summary([150, 150], { failed: { 0: 151 } }), /more failures than requests/],
     [k6Summary([150, 150], { extra: { window_1_duration: { "p(95)": 30, "p(99)": 20 } } }), /p95\/p99/],
+    // A window's p99 of 20 ms beside an aggregate maximum of 1 ms cannot both be k6's.
+    [k6Summary([150, 150], { extra: { http_req_duration: { avg: 1, "p(95)": 1, "p(99)": 1, max: 1 } } }), /window 0: latency above k6's aggregate http_req_duration maximum/],
+    [k6Summary([150, 150], { extra: { http_req_duration: { avg: 1 } } }), /http_req_duration maximum missing/],
   ]) assert.throws(() => readWindows(summary, { windows: 2, windowSeconds: 15 }), pattern);
 });
 
@@ -189,7 +199,7 @@ const likeRound = (warmup = 10) => ({ schema: resultSchema, commit: "c".repeat(4
   measurement: measurement(), fixtureSha256, tools: structuredClone(tools), apps: { corten: { imageId: imageIds.corten, runs: runs() }, aspnet: { imageId: imageIds.aspnet, runs: runs() } } });
 const cellOf = (app, source, target, rps) => {
   const w = windows(rps), requests = w.reduce((sum, x) => sum + x.requests, 0) + 3;
-  return { app, source, target, windows: w, tail: 3, unrecorded: 0, requests, iterations: requests, failedRequests: 0, verdict: flattenPoint(w) };
+  return { app, source, target, windows: w, tail: 3, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 25, failedRequests: 0, verdict: flattenPoint(w) };
 };
 function convergencePass({ commit = "c".repeat(40), cells } = {}) {
   const options = parseSteadyArgs(["convergence", "w3", "--apps", "corten,aspnet", "--minutes", "3"], apps, groupApps);
@@ -245,6 +255,9 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cells[0].unrecorded = 1; v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /more unrecorded requests than unfinished iterations/],
     [(v) => { delete v.cells[0].iterations; }, /request and iteration totals/],
     [(v) => { v.options.apps = []; v.images = {}; v.cells = []; }, /at least one of its apps/],
+    [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate http_req_duration maximum/],
+    [(v) => { delete v.cells[0].latencyMaxMs; }, /aggregate latency maximum/],
+    [(v) => { v.schema = "marketplace-convergence/v2"; }, /not a marketplace-convergence\/v3 result/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
   const failed = structuredClone(s);
   failed.cells[2] = { app: failed.cells[2].app, source: failed.cells[2].source, target: failed.cells[2].target, verdict: null, failure: "not ready in 120s: HTTP 500" };
@@ -256,7 +269,7 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   const w = windows([150, 150, 150, 150, 150, 150], (i) => 10 + i, 15);
   const memory = Array.from({ length: 360 }, (_, i) => ({ atSeconds: i / 4, mib: 100 + i / 10 }));
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
-  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 13500, iterations: 13500, memory, before: held, after: held, events: [] };
+  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 13500, iterations: 13500, latencyMaxMs: 40, memory, before: held, after: held, events: [] };
   const cell = summarizeSoak(base);
   assert.equal(cell.memory.samples, 360);
   assert.ok(Math.abs(cell.memory.startMiB - 102.95) < 1e-9 && Math.abs(cell.memory.endMiB - 132.95) < 1e-9 && Math.abs(cell.memory.growthMiB - 30) < 1e-9, JSON.stringify(cell.memory));
@@ -269,13 +282,13 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   const restartedInPlace = summarizeSoak({ ...base, after: { ...held, startedAt: "2026-11-20T00:10:00Z" } }).restarts;
   assert.deepEqual([restartedInPlace.restarted, restartedInPlace.replaced], [true, true]);
   assert.equal(summarizeSoak({ ...base, after: { ...held, id: "b".repeat(64) } }).restarts.replaced, true);
-  assert.throws(() => summarizeSoak({ ...base, memory: memory.slice(0, 10) }), /first and last interval/);
+  assert.deepEqual(summarizeSoak({ ...base, memory: memory.slice(0, 10) }).memory, { samples: 10, unavailable: "no memory sample in the last interval", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
   assert.throws(() => summarizeSoak({ ...base, before: { ...held, restartCount: 1 } }), /backwards/);
   assert.throws(() => summarizeSoak({ ...base, before: { restartCount: 0, running: true, oomKilled: false } }), /needs id, startedAt/);
 
   const options = parseSteadyArgs(["soak", "w4", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const long = windows(Array(30).fill(150), (i) => (i === 29 ? 40 : 10), 60);
-  const soakCell = (extra = {}) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: long, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000,
+  const soakCell = (extra = {}) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: long, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 90,
     memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: i < 60 ? 50 : 80 })), before: held, after: held, events: [], ...extra }) });
   const s = { schema: soakSchema, name: "w4", options, commit: "d".repeat(40), finishedCommit: "d".repeat(40), dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
     failures: [], cleanupFailures: [], cleanup: cleanCleanup(), measurement: { ...measurement(), memoryClock: soakMemoryClock },
@@ -312,36 +325,95 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed/],
     [(v) => { delete v.measurement.memoryClock; }, /clock of its memory samples/],
     [(v) => { v.options.apps = []; v.cells = []; }, /at least one of its apps/],
+    [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate/],
+    // More failures than requests, or failures outside the windows beyond the requests outside them.
+    [(v) => { v.cells[0].failedRequests = 270001; }, /aggregate failures/],
+    [(v) => { v.cells[0].failedRequests = 1; }, /aggregate failures/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), pattern); }
   // A soak whose k6 dropped iterations did not run the fixed rate: stated, and not presented as a fixed-rate result.
   assert.equal(readDropped({ metrics: { dropped_iterations: { count: 37, rate: 0.02 } } }), 37);
   assert.equal(readDropped({ metrics: {} }), 0);
   const dropped = structuredClone(s);
-  dropped.cells = [soakCell({ droppedIterations: 37, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })) })];
-  assert.deepEqual(dropped.cells[0].rate, { requested: 150, droppedIterations: 37, met: false });
+  const behind = windows([...Array(29).fill(150), 149.5], (i) => (i === 29 ? 40 : 10), 60);
+  dropped.cells = [soakCell({ windows: behind, requests: 269970, iterations: 269970, droppedIterations: 31, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 50 })) })];
+  assert.deepEqual(dropped.cells[0].rate, { requested: 150, seconds: 1800, scheduled: 270001, requests: 269970, droppedIterations: 31, shortfall: 0, allowance: 151, held: false });
+  validateSoak(dropped);
   const droppedText = soakReport(dropped);
-  assert.match(droppedText, /^\| corten \| fixture \| page \| not met: 37 iterations dropped \|/m);
-  assert.match(droppedText, /^corten fixture page: the fixed 150 requests\/second was not met \(k6 dropped 37 iterations it could not start on time\), so this is not a fixed-rate result/m);
-  for (const mutate of [(v) => { v.cells[0].rate.met = true; }, (v) => { v.cells[0].rate.requested = 20; }, (v) => { delete v.cells[0].rate; }]) { const v = structuredClone(dropped); mutate(v); assert.throws(() => validateSoak(v), /rate/); }
+  assert.match(droppedText, /^\| corten \| fixture \| page \| not held \|/m);
+  assert.match(droppedText, /^corten fixture page: k6 recorded 269970 requests and dropped 31 iterations; the schedule has at most 270001 arrivals, so 0 are not accounted for \(allowance 151\)\.$/m);
+  assert.match(droppedText, /^corten fixture page: the fixed 150 requests\/second was not held, so this is not a fixed-rate result/m);
+  for (const mutate of [(v) => { v.cells[0].rate.held = true; }, (v) => { v.cells[0].rate.requested = 20; }, (v) => { delete v.cells[0].rate; }, (v) => { v.cells[0].rate.met = true; }]) { const v = structuredClone(dropped); mutate(v); assert.throws(() => validateSoak(v), /rate/); }
   assert.throws(() => summarizeSoak({ rate: 150, windows: long, tail: 0, unrecorded: 0, memory: [], before: held, after: held, events: [] }), /dropped iterations/);
-  assert.throws(() => summarizeSoak({ rate: 150, droppedIterations: 0, windows: long, tail: 0, unrecorded: 0, memory, before: held, after: held, events: [] }), /aggregate failed requests/);
   assert.throws(() => steadyReport({ schema: "marketplace-results/v6" }), /not a/);
+});
+
+test("a soak says the fixed rate held only when k6's counts reconcile with the schedule, and never claims more than k6 recorded", () => {
+  // 1,800 requests over 30 min at a 150 req/s target, nothing dropped: the schedule has 270,001
+  // arrivals, so the rate did not hold, although k6 reported no drop.
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const sparse = windows(Array(30).fill(1), () => 10, 60);
+  const cell = summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: sparse, tail: 0, unrecorded: 0, requests: 1800, iterations: 1800, latencyMaxMs: 25,
+    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [] });
+  assert.deepEqual(cell.rate, { requested: 150, seconds: 1800, scheduled: 270001, requests: 1800, droppedIterations: 0, shortfall: 268201, allowance: 151, held: false });
+  const options = parseSteadyArgs(["soak", "w5", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const s = { schema: soakSchema, name: "w5", options, commit: "d".repeat(40), finishedCommit: "d".repeat(40), dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
+    failures: [], cleanupFailures: [], cleanup: cleanCleanup(), measurement: { ...measurement(), memoryClock: soakMemoryClock }, host: { cpu: "Synthetic test only" }, admission: null,
+    cells: [{ app: "corten", source: "fixture", target: "page", ...cell }] };
+  validateSoak(s);
+  const text = soakReport(s);
+  assert.match(text, /^\| corten \| fixture \| page \| not held \|/m);
+  assert.match(text, /^corten fixture page: k6 recorded 1800 requests and dropped 0 iterations; the schedule has at most 270001 arrivals, so 268201 are not accounted for \(allowance 151\)\.$/m);
+  assert.match(text, /the fixed 150 requests\/second was not held, so this is not a fixed-rate result/);
+  assert.doesNotMatch(text, /\| held \|/);
+  // A saved soak that claims the rate held is refused.
+  const forged = structuredClone(s); forged.cells[0].rate.held = true;
+  assert.throws(() => validateSoak(forged), /fixed-rate claim contradicts/);
+  // Within the allowance it held; one arrival beyond it did not; more than the schedule is refused.
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, requests: 270001 - 151, droppedIterations: 0 }).held, true);
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, requests: 270001 - 152, droppedIterations: 0 }).held, false);
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, requests: 270000, droppedIterations: 1 }).held, false);
+  assert.throws(() => soakArrivals({ rate: 150, seconds: 1800, requests: 270001, droppedIterations: 1 }), /more requests and dropped iterations than the fixed rate schedules/);
+});
+
+test("memory that cannot be read leaves the restart, stop and OOM observations in place", () => {
+  const before = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const after = { ...before, running: false, oomKilled: true };
+  const w = windows(Array(30).fill(150), () => 10, 60);
+  const base = { rate: 150, droppedIterations: 0, failedRequests: 0, windows: w, tail: 0, unrecorded: 0, requests: 270000, iterations: 270000, latencyMaxMs: 25, before, after, events: [{ action: "oom", atSeconds: 900 }] };
+  // A zero sample (an app the kernel killed reads 0 B), and a sampler that failed outright.
+  const zero = summarizeSoak({ ...base, memory: [{ atSeconds: 1, mib: 60 }, { atSeconds: 1799, mib: 0 }] });
+  assert.deepEqual(zero.memory, { samples: 2, unavailable: "1 memory sample had no time or no positive size", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
+  assert.deepEqual(zero.restarts, { restarted: true, restartCount: 0, replaced: false, events: [{ action: "oom", atSeconds: 900 }], runningAtEnd: false, oomKilled: true });
+  const failed = summarizeSoak({ ...base, memory: null });
+  assert.equal(failed.memory.unavailable, "memory sampling failed");
+  assert.equal(failed.restarts.oomKilled, true);
+  const options = parseSteadyArgs(["soak", "w6", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const s = { schema: soakSchema, name: "w6", options, commit: "d".repeat(40), finishedCommit: "d".repeat(40), dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
+    failures: [], cleanupFailures: [], cleanup: cleanCleanup(), measurement: { ...measurement(), memoryClock: soakMemoryClock }, host: { cpu: "Synthetic test only" }, admission: null,
+    cells: [{ app: "corten", source: "fixture", target: "page", ...zero }] };
+  validateSoak(s);
+  const text = soakReport(s);
+  assert.match(text, /^\| corten \| fixture \| page \| held \| unavailable \| unavailable \| unavailable \| .* \| yes: oom at 900 s, not running at the end, OOM-killed \|$/m);
+  assert.match(text, /^corten fixture page: memory unavailable \(1 memory sample had no time or no positive size\); its restart, stop and OOM observations are still reported\.$/m);
+  for (const mutate of [(v) => { v.cells[0].memory.unavailable = "something Docker said"; }, (v) => { v.cells[0].memory.startMiB = 60; }]) {
+    const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), /unavailable memory/);
+  }
 });
 
 test("the timed reporter lists every differing or missing input and never judges the warmup", () => {
   assert.throws(() => convergenceLines(likeRound(), ["corten"], null), /reads a convergence pass/);
   const lines = convergenceLines(likeRound(), ["corten", "aspnet"], convergencePass());
-  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v2, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start\.$/);
+  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v3, reading marketplace-tolerance\/v4\), measured at commit `c{40}`\. Host CPU: Synthetic test only\. One 32-user closed-loop pass .* after the timed round's cold start\.$/);
   assert.match(lines[1], /^The pass is like-for-like with this round on every input compared: commit, group, adapter images, .* startup timeout, memory limits, response encoding, .* a timed warmup with no failed request\.$/);
   assert.match(lines[2], /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./);
   assert.ok(lines.includes("Reading: aspnet api page: within the stated tolerance from the window ending at 90 s."));
   assert.ok(lines.includes("Reading: corten fixture json: within the stated tolerance from the window ending at 15 s."));
-  const judged = (warmup) => `This report does not judge whether this round's ${warmup}s warmup was long enough: a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`;
+  const judged = (warmup) => `This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`;
   assert.equal(lines.at(-1), judged(10));
   // Even a like-for-like pass whose readings all start before the warmup's end is not a conclusion.
   const long = convergenceLines(likeRound(300), ["corten"], convergencePass());
   assert.equal(long.at(-1), judged(300));
-  for (const text of [lines, long]) assert.ok(!text.some((l) => /reaches|is shorter than|is enough|supports|establish/.test(l)), text.join("\n"));
+  for (const text of [lines, long]) assert.ok(!text.some((l) => /reaches|is shorter than|is enough|supports|establishes|was sufficient\b(?!:)/.test(l.replace(/^This report does not establish whether [^:]*:/, ""))), text.join("\n"));
 
   const pass = convergencePass(), explore = convergencePass(); explore.options.vus = 64;
   const otherStart = convergencePass(); otherStart.startup = "one readiness request/v0";

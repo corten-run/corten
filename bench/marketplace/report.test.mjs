@@ -202,7 +202,7 @@ test("r20 still validates and renders its actual per-locale measurements", () =>
   // The saved report, plus only the statement that no convergence pass was provided to it (#1851).
   const original = saved("report.md").replaceAll("\r\n", "\n"), at = original.indexOf("\n\n## ", original.indexOf("Warning: Short 15s phase windows"));
   assert.ok(at > 0);
-  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none provided to this report. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 10s warmup; the timed numbers may include warming.${original.slice(at)}`);
+  assert.equal(report(s), `${original.slice(0, at)}\n\nConvergence evidence: none provided to this report. This report does not establish whether this round's 10s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.${original.slice(at)}`);
   // The regression key produced by the v5 reader for this saved round.
   assert.equal(comparisonKey(s), "ac1de5eaa9eabbfd993d3dc68eab0526eed883f240a2aac9cf2988e759b3d853");
   const next = grouped("production", "r21");
@@ -612,7 +612,8 @@ test("the report states the convergence pass given to it, or that none was provi
   for (const app of ["nextjs", "fastapi", "express", "topcoat", "leptos"]) Object.assign(s.apps[app], { runs: {}, phases: {} }).qualification.api = produceBoundedQualification(probes, "api");
   validateSummary(s);
   const none = report(s);
-  assert.match(none, /^Convergence evidence: none provided to this report\. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its 30s warmup/m);
+  assert.match(none, /^Convergence evidence: none provided to this report\. This report does not establish whether this round's 30s timed warmup was sufficient; a convergence pass \(steady\.mjs\) would add a screening reading of throughput, not that conclusion\.$/m);
+  assert.doesNotMatch(none, /cannot show|may include warming/);
   const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
   // Like-for-like with the round on every compared input.
   const options = { kind: "convergence", name: "w5", group: "production", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: timedWarmupVus, startupTimeout: 120 };
@@ -624,23 +625,24 @@ test("the report states the convergence pass given to it, or that none was provi
     cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
       const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));
       const requests = w.reduce((sum, x) => sum + x.requests, 0);
-      return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, failedRequests: 0, verdict: flattenPoint(w) };
+      return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
     }))) };
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
-  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v2, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
+  assert.match(text, /^Convergence evidence: pass w5 \(marketplace-convergence\/v3, reading marketplace-tolerance\/v4\), measured at commit `a{40}`/m);
   assert.match(text, /^The pass is like-for-like with this round on every input compared: /m);
   assert.match(text, /^Tolerance reading marketplace-tolerance\/v4: a screening reading of throughput, not a certificate of steady state\./m);
   assert.match(text, /^Reading: aspnet api json: within the stated tolerance from the window ending at 60 s\.$/m);
-  const judged = /^This report does not judge whether this round's 30s warmup was long enough: a timed warmup is set only by a separate reviewed change from a saved like-for-like pass\.$/m;
+  const judged = /^This report does not establish whether this round's 30s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass\.$/m;
   assert.match(text, judged);
-  // The timed preamble says ranges "do not establish" a difference; only the convergence lines are checked for a warmup conclusion.
-  const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Tolerance reading|Reading|The pass is|This report does not judge)/.test(line)).join("\n");
+  // The timed preamble says ranges "do not establish" a difference, and the closing line says this report does not
+  // establish the warmup; every other convergence line is checked for a warmup conclusion.
+  const evidence = (t) => t.split("\n").filter((line) => /^(?:Convergence evidence|Tolerance reading|Reading|The pass is)/.test(line)).join("\n");
   assert.ok(evidence(text).length > 0);
   assert.doesNotMatch(evidence(text), /reaches|is shorter than|establish|sufficient|long enough to/);
   // Only the convergence lines differ: the timed tables are the same with or without evidence.
-  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Tolerance reading|Reading|The pass is|This report does not judge|No convergence)[^\n]*/g, "");
+  const strip = (t) => t.replace(/\n\n(?:Convergence evidence|Tolerance reading|Reading|The pass is|This report does not establish whether this round|No convergence)[^\n]*/g, "");
   assert.equal(strip(text), strip(none));
   const tampered = structuredClone(pass); tampered.cells[2].verdict.window = 0;
   assert.throws(() => report(s, { convergence: given(tampered) }), /saved verdict differs/);

@@ -156,11 +156,11 @@ not a guaranteed finish by 7 am or an unsupported claim about small differences.
 
 ### Convergence and soak passes
 
-Nothing saved yet shows that each adapter has stopped changing by the end of the timed
-10-second warmup, or that its memory and tail latency hold over time
+No report here establishes whether each adapter had stopped changing by the end of the timed
+10-second warmup, or whether its memory and tail latency hold over time
 ([#1851 Load phases run 15 s after a 10 s warmup, and nothing shows the JIT runtimes had reached steady state or that any app's memory holds over time](https://github.com/corten-run/corten/issues/1851)).
-Two passes, separate from the timed rounds, collect that evidence. Neither changes a timed
-phase, the warmup, the rate, the droplet job or a saved round, and neither is part of the nightly.
+Two passes, separate from the timed rounds, take screening readings toward those questions; neither
+establishes either answer. Neither changes a timed phase, the warmup, the rate, the droplet job or a saved round, and neither is part of the nightly.
 
 ```sh
 # One closed loop per adapter, source and target: the timed warmup's 32 users for 5 minutes in 15 s windows.
@@ -211,7 +211,10 @@ direction of travel:
    5% of the tail) is shorter than 60 s, sometimes with "and the last 60 s median is more than 5%
    above the 60 s before it";
 3. that stretch lasts at least 60 s but has no onset, and the least-squares line through it goes
-   up, or does not go up.
+   up, or does not go up (flat or down).
+
+When the last 60 s median is zero there is no reading, and the report says that median is zero;
+the last window can still have served requests.
 
 A comparison of medians says nothing about the last window: a pass that climbed and whose last
 window then fell to half can read "the last 60 s median is more than 5% above the 60 s before it",
@@ -222,7 +225,7 @@ What the reading does not detect, by construction (each case is pinned in `stead
 1. Oscillation or drift inside those bounds reads as within tolerance. 920, 1000, 1080, 1000
    repeated five times in 15 s windows reads within tolerance from the window ending at 30 s, and a
    steady climb from 1000 to 1076 over 20 windows from the window ending at 105 s.
-2. A shift of under 10% in the last window is not detected: nineteen windows at 1000 then one at
+2. A shift of under 10% in the last window can go undetected: nineteen windows at 1000 then one at
    1090 reads within tolerance from the window ending at 15 s, because the tail median is unchanged.
 3. A pass that started faster is not within tolerance even if it then held: four windows at 1100
    then sixteen at 1000 reads "the median of the first 60 s is more than 5% above the last 60 s
@@ -237,7 +240,19 @@ stopped, restarted, was replaced (another container ID or StartedAt) or was OOM-
 reading, and a saved pass with one is refused when read. k6's engine clock is checked as a timed
 phase's is (`validateLoadExecution`). A saved pass is also refused if it finished at another commit,
 if its cleanup failed or is not confirmed complete, if its window totals do not add up to k6's
-request count, or if it has no adapters, sources or targets.
+request count, if a window's p95 or p99 is above k6's aggregate latency maximum, if k6's aggregate
+failures are fewer than its windows' or more than its windows' plus the requests outside them (the
+graceful-stop tail and unrecorded requests), or if it has no adapters, sources or targets.
+
+Some checks are made only while a pass runs, because the saved summary does not keep what they
+read: k6's raw engine clock against the load container's own run (`validateLoadExecution`, from
+the raw `load-clock.json` and container receipts), the app container's before and after inspect
+(for a convergence cell: the same ID and StartedAt, running, not restarted or OOM-killed,
+`heldThrough`; for a soak: the restart, stop and OOM observations it saves), the cold-start
+clock, and the k6 export's metric names. A saved summary records their outcome (a cell that failed
+one has no reading) but cannot be re-verified from summary.json alone; the raw files beside it
+(`app-container.json`, `app-container-after.json`, `load-container.json`, `load-clock.json`,
+`load-summary.json`) are what they read.
 
 A soak reports memory at the start and the end (the median sample in the first and last memory
 interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate) and
@@ -245,9 +260,16 @@ any restart, replacement, stop or OOM kill. Latency intervals start at the k6 en
 samples are stamped on the workstation clock from the moment the load's `docker start` was issued,
 in intervals of their own of the same length, which lead the latency intervals by the load
 container's startup; restart events use the Docker daemon's clock. The report states both clocks.
-If k6 dropped iterations, the fixed rate was not met: the soak report says so and does not present
-that cell as a fixed-rate result. A saved soak whose p99, restart or state claims contradict its
-counters is refused.
+The fixed rate is reconciled against its schedule: k6's constant-arrival-rate starts one request
+per tick of floor(1e9 / rate) ns from slot 0, at most floor(duration / tick) + 1 over the soak.
+The report says "held" only when k6 dropped no iteration and its recorded requests fall short of
+that schedule by at most one second of arrivals plus the boundary slot (the allowance for an
+iteration the engine's stop cut off); otherwise it reports the shortfall and does not present the
+cell as a fixed-rate result. The counts it prints are k6's own, never the schedule's. Memory is
+reported as unavailable, with the reason, when sampling failed, a sample had no positive size or
+the first or last interval had none; the restart, stop and OOM observations are reported either
+way. A saved soak whose rate, memory, p99, restart or state claims contradict its counters is
+refused.
 
 No report concludes that a timed warmup is long enough. A timed warmup is set only by a separate
 reviewed change to the droplet contract, made from a saved pass that is like-for-like with the

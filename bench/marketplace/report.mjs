@@ -281,7 +281,7 @@ export function report(s, { convergence = null } = {}) {
   if (Object.values(s.measurement.cpus).some((c) => !c.cpuset)) warnings.push("CPU quotas without disjoint pinning do not prove CPU isolation.");
   for (const warning of warnings) lines.push("", `Warning: ${warning}`);
   const convergenceText = convergence ? convergence(s, apps)
-    : [`Convergence evidence: none provided to this report. Without a saved convergence pass it cannot show that each measured adapter had stopped changing by the end of its ${s.options.warmup}s warmup; the timed numbers may include warming.`];
+    : [`Convergence evidence: none provided to this report. This report does not establish whether this round's ${s.options.warmup}s timed warmup was sufficient; a convergence pass (steady.mjs) would add a screening reading of throughput, not that conclusion.`];
   for (const line of convergenceText) lines.push("", line);
   // The rows of every table: a split round's, each droplet's Corten and its admitted candidates,
   // each beside its own Corten (#816); otherwise the measured adapters, in the group's order.

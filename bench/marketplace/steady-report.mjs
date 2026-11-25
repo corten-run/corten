@@ -43,14 +43,22 @@ export function soakReport(s) {
   const lines = [...header(s, "soak"), "",
     `A fixed rate of ${o.rate} requests/second asked for, for ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s intervals of the k6 engine's clock. Clocks: ${soakMemoryClock}.`,
     "", "| Adapter | Source | Target | Fixed rate | Start MiB | End MiB | Growth | p99 first / last / max ms | Failed requests | Restarted |", "|---|---|---|---|---:|---:|---:|---|---:|---|"];
-  const unmet = s.cells.filter((c) => c.failure === undefined && !c.rate.met);
+  const unmet = s.cells.filter((c) => c.failure === undefined && !c.rate.held), blind = s.cells.filter((c) => c.failure === undefined && c.memory.unavailable !== undefined);
+  const mib = (v) => (v === null ? "unavailable" : v.toFixed(1));
   for (const c of s.cells) {
     if (c.failure !== undefined) { lines.push(`| ${c.app} | ${c.source} | ${c.target} | - | - | - | - | - | - | pass failed: ${c.failure.split("\n")[0].replace(/\|/g, "\\|")} |`); continue; }
     const r = c.restarts, m = c.memory;
     const why = [r.restartCount ? `RestartCount +${r.restartCount}` : null, r.replaced ? "another instance (ID or StartedAt) at the end" : null, ...r.events.map((e) => `${e.action} at ${e.atSeconds.toFixed(0)} s`), r.runningAtEnd ? null : "not running at the end", r.oomKilled ? "OOM-killed" : null];
-    lines.push(`| ${c.app} | ${c.source} | ${c.target} | ${c.rate.met ? "held" : `not met: ${c.rate.droppedIterations} iterations dropped`} | ${m.startMiB.toFixed(1)} | ${m.endMiB.toFixed(1)} | ${m.growthMiB >= 0 ? "+" : ""}${m.growthMiB.toFixed(1)} MiB (${m.growthPct.toFixed(1)}%) | ${ms(c.p99.first)} / ${ms(c.p99.last)} / ${ms(c.p99.max)} | ${c.failedRequests} | ${r.restarted ? `yes: ${why.filter(Boolean).join(", ")}` : "no"} |`);
+    const growth = m.growthMiB === null ? "unavailable" : `${m.growthMiB >= 0 ? "+" : ""}${m.growthMiB.toFixed(1)} MiB (${m.growthPct.toFixed(1)}%)`;
+    lines.push(`| ${c.app} | ${c.source} | ${c.target} | ${c.rate.held ? "held" : "not held"} | ${mib(m.startMiB)} | ${mib(m.endMiB)} | ${growth} | ${ms(c.p99.first)} / ${ms(c.p99.last)} / ${ms(c.p99.max)} | ${c.failedRequests} | ${r.restarted ? `yes: ${why.filter(Boolean).join(", ")}` : "no"} |`);
   }
-  for (const c of unmet) lines.push("", `${c.app} ${c.source} ${c.target}: the fixed ${o.rate} requests/second was not met (k6 dropped ${c.rate.droppedIterations} iterations it could not start on time), so this is not a fixed-rate result: its memory and p99 are under a lower, uneven load.`);
+  lines.push("", `Fixed rate: "held" means k6 dropped no iteration and recorded at least the schedule's floor(1e9 / rate) ns arrivals over the soak (${s.options.windows * s.options.windowSeconds} s, from slot 0) less one second of arrivals plus the boundary slot, the allowance for an iteration the engine's stop cut off. The counts below are k6's own.`);
+  for (const c of s.cells.filter((x) => x.failure === undefined)) {
+    const a = c.rate;
+    lines.push("", `${c.app} ${c.source} ${c.target}: k6 recorded ${a.requests} requests and dropped ${a.droppedIterations} iterations; the schedule has at most ${a.scheduled} arrivals, so ${a.shortfall} are not accounted for (allowance ${a.allowance}).`);
+  }
+  for (const c of unmet) lines.push("", `${c.app} ${c.source} ${c.target}: the fixed ${o.rate} requests/second was not held, so this is not a fixed-rate result: its memory and p99 are under a lower or uneven load.`);
+  for (const c of blind) lines.push("", `${c.app} ${c.source} ${c.target}: memory unavailable (${c.memory.unavailable}); its restart, stop and OOM observations are still reported.`);
   lines.push("", "## Intervals", "");
   for (const c of s.cells) if (c.failure === undefined) lines.push(`${c.app} ${c.source} ${c.target} p99 ms by interval: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "");
   return lines.join("\n");

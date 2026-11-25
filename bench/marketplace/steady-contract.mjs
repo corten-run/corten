@@ -9,8 +9,8 @@ import { resultSchema, timedProfilesFor } from "./run-contract.mjs";
 // v2: a cell's reading is withinTolerance/fromSeconds (the onset window's end), cells keep k6's
 // request and iteration totals, a soak keeps its memory clock and instance, and a pass keeps its
 // cleanup record.
-export const convergenceSchema = "marketplace-convergence/v2";
-export const soakSchema = "marketplace-soak/v2";
+export const convergenceSchema = "marketplace-convergence/v3";
+export const soakSchema = "marketplace-soak/v3";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
 // from memory and from the HTTP upstream.
 export const steadyTargets = Object.freeze(["page", "json"]);
@@ -44,7 +44,7 @@ export const timedStartup = "marketplace cold start/v1: created app, sidecar pol
  *    onset is reported at the window's end, so it is never less than one window.
  * 7. Otherwise not within tolerance at the end. A run shorter than holdSeconds is short, or
  *    short-above-previous when also tail > previous * (1 + tolerance). A longer run with no onset
- *    is trend-up or trend-down by the sign of the least-squares line through the whole run. Each
+ *    is trend-up or trend-not-up by the sign of the least-squares line through the whole run. Each
  *    reason names the comparison that decided it; verdictText says it in those terms. None of them
  *    says how the last window moved: a pass whose last window halved after a climb is short-above-
  *    previous, since that window leaves the run empty and the last 60 s median is still above the
@@ -58,7 +58,7 @@ export const timedStartup = "marketplace cold start/v1: created app, sidecar pol
  *   first window (920, 8% under) is too far off to be the onset. A steady climb from 1000 to 1076
  *   over 20 windows reads within tolerance from the window ending at 105 s, once the climb left
  *   after it is under 5% of the tail.
- * - A shift in the last window under 10% is not detected: nineteen windows at 1000 then one at
+ * - A shift in the last window under 10% can go undetected: nineteen windows at 1000 then one at
  *   1090 reads within tolerance from the window ending at 15 s, since the tail median is still 1000.
  * - A pass that started faster is not within tolerance even if it then held: four windows at
  *   1100 then sixteen at 1000 reads that the median of its first 60 s is more than 5% above the tail.
@@ -173,7 +173,9 @@ const count = (summary, name) => {
  * no latency. The windows and tail must account for every request k6 counted, except one whose
  * iteration the graceful stop cut off before it was counted (unrecorded, at most the unfinished
  * iterations). `requests` and `iterations` are k6's own totals, kept so a saved pass reconciles.
- * @returns {{ windows: {index: number, startSeconds: number, seconds: number, requests: number, failed: number, rps: number, p95: number | null, p99: number | null}[], tail: number, unrecorded: number, requests: number, iterations: number }}
+ * `latencyMaxMs` is k6's aggregate http_req_duration maximum over every request (windows, tail and
+ * unrecorded); no window's latency may be above it.
+ * @returns {{ windows: {index: number, startSeconds: number, seconds: number, requests: number, failed: number, rps: number, p95: number | null, p99: number | null}[], tail: number, unrecorded: number, requests: number, iterations: number, latencyMaxMs: number | null }}
  */
 export function readWindows(summary, { windows, windowSeconds }) {
   integer(windows, 1, maxWindows, "windows"); integer(windowSeconds, 1, 3600, "windowSeconds");
@@ -200,7 +202,16 @@ export function readWindows(summary, { windows, windowSeconds }) {
   assert.ok(Number.isSafeInteger(total) && Number.isSafeInteger(iterations) && iterations <= total, "k6 request and iteration counters missing");
   const unrecorded = total - rows.reduce((sum, w) => sum + w.requests, 0) - tail;
   assert.ok(unrecorded >= 0 && unrecorded <= total - iterations, "windows and tail do not account for every request k6 counted");
-  return { windows: rows, tail, unrecorded, requests: total, iterations };
+  const latencyMaxMs = total ? metric(summary, "http_req_duration")?.max : null;
+  if (total) assert.ok(Number.isFinite(latencyMaxMs) && latencyMaxMs >= 0, "k6 http_req_duration maximum missing");
+  else assert.ok(metric(summary, "http_req_duration") === undefined || metric(summary, "http_req_duration")?.max === undefined, "k6 latency without requests");
+  latencyWithin(rows, latencyMaxMs);
+  return { windows: rows, tail, unrecorded, requests: total, iterations, latencyMaxMs };
+}
+// Every window's latency is drawn from the same requests as k6's aggregate http_req_duration, so no
+// window's p95 or p99 can be above the aggregate maximum.
+function latencyWithin(windows, max) {
+  for (const w of windows) if (w.p99 !== null) assert.ok(max !== null && w.p95 <= max && w.p99 <= max, `window ${w.index}: latency above k6's aggregate http_req_duration maximum`);
 }
 
 /**
@@ -253,7 +264,7 @@ export function flattenPoint(windows, rule = flattenRule) {
     if (within(rps[s], t) && Math.abs(fittedChange(rps.slice(s))) <= t * tail) return { withinTolerance: true, window: s, fromSeconds: windows[s].startSeconds + size, ...evidence };
   }
   if (n - run < h) return { withinTolerance: false, reason: tail > previous * (1 + t) ? "short-above-previous" : "short", ...evidence };
-  return { withinTolerance: false, reason: fittedChange(rps.slice(run)) > 0 ? "trend-up" : "trend-down", ...evidence };
+  return { withinTolerance: false, reason: fittedChange(rps.slice(run)) > 0 ? "trend-up" : "trend-not-up", ...evidence };
 }
 
 const cellKey = (c) => `${c.app} ${c.source} ${c.target}`;
@@ -268,12 +279,20 @@ function windowsEvidence(windows, n, seconds) {
     else assert.deepEqual([w.p95, w.p99], [null, null], `window ${index}: latency without requests`);
   });
 }
-// A cell's windows, graceful-stop tail and unrecorded requests must add up to k6's own request total.
-function reconciles(c) {
+// A cell's windows, graceful-stop tail and unrecorded requests must add up to k6's own request total;
+// no window's latency may be above k6's aggregate maximum; and k6's aggregate failures are at least
+// the windows' and at most the windows' plus every request outside them (tail and unrecorded).
+// Checked when a cell is captured and again when a saved pass is read.
+export function reconcileCell(c) {
   assert.ok(Number.isSafeInteger(c.requests) && Number.isSafeInteger(c.iterations) && c.iterations >= 0 && c.iterations <= c.requests, `${cellKey(c)}: k6 request and iteration totals`);
   assert.ok(Number.isSafeInteger(c.tail) && c.tail >= 0 && Number.isSafeInteger(c.unrecorded) && c.unrecorded >= 0, `${cellKey(c)}: tail and unrecorded requests`);
   assert.equal(c.windows.reduce((sum, w) => sum + w.requests, 0) + c.tail + c.unrecorded, c.requests, `${cellKey(c)}: windows, tail and unrecorded requests do not add up to k6's request total`);
   assert.ok(c.unrecorded <= c.requests - c.iterations, `${cellKey(c)}: more unrecorded requests than unfinished iterations`);
+  assert.ok(c.requests === 0 ? c.latencyMaxMs === null : Number.isFinite(c.latencyMaxMs) && c.latencyMaxMs >= 0, `${cellKey(c)}: k6's aggregate latency maximum`);
+  latencyWithin(c.windows, c.latencyMaxMs);
+  const inWindows = c.windows.reduce((sum, w) => sum + w.failed, 0);
+  assert.ok(Number.isSafeInteger(c.failedRequests) && c.failedRequests >= inWindows && c.failedRequests - inWindows <= c.tail + c.unrecorded,
+    `${cellKey(c)}: k6's aggregate failures are fewer than its windows' or more than its windows' plus the requests outside them`);
 }
 function passEvidence(s, schema) {
   assert.equal(s?.schema, schema, `not a ${schema} result`);
@@ -323,7 +342,7 @@ export function validateConvergence(s) {
     // k6's aggregate (which also counts the graceful stop), has no verdict, so none is saved.
     assert.ok(c.windows.every((x) => x.failed === 0), `${cellKey(c)}: a cell with failed requests in its windows has no verdict`);
     assert.equal(c.failedRequests, 0, `${cellKey(c)}: a cell with failed requests in k6's aggregate has no verdict`);
-    reconciles(c);
+    reconcileCell(c);
     assert.deepEqual(c.verdict, flattenPoint(c.windows), `${cellKey(c)}: saved verdict differs from the stated tolerance reading`);
   }
   return s;
@@ -337,37 +356,62 @@ export function validateConvergence(s) {
  */
 export const soakMemoryClock = "memory: docker stats samples on the workstation clock from the issue of the load's docker start, in intervals of their own (the latency intervals' length, from that origin, which leads the k6 engine's start by the load container's startup); start and end memory are medians of the samples in the first and last of those intervals. Restart events: the Docker daemon's clock from the load container's StartedAt";
 /**
- * A soak cell from its intervals, its app's memory samples and what Docker said about the container
- * before and after: memory at the start and end is the median of the samples taken in the first and
- * the last memory interval (soakMemoryClock); p99 is kept per interval; a restart is any
- * RestartCount increase, another container ID or StartedAt at the end (a `docker restart` keeps
- * RestartCount), any start, restart, die, kill or OOM event during the soak, or a container not
- * running or OOM-killed at the end.
+ * Whether a soak's load held the fixed rate it asked for, from k6's own counts. constant-arrival-rate
+ * starts one iteration (one request: window-load.js makes one, with no redirects) per tick of
+ * floor(1e9 / rate) ns from slot 0 through the configured duration, so at most
+ * floor(duration / tick) + 1 starts (load-evidence.mjs counts slots the same way). Each start ends
+ * as a request k6 recorded or an iteration it dropped, except one the engine's stop cut off before
+ * its request was counted. The rate held only when k6 dropped nothing and its recorded requests
+ * fall short of that schedule by at most one second of arrivals plus the boundary slot, the
+ * allowance for such a cut-off. The counts reported are k6's; the schedule is only compared.
  */
-export function summarizeSoak({ windows, tail, unrecorded, requests, iterations, memory, before, after, events, rate, droppedIterations, failedRequests }) {
-  assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "a soak records its requested rate and k6's dropped iterations");
-  // k6's aggregate failures, which also count answers that completed during the graceful stop.
-  assert.ok(Number.isSafeInteger(failedRequests) && failedRequests >= windows.reduce((sum, w) => sum + w.failed, 0), "a soak records k6's aggregate failed requests, at least those in its intervals");
-  assert.ok(Array.isArray(windows) && windows.length >= 2, "a soak has at least two intervals");
-  const seconds = windows[0].seconds, end = windows.length * seconds;
-  assert.ok(Array.isArray(memory) && memory.every((m) => Number.isFinite(m.atSeconds) && Number.isFinite(m.mib) && m.mib > 0), "memory samples need a time and a positive size");
+export function soakArrivals({ rate, seconds, requests, droppedIterations }) {
+  assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(seconds) && seconds > 0, "a soak's rate and length");
+  assert.ok(Number.isSafeInteger(requests) && requests >= 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "k6's requests and dropped iterations");
+  const tick = Math.floor(1e9 / rate), scheduled = Math.floor((seconds * 1e9) / tick) + 1, allowance = rate + 1;
+  assert.ok(requests + droppedIterations <= scheduled, "k6 recorded more requests and dropped iterations than the fixed rate schedules");
+  const shortfall = scheduled - requests - droppedIterations;
+  return { requested: rate, seconds, scheduled, requests, droppedIterations, shortfall, allowance, held: droppedIterations === 0 && shortfall <= allowance };
+}
+// The memory reading when it cannot be made: the reason is fixed text (validateSoak checks it), and
+// the restart, stop and OOM observations are kept either way.
+const memoryUnavailable = (samples, unavailable) => ({ samples, unavailable, startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
+const memoryReasons = /^(memory sampling failed|[1-9]\d* memory samples? had no time or no positive size|no memory sample in the (first|last|first or last) interval)$/;
+function soakMemory(memory, seconds, end) {
+  if (!Array.isArray(memory)) return memoryUnavailable(0, "memory sampling failed");
+  const bad = memory.filter((m) => !(Number.isFinite(m?.atSeconds) && Number.isFinite(m?.mib) && m.mib > 0)).length;
+  if (bad) return memoryUnavailable(memory.length, `${bad} memory sample${bad === 1 ? "" : "s"} had no time or no positive size`);
   const at = (from, to) => memory.filter((m) => m.atSeconds >= from && m.atSeconds < to).map((m) => m.mib);
   const first = at(0, seconds), last = at(end - seconds, end);
-  assert.ok(first.length && last.length, "a soak needs memory samples in its first and last interval");
+  if (!first.length || !last.length) return memoryUnavailable(memory.length, `no memory sample in the ${!first.length && !last.length ? "first or last" : !first.length ? "first" : "last"} interval`);
   const startMiB = median(first), endMiB = median(last);
+  return { samples: memory.length, startMiB, endMiB, growthMiB: endMiB - startMiB, growthPct: (endMiB - startMiB) / startMiB * 100 };
+}
+/**
+ * A soak cell from its intervals, its app's memory samples and what Docker said about the container
+ * before and after: memory at the start and end is the median of the samples taken in the first and
+ * the last memory interval (soakMemoryClock), or unavailable with a stated reason (sampling failed,
+ * a sample with no positive size, or none in the first or last interval) while everything else is
+ * still reported; p99 is kept per interval; the fixed rate is held only as soakArrivals says; a
+ * restart is any RestartCount increase, another container ID or StartedAt at the end (a
+ * `docker restart` keeps RestartCount), any start, restart, die, kill or OOM event during the soak,
+ * or a container not running or OOM-killed at the end. `memory` is null when sampling failed.
+ */
+export function summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory, before, after, events, rate, droppedIterations, failedRequests }) {
+  assert.ok(Array.isArray(windows) && windows.length >= 2, "a soak has at least two intervals");
+  const seconds = windows[0].seconds, end = windows.length * seconds;
   for (const c of [before, after]) assert.ok(typeof c?.id === "string" && typeof c.startedAt === "string" && Number.isSafeInteger(c.restartCount) && c.restartCount >= 0 && typeof c.running === "boolean" && typeof c.oomKilled === "boolean", "container state needs id, startedAt, restartCount, running and oomKilled");
   assert.ok(after.restartCount >= before.restartCount, "RestartCount moved backwards");
   const restartEvents = events.filter((e) => ["start", "restart", "die", "oom", "kill"].includes(e.action)).map((e) => ({ action: e.action, atSeconds: e.atSeconds }));
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
   const restarted = after.restartCount > before.restartCount || replaced || restartEvents.length > 0 || !after.running || after.oomKilled;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
-  // k6 drops an iteration it could not start on time (no free user): then the load was not the fixed rate asked for.
-  return { windows, tail, unrecorded, requests, iterations, rate: { requested: rate, droppedIterations, met: droppedIterations === 0 }, memory: { samples: memory.length, startMiB, endMiB, growthMiB: endMiB - startMiB, growthPct: (endMiB - startMiB) / startMiB * 100 },
+  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, requests, droppedIterations }), memory: soakMemory(memory, seconds, end),
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: { restarted, restartCount: after.restartCount - before.restartCount, replaced, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled } };
 }
-/** Validates a saved soak, including that its p99, memory and restart claims agree with its own counters. Returns it. */
+/** Validates a saved soak, including that its rate, p99, memory and restart claims agree with its own counters. Returns it. */
 export function validateSoak(s) {
   passEvidence(s, soakSchema);
   assert.ok(Number.isSafeInteger(s.options.rate) && s.options.rate > 0);
@@ -375,25 +419,29 @@ export function validateSoak(s) {
   for (const c of s.cells) {
     if (c.failure !== undefined) { assert.ok(typeof c.failure === "string" && c.failure.length > 0 && c.windows === undefined, `${cellKey(c)}: a failed cell keeps its reason`); continue; }
     windowsEvidence(c.windows, s.options.windows, s.options.windowSeconds);
-    reconciles(c);
+    reconcileCell(c);
     const m = c.memory;
-    assert.ok(Number.isSafeInteger(m?.samples) && m.samples > 1 && m.startMiB > 0 && m.endMiB > 0 && m.growthMiB === m.endMiB - m.startMiB && m.growthPct === m.growthMiB / m.startMiB * 100, `${cellKey(c)}: memory`);
+    if (m?.unavailable !== undefined) {
+      assert.ok(memoryReasons.test(m.unavailable) && Number.isSafeInteger(m.samples) && m.samples >= 0 && [m.startMiB, m.endMiB, m.growthMiB, m.growthPct].every((x) => x === null), `${cellKey(c)}: unavailable memory`);
+    } else {
+      assert.ok(Number.isSafeInteger(m?.samples) && m.samples > 1 && m.startMiB > 0 && m.endMiB > 0 && m.growthMiB === m.endMiB - m.startMiB && m.growthPct === m.growthMiB / m.startMiB * 100, `${cellKey(c)}: memory`);
+    }
     const p99 = c.windows.filter((w) => w.p99 !== null).map((w) => w.p99);
     assert.deepEqual(c.p99, { first: c.windows[0].p99, last: c.windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null }, `${cellKey(c)}: p99 contradicts its intervals`);
     assert.equal(c.failed, c.windows.reduce((sum, w) => sum + w.failed, 0), `${cellKey(c)}: failures`);
-    assert.ok(Number.isSafeInteger(c.failedRequests) && c.failedRequests >= c.failed, `${cellKey(c)}: aggregate failures`);
     const r = c.restarts;
     assert.ok(Number.isSafeInteger(r?.restartCount) && r.restartCount >= 0 && typeof r.replaced === "boolean" && typeof r.runningAtEnd === "boolean" && typeof r.oomKilled === "boolean"
       && Array.isArray(r.events) && r.events.every((e) => ["start", "restart", "die", "oom", "kill"].includes(e?.action) && Number.isFinite(e.atSeconds)), `${cellKey(c)}: restarts`);
     assert.equal(r.restarted, r.restartCount > 0 || r.replaced || r.events.length > 0 || !r.runningAtEnd || r.oomKilled, `${cellKey(c)}: the restart claim contradicts its counters, events and final state`);
-    assert.ok(c.rate?.requested === s.options.rate && Number.isSafeInteger(c.rate.droppedIterations) && c.rate.droppedIterations >= 0 && c.rate.met === (c.rate.droppedIterations === 0), `${cellKey(c)}: rate`);
+    assert.ok(Number.isSafeInteger(c.rate?.droppedIterations), `${cellKey(c)}: rate`);
+    assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, requests: c.requests, droppedIterations: c.rate.droppedIterations }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
   }
   return s;
 }
 
 const pct = (x) => `${x * 100}%`;
 /** The tolerance reading in words: its bounds and what it does not detect. */
-export const ruleText = `a screening reading of throughput, not a certificate of steady state. "Within the stated tolerance from the window ending at N s" means that from that window to the end of the pass, at least ${flattenRule.holdSeconds} s, every window's throughput was within ${pct(flattenRule.windowTolerance)} of the median of the last ${flattenRule.holdSeconds} s (the tail), every three-window median within ${pct(flattenRule.tolerance)}, and the least-squares line through those windows changed by at most ${pct(flattenRule.tolerance)} of the tail, and that neither the first nor the second-to-last ${flattenRule.holdSeconds} s ran more than ${pct(flattenRule.tolerance)} above the tail. Oscillation or drift inside those bounds reads as within tolerance; a shift of under ${pct(flattenRule.windowTolerance)} in the last window is not detected; the onset is resolved to one window and given as that window's end; readings at different window lengths are not comparable. p95 and p99 are kept as evidence and not read.`;
+export const ruleText = `a screening reading of throughput, not a certificate of steady state. "Within the stated tolerance from the window ending at N s" means that from that window to the end of the pass, at least ${flattenRule.holdSeconds} s, every window's throughput was within ${pct(flattenRule.windowTolerance)} of the median of the last ${flattenRule.holdSeconds} s (the tail), every three-window median within ${pct(flattenRule.tolerance)}, and the least-squares line through those windows changed by at most ${pct(flattenRule.tolerance)} of the tail, and that neither the first nor the second-to-last ${flattenRule.holdSeconds} s ran more than ${pct(flattenRule.tolerance)} above the tail. Oscillation or drift inside those bounds reads as within tolerance; a shift of under ${pct(flattenRule.windowTolerance)} in the last window can go undetected; the onset is resolved to one window and given as that window's end; readings at different window lengths are not comparable. p95 and p99 are kept as evidence and not read.`;
 /**
  * A reading in words. An end-state reading says literally what was compared, never how the
  * throughput moved: "the last 60 s median is more than 5% above the 60 s before it" is a comparison
@@ -407,7 +455,7 @@ export function verdictText(v) {
   const noOnset = `${stretch} lasts at least ${span}, but no window in it that leaves ${span} to the end is both within ${by} of that median and the start of a least-squares line to the end that changes by at most ${by} of it`;
   const end = {
     "too-few-windows": "no reading: too few windows",
-    "no-throughput": "no reading: nothing served at the end",
+    "no-throughput": `no reading: the last ${span} median is zero`,
     "earlier-above-tail": () => {
       const earlier = [over(v.headRps) ? `the first ${span}` : null, over(v.previousRps) ? `the ${span} before the last ${span}` : null].filter(Boolean);
       assert.ok(earlier.length > 0, "an earlier-above-tail reading records the earlier median above the tail");
@@ -416,7 +464,7 @@ export function verdictText(v) {
     "short-above-previous": `not within tolerance at the end: ${short}, and the last ${span} median is more than ${by} above the ${span} before it`,
     short: `not within tolerance at the end: ${short}`,
     "trend-up": `not within tolerance at the end: ${noOnset}; the least-squares line through the whole stretch goes up`,
-    "trend-down": `not within tolerance at the end: ${noOnset}; the least-squares line through the whole stretch does not go up`,
+    "trend-not-up": `not within tolerance at the end: ${noOnset}; the least-squares line through the whole stretch does not go up`,
   }[v.reason];
   assert.ok(end !== undefined, `unknown reading ${v.reason}`);
   return typeof end === "function" ? end() : end;
@@ -502,6 +550,6 @@ export function convergenceLines(round, apps, convergence) {
   }
   for (const { name, cell } of found) lines.push(`Reading: ${name}: ${cell.failure !== undefined ? `no reading, the cell failed (${cell.failure.split("\n")[0]})` : verdictText(cell.verdict)}.`);
   if (missing.length) lines.push(`No convergence pass for: ${missing.join(", ")}.`);
-  lines.push(`This report does not judge whether this round's ${warmup}s warmup was long enough: a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`);
+  lines.push(`This report does not establish whether this round's ${warmup}s timed warmup was sufficient: the pass is a screening reading of throughput, and a timed warmup is set only by a separate reviewed change from a saved like-for-like pass.`);
   return lines;
 }
