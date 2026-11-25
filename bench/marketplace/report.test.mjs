@@ -608,7 +608,7 @@ test("the report states the convergence pass it used, or that none exists for th
   const none = report(s);
   assert.match(none, /^Convergence evidence: none exists for this round\. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 30s warmup/m);
   const windows = (rps) => rps.map((r, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: r * 15, failed: 0, rps: r, p95: 5, p99: 9 }));
-  const options = { kind: "convergence", name: "w5", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: 64 };
+  const options = { kind: "convergence", name: "w5", group: "production", apps: ["corten", "aspnet"], sources: ["fixture", "api"], targets: ["page", "json"], minutes: 3, windowSeconds: 15, windows: 12, vus: 64 };
   const convergence = { schema: convergenceSchema, name: "w5", options, rule: flattenRule, commit: s.commit, dirty: false, complete: true, startedAt: "2026-11-20T00:00:00Z", finishedAt: "2026-11-20T01:00:00Z",
     host: { cpu: "Synthetic test only" }, cells: options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
       const w = windows(app === "aspnet" ? [300, 600, 900, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000] : Array(12).fill(1000));

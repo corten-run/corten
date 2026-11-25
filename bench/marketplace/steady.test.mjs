@@ -130,6 +130,8 @@ test("a saved convergence pass validates, recomputes every verdict and supports 
   assert.match(text, /^\| aspnet \| api \| json \| window 5 \(75 s\) \| 1000\.0 \| 0 \|$/m);
   assert.match(text, /Supported timed warmup: at least 75 s/);
   assert.match(text, /^corten fixture page req\/s by window: 1000\.0, 1000\.0/m);
+  assert.match(text, /^corten fixture page p95 ms by window: \d/m);
+  assert.match(text, /^corten fixture page p99 ms by window: \d/m);
   assert.equal(steadyReport(s), text);
   for (const mutate of [
     (v) => { v.cells[0].verdict = { ...v.cells[0].verdict, window: 4 }; },
@@ -182,13 +184,19 @@ test("the timed reporter's convergence statement says none exists, or which pass
   const round = { commit: "c".repeat(40), options: { warmup: 10 } };
   assert.deepEqual(convergenceLines(round, ["corten", "aspnet"], null), ["Convergence evidence: none exists for this round. Nothing saved shows that each measured adapter had stopped getting faster by the end of its 10s warmup; the timed numbers may include warming."]);
   const lines = convergenceLines(round, ["corten", "aspnet"], convergencePass());
-  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v1, rule marketplace-flatten\/v1\), measured at commit `c{40}`, this round's commit, on Synthetic test only\./);
+  assert.match(lines[0], /^Convergence evidence: pass w3 \(marketplace-convergence\/v1, rule marketplace-flatten\/v1\), measured at commit `c{40}`, this round's commit\. Host CPU: Synthetic test only\./);
   assert.ok(lines.includes("Flatten: aspnet api page: window 5 (75 s)."));
   assert.ok(lines.includes("Flatten: corten fixture json: window 0 (0 s)."));
   assert.match(lines.at(-1), /^The slowest measured adapter flattened at 75 s \(aspnet fixture page\); this round's 10s warmup is shorter than that point\./);
   assert.match(convergenceLines({ ...round, options: { warmup: 90 } }, ["corten"], convergencePass()).at(-1), /flattened at 0 s \(corten fixture page\); this round's 90s warmup reaches that point/);
   const other = convergenceLines({ ...round, commit: "a".repeat(40) }, ["corten"], convergencePass());
   assert.match(other[0], /not this round's `a{40}`: adapter inputs may differ/);
+  // A pass without the round's group measured other images and container settings: stated, and it
+  // does not establish the warmup even when every adapter flattened inside it.
+  const grouped = convergenceLines({ ...round, options: { warmup: 90, group: "production" } }, ["corten"], convergencePass());
+  assert.ok(grouped.includes("The pass ran the ungrouped images and container settings; this round ran group production's images and container settings. They are not the same app configuration."));
+  assert.match(grouped.at(-1), /^The pass measured another app configuration than this round's, so this evidence does not establish the round's 90s warmup\.$/);
+  assert.ok(!convergenceLines({ ...round, options: { warmup: 90 } }, ["corten"], convergencePass()).some((l) => /app configuration/.test(l)));
   const missing = convergenceLines(round, ["corten", "drogon"], convergencePass());
   assert.ok(missing.includes("No convergence pass for: drogon fixture page, drogon fixture json, drogon api page, drogon api json."));
   assert.match(missing.at(-1), /does not establish the round's 10s warmup/);

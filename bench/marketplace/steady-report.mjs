@@ -31,7 +31,8 @@ export function convergenceReport(s) {
   for (const c of s.cells) {
     if (c.failure !== undefined) { lines.push(`${c.app} ${c.source} ${c.target}: failed: ${c.failure.split("\n")[0]}`, ""); continue; }
     lines.push(`${c.app} ${c.source} ${c.target} req/s by window: ${c.windows.map((w) => w.rps.toFixed(1)).join(", ")}`, "",
-      `${c.app} ${c.source} ${c.target} p95 ms by window: ${c.windows.map((w) => ms(w.p95)).join(", ")}`, "");
+      `${c.app} ${c.source} ${c.target} p95 ms by window: ${c.windows.map((w) => ms(w.p95)).join(", ")}`, "",
+      `${c.app} ${c.source} ${c.target} p99 ms by window: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "");
   }
   return lines.join("\n");
 }

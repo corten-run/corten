@@ -284,7 +284,12 @@ export function convergenceLines(round, apps, convergence) {
   const warmup = round.options.warmup;
   if (convergence == null) return [`Convergence evidence: none exists for this round. Nothing saved shows that each measured adapter had stopped getting faster by the end of its ${warmup}s warmup; the timed numbers may include warming.`];
   const c = validateConvergence(convergence), o = c.options;
-  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, rule ${flattenRule.name}), measured at commit \`${c.commit}\`${c.commit === round.commit ? ", this round's commit" : `, not this round's \`${round.commit}\`: adapter inputs may differ`}, on ${c.host.cpu}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after readiness.`];
+  const lines = [`Convergence evidence: pass ${c.name} (${convergenceSchema}, rule ${flattenRule.name}), measured at commit \`${c.commit}\`${c.commit === round.commit ? ", this round's commit" : `, not this round's \`${round.commit}\`: adapter inputs may differ`}. Host CPU: ${c.host.cpu}. One ${o.vus}-user closed-loop pass of ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s windows from the start of the load, after readiness.`];
+  // A pass run without the round's group (or with another) used other images and container settings
+  // (the bounded profile and connection limit): it is not the configuration the round timed.
+  const roundGroup = round.options.group ?? null, passGroup = o.group ?? null;
+  const groupText = (g) => g ? `group ${g}'s images and container settings` : "the ungrouped images and container settings";
+  if (roundGroup !== passGroup) lines.push(`The pass ran ${groupText(passGroup)}; this round ran ${groupText(roundGroup)}. They are not the same app configuration.`);
   const found = [], missing = [];
   for (const app of apps) for (const source of steadySources) for (const target of steadyTargets) {
     const cell = c.cells.find((x) => x.app === app && x.source === source && x.target === target);
@@ -296,6 +301,10 @@ export function convergenceLines(round, apps, convergence) {
   const verdicts = found.map(({ name, cell }) => ({ name, v: cell.verdict }));
   if (missing.length || verdicts.some(({ v }) => !v?.flattened)) {
     lines.push(`Not every measured adapter is shown at steady state, so this evidence does not establish the round's ${warmup}s warmup.`);
+    return lines;
+  }
+  if (roundGroup !== passGroup) {
+    lines.push(`The pass measured another app configuration than this round's, so this evidence does not establish the round's ${warmup}s warmup.`);
     return lines;
   }
   const slowest = verdicts.reduce((a, b) => (b.v.atSeconds > a.v.atSeconds ? b : a));

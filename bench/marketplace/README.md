@@ -199,8 +199,11 @@ and target, or none if any never flattened. Changing the nightly's `--warmup` is
 change to the droplet contract. `report.mjs <summary.json> --convergence <pass>/summary.json`
 states which pass a round's report used, each measured adapter's flatten window and whether the
 round's warmup reaches the slowest; without `--convergence` the report says no convergence
-evidence exists for that round, as it does for every saved round today. No such pass has been
-run, so nothing here says whether any adapter is warm after 10 seconds.
+evidence exists for that round, as it does for every saved round today. A pass run with another
+group than the round's (for example `--apps` against a `--group production` round) measured other
+images and container settings: the report says so and does not count it toward the warmup. No
+convergence pass has been saved for any round, so nothing here says whether any adapter is warm
+after 10 seconds.
 
 ### Splitting a round across droplets
 
