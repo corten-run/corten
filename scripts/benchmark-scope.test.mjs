@@ -31,6 +31,8 @@ for (const [name, paths, apps, json] of [
   ["Express driver used by FastAPI", ["bench/fullstack/apps/express/check-native.mjs"], ["fastapi", "express"], false],
   ["Express app without shared driver changes", ["bench/fullstack/apps/express/package.json"], ["express"], false],
   ["compiled alert helper", ["bench/fullstack/apps/gin/check-alerts.mjs"], ["leptos", "topcoat", "gin", "drogon"], false],
+  ...["src/main.rs", "src/hosts.rs", "tests/check-parity.mjs", "tests/marketplace.json"]
+    .map((path) => [`Topcoat parity input: ${path}`, [`bench/fullstack/apps/topcoat/${path}`], ["topcoat"], false]),
   ["workflow edit", [".github/workflows/catalog.yml"], allApps, true],
   ["docs only", ["docs/design.md", "CHANGELOG.md"], [], false],
   ["JSON-only app", ["bench/fullstack/apps/aspnet-aot/Program.cs"], [], true],
@@ -107,9 +109,12 @@ async function localImports(entries) {
 }
 
 test("every local module used by the Catalog harness starts the harness", async () => {
-  const patterns = workflow.jobs.harness.steps.flatMap(({ run }) => {
-    if (!run || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ") || run.startsWith("npx playwright install ")) return [];
-    const command = run === "npm run check:marketplace" ? packageScripts["check:marketplace"] : run;
+  const patterns = workflow.jobs.harness.steps.flatMap(({ name, run }) => {
+    // Playwright's image takes its tag from package.json, which is shared tooling.
+    if (!run || name === "Playwright's image" || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ")) return [];
+    // A browser check runs the same command in that image.
+    const local = run.replace(/^\$\{PLAYWRIGHT(?:_WITH_DOCKER)?:\?\} /, "");
+    const command = local === "npm run check:marketplace" ? packageScripts["check:marketplace"] : local;
     assert.match(command, /^node (?:--test )?bench\//, "trace new harness commands here");
     return command.replace(/^node (?:--test )?/, "").split(" ");
   });
@@ -117,6 +122,7 @@ test("every local module used by the Catalog harness starts the harness", async 
     const { apps, json } = selectScope(allApps, [input]);
     assert.ok(apps.length > 0 || json, "harness input not selected: " + input);
   }
+  assert.ok(selectScope(allApps, ["package.json"]).apps.length > 0, "Playwright's image tag input not selected");
 });
 
 test("Catalog jobs whose replay parses bindings install the bench package's classic compiler", () => {

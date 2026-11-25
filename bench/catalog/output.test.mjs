@@ -154,6 +154,11 @@ test("a successful or failing command keeps its existing result and exit shape",
   await assert.rejects(runner.command(...node("")), /catalog run interrupted/);
 });
 
+test("a shared caller can keep its own pre-interrupt diagnostic", async () => {
+  const { command } = commandRunner({ interrupted: () => true, interruptMessage: "marketplace run interrupted" });
+  await assert.rejects(command("must-not-spawn", []), { message: "marketplace run interrupted" });
+});
+
 test("a client that cannot start fails with its spawn error unless a stop was accepted first, and carries `exit` either way", { timeout: 15000 }, async () => {
   const missing = join(tmpdir(), `catalog-missing-client-${randomBytes(6).toString("hex")}`);
   // Unopposed, the spawn error is the command's own failure.

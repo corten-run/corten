@@ -1,7 +1,7 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
-import { execFileSync, fork } from "node:child_process";
+import { execFileSync, fork, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -11,21 +11,22 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
-import { digest, fileHash, treeHash } from "./cloud-local.mjs";
+import { digest, durable, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, tags, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
-import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
+import { createErroredReceipt, createErroredRecord, offlineNeverStarted, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { continuationAdmission, continuationLock, inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
+import { controller, publicError } from "./droplet.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
@@ -102,6 +103,7 @@ function fixture(t, mode = "success") {
   const h = harness(t), output = [], workers = [];
   t.after(() => { if (traceFailure) throw traceFailure; });
   const repo = path.join(h.temp, "captured"), trace = path.join(h.temp, "boundaries.jsonl"), hosts = path.join(h.temp, "provider.json");
+  const refusalLog = path.join(h.temp, "refusals.jsonl");
   fs.mkdirSync(repo); fs.writeFileSync(trace, "");
   fs.mkdirSync(path.join(repo, "bench/workloads"), { recursive: true });
   // The operator's local bench install (npm --prefix bench ci), which native replay and the
@@ -148,6 +150,24 @@ const synthetic = (${syntheticDependencies.toString()})({
   bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, bootstrapWorkspaceScript, controlRegistration,
   EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
     }
+    if (file === "bench/workloads/cloud-production.mjs") {
+      // The worker passes only closed fields to its parent, never a refusal's message. Record
+      // productionMain's message chain beside the trace so a test can tell which gate refused;
+      // the body and its result are unchanged.
+      const entry = "export async function productionMain(";
+      assert.equal(source.split(entry).length, 2, "review refusal-recording seam");
+      source = source.replace(entry, "async function syntheticProductionMain(") + `
+export async function productionMain(...args) {
+  try { return await syntheticProductionMain(...args); }
+  catch (error) {
+    const messages = [];
+    for (let cause = error; cause && messages.length < 8; cause = cause.cause) messages.push(String(cause.message));
+    syntheticFs.appendFileSync(${JSON.stringify(refusalLog)}, JSON.stringify(messages) + "\\n");
+    throw error;
+  }
+}
+`;
+    }
     fs.writeFileSync(target, source);
     return { path: file, url: pathToFileURL(target).href, source, sha256: digest(source) };
   });
@@ -178,7 +198,9 @@ const synthetic = (${syntheticDependencies.toString()})({
     assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3);
     return [...args, "--detach", "--approve-reviewed-merged-ready", output.at(-1).approvalSha256];
   }
-  return { h, output, workers, saved, events, prepare, prepareArgs, deps, trace, hosts };
+  // Each worker refusal's message and its causes, in order.
+  const refusals = () => fs.existsSync(refusalLog) ? readTrace(refusalLog, { finished: true }) : [];
+  return { h, output, workers, saved, events, refusals, prepare, prepareArgs, deps, trace, hosts };
 }
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
@@ -677,18 +699,34 @@ test("independent continuation admits two remote-active hosts and collects a fai
     assert.equal(await prepare(denied), 3);
     const deniedApproval = await approve(denied);
     const limit = p.hosts + ".limit";
+    const inventory = fs.readFileSync(p.hosts, "utf8");
+    assert.equal(JSON.parse(inventory).length, 1);
     fs.writeFileSync(limit, "1");
     try { assert.equal(await fleetMain(deniedApproval, p.deps), 2); }
     finally { fs.unlinkSync(limit); }
+    assert.deepEqual(p.output.at(-1).groups, [{ group: denied, outcome: "error", error: "group-operation-failed",
+      uncertain: false, providerDiagnostic: { code: "account-capacity" }, controllerStage: "controller-launch" }]);
     const refused = p.saved(path.join(denied, denied));
-    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined);
+    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined); assert.equal(refused.id, undefined);
+    assert.deepEqual(refused.control.ledger, []);
+    const refusedRoot = path.join(p.h.base, denied, denied);
+    assert.ok(!fs.existsSync(path.join(refusedRoot, ".groups-launch.lock")) && !fs.existsSync(path.join(refusedRoot, "groups-r21/operation.lock")));
+    assert.ok(!fs.existsSync(path.join(p.h.base, continuationLock)));
+    assert.equal(fs.readFileSync(p.hosts, "utf8"), inventory);
+    const deniedEvents = p.events().filter((row) => row.group === denied);
+    assert.ok(deniedEvents.some((row) => row.method === "GET" && row.path.startsWith("/v2/droplets?")));
+    assert.ok(deniedEvents.every((row) => row.boundary !== "provider" || row.method === "GET"));
+    assert.ok(!deniedEvents.some((row) => ["ssh", "upload", "monitor"].includes(row.boundary)));
     assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group }) => group), [first]);
 
     assert.equal(await prepare(second), 3);
     const secondApproval = await approve(second);
     assert.deepEqual(p.output.at(-1).subject.continuation.peers.map(({ id }) => id), ["101"]);
-    launch(secondApproval);
-    await wait(() => active(second) && handoff());
+    fs.writeFileSync(limit, "2"); // The first host still occupies one slot.
+    try {
+      launch(secondApproval);
+      await wait(() => active(second) && handoff());
+    } finally { fs.unlinkSync(limit); }
     const events = p.events();
     assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
     assert.deepEqual(events.filter((row) => row.boundary === "remote-active").map(({ group, id }) => [group, id]), [[first, "101"], [second, "102"]]);
@@ -821,6 +859,287 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
+test("continuation retries past a create that errored after its launch deadline once the operator released its custody and the child recheck settled it", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
+  const args = (round) => [round, "--continuation-root", p.h.base, "--group", group];
+  const prepare = (round, failures) => fleetMain([...args(round), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps, failures);
+  assert.equal(await prepare("r19"), 3);
+  assert.equal(await fleetMain([...args("r19"), "--detach", "--print-approval"], p.deps), 3);
+  const approval = p.output.at(-1).approvalSha256, fleet = readFleet(slot, "r19").manifest;
+  const stateRoot = path.join(slot, group), local = path.join(stateRoot, "groups-r19"), at = new Date().toISOString();
+  const ids = { dropletId: "123", actionId: "456" }, statePath = path.join(local, "state.json"), receipt = path.join(local, createErroredReceipt);
+  const launchLock = path.join(stateRoot, ".groups-launch.lock"), operationLock = path.join(local, "operation.lock");
+  const pending = { ...reservation({ round: "r19", commit, token: fleet.jobs[0].token, group, fleet }), provider: fleet.provider,
+    fullGroupQualified: false, status: "creating", createIntentAt: at, createPending: ids };
+  // The launch reached its create deadline with the action still in progress. Its
+  // process has since exited: the child locks are its exact records naming a dead owner.
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  p.deps.main = async () => {
+    fs.mkdirSync(local, { recursive: true }); fs.writeFileSync(statePath, JSON.stringify(pending));
+    fs.writeFileSync(launchLock, `${JSON.stringify({ pid: dead, round: "r19" })}\n`);
+    fs.writeFileSync(operationLock, `${JSON.stringify({ pid: dead, at })}\n`);
+    throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, providerDiagnostic: { code: "create-action-pending" } });
+  };
+  assert.equal(await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
+  assert.deepEqual(p.output.at(-1).groups.map(({ outcome, uncertain }) => [outcome, uncertain]), [["error", true]]);
+  delete p.deps.main;
+  // The launch process has since exited: its retained batch lock names a dead owner.
+  const batch = path.join(slot, ".fleet-operation.lock");
+  fs.writeFileSync(batch, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(batch)), pid: dead })}\n`);
+  const outer = path.join(p.h.base, continuationLock);
+  assert.ok(fs.existsSync(outer)); await assert.rejects(prepare("r20"), /EEXIST/);
+  // The child's own --collect, read-only on the saved account, with the real controller.
+  let action = "in-progress";
+  const providerReads = [];
+  const child = () => controller({ round: "r19", stateDir: stateRoot, collect: true }, { repo: p.deps.repo, sleep: async () => {}, run(binary, argv) {
+    assert.equal(binary, "doctl"); assert.deepEqual(argv.slice(-2), ["--context", context]);
+    const command = argv.slice(0, -2); providerReads.push(command[0] === "account" ? "account" : command[1] === "action" ? "action" : command[2]);
+    const ok = (value) => ({ status: 0, stdout: JSON.stringify(value), stderr: "" });
+    if (command[0] === "account") return ok({ uuid: userId, droplet_limit: 20 });
+    if (command[1] === "action") return ok([{ id: 456, type: "create", resource_type: "droplet", resource_id: action === "errored" ? 123 : null, status: action }]);
+    if (command[2] === "get") return { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+    assert.deepEqual(command, ["compute", "droplet", "list", "--single-response", "--output", "json"]); return ok([]);
+  } }).collect();
+  // A dead PID in the child's lock records is not proof that the launch's process tree
+  // settled: the child refuses before any provider read and leaves its locks.
+  await assert.rejects(child(), /original launch custody retained/);
+  assert.deepEqual(providerReads, []); assert.ok([launchLock, operationLock].every((lock) => fs.existsSync(lock)));
+  // The operator's custody step for the child: its controller, provider worker and their
+  // descendants are accounted for and gone; then its launch and operation locks are released.
+  fs.unlinkSync(launchLock); fs.unlinkSync(operationLock);
+  assert.equal(await child(), 3, "still running: nothing changes");
+  assert.ok(![launchLock, operationLock].some((lock) => fs.existsSync(lock))); assert.equal(JSON.parse(fs.readFileSync(statePath)).createErrored, undefined);
+  action = "errored";
+  assert.equal(await child(), 1);
+  assert.deepEqual(providerReads.slice(-9), ["account", "action", "account", "account", "get", "account", "account", "list", "account"]);
+  const resolved = JSON.parse(fs.readFileSync(statePath)), record = fs.readFileSync(receipt, "utf8");
+  assert.deepEqual(resolved.createErrored, { ...ids, evidenceSha256: digest(record) });
+  assert.ok(![launchLock, operationLock, path.join(local, "create-recheck.lock")].some((lock) => fs.existsSync(lock)), "no child lock is left");
+  // The child recheck settles only the child. The outer continuation lock and the dead
+  // batch lock stay; continuation remains closed until the operator's custody step.
+  assert.ok(fs.existsSync(outer) && fs.existsSync(batch)); await assert.rejects(prepare("r20"), /EEXIST/);
+  // A lock that appears after admission's scan refuses at its final recheck.
+  const admission = await continuationAdmission(p.h.base, group, { repo: p.deps.repo, inspect: p.deps.inspect });
+  admission.recheck();
+  for (const lock of [launchLock, operationLock, path.join(local, "create-recheck.lock")]) {
+    fs.writeFileSync(lock, "SYNTHETIC");
+    assert.throws(() => admission.recheck(), /custody changed/, path.basename(lock));
+    fs.unlinkSync(lock);
+  }
+  admission.recheck();
+  // The operator's documented custody step: the outer lock names this group, its
+  // owner and process tree are accounted for and gone; keep its bytes, then release it.
+  assert.equal(JSON.parse(fs.readFileSync(outer)).group, group);
+  fs.unlinkSync(outer);
+  fs.writeFileSync(receipt, record.replace('"droplets": 0', '"droplets": 4'));
+  const failures = new Map();
+  await assert.rejects(prepare("r20", failures), (error) => /unresolved custody: selected provider-errored create/.test(error.message)
+    && failures.get(error) === "continuation-admission; custody-replay", "a changed receipt is not resolved");
+  fs.writeFileSync(receipt, record);
+  let { report } = await inspectContinuation(p.h.base, p.deps);
+  assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"]]);
+  assert.ok(report.eligibleToRun.includes(group));
+  const tree = treeHash(slot);
+  assert.equal(await prepare("r20"), 3);
+  ({ report } = await inspectContinuation(p.h.base, p.deps));
+  assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome]), [["r19", "create-errored"], ["r20", "prepared"]]);
+  assert.equal(treeHash(slot), tree, "the resolved attempt is never rewritten");
+  assert.deepEqual(p.events().filter((row) => row.method === "POST"), []);
+  // Review round 2, finding 2. The successor's real child rechecks the old attempt
+  // immediately before its create. Here the old attempt takes its operation lock during
+  // the create's own account check, after the new launch intent: no POST is sent.
+  assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], p.deps), 3);
+  const retryApproval = p.output.at(-1).approvalSha256;
+  fs.writeFileSync(`${p.hosts}.late-lock`, operationLock);
+  assert.equal(await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", retryApproval], p.deps), 2);
+  assert.deepEqual(p.output.at(-1).groups.map(({ group: name, outcome }) => [name, outcome]), [[group, "error"]]);
+  assert.ok(fs.existsSync(path.join(p.h.base, `${group}--r20`, "launch-intent.json")), "the refusal came after the new launch intent");
+  assert.ok(fs.existsSync(operationLock), "the old attempt's lock is left alone");
+  assert.deepEqual(p.events().filter((row) => row.method === "POST"), []);
+  const retry = JSON.parse(fs.readFileSync(path.join(p.h.base, `${group}--r20`, group, "groups-r20", "state.json")));
+  assert.equal(retry.createIntentAt, undefined); assert.notEqual(retry.status, "creating");
+});
+
+// Review round 3: the same persisted continuation. A json-api launch, optionally an
+// --offline-handoff one, stopped at its create deadline with the POST's IDs. The child
+// state is the one the launch saves before its create; the launch's process tree has
+// since been accounted for by the operator's custody step for the child locks.
+async function lateCreateAttempt(t, { offline = false } = {}) {
+  const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
+  const args = (round) => [round, "--continuation-root", p.h.base, "--group", group];
+  const prepare = (round) => fleetMain([...args(round), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId,
+    "--context", context, ...(offline && round === "r19" ? ["--offline-handoff"] : [])], p.deps);
+  assert.equal(await prepare("r19"), 3);
+  assert.equal(await fleetMain([...args("r19"), "--detach", "--print-approval"], p.deps), 3);
+  const approval = p.output.at(-1).approvalSha256, fleet = readFleet(slot, "r19").manifest;
+  assert.equal(fleet.single.offlineHandoff, offline ? true : undefined);
+  const stateRoot = path.join(slot, group), local = path.join(stateRoot, "groups-r19"), statePath = path.join(local, "state.json");
+  const locks = { launch: path.join(stateRoot, ".groups-launch.lock"), operation: path.join(local, "operation.lock"),
+    batch: path.join(slot, ".fleet-operation.lock"), outer: path.join(p.h.base, continuationLock) };
+  const pending = { ...reservation({ round: "r19", commit, token: fleet.jobs[0].token, group, fleet }), provider: fleet.provider,
+    fullGroupQualified: false, benchPackage: true, gitSource: true, quietBootstrap: "prelogin",
+    control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
+      ...(offline ? {} : { monitor: { schema: "benchmark-supervised-control/v1", id: "c".repeat(32), phase: "pending" } }) },
+    status: "creating", createIntentAt: new Date().toISOString(), createPending: { dropletId: "123", actionId: "456" } };
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  p.deps.main = async () => {
+    fs.mkdirSync(local, { recursive: true }); fs.writeFileSync(statePath, JSON.stringify(pending));
+    fs.writeFileSync(locks.launch, `${JSON.stringify({ pid: dead, round: "r19" })}\n`);
+    fs.writeFileSync(locks.operation, `${JSON.stringify({ pid: dead, at: pending.createIntentAt })}\n`);
+    throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, providerDiagnostic: { code: "create-action-pending" } });
+  };
+  assert.equal(await fleetMain([...args("r19"), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
+  delete p.deps.main;
+  fs.writeFileSync(locks.batch, `${JSON.stringify({ ...JSON.parse(fs.readFileSync(locks.batch)), pid: dead })}\n`);
+  fs.unlinkSync(locks.launch); fs.unlinkSync(locks.operation); // The custody step for the child.
+  // The child's own collect with the real controller and a synthetic provider on the saved account.
+  const provider = { action: "errored", droplets: [], reads: [], deletes: 0 };
+  const owned = () => { const s = JSON.parse(fs.readFileSync(statePath)); return { id: 123, name: s.name, tags: [...tags, s.tag],
+    size_slug: s.host.size, region: { slug: s.host.region }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } }; };
+  const ok = (value) => ({ status: 0, stdout: JSON.stringify(value), stderr: "" });
+  const run = (binary, argv) => {
+    if (binary === "ssh") {
+      provider.reads.push("ssh"); const s = JSON.parse(fs.readFileSync(statePath));
+      assert.ok(argv.includes("StrictHostKeyChecking=yes") && argv.at(-1) === unusedHostScript(s, { bootstrap: true }), "only the pinned unused proof");
+      return ok({ schema: "benchmark-unused-host/v1", hostId: s.id, unit: s.unit, unused: true, observedAtMs: Date.now() });
+    }
+    if (binary === "git") return p.h.run(binary, argv, 60000);
+    assert.equal(binary, "doctl"); assert.deepEqual(argv.slice(-2), ["--context", context]);
+    const command = argv.slice(0, -2);
+    provider.reads.push(command[0] === "account" ? "account" : command[1] === "action" ? "action" : command[2]);
+    if (command[0] === "account") return ok({ uuid: userId, droplet_limit: 20 });
+    if (command[1] === "action") return ok([{ id: 456, type: "create", resource_type: "droplet", resource_id: 123, status: provider.action }]);
+    if (command[2] === "get") {
+      const rows = provider.droplets.filter(({ id }) => String(id) === command[3]);
+      return rows.length ? ok(rows) : { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+    }
+    if (command[2] === "list") return ok(provider.droplets);
+    assert.deepEqual(command, ["compute", "droplet", "delete", "123", "--force"]);
+    provider.deletes++; provider.droplets = provider.droplets.filter(({ id }) => id !== 123); return ok([]);
+  };
+  const child = (options = {}, deps = {}) => controller({ round: "r19", stateDir: stateRoot, collect: true, ...options },
+    { repo: p.deps.repo, sleep: async () => {}, run, ...deps }).collect();
+  return { p, group, slot, args, prepare, stateRoot, local, statePath, locks, provider, owned, child,
+    posts: () => p.events().filter(({ boundary, method }) => boundary === "provider" && method === "POST") };
+}
+
+// Review round 3, finding 1. The previous controller refused the witnessing collect but
+// left the receipt acceptable, and the successor's census fenced only setup-recovery IDs:
+// its real worker sent a POST with droplet 123 still in the inventory.
+for (const change of ["witnessed before approval", "witnessed with a stale approval", "renamed posted droplet in the census", "witnessed with a failed publication and a stale approval"]) {
+  test(`a continuation successor sends no create when its earlier provider-errored attempt's droplet is ${change}`, { timeout: 60000 }, async (t) => {
+    const a = await lateCreateAttempt(t);
+    assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
+    const resolved = JSON.parse(fs.readFileSync(a.statePath));
+    assert.ok(resolved.createErrored && !resolved.createErrored.reappeared);
+    fs.unlinkSync(a.locks.outer); // The documented custody step for the outer continuation lock.
+    assert.equal(await a.prepare("r20"), 3);
+    assert.equal(await fleetMain([...a.args("r20"), "--detach", "--print-approval"], a.p.deps), 3);
+    const stale = a.p.output.at(-1).approvalSha256;
+    assert.deepEqual(a.p.output.at(-1).subject.continuation.createFailures.map(({ dropletId, accountId: account }) => [dropletId, account]), [["123", accountId]]);
+    const renamed = { ...a.owned(), name: "renamed-by-someone", tags: [] };
+    if (change === "renamed posted droplet in the census") fs.writeFileSync(a.p.hosts, JSON.stringify([renamed]));
+    else if (change === "witnessed with a failed publication and a stale approval") {
+      // Review round 4, finding 2: the contradiction's state rename fails. Custody stays
+      // with that collect; after the custody step the gone droplet does not revive the receipt.
+      a.provider.droplets = [renamed];
+      const createReappearedIo = { durable, rename() { throw Object.assign(new Error("synthetic EIO"), { code: "EIO" }); } };
+      await assert.rejects(a.child({}, { createReappearedIo }), { controllerStage: "create-contradiction-unpublished" });
+      const lock = path.join(a.stateRoot, "groups-r19", "operation.lock");
+      assert.ok(fs.existsSync(lock)); assert.equal(JSON.parse(fs.readFileSync(a.statePath)).createErrored.reappeared, undefined);
+      fs.unlinkSync(lock); // The custody step for that collect.
+      a.provider.droplets = [];
+      await assert.rejects(a.child(), /observed again/);
+    } else {
+      // The old attempt's collect sees ID 123 again and refuses; the droplet is gone again afterwards.
+      a.provider.droplets = [renamed];
+      await assert.rejects(a.child(), /observed again/);
+      assert.equal(JSON.parse(fs.readFileSync(a.statePath)).createErrored.reappeared.dropletId, "123");
+      a.provider.droplets = [];
+      await assert.rejects(a.child(), /observed again/);
+    }
+    let approval = stale;
+    if (change === "witnessed before approval") {
+      // A fresh approval refuses to admit the contradicted attempt.
+      const before = a.p.output.length;
+      const printed = await fleetMain([...a.args("r20"), "--detach", "--print-approval"], a.p.deps).catch((error) => error);
+      assert.ok(printed !== 3 && !a.p.output.slice(before).some((row) => row.approvalSha256), "no approval for a contradicted attempt");
+    }
+    const code = await fleetMain([...a.args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+    assert.notEqual(code, 3);
+    assert.deepEqual(a.posts(), [], "no POST from the successor");
+    const retry = path.join(a.p.h.base, `${a.group}--r20`, a.group, "groups-r20", "state.json");
+    if (fs.existsSync(retry)) assert.equal(JSON.parse(fs.readFileSync(retry)).createIntentAt, undefined, "no create intent");
+    assert.equal(a.provider.deletes, 0);
+  });
+}
+
+// Review round 3, findings 2 and 3, on an actual --offline-handoff child. The previous
+// controller refused the errored-but-present allocation before binding, and refused the
+// bound never-started child at the regular offline gate with no other admitted route.
+for (const action of ["completed", "errored"]) {
+  test(`an offline-handoff child whose late ${action} create left its exact droplet binds it, then retires only by the approved pinned unused proof`, { timeout: 60000 }, async (t) => {
+    const a = await lateCreateAttempt(t, { offline: true });
+    const reserved = JSON.parse(fs.readFileSync(a.statePath));
+    assert.equal(reserved.fleet.single.offlineHandoff, true); assert.equal(reserved.control.monitor, undefined);
+    a.provider.action = action; a.provider.droplets = [a.owned()];
+    assert.equal(await a.child(), 3);
+    const bound = JSON.parse(fs.readFileSync(a.statePath));
+    assert.equal(bound.status, "preparing"); assert.equal(bound.id, "123"); assert.deepEqual(bound.control.ledger, []);
+    assert.ok(!a.provider.reads.includes("ssh") && !a.provider.reads.includes("delete"));
+    // Regular collection keeps the offline handoff gate and names the approved route, also
+    // through the CLI formatter, which prints only allowlisted stages (review round 4, finding 4).
+    await assert.rejects(a.child(), (error) => {
+      assert.match(error.message, /offline handoff never started: .*--unused-bootstrap-known-hosts/);
+      assert.equal(error.controllerStage, "offline-never-started");
+      assert.match(publicError(error), /--collect --unused-bootstrap-known-hosts/); return true;
+    });
+    const key = path.join(a.p.h.temp, "operator-verified-host-key"), keyBytes = "synthetic operator-verified host key\n";
+    fs.writeFileSync(key, keyBytes);
+    const gitRun = (binary, argv, timeout = 60000, allowFail) => {
+      assert.equal(binary, "git");
+      return argv[0] === "show" ? { status: 0, stdout: fs.readFileSync(path.resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
+        : a.p.h.run(binary, argv, timeout, allowFail);
+    };
+    const plan = await productionPlan({ round: "r19", stateDir: a.stateRoot, collect: true, unusedBootstrapKnownHosts: key }, { repo: a.p.deps.repo, run: gitRun });
+    assert.deepEqual(plan.missing, []);
+    assert.deepEqual(plan.subject.recovery, { measuredCommit: commit, hostId: "123", ip: "192.0.2.10", knownHostsSha256: digest(keyBytes),
+      policy: "offline-never-started-posted-create-unused-only-no-qualification" });
+    const pinned = () => a.child({ unusedBootstrapKnownHosts: key }, { unusedBootstrapApproval: { reservationSha256: plan.subject.reservationSha256,
+      knownHostsSha256: plan.subject.recovery.knownHostsSha256 } });
+    // The launch's retained batch and outer continuation locks are custody too.
+    await assert.rejects(pinned(), /original launch custody remains/);
+    fs.unlinkSync(a.locks.batch);
+    await assert.rejects(pinned(), /continuation custody remains/);
+    fs.unlinkSync(a.locks.outer);
+    assert.equal(a.provider.deletes, 0);
+    assert.equal(await pinned(), 1);
+    const retired = JSON.parse(fs.readFileSync(a.statePath));
+    assert.equal(retired.status, "retired"); assert.equal(retired.retirement.kind, "unused"); assert.ok(retired.destroyedAt);
+    assert.deepEqual(retired.control.ledger, []); assert.equal(a.provider.deletes, 1);
+    assert.equal(a.provider.reads.filter((read) => read === "ssh").length, 1, "one fresh pinned unused proof");
+    assert.deepEqual(a.posts(), []);
+  });
+}
+
+test("the offline never-started route needs the exact bound posted create and an empty ledger", { timeout: 60000 }, async (t) => {
+  const a = await lateCreateAttempt(t, { offline: true });
+  a.provider.action = "completed"; a.provider.droplets = [a.owned()];
+  assert.equal(await a.child(), 3);
+  const original = fs.readFileSync(a.statePath, "utf8"), bound = JSON.parse(original);
+  assert.ok(offlineNeverStarted(bound));
+  const ledgerRow = { request: controlRequest(bound, "ssh", ["true"], 30000, "bootstrap", []), localTerminal: false };
+  for (const change of [(s) => { delete s.createPending; }, (s) => { s.control.ledger.push(ledgerRow); },
+    (s) => { s.launchHostKeySha256 = "a".repeat(64); }, (s) => { delete s.fleet.single.offlineHandoff; s.control.monitor = { schema: "benchmark-supervised-control/v1", id: "c".repeat(32), phase: "pending" }; }]) {
+    const s = JSON.parse(original); change(s);
+    assert.equal(offlineNeverStarted(s), false);
+  }
+});
 test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 120000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
@@ -1091,3 +1410,168 @@ test("refused authenticated peer capture preserves the host without uploading or
   assert.equal(request.invocation.requestSha256, digest(capture.options.input));
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
 });
+
+// Review round 4, finding 5 (benchmark lane). Only the selected group's earlier
+// provider-errored attempts were fenced: another group's launch sent a POST with
+// json-api's posted droplet 123 still in the census, renamed and untagged.
+for (const listed of [true, false]) {
+  test(`another group's launch ${listed ? "sends no create while" : "proceeds when"} an earlier provider-errored attempt's posted ID is ${listed ? "listed, renamed and untagged" : "absent"}`, { timeout: 60000 }, async (t) => {
+    const a = await lateCreateAttempt(t);
+    assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
+    fs.unlinkSync(a.locks.outer); // The documented custody step for the outer continuation lock.
+    const other = groupNames.find((group) => group !== a.group);
+    const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
+    assert.equal(await fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], a.p.deps), 3);
+    assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps), 3);
+    const approval = a.p.output.at(-1).approvalSha256;
+    // Each earlier posted create is snapshotted for the final pre-POST recheck (review round 6, finding 3).
+    assert.deepEqual(a.p.output.at(-1).subject.continuation.postedCreates, [{ root: a.slot, round: "r19", group: a.group,
+      manifestSha256: fileHash(path.join(a.slot, "fleet-r19.json")), stateSha256: fileHash(a.statePath), outcome: "available", contradicted: false,
+      accountId, dropletId: "123" }]);
+    if (listed) fs.writeFileSync(a.p.hosts, JSON.stringify([{ ...a.owned(), name: "renamed-by-someone", tags: [] }]));
+    const code = await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+    if (listed) {
+      assert.notEqual(code, 3);
+      assert.deepEqual(a.posts(), [], "no POST from the other group");
+      const state = path.join(a.p.h.base, other, other, "groups-r20", "state.json");
+      if (fs.existsSync(state)) assert.equal(JSON.parse(fs.readFileSync(state)).createIntentAt, undefined, "no create intent");
+    } else assert.equal(a.posts().length, 1, "the other group creates its own host");
+    assert.equal(a.provider.deletes, 0);
+  });
+}
+
+// Review round 6, finding 3. Only the selected group's earlier attempts were rechecked at the
+// final gate: a contradiction of json-api's settled attempt recorded after the other group's
+// census (here during the account read that opens its create) still let it record create intent and POST.
+// Review round 7, finding 1: a create-recheck or launch lock taken in that attempt at the same
+// point also still let it POST; the gate saw only its operation lock.
+const postedRefusal = /an earlier provider-errored create on this account changed, took custody or was contradicted before this create/;
+for (const late of ["provider-create-reappeared", "create-recheck.lock", ".groups-launch.lock", null]) {
+  test(`another group's create ${late ? `is refused when ${late} is written in` : "proceeds beside"} an earlier provider-errored attempt after its census`, { timeout: 60000 }, async (t) => {
+    const a = await lateCreateAttempt(t);
+    assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
+    fs.unlinkSync(a.locks.outer); // The documented custody step for the outer continuation lock.
+    const other = groupNames.find((group) => group !== a.group);
+    const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
+    assert.equal(await fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], a.p.deps), 3);
+    assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps), 3);
+    const approval = a.p.output.at(-1).approvalSha256;
+    const marker = late && path.join(late === ".groups-launch.lock" ? a.stateRoot : a.local, late);
+    if (late) fs.writeFileSync(a.p.hosts + ".late-lock", marker);
+    const code = await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+    if (late) {
+      assert.ok(fs.existsSync(marker), "the marker was written during the create's account read");
+      assert.notEqual(code, 3);
+      assert.deepEqual(a.posts(), [], "no POST from the other group");
+      const state = path.join(a.p.h.base, other, other, "groups-r20", "state.json");
+      if (fs.existsSync(state)) assert.equal(JSON.parse(fs.readFileSync(state)).createIntentAt, undefined, "no create intent");
+      // Refused by the cross-group final gate, not by an unrelated failure.
+      assert.deepEqual(a.p.output.at(-1).groups.map(({ group, outcome, controllerStage }) => [group, outcome, controllerStage]),
+        [[other, "error", "controller-launch"]]);
+      const refusals = a.p.refusals();
+      assert.equal(refusals.length, 1, JSON.stringify(refusals));
+      assert.match(refusals[0][0], postedRefusal);
+      if (late !== "provider-create-reappeared") assert.match(refusals[0][1], /provider-errored create still holds custody/);
+    } else {
+      assert.equal(a.posts().length, 1, "the other group creates its own host");
+      // What happens after the POST is outside this test; the cross-group gate did not refuse.
+      assert.ok(!a.p.refusals().flat().some((message) => postedRefusal.test(message)), JSON.stringify(a.p.refusals()));
+    }
+    assert.equal(a.provider.deletes, 0);
+  });
+}
+
+// Review round 6, finding 4. A contradicted attempt retired by the pinned route lost its
+// createErrored record, and with it its place in the posted-ID census fence.
+async function retiredContradictedAttempt(t) {
+  const a = await lateCreateAttempt(t, { offline: true });
+  assert.equal(await a.child(), 1, "the errored action and absence settle the attempt");
+  a.provider.droplets = [a.owned()];
+  assert.equal(await a.child(), 3, "the reappeared posted droplet is bound as contradicted");
+  assert.ok(JSON.parse(fs.readFileSync(a.statePath)).createContradicted);
+  const key = path.join(a.p.h.temp, "operator-verified-host-key"), keyBytes = "synthetic operator-verified host key\n";
+  fs.writeFileSync(key, keyBytes);
+  const gitRun = (binary, argv, timeout = 60000, allowFail) => {
+    assert.equal(binary, "git");
+    return argv[0] === "show" ? { status: 0, stdout: fs.readFileSync(path.resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
+      : a.p.h.run(binary, argv, timeout, allowFail);
+  };
+  const plan = await productionPlan({ round: "r19", stateDir: a.stateRoot, collect: true, unusedBootstrapKnownHosts: key }, { repo: a.p.deps.repo, run: gitRun });
+  assert.equal(plan.subject.recovery.policy, "contradicted-create-posted-droplet-unused-only-no-qualification");
+  fs.unlinkSync(a.locks.batch); fs.unlinkSync(a.locks.outer); // The custody steps for the launch's retained locks.
+  assert.equal(await a.child({ unusedBootstrapKnownHosts: key }, { unusedBootstrapApproval: { reservationSha256: plan.subject.reservationSha256,
+    knownHostsSha256: plan.subject.recovery.knownHostsSha256 } }), 1);
+  const retired = JSON.parse(fs.readFileSync(a.statePath));
+  assert.ok(retired.destroyedAt && retired.createContradicted && !retired.createErrored); assert.equal(a.provider.deletes, 1);
+  return a;
+}
+for (const listed of [true, false]) {
+  test(`another group's launch ${listed ? "still fences" : "proceeds beside"} a retired contradicted attempt's posted ID ${listed ? "listed, renamed and untagged" : "that is absent"}`, { timeout: 90000 }, async (t) => {
+    const a = await retiredContradictedAttempt(t);
+    const other = groupNames.find((group) => group !== a.group);
+    const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
+    assert.equal(await fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], a.p.deps), 3);
+    assert.equal(await fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps), 3);
+    const approval = a.p.output.at(-1).approvalSha256;
+    assert.deepEqual(a.p.output.at(-1).subject.continuation.postedCreates.map(({ accountId: account, dropletId, contradicted }) => [account, dropletId, contradicted]),
+      [[accountId, "123", true]]);
+    if (listed) fs.writeFileSync(a.p.hosts, JSON.stringify([{ ...a.owned(), name: "renamed-by-someone", tags: [] }]));
+    const code = await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+    if (listed) {
+      assert.notEqual(code, 3);
+      assert.deepEqual(a.posts(), [], "no POST from the other group");
+      const state = path.join(a.p.h.base, other, other, "groups-r20", "state.json");
+      if (fs.existsSync(state)) assert.equal(JSON.parse(fs.readFileSync(state)).createIntentAt, undefined, "no create intent");
+    } else assert.equal(a.posts().length, 1, "the other group creates its own host");
+    assert.equal(a.provider.deletes, 1);
+  });
+}
+
+// Issue #2019. The final gate refuses a create beside an earlier posted attempt that holds a
+// launch, operation or recheck lock, retired or not, but admission accepted a retired one: the
+// operator approved a launch the gate was certain to refuse. Admission now applies the gate's
+// custody check to every posted attempt, so the refusal comes before the approval prompt.
+for (const lock of ["launch", "operation", "recheck", null]) {
+  test(`another group's admission ${lock ? `refuses before approval while a retired posted attempt holds its ${lock} lock` : "admits a retired posted attempt that holds no lock"}`, { timeout: 90000 }, async (t) => {
+    const a = await retiredContradictedAttempt(t);
+    const other = groupNames.find((group) => group !== a.group), otherSlot = path.join(a.p.h.base, other);
+    const args = (round) => [round, "--continuation-root", a.p.h.base, "--group", other];
+    const prepare = (failures) => fleetMain([...args("r20"), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId,
+      "--context", context], a.p.deps, failures);
+    const preview = (failures) => fleetMain([...args("r20"), "--detach", "--print-approval"], a.p.deps, failures);
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+    const held = lock && { launch: a.locks.launch, operation: a.locks.operation, recheck: path.join(a.local, "create-recheck.lock") }[lock];
+    const take = () => fs.writeFileSync(held, `${JSON.stringify({ pid: dead, round: "r19" })}\n`);
+    const refused = async (action) => {
+      const failures = new Map(), before = a.p.output.length;
+      await assert.rejects(action(failures), (error) => /unresolved custody: an earlier provider-errored create still holds a lock/.test(error.message)
+        && /provider-errored create still holds custody/.test(error.cause?.message)
+        && failures.get(error) === "continuation-admission; posted-custody");
+      assert.ok(!a.p.output.slice(before).some((row) => row?.approvalSha256), "no approval prompt");
+      assert.ok(fs.existsSync(held), "the lock is left alone");
+      assert.ok(!fs.existsSync(path.join(otherSlot, "launch-intent.json")), "no launch intent");
+      assert.ok(!fs.existsSync(path.join(otherSlot, other, "groups-r20", "state.json")), "no create intent");
+      assert.ok(!fs.existsSync(path.join(a.p.h.base, continuationLock)), "admission releases the continuation lock");
+      assert.deepEqual(a.posts(), [], "no POST");
+    };
+    if (lock) {
+      // Present at prepare: no reservation is made for the other group.
+      take();
+      await refused(prepare);
+      assert.ok(!fs.existsSync(otherSlot), "no reservation");
+      // Taken after prepare: the approval prompt itself refuses.
+      fs.unlinkSync(held); // Only the test's own synthetic lock; the controller never clears it.
+      assert.equal(await prepare(), 3);
+      take();
+      await refused(preview);
+    } else {
+      assert.equal(await prepare(), 3);
+      assert.equal(await preview(), 3);
+      const approval = a.p.output.at(-1).approvalSha256;
+      assert.deepEqual(a.p.output.at(-1).subject.continuation.postedCreates.map(({ dropletId, contradicted }) => [dropletId, contradicted]), [["123", true]]);
+      await fleetMain([...args("r20"), "--detach", "--approve-reviewed-merged-ready", approval], a.p.deps).catch((error) => error);
+      assert.equal(a.posts().length, 1, "the other group creates its own host");
+    }
+    assert.equal(a.provider.deletes, 1);
+  });
+}

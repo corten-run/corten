@@ -21,8 +21,8 @@ const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const holder = "cs-holder";
 const clock = "cs-clock";
-// bash's /dev/tcp and GNU date (nanoseconds) from debian:bookworm-slim, so no HTTP client is needed.
-const probeImage = "debian:bookworm-slim";
+// bash's /dev/tcp and GNU date (nanoseconds) from Debian 13 slim, so no HTTP client is needed.
+const probeImage = "debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2";
 const probe = (/** @type {string} */ path) => [
   `until { exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET ${path} HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && [[ $line == *' 200 '* ]]; } 2>/dev/null; do exec 3>&- 2>/dev/null; done`,
   "date +%s%N",

@@ -367,7 +367,7 @@ create and remove their own target.
 `host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
 or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
 with one CPU and 1 GiB memory, using the native pinned image
-`node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
+`node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067`.
 The test only reads the original full ID; it does not create, stop or remove containers.
 It requires root-readable `/proc` and cgroup v2 in the Docker daemon's actual host PID
 and cgroup namespaces, plus the local Docker CLI/socket and Linux Node. Socket access
@@ -395,22 +395,30 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 
 ## Post-command udev settle
 
-Supervised JSON preparation and localized-marketplace timing can take one additional
-host observation if the first-after inventory contains only new sleeping children of
-the same baseline `systemd-udevd`. The last command must have sealed terminal and empty
-lifetime evidence before the five-second wait begins. For untimed JSON preparation,
-the Linux start ticks must place each worker strictly after the pre-phase census
-cutoff. Marketplace timing still requires birth strictly after the sealed terminal
-cutoff; other timing phases do not use this rule.
+An authenticated monitored or offline-handoff campaign can take one additional host
+observation after official timing or untimed JSON preparation if the first-after
+inventory contains only new sleeping children of the same baseline `systemd-udevd`.
+Capture and replay use the same eligibility check: only the exact bound native
+invocation for the campaign's registered group, round and phase can carry a sealed
+clock. Fixture generators and helpers cannot carry one. The clock is optional;
+without it only the ordinary first-after boundary can prove cleanup.
+Live Delivery and Recoverable Live replay both censuses when a settled census
+is present. Both must match the committed phase seal and the verified lifetime;
+a supplied but invalid settlement cannot fall back to the first census.
+The last native command must have a verified sealed terminal lifetime, including
+proof that its accounting scope is empty, before the five-second wait begins. For
+official timing, each worker's Linux start ticks must place its birth strictly after
+the sealed terminal cutoff. For untimed JSON preparation, the same strict comparison
+uses the pre-phase census cutoff instead.
 
 Both uptime and the monotonic apparatus samples must support the wait. Cancellation
 keeps the first-after inventory and skips the second census. Exact cgroup, parent
 PID/start identity and matching executable path, device and inode are required, not
-just the worker name. Saved replay uses the same rule and requires cleanup proof
-before accepting JSON audit readiness. A surviving or replacement worker, uncertain
-timing or ownership, a new login or benchmark process, or a changed Docker baseline
-still stops sequencing. This does not alter a measured window, prove the host was
-quiet, or repair historical evidence.
+just the worker name. Saved replay uses the measured checkout and requires cleanup
+proof before accepting JSON audit readiness. A surviving or replacement worker,
+uncertain timing or ownership, a new login or benchmark process, or a changed Docker
+baseline still stops sequencing. This does not alter a measured window, prove the
+host was quiet, or qualify historical evidence that lacks the proof.
 
 An [offline single-group handoff](../CLOUD.md#offline-handoff) writes execution
 version 6. It uses the registered bootstrap and audit epochs without a stream.
@@ -419,12 +427,15 @@ replay requires the exact policy with zero excess/non-SYN hits, monotonic counts
 for rate-bounded pre-login SYNs, and the ordinary lifetimes, workload evidence and
 audit gates. Replay reports the packet and byte deltas by sealed phase in
 `offlineIngress`. Untimed preparation permits bounded denied SYNs; official timing
-requires zero. A valid archive with denied SYNs during timing stays replayable
-but cannot supply a comparison. The two udev-settle cases use monotonic
-bookends taken on that boot, not workstation timestamps. For a finished archive
-the replay result can bind the boot, hostname, ownership token and exact
-bootstrap seal ledger to the collector's reservation. That binding is not a
-whole-host terminal observation or permission to destroy the host.
+requires zero throughout the fenced phase. The fence closes after any post-terminal
+udev settle wait and second census, so a SYN denied after native command exit can
+still disqualify the phase. Keep probes stopped throughout the fenced phase. The
+measured workload window is unchanged. A valid archive with denied SYNs in the
+timing phase stays replayable but cannot supply a comparison. The udev settle
+checks use monotonic bookends taken on that boot, not workstation timestamps.
+For a finished archive the replay result can bind the boot, hostname, ownership
+token and exact bootstrap seal ledger to the collector's reservation. That
+binding is not a whole-host terminal observation or permission to destroy the host.
 
 An offline JSON or mixed audit wait with no delivery or audit admission can
 seal a terminal failure after 24 hours. Replay matches the expired subject
@@ -556,7 +567,9 @@ it does not accept either ordinal interchangeably. The plan and reservation must
 unchanged across replay, as must the phase's evidence tree.
 It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
 manifest, positive terminal empty scope, observed browser renderer, inherited controls and
-empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;
+empty Docker container boundaries. Before using either one or two censuses, the adapter
+replays the ordered campaign journal through the phase seal and checks that seal against
+the whole phase. The recorded command start and exit bind the lifetime it reads;
 the live controller separately establishes their execution origin and exclusive ownership.
 This composes actual host cleanup instead of requiring the native app to assert it again.
 An error-only failure with no retained target HTTP/control observation is incomplete, even

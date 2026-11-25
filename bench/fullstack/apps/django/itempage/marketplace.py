@@ -9,6 +9,8 @@ from babel import Locale
 from babel.numbers import format_currency, format_decimal, parse_decimal, NumberFormatError
 import requests
 
+from . import upstream
+
 
 LABELS = json.loads((Path(__file__).resolve().parent / "marketplace_labels.json").read_text(encoding="utf-8"))
 LOCALES = {name: Locale.parse(name, sep="-") for name in LABELS}
@@ -70,7 +72,7 @@ def _integer(value, minimum=0, maximum=10**9):
 class MarketplaceSource:
     def __init__(self):
         self.base = os.environ.get("API_BASE", "http://localhost:8080").rstrip("/")
-        self.session = requests.Session()
+        self.session = upstream.session()
         self.fixture = None
         if os.environ.get("MARKETPLACE_SOURCE") == "fixture":
             with open(os.environ.get("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"), encoding="utf-8") as file:

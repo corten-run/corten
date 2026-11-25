@@ -19,12 +19,13 @@ import { recordAttemptSchema } from "./record-attempt.mjs";
 import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
-import { k6Image, k6Provenance } from "../load-tool.mjs";
-import { collectTimedPhase, readTimedLoad, verifyTimedPhase } from "./timed.mjs";
+import { ImagePinRefusal, k6Image, k6Provenance } from "../load-tool.mjs";
+import { inspect } from "node:util";
+import { collectTimedPhase, readFailureClasses, readTimedLoad, verifyTimedPhase } from "./timed.mjs";
 import { composePhase } from "../workloads/isolated/composition.mjs";
 import { latestStableSchema } from "../workloads/latest-stable.mjs";
 import { loadSummary, timedFixture } from "./timed-fixture.mjs";
-import { requestOutcome } from "./load-outcome.js";
+import { failureClass, requestOutcome } from "./load-outcome.js";
 
 // Synthetic verifier fixtures, never measured performance or qualification receipts.
 function fixture(passes = 1) {
@@ -512,14 +513,52 @@ test("timed parser rejects unclassified/content failures and contradictory count
   assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
 });
 
+test("timed parser checks failure classes when a producer wrote them and reads the same metrics either way", () => {
+  const classes = { http_429: 1, http_502: 2, http_503: 3, http_5xx: 4 };
+  const split = readTimedLoad(loadSummary({ httpErrors: 10, classes }));
+  assert.deepEqual(split, readTimedLoad(loadSummary({ httpErrors: 10 })));
+  assert.equal(split.httpErrors, 10); assert.equal(split.failed, 10); assert.equal(split.outcome, "failed");
+  assert.deepEqual(readFailureClasses(loadSummary({ httpErrors: 10, classes }), { http_errors: 10, invalid_responses: 0 }),
+    { ...classes, transport: 0, other: 0 });
+  // No class series: a run without failures, or a producer from before the split. Unknown, not zero.
+  assert.equal(readFailureClasses(loadSummary({ httpErrors: 10 }), { http_errors: 10, invalid_responses: 0 }), null);
+  assert.deepEqual(readTimedLoad(loadSummary()), readTimedLoad(loadSummary({ classes: {} })));
+  for (const bad of [{ ...classes, http_502: 1 }, { ...classes, http_5xx: 5 }, { ...classes, http_429: 0 }, { ...classes, http_503: -1 },
+    { ...classes, other: 1 }, { http_502: 10, transport: 0 }])
+    assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: bad })), /failure class/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1, classes: { transport: 1 } })), /k6 transport error without an app response/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1, classes: { other: 1 } })), /corrupt response/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
+});
+
+test("timed parser refuses an unknown series under the failure-class prefix, alone or beside a counted class", () => {
+  const counts = { http_errors: 10, invalid_responses: 0 };
+  // Alone: a misspelled class must not read as a summary from before the split.
+  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } }), counts), /unknown timed failure class series: catalog_failed_http_50x/);
+  assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: { http_50x: 10 } })), /unknown timed failure class/);
+  // Beside a valid class that already accounts for every HTTP error.
+  assert.throws(() => readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } }), counts), /unknown timed failure class series: catalog_failed_http_50x/);
+  assert.throws(() => readTimedLoad(loadSummary({ httpErrors: 10, classes: { http_5xx: 10, http_50x: 1 } })), /unknown timed failure class/);
+  // An empty suffix is not a class either.
+  assert.throws(() => readFailureClasses(loadSummary({ classes: { "": 1 } }), { http_errors: 0, invalid_responses: 0 }), /unknown timed failure class/);
+  // A legacy summary with no class series stays valid and its split stays unknown.
+  assert.equal(readFailureClasses(loadSummary({ httpErrors: 10 }), counts), null);
+  assert.equal(readTimedLoad(loadSummary({ httpErrors: 10 })).httpErrors, 10);
+  assert.deepEqual(readFailureClasses(loadSummary({ httpErrors: 10, classes: { http_5xx: 10 } }), counts),
+    { http_429: 0, http_502: 0, http_503: 0, http_5xx: 10, transport: 0, other: 0 });
+});
+
 test("timed request classification does not turn bad content types or arbitrary transport errors into target outcomes", () => {
   const response = (status, type = "text/html", error_code = 0) => ({ status, headers: { "Content-Type": type }, error_code });
   assert.equal(requestOutcome(response(200), "page"), "successes");
   assert.equal(requestOutcome(response(0, "", 1050), "page"), "timeouts");
   for (const status of [429, 500, 502, 503, 504]) for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
     for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), "http_errors");
-  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "", 1000)])
+  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "", 1000), response(0, "", 1210)])
     assert.equal(requestOutcome(r, "page"), "invalid_responses");
+  // A k6 transport error is told apart from another invalid response, and a replay still refuses both.
+  assert.equal(failureClass(response(0, "", 1210)), "transport");
+  assert.equal(failureClass(response(0, "", 1020)), "other");
 });
 
 test("timed HTTP error accounting retains errors whose media type differs from a successful page", () => {
@@ -725,6 +764,66 @@ test("catalog negative raw replay retains every selected app without timing or b
     f.put(path, proof);
   }
   assert.deepEqual(replayCatalog(f.summary, f.reader, f.commit), report, "Docker mount enumeration order is not semantic");
+});
+
+test("catalog negative replay binds retained tool images to the checkout of its measured commit", () => {
+  const f = failedFixture();
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).attemptComplete, true, "the measuring checkout replays its own evidence");
+  // The same evidence as a checkout still pinned to the Debian 12 upstream image wrote it.
+  const earlier = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+  f.summary.tools.upstream.image = earlier; f.put("tools.json", f.summary.tools);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), (e) => e.message.includes(
+    `retained upstream image is not this checkout's pin ${upstreamImage}; verify from a checkout of the measured commit ${f.commit}`)
+    && !e.message.includes(earlier));
+});
+
+// Each case changes only an image reference: the refusal names the pin and hint, never the saved text.
+const savedImage = "node:SAVED-IMAGE-CANARY";
+const pinRefusal = (tool, pin, commit) => (e) => e instanceof ImagePinRefusal
+  && e.message === `retained ${tool} image is not this checkout's pin ${pin}; verify from a checkout of the measured commit ${commit}`
+  && !inspect(e).includes(savedImage);
+const editTools = (f, edit) => { const tools = structuredClone(f.summary.tools); edit(tools); f.put("tools.json", tools); };
+test("catalog replay refuses a retained tool image other than the pin by the pin and hint, not the saved text", () => {
+  const complete = () => { const f = fixture(); assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true); return f; };
+  let f = complete();
+  f.summary.tools.k6.image = savedImage; f.put("tools.json", f.summary.tools);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), pinRefusal("k6", k6Image, f.commit), "k6 in the summary and its sidecar");
+  f = complete(); editTools(f, (tools) => { tools.k6.image = savedImage; });
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), pinRefusal("k6", k6Image, f.commit), "k6 in the sidecar only");
+  for (const [tool, pin] of [["upstream", upstreamImage], ["checker", checkerImage]]) {
+    f = failedFixture(); assert.equal(replayCatalog(f.summary, f.reader, f.commit).attemptComplete, true);
+    editTools(f, (tools) => { tools[tool].image = savedImage; });
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), pinRefusal(tool, pin, f.commit), `${tool} in a gated attempt's sidecar only`);
+  }
+});
+
+test("catalog replay still refuses a non-pin tool sidecar difference, naming the field and not the saved text", () => {
+  for (const [make, edit, field] of [[fixture, (tools) => { tools.upstream.imageId = savedImage; }, "upstream.imageId"],
+    [fixture, (tools) => { tools.k6.note = savedImage; }, "k6.(unexpected field)"],
+    [fixture, (tools) => { tools.SAVEDKEYCANARY = { image: 1 }; }, "(unexpected field)"],
+    [fixture, (tools) => { tools.k6.SAVEDKEYCANARY = 1; }, "k6.(unexpected field)"],
+    [failedFixture, (tools) => { tools.checker.execution.Cmd = [savedImage]; }, "checker.execution.Cmd"]]) {
+    const f = make(); editTools(f, edit);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), (e) => !(e instanceof ImagePinRefusal)
+      && e.message === `tool observations differ at ${field}` && !inspect(e).includes(savedImage) && !inspect(e).includes("SAVEDKEYCANARY"), field);
+  }
+});
+
+test("catalog verifier passes a pin refusal through with its hint and keeps every other failure generic", () => {
+  const folder = mkdtempSync(join(tmpdir(), "catalog-pin-refusal-"));
+  try {
+    const save = (f) => { for (const [key, value] of f.files) { mkdirSync(dirname(join(folder, key)), { recursive: true }); writeFileSync(join(folder, key), value); } };
+    let f = fixture(); save(f);
+    const input = { folder, round: "c1", commit: f.commit };
+    assert.equal(validateSaved(input).status, "verified");
+    f.summary.tools.k6.image = savedImage; f.put("tools.json", f.summary.tools); f.put("summary.json", f.summary); save(f);
+    const pinned = validateSaved(input);
+    assert.deepEqual(pinned, { status: "invalid", complete: false,
+      errors: [`retained k6 image is not this checkout's pin ${k6Image}; verify from a checkout of the measured commit ${f.commit}`] });
+    assert.ok(!JSON.stringify(pinned).includes(savedImage));
+    f = fixture(); editTools(f, (tools) => { tools.upstream.imageId = savedImage; }); save(f);
+    assert.deepEqual(validateSaved(input), { status: "invalid", complete: false, errors: ["native evidence invalid or contradictory"] });
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
 });
 
 const boundaryFile = "fixture/corten/checker.json";

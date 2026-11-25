@@ -3,8 +3,10 @@ import json
 import os
 import requests
 
+from . import upstream
+
 BASE = os.environ.get("API_BASE", "http://localhost:8080")
-_session = requests.Session()
+_session = upstream.session()
 
 
 def _money(amount, code):

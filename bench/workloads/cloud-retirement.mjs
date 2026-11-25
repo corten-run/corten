@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { lstatSync, opendirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
+import { digest, evidenceEnvelope, evidenceFileIdentity, fileHash, physical, pinEvidenceTree, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { bootstrapWorkspaceScript, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
 import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
@@ -14,6 +14,72 @@ import { verifyControlWatcher } from "./isolated/control-admission.mjs";
 import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./registry.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
+
+// A provider-errored create: one accepted POST whose exact action ended errored and
+// whose droplet was proved absent on the saved account. Never a host or a deletion.
+export const createErroredReceipt = "provider-create-errored.json";
+export const createRecheckLock = "create-recheck.lock";
+export const createErroredBytes = (record) => `${JSON.stringify(record, null, 2)}\n`;
+export function createErroredRecord(s, { dropletId, actionId }, droplets, observedAt) {
+  return { schema: "benchmark-provider-create-errored/v1", round: s.round, commit: s.commit, ...(s.group === undefined ? {} : { group: s.group }),
+    name: s.name, tag: s.tag, host: s.host, createIntentAt: s.createIntentAt,
+    action: { id: Number(actionId), type: "create", resourceType: "droplet", resourceId: Number(dropletId), status: "errored" },
+    account: { id: s.provider.accountId, verified: "before-and-after-each-provider-call" },
+    absence: { exactGet: { id: Number(dropletId), httpStatus: 404 },
+      inventory: { complete: true, droplets, matchingId: 0, matchingName: 0, matchingTag: 0 } },
+    observedAt, dispatched: { create: 1, replacementCreate: 0, delete: 0, guest: false }, measurements: 0 };
+}
+// Rebuild the receipt from the saved state; only the census size and time come from the file.
+// A recorded reappearance of the posted droplet contradicts the receipt for good.
+export const createReappeared = "provider-errored create contradicted: its posted droplet was observed again on the saved account;"
+  + " this attempt never resolves or admits a retry; collect binds only that exact posted droplet under its saved name, tags, region"
+  + " and one public IPv4, then retire it by --collect --unused-bootstrap-known-hosts; otherwise account for it with the provider and preserve reservation";
+// A contradiction is made durable before its state publication: this witness first,
+// then the state through its own create-reappeared stage. Either one left behind (a
+// failed or interrupted publication) contradicts the receipt exactly as a published
+// reappearance does, so no later collect, launch, fleet check or successor accepts it.
+export const createReappearedWitness = "provider-create-reappeared";
+const reappearedStage = /^state\.json\.create-reappeared-[a-f0-9]{32}\.tmp$/;
+// The stages a failed contradiction publication left, by name (never read here).
+export const contradictionStages = (local) => readdirSync(local).filter((name) => reappearedStage.test(name)).sort();
+// The stages an interrupted createErrored publication left (written before its rename), by name.
+// They claim absence; beside a contradiction the bind checks their bytes and records them.
+const erroredStage = /^state\.json\.create-errored-[a-f0-9]{32}\.tmp$/;
+export const publicationStages = (local) => readdirSync(local).filter((name) => erroredStage.test(name)).sort();
+export function createContradiction(local) {
+  return !!lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false })
+    || readdirSync(local).some((name) => reappearedStage.test(name));
+}
+export function verifyCreateErrored(local, s) {
+  assert.ok(s.createErrored, "no provider-errored create record");
+  assert.ok(!s.createErrored.reappeared && !createContradiction(local), createReappeared);
+  const bytes = regular(join(local, createErroredReceipt), 64 * 1024), record = JSON.parse(bytes);
+  assert.equal(digest(bytes), s.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+  assert.ok(Number.isSafeInteger(record.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "create failure receipt changed; preserve reservation");
+  assert.deepEqual(record, createErroredRecord(s, s.createErrored, record.absence.inventory.droplets, record.observedAt),
+    "create failure receipt changed; preserve reservation");
+  return true;
+}
+// A resolved provider-errored create leaves no custody behind: no launch or operation
+// lock, and no recheck lock (no controller writes one now; a stray one still refuses).
+// Any of them is unresolved until the operator's custody step accounts for its owner.
+export function createErroredCustody(local) {
+  for (const path of [join(dirname(local), ".groups-launch.lock"), join(local, "operation.lock"), join(local, createRecheckLock)])
+    assert.ok(!lstatSync(path, { throwIfNoEntry: false }),
+      "provider-errored create still holds custody; account for the lock's owner by the custody step; preserve reservation");
+  return true;
+}
+// A receipt written before its state publication (a crash between the two) is
+// adopted only if its bytes are exactly the canonical record for this saved state.
+export function pendingCreateErroredReceipt(bytes, s, posted) {
+  const record = JSON.parse(bytes);
+  assert.ok(Number.isSafeInteger(record?.absence?.inventory?.droplets) && record.absence.inventory.droplets >= 0
+    && typeof record.observedAt === "string" && new Date(record.observedAt).toISOString() === record.observedAt, "unpublished create failure receipt differs; preserve reservation");
+  assert.ok(Buffer.from(createErroredBytes(createErroredRecord(s, posted, record.absence.inventory.droplets, record.observedAt))).equals(bytes),
+    "unpublished create failure receipt differs; preserve reservation");
+  return bytes;
+}
 
 // This migration is not a general old-source collection or validation override.
 export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
@@ -158,10 +224,10 @@ function preplanGroup(local, state, readGrouped = groupedFailure) {
   return { ...grouped, preplan: true };
 }
 
-function originalFailedWrapper(local, state) {
+function originalFailedWrapper(local, state, verifyTree = verifyEvidenceTree) {
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
-  assert.equal(treeHash(extracted), state.evidenceSha256, "original failed extraction changed");
+  verifyTree(extracted, state.evidenceSha256, "original failed extraction changed");
   assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from("2\n")), "custody requires the saved failure exit, not a successful report");
   const folder = join(extracted, "campaign"); physical(folder);
   return { extracted, folder };
@@ -186,14 +252,61 @@ export function groupedPreplanFailure(local, state) {
   return grouped;
 }
 
+export const handoffRetirementPolicy = "grouped-handoff-failure-existing-custody-only";
+export function handoffLocks(local, holdingOperationLock = false) {
+  const base = dirname(local), fleet = dirname(base);
+  const paths = [join(local, "stream-recovery.lock"), join(local, "audit-delivery.lock"), join(local, createRecheckLock),
+    join(base, ".groups-launch.lock"), join(fleet, ".fleet-operation.lock"),
+    join(dirname(fleet), ".continuation-operation.lock")];
+  if (!holdingOperationLock) paths.push(join(local, "operation.lock"));
+  assert.ok(paths.every(path => !lstatSync(path, { throwIfNoEntry: false })), "handoff recovery has competing or retained custody");
+}
+
+function handoffPublications(local) {
+  // Ordinary collection leaves its download files behind. Only the published
+  // archive and capture are evidence; never adopt or replace the download.
+  for (const name of ["monitor-invalid.json", "state.json.tmp", "failed-native-results.tgz.synced"])
+    assert.ok(!lstatSync(join(local, name), { throwIfNoEntry: false }), "foreclosed or incomplete handoff custody");
+  assert.ok(!readdirSync(local).some(name => /^state\.json\..*\.tmp$/.test(name)), "unsettled handoff state publication");
+}
+
+export function handoffCapture(local, state) {
+  assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group
+    && state.control?.monitor?.phase === "closed", "closed single-group handoff required");
+  assert.equal(state.control.helperSha256, guardianSha256, "original handoff control source changed");
+  assert.ok(!state.control.sealed.includes("collection"), "handoff collection is foreclosed");
+  assert.ok(state.id && state.ip && state.createIntentAt && state.fullGroupQualified === false
+    && ["collectedAt", "validation", "evidenceOutcome", "exitCode", "preBootstrapTerminal", "mixedCancellation"]
+      .every(key => state[key] === undefined), "only an unqualified terminal handoff may retire");
+  assert.ok(state.status === "running" && !state.retirement && !state.deletionIntentAt && !state.destroyedAt
+    || state.status === "retired" && state.retirement?.kind === "native-failed" && state.deletionIntentAt, "handoff retirement state differs");
+  handoffPublications(local);
+  if (state.status === "running")
+    assert.ok(!lstatSync(join(local, "failed-native-host.json"), { throwIfNoEntry: false }), "foreclosed or incomplete handoff custody");
+  const grouped = groupedFailure(local, state);
+  const bytes = regular(join(local, "failed-native-capture.json"), 1024 * 1024), capture = JSON.parse(bytes);
+  assert.deepEqual(Object.keys(capture).sort(), ["controllerCommit", "evidence", "evidenceSha256", "finishedAtMs", "measuredCommit",
+    "observation", "reservationSha256", "schema", "scriptSha256", "startedAtMs"]);
+  assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
+  assert.equal(capture.measuredCommit, state.commit);
+  assert.equal(capture.controllerCommit, state.commit, "handoff capture must come from the measured controller");
+  assert.match(capture.evidenceSha256, /^[a-f0-9]{64}$/);
+  failedNativeObservation(JSON.stringify(capture.observation), state, capture.startedAtMs, capture.finishedAtMs, grouped);
+  const prior = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
+  assert.equal(digest(prior), capture.reservationSha256, "handoff preimage changed");
+  verifyFailedNativeReservation(state, JSON.parse(prior), grouped);
+  assert.equal(capture.scriptSha256, digest(failedNativeScript(state, null, null, grouped)), "original handoff capture script changed");
+  return { grouped, capture, captureSha256: digest(bytes) };
+}
+
 export function failedNativeArchive(local, state, grouped) {
   return failedNativeArchiveEvidence(local, state, grouped, groupedFailure);
 }
 
-function failedNativeArchiveEvidence(local, state, grouped, readGrouped) {
+function failedNativeArchiveEvidence(local, state, grouped, readGrouped, verifyTree) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
   let retirementAllowed = true;
-  const wrapper = originalFailedWrapper(local, state), { folder } = wrapper;
+  const wrapper = originalFailedWrapper(local, state, verifyTree), { folder } = wrapper;
   if (grouped?.preplan === true) {
     assert.ok(isDeepStrictEqual(grouped, preplanGroup(local, state, readGrouped)), "grouped preplan identity differs");
     verifyPreplanArchive(wrapper, state);
@@ -269,7 +382,7 @@ function failedNativeArchiveEvidence(local, state, grouped, readGrouped) {
     assert.equal(result.status.outcomes.length, 1); assert.equal(result.status.outcomes[0].group, state.group); assert.equal(result.status.outcomes[0].outcome, "not-run");
     assert.ok(!readdirSync(dir).some((n) => /^mixed-(native-audits|audit-delivery(?:-retained)?)\.json$/.test(n)), "cancelled wait advanced into audit");
   }
-  return { campaign, roots, retirementAllowed };
+  return { campaign, roots, retirementAllowed, pending: result.status.uncollectedNativeRoots };
 }
 
 // Only trusted controller code runs remotely. Native files are opened as data,
@@ -648,16 +761,46 @@ export function verifyFailedNativeReservation(state, prior, grouped) {
 }
 
 export function verifyFailedNativeCustody(local, state, capture, grouped, requireRetirement = false) {
-  return verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement, groupedFailure);
+  return verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement ? true : undefined, groupedFailure);
 }
 
-function verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement, readGrouped) {
+function verifyEvidenceTree(path, expected, message) {
+  assert.equal(treeHash(path), expected, message);
+}
+
+export function verifyHandoffCustody(local, state, handoff, pin = false) {
+  const launch = join(dirname(dirname(local)), "launch-intent.json");
+  const inputs = pin ? [launch, ...["failed-native-capture.json", "failed-native-reservation.json", "results.tgz",
+    "failed-native-results.tgz", "known_hosts", "monitor-registration.json", "monitor-local-closed.json", "monitor-terminal.json"]
+    .map(name => join(local, name))].map(path => [path, evidenceFileIdentity(path)]) : undefined;
+  const { grouped, capture, captureSha256 } = handoffCapture(local, state);
+  assert.equal(captureSha256, handoff.captureSha256, "approved original handoff capture changed");
+  assert.match(handoff.controllerCommit, /^[a-f0-9]{40}$/);
+  assert.notEqual(handoff.controllerCommit, capture.controllerCommit, "distinct repair controller required");
+  assert.equal(fileHash(launch, 1024 * 1024), handoff.launchIntentSha256, "approved handoff launch intent changed");
+  const trees = [];
+  verifyFailedNativeCustodyEvidence(local, state, capture, grouped, false, groupedFailure,
+    pin ? (...args) => { trees.push(pinEvidenceTree(...args)); } : verifyEvidenceTree);
+  const assertCustody = pin ? (includeTrees = true) => {
+    if (includeTrees) for (const unchanged of trees) unchanged();
+    assert.equal(fileHash(join(local, "failed-native-capture.json"), 1024 * 1024), handoff.captureSha256,
+      "approved original handoff capture changed");
+    handoffPublications(local);
+    for (const [path, before] of inputs)
+      assert.ok(evidenceFileIdentity(path) === before, "local handoff custody changed: file");
+  } : undefined;
+  assertCustody?.(false);
+  return { grouped, capture, assertCustody };
+}
+
+function verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requiredEligibility, readGrouped, verifyTree = verifyEvidenceTree) {
   const preplan = Object.hasOwn(capture, "scope");
   if (preplan) assert.ok(capture.scope === "grouped-preplan", "unknown custody scope");
   if (preplan && grouped === undefined) grouped = preplanGroup(local, state, readGrouped);
   assert.equal(grouped?.preplan === true, preplan, "custody preplan scope differs");
-  const { retirementAllowed } = failedNativeArchiveEvidence(local, state, grouped, readGrouped);
-  if (requireRetirement) assert.ok(retirementAllowed, "ambiguous native outcome permits custody only");
+  const { retirementAllowed, campaign, pending } = failedNativeArchiveEvidence(local, state, grouped, readGrouped, verifyTree);
+  if (requiredEligibility === true) assert.ok(retirementAllowed, "ambiguous native outcome permits custody only");
+  if (requiredEligibility === false) assert.ok(!retirementAllowed, "handoff requires a captured native-validated campaign");
   assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
   assert.equal(capture.measuredCommit, state.commit);
   assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
@@ -676,10 +819,17 @@ function verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requi
   verifyFailedNativeReservation(state, JSON.parse(original), grouped);
   assert.match(capture.evidence, /^custody-[A-Za-z0-9]+$/);
   const observation = failedNativeObservation(JSON.stringify(capture.observation), state, capture.startedAtMs, capture.finishedAtMs, grouped);
+  if (requiredEligibility === false) {
+    const present = (path) => observation.roots.some(root => root.path === "/bench/repo/" + path && root.present);
+    assert.ok(pending.every(({ artifactRoot }) => present(artifactRoot)), "uncaptured pending native root");
+    // Some runners transfer the original output into the collected phase rather than copying it.
+    if (!present(grouped.phases.timing))
+      physical(join(local, state.evidence, "campaign", campaign, `00-${state.group}-timing`, "native"));
+  }
   assert.equal(capture.scriptSha256, digest(failedNativeScript(state, null, null, grouped)));
   assert.equal(fileHash(join(local, "failed-native-results.tgz")), observation.archiveSha256, "custody archive changed");
   const extracted = join(local, capture.evidence); physical(extracted);
-  assert.equal(treeHash(extracted), capture.evidenceSha256, "custody extraction changed");
+  verifyTree(extracted, capture.evidenceSha256, "custody extraction changed");
   const snapshot = regular(join(extracted, "campaign", "custody-snapshot.json"), 16384);
   assert.equal(digest(snapshot), observation.snapshotSha256);
   assert.deepEqual(JSON.parse(snapshot), { roots: observation.roots, metadataSha256: observation.metadataSha256 });
@@ -716,44 +866,75 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   return replayFailedNativeRetirement(local, state, expectedSha256, groupedFailure);
 }
 
+export function pinHandoffRetirement(local, state, handoff) {
+  const { record, assertCustody } = replayFailedNativeRetirement(local, state, state.retirement.evidenceSha256, groupedFailure, true);
+  assert.deepEqual(record.handoff, handoff, "approved handoff retirement receipt differs");
+  return assertCustody;
+}
+
 export function verifyHistoricalFailedNativeRetirement(local, state, settledOwner) {
   assert.ok(state.status === "retired" && state.destroyedAt && state.retirement.kind === "native-failed");
   return replayFailedNativeRetirement(local, state, state.retirement.evidenceSha256,
     (dir, saved) => groupedFailureEvidence(dir, saved, settledOwner));
 }
 
-function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped) {
+function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped, pin = false) {
   const bytes = regular(join(local, "failed-native-host.json"));
   assert.match(expectedSha256, /^[a-f0-9]{64}$/);
   assert.equal(digest(bytes), expectedSha256, "failed-native retirement receipt changed");
   const record = JSON.parse(bytes);
-  assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs"].sort());
-  assert.equal(record.schema, "benchmark-failed-native-retirement/v1");
+  const handoff = record.schema === "benchmark-failed-native-retirement/v2";
+  assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs",
+    ...(handoff ? ["handoff"] : [])].sort());
+  assert.ok(handoff || record.schema === "benchmark-failed-native-retirement/v1");
   // The explicit scope distinguishes grouped successor custody from historical
   // recovery; ordinary grouped receipts still replay at the measured commit.
-  const grouped = record.capture.scope === "grouped-preplan" ? preplanGroup(local, state, readGrouped)
-    : record.capture.controllerCommit === state.commit ? readGrouped(local, state) : undefined;
-  verifyFailedNativeCustodyEvidence(local, state, record.capture, grouped, true, readGrouped);
+  let grouped, assertCustody;
+  assert.ok(!pin || handoff, "approved handoff retirement receipt required");
+  if (handoff) {
+    assert.equal(state.status, "retired");
+    assert.deepEqual(Object.keys(record.handoff).sort(), ["captureSha256", "controllerCommit", "launchIntentSha256"]);
+    const checked = verifyHandoffCustody(local, state, record.handoff, pin);
+    assert.deepEqual(record.capture, checked.capture, "retirement did not preserve the original handoff capture");
+    grouped = checked.grouped;
+    assertCustody = checked.assertCustody;
+  } else {
+    grouped = record.capture.scope === "grouped-preplan" ? preplanGroup(local, state, readGrouped)
+      : record.capture.controllerCommit === state.commit ? readGrouped(local, state) : undefined;
+    verifyFailedNativeCustodyEvidence(local, state, record.capture, grouped, true, readGrouped);
+  }
   assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
   const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs, grouped);
-  assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, null, grouped)));
+  assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, null, grouped)), "retirement rehash script changed");
   const final = failedNativeObservation(JSON.stringify(record.confirmation), state, record.startedAtMs, record.finishedAtMs, grouped);
-  assert.equal(record.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, record.capture.observation, grouped)));
+  assert.equal(record.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, record.capture.observation, grouped)), "retirement fence script changed");
   const withoutTime = ({ observedAtMs, ...rest }) => rest;
   assert.deepEqual(withoutTime(rehash), withoutTime(record.capture.observation), "remote custody rehash differs");
   assert.deepEqual(withoutTime(final), withoutTime(record.capture.observation), "predelete custody differs");
-  return record;
+  return pin ? { record, assertCustody } : record;
+}
+
+// An offline-handoff launch that stopped at its create, whose exact posted droplet a
+// later collect bound: no SSH, upload, seal or monitor ever existed. Its own pinned,
+// separately approved unused-host collection is the only route to retirement.
+export function offlineNeverStarted(state) {
+  const c = state.control;
+  return state.fleet?.single?.offlineHandoff === true && state.quietBootstrap === "prelogin" && c?.monitor === undefined
+    && Array.isArray(c?.ledger) && c.ledger.length === 0 && Array.isArray(c.sealed) && c.sealed.length === 0
+    && state.launchHostKeySha256 === undefined && state.createErrored === undefined
+    && typeof state.id === "string" && state.createPending?.dropletId === state.id;
 }
 
 function unusedBootstrapState(state, interrupted = false) {
   const c = state.control;
   const pending = c?.monitor?.phase === "pending" && !c.monitor.registrationSha256;
   // Offline launch has no monitor by design. Admit only this exact interrupted
-  // first-upload prefix, never an unmonitored no-op or settled prefix.
+  // first-upload prefix or a bound posted create that never started, never an
+  // unmonitored no-op or settled prefix.
   const offline = interrupted && state.fleet?.single?.offlineHandoff === true
     && state.quietBootstrap === "prelogin" && c?.monitor === undefined;
   return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
-    && (pending || offline) && !c.sealed.length
+    && (pending || offline || !interrupted && offlineNeverStarted(state)) && !c.sealed.length
     && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
     && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
       "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));

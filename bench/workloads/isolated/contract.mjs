@@ -160,7 +160,8 @@ function reviewDeclaration(review, subjectSha256) {
   return { state: "declared-not-authenticated", declaration: clone(review) };
 }
 
-function native(group, round, recipe, reviewId) {
+// Pure native command and option derivation, not source or execution admission.
+export function nativeExecution(group, round, recipe, reviewId) {
   const available = Object.fromEntries(selectedApps(group).map((app) => [app, {}]));
   const { entry, selection: flags } = runnerFor(group);
   const base = [round, ...flags], args = [...base], changes = [];
@@ -299,7 +300,7 @@ function validation(group, rootPath) {
 function build(r, sources, review, campaignMode) {
   const subject = subjectFor(r, sources, campaignMode), subjectSha256 = deploymentSha256(subject);
   const declaredReview = reviewDeclaration(review, subjectSha256);
-  const execution = native(r.group, r.round, r.recipe, subjectSha256);
+  const execution = nativeExecution(r.group, r.round, r.recipe, subjectSha256);
   const checks = validation(r.group, execution.operationalOptions.artifactRoot);
   if (checks.validator?.commitOption) checks.validator.argv.push(checks.validator.commitOption, r.commit);
   const body = { ...subject, subjectSha256, sources, review: declaredReview, execution,

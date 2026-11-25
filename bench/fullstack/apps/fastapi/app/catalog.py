@@ -6,6 +6,8 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictStr
 
+from .upstream import LIMITS
+
 
 class CatalogField(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -32,8 +34,7 @@ class CatalogRecord(BaseModel):
 
 class CatalogSource:
     def __init__(self):
-        limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
-        self.client = httpx.AsyncClient(base_url=os.environ.get("API_BASE", "http://localhost:8080").rstrip("/"), timeout=10, limits=limits)
+        self.client = httpx.AsyncClient(base_url=os.environ.get("API_BASE", "http://localhost:8080").rstrip("/"), timeout=10, limits=LIMITS)
         self.fixture = None
         if os.environ.get("CATALOG_SOURCE") == "fixture":
             with open(os.environ.get("CATALOG_FIXTURE_PATH", "/fixtures/catalog.json"), encoding="utf-8") as file:

@@ -4862,7 +4862,14 @@ rules something out.
     `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-16, a leading `<col>`'s
     patch losing its stylesheet link, a case of `crates/corten/src/patch-parsing.json` that
     `scripts/smoke.mjs` loaded on `1f0bc47b7`, in Chromium 156.0.8078.80, Firefox 157.0 and
-    WebKit 27.2 (Playwright 1.64.1).
+    WebKit 27.2 (Playwright 1.64.1); 2026-11-24, a navigation drawn only after the patch's held
+    stylesheet loads, and loading the page in full when that load fails, in Chromium 159.0.8154.6
+    and Firefox 159.0 (Playwright 1.65.1) by the checks of `scripts/smoke/styles.mjs` on
+    `c54b76f16`: with `stylesOf`'s shared-load return removed and the news page's handler module
+    (`news_filter.js`) held 2 s, the held load's check passed (the page swapped in styled) and the
+    failed load's check failed (the page swapped in instead of loading in full), in both, and with
+    that return removed and the module not held, both checks failed in both (the page swapped in
+    unstyled while the stylesheet was held).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
@@ -7644,14 +7651,77 @@ rules something out.
     was. The command is the app's because what it sends decides the gain, and it does nothing
     but send: `corten build` starts the copy on a free port it gives the command in `PORT`,
     waits for it to listen, and stops it with `SIGTERM` when the command ends, so that the copy
-    writes its profile. The copy is started without `HOST`, so it listens on this machine
-    only, where the build and the command look for it. Starting, waiting and stopping are where a script goes wrong without a
+    writes its profile. The copy is started without `HOST`, so one that reads it listens on
+    this machine only, where the build and the command look for it; an app that binds
+    listeners of its own binds the addresses it chooses. An app that binds a port of its own
+    and never reads `PORT`, which `serve_on` and `serve_wrapped` let it be, never listens on a
+    port the build picked, so the build is told that port by an argument of the option's own,
+    `--port <port>` before `--profile-from`: the copy is looked for there, and it and the
+    command are given that port in `PORT`. A `PORT` in the build's own environment is not
+    read, with the argument or without, so a build that names no port picks its port as it
+    did. Three things changed with the argument for every profiled build, one that names no
+    port included: an app that did not listen is told where it was looked for and of `--port`;
+    a look whose connection met itself is no longer taken for the copy listening, which a
+    picked port, always in the range the system gives outgoing connections, could be; and the
+    copy's exit is read after each look of the wait, not before it, so a copy that exited
+    during a look is not taken for what accepted. A
+    named port that something already listens on is refused, before the first build and again
+    before the copy starts, since that listener would answer the wait and the command in the
+    copy's place; a port the build picks is one nothing listened on when it was picked. The
+    first look comes after the target directory's lock is taken, so a second build there that
+    names the port the first one's copy holds is told that a build is running, not to stop
+    what listens; a refusal at that look has built nothing and leaves the lock's file, in a
+    target directory it makes when there was none. The
+    wait is a connection to either loopback address at that one port, and an app's other
+    listeners are its command's to wait for. A connection does not say whose socket accepted
+    it: a copy that has exited by then is not taken for the listener, and a program that takes
+    the port between the build's last look and the copy's own bind is, a window that two more
+    looks at a named port narrow and that the build cannot close without knowing the copy's
+    sockets. The copy cannot bind the same address then, unless both sockets set
+    `SO_REUSEPORT`, as two instances of one app may: the system then shares the command's
+    connections between the two, and the look after the copy stops the build only if the
+    other is still listening, which is reasoned from the measured bind and was not run through
+    a build. A copy that
+    has exited by the time the command ends stops the build. One still running when the
+    command ends (still starting, or one that does not exit when it cannot bind) is stopped as
+    any copy is, whatever status it then leaves with, since an app
+    may exit non-zero on `SIGTERM` by design. So the build looks at a named port when the
+    command has ended and before it stops the copy, and stops when nothing accepts at either
+    loopback address there: a copy that listens on the port it was named would. That look
+    holds no guarantee of its own and is kept: the timing it catches was reproduced (a program
+    that answered the wait and left while the command ran, the copy still starting when the
+    command ended), its wrong stop needs a serving copy's queue to be full after the command
+    has ended, and what it does not see is stated below. The build looks once more after the
+    copy has exited, and stops when something listens there, which is not the copy.
+    What the two looks establish is that something accepted a connection on a loopback address
+    of the port when the command ended, and that nothing listens there once the copy has
+    exited. Neither shows that the copy is what answered the command, and no look can. Three
+    timings end with the build succeeding and its release built from a profile of a copy the
+    command never reached. In the first, another program takes the named port in that window,
+    answers the wait and the command and leaves while the command runs, and the copy, still
+    starting or trying its bind again, binds the port before the command ends. In the second,
+    a program on the other loopback address of the named port, beside a copy bound to its own,
+    answers a command that asks that address (as one that asks `localhost` may) and leaves
+    before the copy has exited, which needs no race with the copy's start. In the third,
+    another program takes the port in that window and answers the wait and the command, the
+    copy is still running when the command ends, and the program leaves between the look at
+    the command's end and the copy's exit. The first two were reproduced, and tests hold them
+    as what the build does, to change when the gap is closed; the third is reasoned. Each
+    look has a cost of its own, a build stopped whose profile was good: the one before the
+    copy is stopped, when the queue of connections a serving copy has not accepted is full at
+    that instant; the one after it, when a program begins to listen on the port once the copy
+    has left it (a supervisor starting the app again). And a listener on the other loopback
+    address of the named port, which a copy bound to its own address can serve beside for the
+    whole run, stops the build at whichever look finds it, the one after the copy included:
+    the build cannot tell that the command never reached it, and a command that asks
+    `localhost` may have, so it takes the cautious reading. Starting, waiting and stopping are where a script goes wrong without a
     word (a copy killed, not waited for, or left running writes no profile or a stale one), so
     they are in the command once and not in each app's script. The instrumented copy has a
     target directory of its own, so `target/release` never holds a binary that writes a
     profile, and a step that fails leaves the last release standing. What can be told is wrong
     without building is refused before the first build: a toolchain without `llvm-profdata`, a
-    system that cannot ask the copy to stop, a command that is not there, another profiled
+    system that cannot ask the copy to stop, a command that is not there, a `--port` that is no
+    port number, is given without the option or names a port something listens on, another profiled
     build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
     go in the environment, would replace. A command that fails,
     a copy that exits early or does not listen, a profile not written, and a package that
@@ -7678,38 +7748,116 @@ rules something out.
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
     not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
     and every argument after a `--` passed to Cargo, which lets one that moves the binary or
-    its messages through to steps that read both.
+    its messages through to steps that read both. For an app with a port of its own, not
+    chosen: the port read from the environment's `PORT`, the variable an app and `corten dev`
+    already read one from, which needs no argument and was built first. It changes the build
+    of every app that has `PORT` set and never asked: the app's usual port is refused while
+    `corten dev` or the app holds it, where a free one was picked before; the copy holds the
+    port the dev server binds at its next restart; two builds on one machine that share an
+    exported `PORT` meet on it; and a copy that a cancelled build left running refuses every
+    build after it. A build that works as it did comes before one way to name a port (README
+    Values, the order), and `corten dev` takes `--port <port>` already, the value after it.
+    The argument accepts all four of those costs for the app that names a port, and none for
+    any other: the port is refused while `corten dev` or the app holds it, the copy holds the
+    port the dev server binds at its next restart, two builds on one machine that name the
+    port meet on it, and a copy that a cancelled build left running holds the port, so that
+    each later build that names it is refused until the copy is stopped, by a refusal that
+    names such a copy among what may hold the port. Nor both, the argument and
+    the variable, which keeps each of those costs; `corten dev` made to read its `--port` as
+    this one is read, in the same change: the two commands read it differently (`--port=<n>`
+    is build's alone, and `dev` passes its value on to the app unchecked, a `0` included,
+    which the app binds as a free port), and that is left for a change of its own; a copy's status after `SIGTERM` read as the
+    build's failure, which would stop the build in the third timing above when the copy that
+    could not bind exits with an error's status, and would refuse an app that exits non-zero on
+    `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
+    it to the command, which puts a wait in every such app's script and has nothing look for
+    the copy before the command runs; finding the
+    sockets the copy listens on under `/proc`, which Linux alone has, and which says nothing of
+    which of several the command is for; sockets the build binds and hands the copy
+    (`LISTEN_FDS`), which the app would have to be written to take; and the guide saying an app
+    must listen on `PORT`, which refuses an app the library lets be written.
 
     Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
     than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
     the ordinary build's 143,443, lower in all 10, and 32,516 fewer where it compressed each
     answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
     rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
-    target directory took about eleven minutes against about four for one ordinary build);
+    target directory took about eleven minutes against about four for one ordinary build;
+    what a command leaves out can cost more instructions a request than no profile, cycles
+    and time not measured: on card-market, by callgrind, a
+    profile whose command never asked for the item page made that page cost 4.1% more
+    instructions a request than the ordinary build, and 7.2% more in Brotli, and one whose
+    command never had an answer in Brotli made the two pages' Brotli answers cost 17.2% and
+    9.5% more, where what a command did ask for cost 3.9% to 26.7% fewer, each the median of
+    three counts, from each of two builds of each profile);
     platform (rustc's `-Cprofile-generate` and `-Cprofile-use` and the `llvm-tools`
     component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
     configuration and never both, and builds a crate again, one from the registry included,
     when the file `-Cprofile-use` names is replaced; a process that returns from `main` or
-    calls `exit` writes its profile and one that a signal ends does not); reasoned (a
+    calls `exit` writes its profile and one that a signal ends does not; a connection to a
+    port is accepted as soon as a socket listens there, whichever process holds it, while that
+    socket's queue of connections not yet accepted has room: a listener that accepts nothing
+    answers a look until the queue is full and reads as a free port after, 129 looks answered
+    and the 130th not, in each of two runs, by a standard-library listener on Linux 6.18; two
+    sockets listen on one port at the two loopback addresses, as a Corten app's own do, so a
+    copy bound to one serves beside another program's listener on the other; two sockets that
+    both set `SO_REUSEPORT` listen on one address and port and are each given some of its
+    connections, 20 and 20, 21 and 19, and 21 and 19 of 40 in three runs on Linux 6.18, where a
+    socket without the option is refused the address; Linux
+    gives an outgoing connection a port from a range, 32768 to 60999, so that a connection to
+    a port in the range that nothing listens on is, once in some tens of thousands, given that
+    port as its own and connects to itself); reasoned (a connection cannot tell the copy from
+    another listener on the port, so a named port is one nothing listens on before the copy
+    starts; a process that has exited holds no socket, so what accepts on the named port after
+    the copy has exited is not the copy, unless the copy left its listener to a child that
+    outlives it; a copy that listens on the named port accepts a connection there while its
+    queue has room, so a port nothing accepts on while the copy runs is one the copy does not
+    listen on, or one whose queue is full; what accepts on the port when the command has ended
+    need not be what accepted while it ran, and a look is answered at one loopback address where the
+    command may have asked the other, so neither later look shows that the copy answered the
+    command; a `PORT` in the environment is set for running the app, so a build that read it
+    would be changed, or refused, by a setting made for something else; a
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
     or a missing tool found after it costs a build); bet (an app has, or will write, a command
-    that reaches the routes its readers do, which the build cannot check: a command that sent
+    that reaches the routes its readers do, in the codings they are answered in, which the
+    build cannot check (and a release it builds without a word from a command that left some
+    out is bet to be no slower than the ordinary one, where the counts above say it can take
+    more instructions on what was left out): a command that sent
     the copy nothing leaves a profile of the app starting and stopping; and the app listens on
-    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
+    `PORT` as `corten dev` already asks of it, or binds a TCP port its author can name, on a
+    loopback address or on every address, where waiting for that one port is enough); value (fast and proven fast, with mistakes
     failing early and one way to build a release, and the option kept off every app that does
-    not ask for it, README Values).
+    not ask for it, README Values; by their order, a build that a setting made for something
+    else cannot change comes before one way to name a port).
 
-    Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
+    Revisit when: an app needs the option whose only listener is not a TCP port (a Unix
+    socket), whose port is bound on no loopback address, or whose command cannot tell when its
+    other listeners are ready; a command's requests are found to have gone to another program
+    on the named port, and the build to have succeeded, by any of the three timings above (a
+    program that took the port as the copy started and left before the copy bound it, one on
+    the other loopback address that the command asked and that left before the copy had
+    exited, or one that left between the two later looks), or to have been shared with a
+    program that set `SO_REUSEPORT` beside the copy, or a build whose copy served is found stopped: by the look before the copy is
+    stopped with the copy's queue full, by the look after the copy for a listener that came
+    after it, or by that look for a listener on the other loopback address that the command
+    never reached; builds are found refused on a named port for a copy that a cancelled build left
+    running, which the build could stop itself only by catching the signal that ends it or by
+    keeping a record of the copy's process, neither of which the command has; an app's build is found to need the port from
+    its environment after all; Cargo can add a flag to the ones its configuration sets, or builds with a
     profile itself, so the refusal or the steps go; the standard library can ask a child
     process to stop, or an app on Windows needs the option; an app's release needs a Cargo
     argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
-    gaining nothing over the ordinary build.
+    gaining nothing over the ordinary build, or a release that is slower than the ordinary
+    build, in cycles or time, on what its command left out: the build would then have to say
+    what the copy was sent, or refuse a copy that was sent nothing.
 
     Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
     of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app
     (`bench/catalog/corten`) with its default features on one CPU under `wrk` with 64
-    connections; 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
+    connections; 2026-11-24, what a command leaves out, `examples/card-market` at `be1192a7b`
+    with rustc 1.100.0 in `rust:1-trixie` and callgrind 3.24.0 over one connection (tag
+    `evidence/profile-coverage`); 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
     crate again after the file at the same path was replaced, an ordinary build after a
     profiled one compiled nothing and put the binary without the profile back in
     `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
@@ -7720,7 +7868,54 @@ rules something out.
     a profiled build of a two-binary package given `--no-default-features --features=given -p
     --locked --bin` and an empty `-F` on Cargo 1.100.0, selecting a workspace member that is not
     the default one: each build was given exactly them, as written and in order (a `cargo` on
-    the `PATH` recorded each argument), and the test fails when the release build is not.
+    the `PATH` recorded each argument), and the test fails when the release build is not;
+    2026-11-24, the port, by the command's tests on rustc and Cargo 1.100.0 on Linux 6.8 (a
+    program that binds a port of its own and never reads `PORT` was profiled with `--port`
+    naming that port, in both spellings; a `PORT` in the environment that a listener held, and
+    one that is no number, changed nothing of a build without `--port`; a `--port` that is no
+    port number, given twice or without `--profile-from`, and one a listener held were refused
+    with nothing built; one a listener took while the copy was being built was refused before
+    the copy or the command ran; a listener on `[::1]` alone was seen; and the look did not
+    take a connection that met itself for a listener); 2026-11-24, that meeting, by a script
+    of plain connects on Linux 6.8.0 with the range at 32768 to 60999: to an even port of the
+    range that nothing listened on, the 14,542nd connection to `127.0.0.1` and the 4,432nd to
+    `[::1]` met themselves, five and four in 200,000, and none in 200,000 to `127.0.0.1` at an
+    odd port of the range or at port 8443; 2026-11-24, the lock's order, the look after the
+    copy and a listener's queue, on rustc and Cargo 1.100.0 on Linux 6.18 (by the command's
+    tests, a build that named a port a listener held, in a target directory whose lock was
+    held, was told of the build that is running, and a listener that took the named port once
+    the copy had started, the copy still starting when its command ended, answered the wait
+    and the command and stopped the build at the look after the copy had exited, where the
+    same build without that look ended with its release built, the tests in five runs and
+    the build without the look in one; by a throwaway
+    test, a standard-library listener that accepted nothing answered 129 looks and not the
+    130th, which then read the port as free, in each of two runs); 2026-11-24, the look before
+    the copy is stopped, a listener beside the copy and the earlier port tests on this kernel,
+    by the command's tests on rustc and Cargo 1.100.0 on Linux 6.18 (a listener that took the
+    named port once the copy had started, answered the wait and closed while the command ran,
+    the copy still starting when the command ended, stopped the build at the look before the
+    copy was stopped, in three runs, where the same build without that look ended with its
+    release built, in one; a listener bound on `[::1]` at the named port while a copy bound on
+    `127.0.0.1` ran its command stopped the build at the look after the copy, in four runs,
+    where a build whose looks went to `127.0.0.1` alone ended with its release built, in one;
+    and the tests the entry for Linux 6.8 lists passed here in each of three runs, and in one
+    more with their output shown the listener on `[::1]` alone was seen and a connection met
+    itself and was not taken for a listener, neither test returning without testing);
+    2026-11-24, what the two later looks do not see, two sockets that share an address, and
+    what a refusal at the first look leaves, on rustc and Cargo 1.100.0 on Linux 6.18 (by the
+    command's tests, in each of nine runs, a program that took the named port once the copy
+    had started, answered the wait and the command's one request and left, the copy binding
+    the port before the command ended, ended with the release built, and so did a program on
+    `[::1]` that answered the one request of a command beside a copy bound on `127.0.0.1` and
+    left before the command ended; in one run each, the first build stopped where the program
+    stayed and where the copy had not bound when the command ended, the second stopped where
+    the program stayed, and a request sent to the copy's own address was answered by the
+    copy; by a script of plain sockets on Python 3.13.5, two listeners that set
+    `SO_REUSEPORT` both bound `127.0.0.1` at one port and were given 20 and 20, 21 and 19, and
+    21 and 19 of 40 connections, a third socket without the option was refused, and so was a
+    second where neither set it, in three runs; and by the command's tests, a build refused
+    for a named port a listener held left `lock` alone under `target/corten-profile`, in a
+    directory that had no `target` before it).
 
 69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
     app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has
@@ -7829,8 +8024,16 @@ rules something out.
     is kept only when each input of its handler is one of Corten's own whose reading of a page's
     request is known (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), which is
     also known when the route is made (`Anonymous::KEYED`, whose type an app cannot name, so
-    an extractor of the app's own cannot claim it); a page whose handler takes another is made
-    for every request. What those inputs read of the whole document's `GET` is the key:
+    an extractor of the app's own cannot claim it). Each is keyed only as Corten fills it: the
+    trait that reads a route's path for `Params`, the one part of it given the whole request, is
+    sealed; `Params` and `Form` are keyed only within the bounds of Corten's extractor for them,
+    so one the app could fill with an extractor of its own is not; a `Form` counts only as the
+    handler's last argument, the one place Corten reads it; and an `Option` of one, which
+    Corten never fills, is not keyed
+    ([#1803 A hand-written impl of a doc-hidden route trait can read a header under `Params`](https://github.com/corten-run/corten/issues/1803)).
+    `State` is not yet bound that way, since the rule does not see the router's state type
+    ([#2031 An app can fill `State<T>` with an extractor of its own and read a header under a kept page](https://github.com/corten-run/corten/issues/2031)).
+    A page whose handler takes another is made for every request. What those inputs read of the whole document's `GET` is the key:
     the `Host`, the path and the query, and the `Accept-Language` when the page's `Vary` names
     it (`App::messages`, or a locale negotiated from it, named in `Vary` once the handler's answer is finished and before it is kept, however late the read). The header is compared as it was
     sent, as a CDN compares it ([Choice 22](#choice-locale-in-url)), with at most eight copies
@@ -8059,12 +8262,14 @@ rules something out.
     set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
-    honoring a request's `no-cache`; removing a written path's pages by a search of the store or
+    honoring a request's `no-cache`; a way for an extractor of the app's own to say it reads only
+    the URL ([#1799 A page whose handler takes an extractor of the app's own is never kept](https://github.com/corten-run/corten/issues/1799)),
+    a second way to read what a route's query fields (a `FromQuery` type for a rule over the
+    fields it declares) and `Uri` already read, with which a page stays eligible to be kept; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
-    that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, every `Public` body kept whatever its size
+    that drops a page for a change no write to its path made, every `Public` body kept whatever its size
     (what this first did, for the 3.9% and at the price of the 13.8% below), a least size other than the one the
     compressor starts at (by instruction counts a body asked for with a coding named gains from about 350 bytes, and at 1,024 it gained nothing shown in cycles; no size under 1,024 was run), a way for a route to say its bodies are
     worth keeping (a second way to say what `Public` says, until an app shows the handler it
@@ -9122,9 +9327,10 @@ rules something out.
     The CPU-win rule in Pull requests decides wins as before. Nor does a floor apply to a workload
     read across placements ([design Choice 72](#choice-placement-runs)), whose own A/A says what
     the run resolves; this Choice's floor and its calibration are for single-build runs, whose
-    protocol that Choice leaves as it was except for a touched workload with a recorded placement
-    spread, where a single-build bound whose distance from its threshold is inside the spread, by
-    that Choice's one test, no longer decides it, for the margin or for a win.
+    protocol that Choice leaves as it was except for a touched workload, where a single-build
+    bound whose distance from its threshold is inside the placement spread recorded for its
+    setup or, with none, that Choice's default band, by that Choice's one test, no longer
+    decides it, for the margin or for a win.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -9232,7 +9438,7 @@ rules something out.
 72. <a id="choice-placement-runs"></a>**A touched workload may be read across placements the run's
     plan declares, each side compiled once and relinked with a never-called pad of a declared size
     first in its code, and must be when a single build's distance from its threshold lands inside the placement
-    spread.** The
+    spread recorded for its setup or, with none recorded, the widest of the recorded spreads.** The
     paired-cycle gate reads one build of each side
     ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and builds of one commit whose code sits at
     different places have differed in a touched request's cycles by more than its +1% margin:
@@ -9253,7 +9459,8 @@ rules something out.
     requests says: each side compiled once; K placements of it from its captured final link run
     again with one more object, a function of p bytes that nothing calls, placed first in `.text`
     by `-Wl,--symbol-ordering-file`, so every other function moves by p in the default order with
-    its neighbours, the sizes listed in the plan and spread across the phases of a 64-byte line and
+    its neighbours (in a build with no code aligned beyond 16 bytes; one with such code is taken
+    up below), the sizes listed in the plan and spread across the phases of a 64-byte line and
     a 4 KiB page up to about 40,000 bytes, as #1955's blocks were; base with pad p_i against head
     with pad p_i; R recorded pairs per placement after one that is not, every turn on a fresh
     start; per placement the median of its per-pair changes in user plus kernel cycles per
@@ -9273,20 +9480,28 @@ rules something out.
     one reading's bound look resolved while raising the other's. The benefit side may use the
     protocol when the plan declares it and its smallest worthwhile reduction before the run.
 
-    When it is required. A placement run of 30 placements costs about two hours of a c-8 for one
-    workload's change and A/A beside an A/A on `plain` (the second run's four comparisons took 164
-    minutes, and more placements cost in proportion), against about 35 minutes for three
-    single-build comparisons of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
-    change. Each placement run's A/A records the workload's
-    placement spread here, its lowest and highest placement median. One test decides:
+    When it is required. A placement run costs hours where a single build costs minutes, so it is
+    asked only where one build cannot decide. A placement of 8 recorded pairs took 62 s of turns
+    on the third run's API host and 101 s in the fourth, whose workload waits 2 s at each start. At
+    those rates a setup with no eligible A/A reads a pilot of 100 placements in about 1.7 to 2.8
+    hours, and then a change and its A/A in about 2.4 to 3.9 hours at the 69 placements the fourth
+    run's medians size, or 3.5 to 5.6 at the 100 it ran: about 4.1 to 8.4 hours of turns for one
+    workload, estimated, with builds and setup beside, where a single-build comparison of 100
+    pairs took about 12 minutes ([design Choice 71](#choice-layout-floor)'s runs). The first two
+    runs' 30 placements (164 minutes for the second's four comparisons) are not a size to assume
+    (How many placements, below). A placement run's A/A records the workload's
+    placement spread here, its lowest and highest placement median, only if its plan declares
+    before the run that it records one (asked of plans declared once this sentence is on `main`:
+    the three spreads below were recorded before it, the third run's plan declared that it
+    recorded none and the fourth's that it measured the apparatus). One test decides:
     a single-build bound's distance from its threshold (the bound less +1% for the margin, the
     bound plus the smallest worthwhile reduction for a CPU-cost win) is inside the spread when it is
     at or above its lowest and at or below its highest. Inside does not decide the workload, a pass
     as much as a miss and a win no more than a loss, since the build's own placement could account
     for the whole distance either way; the pull request reads that workload across placements,
-    under a plan written before that run. Outside, or with no recorded spread for the run's setup,
-    the single-build bound is the reading, and a placement run declared after it does not clear
-    its miss.
+    under a plan written before that run. Outside, the single-build bound is the reading, and a
+    placement run declared after it does not clear its miss. With no recorded spread for the
+    run's setup, the same test is made against the default band (below).
     Item 2's other requirements, user L1 instruction-cache misses when a change adds or moves code
     among them, apply to a run read across placements as to any other. So a change whose
     single-build reading this rule leaves decided keeps the cheaper run. That is a rule, not a
@@ -9301,7 +9516,8 @@ rules something out.
     turns); and the CPU model. A run that differs in any, such as `plain` or `kept` on a c-8 with
     a Xeon Platinum 8168 or 8280, which [design Choice 71](#choice-layout-floor) records c-8s
     have also had, has no
-    recorded spread, so its single-build bound is the reading, until a placement run on its setup
+    recorded spread, so its single-build bound is tested against the default band, until a
+    placement run on its setup
     records one. These are what decide which code a request runs, what else runs with it and what a
     placement costs on the CPU's caches and predictors; the kernel and toolchain are not among
     them, as a policy choice (Stands on, bet). Only a complete, resolved A/A (both readings, below) records a
@@ -9329,6 +9545,104 @@ rules something out.
     8280. Its A/A on that request with the answer 10,005 seconds old did not resolve, so it
     records none.
 
+    The default band. One build whose distance from its threshold is inside the range placement
+    alone has been seen to move a reading says where the code landed, not what the change costs,
+    whether or not its own setup has been read. So where no recorded spread applies, the one
+    test above is made against the widest of them, the default band: from the lowest low end to
+    the highest high end of the spreads recorded above, each end
+    as printed and the two not always one spread's: -2.98% to +3.33% today, both `kept`'s. It
+    reads no other A/A reported here, and so less than this Choice has seen: the third run's
+    three A/As resolved and ran from -1.96% to +2.10%, -3.64% to +3.04% and -5.47% to +4.15%
+    (recomputed from the counts under the tag `evidence/stage-header-checks-2002`), and its plan
+    recorded no spread. It is
+    read as a spread is, either end inside, from this Choice on `main` when the plan is
+    declared: a pull request that records or replaces a spread restates the band here and in
+    Pull requests, a band that moves after a reading does not reopen it, and a plan declared
+    before `main` gave a band is read without one, so nobody is held to a rule `main` did not
+    show them and no reading changes what it decided. The band is the same whatever reads the
+    workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
+    choosing one. The test gives what it gives with a spread of the setup's own. A negative
+    control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
+    declared for a workload, its margin and a reduction, is tested on its own distance: one
+    outside stays as one build read it, whatever a placement run then reads, and one inside is
+    not decided and is read
+    across placements with the dead ends that reading already has: an A/A that does not resolve
+    does not pass, a side or a pull request the plan's fifth point leaves with no reading across
+    placements does not pass (Code aligned beyond 16 bytes, below), and a workload no K the pads
+    allow can size is not read across placements,
+    so its reading inside the band does not pass (How many placements, below). For the margin
+    the band holds every bound from -1.98% to +4.33%, so a workload the change leaves about as
+    fast as it was is read across placements on any setup, as it already was where a spread
+    applies; one build decides it only when it reads clearly faster or slower. That reading
+    needs what Pull requests' plan lists: each side's final link captured and run again with
+    pads, the unpadded link's map recorded, each placement checked, K sized from a pilot or an eligible A/A, and the change and
+    its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
+    adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
+    did any of it (`df9242b56`); and no run has read the image `count.mjs` starts across
+    placements, so the first catalog target the band leaves not decided has that to build. The
+    band is a default by policy, not a bound on what placement moves on a setup nobody has read
+    (Stands on, bet).
+
+    How many placements. A plan declares each workload's K before the run, for at most a 5% chance
+    that an A/A of a commit against itself fails one of its two readings, sized from an eligible
+    A/A on the run's setup (each item a recorded spread must match, above), workload and R, the
+    last because R sets what a placement median is. An A/A is eligible when every placement its
+    plan declared was read with all R pairs; its placements ran in an order drawn from a seed its
+    plan declared and saved with its results, so that run order is time; and the diagnostics the
+    kit's `report.mjs` (tag `evidence/placement-sizing-1999`) prints for it do not reject what the
+    models below take: medians independent and alike over time (neither lag-1 autocorrelation nor
+    Spearman's correlation with run order at p < 0.05, each by permutation) and centred on zero
+    (zero inside the two-sided order-statistic interval of its K medians from the (K + 1 - j)-th
+    to the j-th smallest, j the gate's upper rank: the 42nd to the 59th of 100). Whether it
+    resolved +1% does not matter to sizing. The kit's `size.mjs` gives the chance at any K under
+    the normal model (normal medians with a common median of zero at the A/A's standard deviation)
+    and under a smoothed resample of the A/A's own medians, each reading centred on its median.
+    If Shapiro-Wilk or Anderson-Darling rejects normality at 5%, only the smoothed resample is
+    kept; otherwise both are. The K the plan declares is then checked at that K itself: under each
+    model kept, for each workload it covers, the chance is at most 5%, read in the kit's `kit/`
+    with `sizePilot(readPilot(dir), { K: [K], draws: 200000, seed: 1983 })` from `size.mjs`, as
+    each kept model's count of failing draws in `rows` (`Math.round(rate * draws)`) against 5%,
+    at most 10,000. The one-decimal rates it prints and its "K for at most 5%"
+    line illustrate and do not decide, and the rate is a model estimate, not a calibration shown
+    on a run. Neither a model's smallest
+    such K rounded up nor the largest of several workloads' smallest will do, since the bound is an
+    order statistic whose rank moves in steps, so a larger K can fail more often than a smaller
+    one: from the fourth run's medians below, as a model calculation with `size.mjs` (200,000
+    seeded draws each, not a run), the normal model fails in 9,037 of 200,000 draws (4.5185%) at 91
+    (the 54th of 91) and 10,823 (5.4115%) at 92 (the 55th), and the smoothed resample in 9,996
+    (4.998%) at 69 and 12,134 (6.067%) at 70. A plan may instead
+    declare a separate K for each workload. The K must also admit the two lists of pads the
+    protocol asks for, 2K distinct multiples of 16 up to about 40,000 bytes whose q_i - p_i mod
+    4096 take K distinct values: no K over 256 does, since 16-byte steps take 256 values mod 4096,
+    and the kit's `pads.mjs` builds lists for K up to 254. A plan never takes a smaller K than the
+    models ask: if no K the pads allow meets the target, it declares none, the workload is not read
+    across placements on that setup at that R (a single-build reading the spread test leaves
+    inside then does not pass), and only a new eligible A/A, at another R or on another setup, can
+    size one.
+
+    Where no eligible A/A has been read on the setup, workload and R, none at all or none that
+    meets every condition above, the plan first reads a pilot: an A/A as this Choice reads one,
+    under a plan of its own declared before it, with the gated run's setup, workload and R, its
+    run order seeded and saved, and a K its plan chooses without sizing: 100, as the fourth run
+    took, unless the plan says why another of at least 30 that the pads allow serves. It is read
+    only for the spread of its placement medians and never with a change's comparison, and its
+    turns and placements are no part of the run it sizes; it decides nothing about a change, and
+    the gated run reads its own A/A as before. A pilot that does not resolve +1% still sizes K if
+    it is eligible, since it is not the gate's A/A. One that is not eligible sizes nothing, and
+    the plan may read another under a new plan, at a larger K or with what made it ineligible
+    changed; one whose models ask for more placements than the pads allow sizes none either, as
+    above. Until a pilot sizes K, the workload is not read across placements on that setup at
+    that R. A K sized this way is a model's estimate, not a promise: the run's own A/A decides
+    what the run resolves, and one that does not resolve does not pass. K = 30, the first two
+    runs' size, is not to be used by default: on the normal model it fails more than
+    5% at four of the five spreads worked out so far, in 18.1% and 20.8% of draws at the first
+    run's 1.44% and 1.48%, 55.5% at `old`'s 1.97% in the second run and 60.64% at the fourth run's
+    2.05%, and 4.6% only at `young`'s 1.17%, so a setup that spreads as `young` did may size 30
+    when an eligible A/A and every model kept agree. The fourth run's A/A, for example, gives an
+    estimated 69 placements for at most 5% by the smoothed resample, normality rejected, where
+    the normal model says 91; the run itself took the 100 its plan declared. That is a size for
+    `old` on that setup at that spread and R, not one for another setup or workload.
+
     What ships is one placement. A release binary is one draw of where the linker put the code, and
     the next change to anything before a function moves it again, so the placement a change lands in
     is not the change's to choose or keep; a gate that charged the change for that draw would be
@@ -9341,7 +9655,8 @@ rules something out.
     what a pull request's two builds are, and the A/A's two lists of sizes give its two sides
     placement differences of the same kind. The first two runs each also read an unpadded build (main's,
     then the change's base's) against eight of its padded ones, the same eight sizes both times, a
-    diagnostic of where the build that ships sits among them.
+    diagnostic of where the build that ships sits among them; the fourth run, below, read four
+    unpadded builds that way.
 
     The kit for the first run, with its `margin.md`, scripts, sources and results, is tag
     `evidence/ee7b0b41`. Before any turn its `build.sh` stops unless each side's captured link run
@@ -9434,14 +9749,16 @@ rules something out.
     comparison chosen after the readings. Why one workload's medians spread further than
     another's was not separated: the placements its two lists of pads give, which an A/A is
     there to show, the answer's path, the clock's step and the 2 s wait after it, or chance.
-    What a spread of placement medians costs a run, on a model no run has tested: of 200,000
+    What a spread of placement medians costs a run, on a model no run had tested by then (the
+    fourth run, below, tested it on `old`, whose medians rejected normality): of 200,000
     seeded draws of K normal medians with a common median of zero, an A/A fails one of its two
     readings (at K = 30 the 20th smallest at or over +1%, or the 11th at or under -1%) in 55.5%
     at `old`'s 1.97%, in 4.6% at `young`'s 1.17% and in 18.1% and 20.8% at the first run's 1.44%
     and 1.48%; at 1.97%, 60 placements fail in 15.4% and 100 in 2.0%, and each figure is for a
     standard deviation taken from 30 medians and a median of exactly zero. So K = 30 is the
-    first run's size and not one to assume. More placements narrow the bound wherever the
-    spread comes from, where more pairs narrow only the part the pairs give; and a setup has no
+    first run's size and not one to assume. More placements generally narrow the bound
+    wherever the spread comes from, though not at every step of K (the bound is an order
+    statistic), where more pairs narrow only the part the pairs give; and a setup has no
     figure for its medians' spread before an A/A has been read on it and on its workload. The
     scripts for both calculations, `resolve-sim.mjs` and `spread.mjs`, are under the tag
     `evidence/c448780e` with what they print. The change on `young`: +0.03%, bound
@@ -9454,12 +9771,14 @@ rules something out.
     sixteen independent signs and the sign tests given for them, which take them as
     independent, overstate: were the unpadded build one of nine alike, it would be the dearest
     one time in nine, as in this run, and the dearest or second dearest two in nine, as in the
-    first. It still meets the Revisit-when on the unpadded build as it was first written;
+    first. It met the Revisit-when on the unpadded build as it was first written;
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    asks what the pad itself changes. The Choice stands through it on this: the gate reads a
+    asks what the pad itself changes, which the fourth run, below, read in part without settling.
+    The Choice stands through it on this: the gate reads a
     change as the difference of two builds with one pad, so what a pad takes from both alike
-    leaves that reading where it was. That it is alike on a base and its head is not measured,
-    since both diagnostics read one side alone, and is now among the bets below. The four
+    leaves that reading where it was. That it is alike on a base and its head was not measured
+    by these two runs, since both diagnostics read one side alone, and is among the bets below;
+    the fourth run read both sides, without showing that a pad takes the same from each. The four
     comparisons' turns took 164 minutes and the diagnostic's 13 more. Two limits of this run: the
     clock library every server was started with, which a run preloads too if it is to match the
     spread recorded from it; and the logins for a line of status while it ran, about once a
@@ -9483,6 +9802,411 @@ rules something out.
     run, which does not test the model above. The kit, the plan and the results are under the
     tag `evidence/stage-header-checks-2002`.
 
+    A fourth run measured the apparatus and gated no change, for
+    [#1999 A placement run's A/A at K = 30 failed to resolve on one workload, and nothing tells a plan what K its setup needs before it runs](https://github.com/corten-run/corten/issues/1999)
+    and
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996),
+    on 2026-11-24 (run 8068ffb8-4604-431d-af08-717236923d24, one c-8 with a Xeon Platinum 8280,
+    Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD 23.1.5; the plan, the kit and every result
+    under the tag `evidence/placement-sizing-1999`). It read the second run's base `14126d2a8`
+    against itself on `old` at K = 100 and R = 8, with that run's probe, clock library, turn
+    protocol and answer checks; its first 30 pad pairs were that run's, and its 100 placements ran
+    in a seeded random order, so run order is time. All 100 were read and none retried, and each of
+    the 1,800 starts had its `Age` in 10,005 to 10,010. It resolves +1%: median of placement
+    medians +0.18%, bound +0.38% (the 59th of 100); with the labels swapped -0.18%, bound +0.14%.
+    Its placement medians ran from -3.98% to +13.10%, the next highest +3.89%, with a standard
+    deviation of 2.05% (1.96% with the labels swapped), descriptively close to the second run's
+    1.97% from 30 medians on the same CPU model. The kit printed two diagnostics beside them that
+    depend on a model: a 95% chi-square interval for the standard deviation, 1.80% to 2.38%, which
+    holds 1.97%, and a two-sided F test of the two variances, p = 0.831. Both take the medians as
+    normal, which these reject (below); the two runs share 30 pad pairs, so their medians are not
+    independent samples; and one CPU model does not make two hosts, or two base binaries that are
+    not byte-identical, interchangeable. So they are not calibrated evidence that the second run's
+    spread on `old` was usual for the setup. Its plan declared it a measurement of the apparatus,
+    not a spread to record, and this record enters none, so `old` still has no recorded spread.
+    The normal model does not fit these medians: Shapiro-Wilk (W = 0.8340, p = 3.2e-9) and
+    Anderson-Darling (A*2 = 1.673, p = 2.7e-4) reject normality. No test detected dependence or
+    drift in run order (lag-1 r1 = 0.061, permutation p = 0.440; Spearman's rho with run order
+    0.089, p = 0.375), and a common median of zero is not rejected (49 of 100 below zero, sign test
+    p = 0.920; zero inside the interval -0.14% to +0.38%, ranks 42 and 59, 91.14%). On the normal
+    model at 2.05% the two-reading A/A fails in 60.64% of draws at K = 30, 19.25% at K = 60 and
+    3.10% at K = 100, and needs an estimated 91 placements for at most 5%; resampling the 100
+    medians, smoothed, it fails in 0.95% at K = 100 and needs an estimated 69, the model the rule
+    above keeps, normality being rejected. From the spread of the pairs within each placement,
+    eight pairs alone are estimated to give a placement median a standard deviation of about 1.69%
+    (leave-one-out residuals rescaled, between 1.39% and 1.73%), where the normal formula gives
+    3.66%; if that part and placement's are independent and add in variance, about 1.17% of the
+    2.05% is left for placement. That is an estimate under the decomposition, not placement
+    isolated by a control: the part that would have read one pad list against itself was cut for
+    time before the run. Between the two runs' medians on their 30 shared pad pairs, Spearman's rho
+    is 0.180 and Pearson's r 0.098, one-sided permutation p = 0.169: the test did not detect a
+    pad pair's median carrying over, which does not show that none does, from 30 pairs, another
+    host and a base binary not byte-identical to the second run's. What sets one workload's spread
+    wider than another's, that issue's third question, is still open: that cut part was to
+    separate the pad lists' placements from the rest, and no run has stepped the clock without the
+    old answer's path.
+
+    Its part C read four unpadded builds, each against padded builds at the first eight pad sizes,
+    8 pairs each after one unrecorded: base's and head `8d02090bf`'s against their own, and two of
+    nearby commits, `92bc32678` and `705d14045`, against base's. Those two are not base's code:
+    each differs from it on `old`'s path in a small way, and their user instructions a request
+    were -0.07% and +0.23% from base's padded builds, within the 0.5% the plan took as compiling
+    that path nearly as base, so they are near-base builds, not more builds of base. The padded
+    builds' median offsets from their unpadded one, with order-statistic intervals of 92.97%
+    nominal coverage: base -0.56% (-1.13% to +1.90%, 5 of 8 cheaper, sign test p = 0.727),
+    `92bc32678` +0.86% (-0.82% to +1.32%, 3 of 8, p = 0.727), `705d14045` -0.59% (-1.08% to
+    +1.59%, 6 of 8, p = 0.289) and head -0.58% (-1.84% to -0.29%, 7 of 8, p = 0.070). Ranked
+    among the A/A's 200 padded placements of base's code, base's unpadded build costs 46,096
+    cycles a request with 98 of 200 cheaper (one-sided p = 0.512), `92bc32678`'s 45,780 with 50
+    (p = 0.751) and `705d14045`'s 46,551 with 159 (p = 0.209); head's 46,825 with 172 (p = 0.144)
+    mixes its code with its layout, so says nothing of a pad on its own; and no drift of the padded
+    costs in run order was detected (Spearman's rho -0.067, p = 0.335), which does not show there
+    was none. Those rank and drift p-values are exploratory, not calibrated tests:
+    each rank sets an unpadded build's median of eight turns among single placements' costs, and
+    the drift shuffle takes the 200 costs as independent where each placement's two share one
+    place in the run order. So for one exact base build and two near-base builds this run did not reproduce the
+    earlier pattern, padded builds under their unpadded one: none of the three offsets' intervals
+    excludes zero, and each unpadded build sits among the 200 padded placements, though two of the
+    three offsets (base's and `705d14045`'s) still point the earlier way and one the other. Head against its own pads is the exception: 7 of 8 cheaper
+    and an interval wholly below zero. Head's offset less base's, pad by pad, is -0.38% (-2.90% to
+    +0.55%; mean -0.93%, 90% t interval -2.17% to +0.31%), zero inside, which establishes neither
+    that a pad takes more from a change's head than from its base nor that it takes the same. For
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
+    this run adds three unpadded builds whose offsets do not repeat that pattern, one (head's)
+    that does, and a first paired reading of head against base that is inconclusive. It leaves
+    open why the first two runs' unpadded builds sat above their padded ones; the controls that
+    issue asks for, the unpadded build against every placement of both lists, a pad of 16 bytes
+    first in `.text` and each pad last in `.text`, none of which ran (ranks against 200 padded
+    placements measured apart are not those paired controls); and whether any of it holds on a
+    workload with a recorded spread, which `old` is not. The issue stays open.
+
+    Code aligned beyond 16 bytes. That a pad moves every function by exactly its size is a
+    property of rustc's code, not of the protocol. LLD lays `.text`'s input sections in order,
+    each at the first multiple of its own alignment at or after the end of the one before it.
+    rustc's function sections are aligned to 16 bytes or less, so a pad of a multiple of 16 moves
+    each by the pad. A section aligned to 32 or 64 bytes moves only by a multiple of that: by the
+    shift of the section before it less that shift's remainder on division by the alignment,
+    when the gap the unpadded link left before the section is at least the remainder, and by
+    one alignment more when it is not. A section aligned to 16 or less laid after it moves as
+    it did. So no shift is further from the pad than the largest alignment so far: each lies
+    from the pad rounded down to the pad rounded up to a multiple of it. C code is where this
+    arises.
+    [#1971 Compress a request's small body with gzip by libdeflate for a client without zstd](https://github.com/corten-run/corten/pull/1971),
+    not merged when this was written, links libdeflate (`libdeflate-sys` 1.26.1), and the gcc
+    its run built with (Debian's 14.2.0-19) aligns code inside libdeflate's functions to 64
+    bytes. In the link of its head
+    (`498291116`) 13 of `.text`'s 3,483 input sections are aligned to 64 bytes and 5 to 32 (3,238
+    to 16, 23 to 8, 42 to 4 and 162 to 1), where the 3,442 of its base (`14126d2a8`) are all at 16
+    or less. The first of the 18 is libdeflate's second function, after 3,443 sections that hold
+    every function of Corten's and the probe's; the 40 from it on are 38 of libdeflate's and two
+    of the compiler's built-ins (`__udivti3` and `round`). Where the alignment comes from was
+    read on one file, `deflate_compress.c`, compiled by hand with that gcc under eleven sets of
+    flags, not the crate's build's, which were not read: at `-O3` and at `-O2` its sections
+    aligned to 64 bytes stayed under every alignment flag tried, and at `-Os` it has none
+    (`results/align-flags.txt` under the tag below). No other compiler or version was tried.
+
+    That pull request's placement run (2026-11-23, tag `evidence/request-gzip-1971-placed`)
+    recorded how far every function moved, and the shifts are that rule: each of the 1,290
+    shifts of the 43 function symbols from libdeflate's first on lies from the pad rounded down
+    to the pad rounded up to a multiple of 64 (`results/model.txt` under the tag below). The kit was
+    built again four times on 2026-11-24 (a Debian 13 container, rustc 1.100.0 with LLD 23.1.5
+    and gcc 14.2.0 as the run had; the four builds' binaries have the same SHA-256s and are
+    not byte-identical to the run's, their `.text` 528 and 512 bytes further on, but each of
+    the 180 layout files, two a placement, is the run's but for addresses) and each of its 92
+    links run again with LLD's map, byte-identical to the link without it. Section by section,
+    in all 90 placements `.text` held the pad's section and then the unpadded link's in its
+    order with their sizes and alignments, and every section in both links began at the first
+    multiple of its alignment at or after the end of the one before: 206,520 of 206,520
+    sections in the base's 60 placements and the 103,290 before the first such section in the
+    head's 30 moved by exactly the pad, and so did every symbol the maps list in them (210,840
+    of 210,840 and 105,450 of 105,450), each as far from its section's start as in the
+    unpadded link; the 1,200 shifts of the head's 40 sections from the first such one on were
+    the pad (341), 16 bytes more (304), 16 less (296) and 32 less (259). The two sections whose
+    predecessor's shift was not already a multiple of their alignment went the way their gaps
+    say: one with 60 bytes before it down by 32 in 15 placements, one with 5 up by 16 in 15.
+    The output sections after `.text`, the data among them, moved by one multiple of 64 bytes
+    in each of the head's placements: the pad in 8, 16 bytes less in 8, 32 less in 7 and 16
+    more in 7. The script that checks this, `replay.mjs`, what it printed, the two unpadded
+    links' maps (the 90 placements' are 319 MB and are not kept; their SHA-256s are), and
+    seven things it refuses (`results/negative.txt`: a function written 16 bytes further into
+    a section that is in its place, and one of a side's own crates after the first such
+    section or in `.init`, among them) are under the tag
+    `evidence/placement-aligned-code-4`. `synthetic.sh` there runs the checks with
+    node alone, on placements written by LLD's rule from the two unpadded maps, which are
+    line for line the maps LLD made for the twelve placements compared. That run has no
+    bound, under the rule as it then stood or under this point: a side with such code cannot
+    pass the check it was held to (below), its plan predates the point, and it recorded no
+    map or fact from the builds it measured. The layouts above are a
+    historical reading, of builds made again, and not a pass.
+
+    So a run with such a section on either side is checked against LLD's rule and not against
+    the pad ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2, the plan's fifth
+    point), on both sides: after the first pad's, the same input sections in the same order
+    with the same sizes and alignments, each at the first multiple of its alignment at or
+    after the end of the one before, and every function in its section as far from the
+    section's start as it was.
+    The first two conditions admit one layout, the unpadded link's with the pad first, so
+    every section before the first one aligned beyond 16 bytes moved by exactly the pad (the
+    point does not ask it apart; the check under the tag counts it), and with the third so
+    did every function before that first section, each of Corten's and the program's among
+    them. On a side with no such section that is every section and "every function moved by
+    exactly the pad", said of sections as well. The check it stands in for never asked where a
+    section was. It asked how far each function with a name of its own had moved. This one
+    asks both, because a check of sections alone passed a map in which a function sat 16
+    bytes further into a section that had not moved. The map it reads is the measured
+    binary's own. A link with `-Wl,-Map` was byte for byte the link without it in all 182
+    compared (the kit's 92 and the 90 with a second pad, below), and the first point's check
+    that the unpadded link run again is the build's own binary is made, in every run, on the
+    link that writes its map. So the rule asks no second link of each placement.
+
+    What the run records, and what no plan states. Two things are read from a build: the sections
+    of `.text` aligned beyond 16 bytes, in order, and the symbols the map lists in `.text` from
+    the first of them on, which the point calls functions, a map giving a symbol no type. The
+    run records them from the map of each build's unpadded link before anything is measured, as
+    the first point's checks are made, and the pull request reports them with the run. No plan
+    states them, and none says in advance that its sides have no such section: the record shows
+    it. A function is listed by its symbol, the archive the map names and its member there, or
+    by its object file where it is in no archive, since an archive can hold one name in two
+    members, the files as the map names them, less directories. `replay.mjs --stated` under the
+    tag prints the sections, the first of them and the list as one line; it also drops the
+    hashes in the files' names, which a run's record keeps, since two versions of one crate
+    differ only there. Both unpadded maps are kept with the run's results (303 and 306 KB for
+    that base and head, compressed), since where a listed function lies in a line, and behind
+    which alignment, is in the map and not in the list. A run with no record
+    has no reading across placements, as a comparison with a placement that fails a check has no
+    bound, and the record is asked of every run, since only the map shows that a side has no such
+    section. A placement run whose plan was declared before the point was on `main` is read by the
+    rule as it then stood: the first point's check, which a side with no such code can pass and a
+    side with it cannot (above). A later head's build is recorded as any build is, and the second
+    pads' sizes are found again for it (below). Beyond the condition below, on the first plan
+    of a pull request whose placement runs predate it, this point has no rule of its own on
+    how many plans a pull request has. Item 2 says that "no placement is rerun, replaced or
+    dropped for its result", and, where it speaks of a negative control and of the margin
+    declared before a run, that "a declaration is never added or changed after a run to clear
+    its result" ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2); this Choice reads
+    the second of no more than that.
+
+    Which code may not lie behind an aligned section is one test on the map, with no list of
+    crates to judge: a `.text*` input section whose name ends in a Rust-mangled symbol, `_R...`,
+    or `_ZN...17h<hash>E` under the legacy scheme. Exactly, as the point words it and
+    `rust-names.mjs` (below) applies it: the name begins `.text.` and matches
+    `\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$`, so a legacy name
+    is taken with `.llvm.<digits>` after it or without. rustc names each function's section so
+    (3,438 of that head's 3,483 input sections of `.text`, 3,188 as `.text._R...` and 250 as
+    `.text.unlikely._R...`), where the map prints the symbols themselves demangled, and it
+    names sections of data for their symbols too, which the test leaves out. Rust code is what
+    pull requests resize, a dependency's as the workspace's: laid behind an aligned section it
+    would keep one place in a line under the pads and take another when the next change links
+    one more function before it, which is the draw this Choice reads across. On that head none
+    of the 40 sections from
+    the first aligned one on is so named, and on neither side is one outside `.text`
+    (`results/base.map.gz` and `results/head.map.gz` under the tag, read by name): the
+    program's 3,440 sections, in 41 objects of one code unit each under thin LTO, all lie
+    before libdeflate's. A build without LTO can lay the crates a C library's crate depends on
+    behind its archive (worked out from the link order, not linked), and then has no reading.
+    `rust-names.mjs` under the tag `evidence/placement-aligned-code-6` applies the test to a
+    map, and was run on both and on five written cases; `replay.mjs` tests less, the crates it
+    is given by name. The test does not see Rust code in a section not named for a
+    mangled symbol (`#[no_mangle]`, `#[export_name]`, `#[link_section]`). The compiler's
+    built-ins are such code: `__udivti3` and `round` are compiled from Rust under C names, so
+    they are not refused, stay on that head's list and are under the limit below. The list
+    holds every symbol from the first such section on, and that is what it is for.
+
+    A pull request with such code on either side whose placement runs predate this point got no
+    bound from them: the check they were held to cannot hold for a build with such code. Its
+    first placement plan after the point is on `main` is read only if it changes, from the plan
+    before it, only what this point or a rule merged since asks, and is declared before any
+    further turn that counts cycles on a padded placement of the pull request, a pilot's turns
+    included, on whichever head: a new head commit starts nothing again. So nothing in that
+    plan is chosen by the
+    results of the turns already counted, which give no bound under it either. The condition
+    is met or missed once a pull request, by that plan: missed, the pull request has no
+    reading across placements; met, the plan's run is read as any run is, and so is what
+    follows it, but for a workload its pilot did not size (below). Where the sizing rule merged
+    since asks a new K, that plan is one plan in two parts, declared whole before the pilot's
+    first turn. Its first part is the pilot, read at that rule's 100, and is the plan of its
+    own that rule asks of a pilot. Its second is the gated run, with each workload's K given
+    by rule and not by number, the smallest at which that rule's check passes for it from
+    that pilot, and its pad lists those `pads.mjs` under the tag
+    `evidence/placement-sizing-1999` gives for that K. That script's first 30 pairs are the
+    lists of the first runs' generator (`pads.mjs` under `evidence/ee7b0b41`, the same file under
+    `evidence/request-gzip-1971-placed`), and it meets the fourth point's rule at every K
+    from 31 to 254, where that generator, run on past 30, meets it at 31 and 32 alone. The
+    K's and their pad lists are published before any turn of the gated run. So the pilot is
+    part of that plan and not a plan before it, its turns are not turns counted before the
+    plan, and nothing is chosen after a result. Where the pilot is not eligible, or no K the
+    pads allow passes the check for a workload, the sizing rule's own words hold: "Until a
+    pilot sizes K, the workload is not read across placements on that setup at that R" (How
+    many placements, above). That rule lets a plan "read another under a new plan, at a larger
+    K or with what made it ineligible changed"; the condition does not, since such a plan
+    would be chosen with the first pilot's results in hand, so that workload has no reading
+    across placements for the pull request. The condition is no leave to choose pads, K or
+    workloads otherwise, and none against the rule
+    that a single build's miss stays binding and that a placement run declared after it does
+    not clear it ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). A plan declared
+    before the point with no such turn counted yet is not under it: the point asks nothing of a
+    plan's text.
+
+    Three kinds of side have no reading, for any workload, since what fails is the placement.
+    One with a section aligned beyond 64 bytes: that
+    limit is where the readings stop, since none has been linked or read, not a finding about
+    such builds, and a pull request that reads one moves it. One with a `.text*` section named
+    for a Rust-mangled symbol from the first such section on, or in another output section
+    (above): behind such a section Rust code keeps a place the next change moves, and in
+    another output section it would pass "same input section, as far from its start" and move
+    with the data. One where none of the four second-pad sizes puts
+    a placement's data where the rule says (below). A side whose largest alignment is 32
+    bytes is under the
+    same rule as one with 64: a first pad moves its data by a multiple of 32, and the second
+    pad's size is found for each placement from its own map, whatever the first pad did.
+    None has been linked, so the check on the first such run is the first test of it. A plan
+    may not build the C code with flags that leave no such section, to be read under the
+    first point alone: that is a binary no app builds, turned down below with the other
+    builds that pin placement. A probe built without the feature that links the C code is a
+    binary apps do build, so a plan may declare it as it declares any probe. It is then
+    another program: it reads nothing of a request that needs the feature, and cannot stand in
+    for one whose path changes when the feature is compiled in, which item 2 asks measured on
+    the affected route; and no spread recorded with the feature applies to it, the probe and
+    its features being part of a spread's setup.
+
+    The pads, and what they vary in the code. The plan lists pads for such a side as for any
+    other, in steps of 16 bytes, and reads the phases its first and fourth points ask for
+    from the pads' sizes. In that run every section before the first one aligned beyond 16
+    bytes moved by the pad (above), so the code in them took each pad's place in a line and a
+    page, as in any run. From the first section aligned to 64 bytes
+    on, 39 function symbols (37 in `.text`, and `_init` and `_fini` after it) kept one place
+    in a 64-byte line in all 30 placements, and the three between the first section aligned
+    to 32 and that one took two of the four. The 39's page offsets, 29 distinct in the 30
+    placements, and the three's, all 30 distinct, fell 8, 7, 8 and 7 in the four quarters of
+    a page, as the pads do, each within 64 bytes of the pad's own. An app's builds put such
+    code in the same places: a section aligned to
+    64 bytes begins a line in every build, what follows keeps its distance from it until the
+    code between changes, and a change to the code before it moves all of it by a multiple
+    of 64. A pad that moved it by 16 would make a placement no build lands in. A section
+    aligned to 32 bytes laid before any aligned to 64 begins at one of two places in a line
+    in every build, and the pads, which move it by multiples of 32, give it both.
+
+    So the pads vary the place in a line of a function on a side's list (a listed function) no
+    further than that, and the point states it as a limit of the reading and refuses no
+    workload for it. A listed function is read where the builds of its side have it, another
+    archive's function behind the aligned code as the library's own: on that head `__udivti3`
+    and `round`, of 198 and 102 bytes, are the last two sections of `.text`, behind libdeflate,
+    and lie 32 and 48 bytes into a line unpadded and in every placement
+    (`results/head.map.gz` and `results/model.txt` under the tag). A change that first links
+    such code, or that resizes what lies between a section
+    aligned to 64 bytes and a function behind it, is therefore read with those functions at
+    one new place and not across places. Later builds keep that place until the code between
+    changes again, so what it costs or saves a request is in the change's bound, and no
+    reading tells it apart from the rest of the change. What a place is worth has not been
+    measured (Stands on, bet). Which listed functions a request runs has not been measured
+    either, for that pull request's workloads or any other, and under the limit it decides
+    nothing. Each side's list in the pull request, with the two kept maps, shows which
+    functions the limit covers. No function in a section named for a Rust-mangled symbol is
+    among them: the second refusal above keeps every one before the first such section, where
+    the pads vary it.
+
+    The data is another matter. The output
+    sections after `.text` move as its end does, so with a section aligned to 64 bytes in
+    `.text` a pad moves them by a multiple of 64. In the links built again, the base's `.data`
+    begins 16 bytes into a 64-byte line unpadded and 0, 16, 32 and 48 bytes in across its
+    placements, and the head's 32 bytes in, unpadded and in all 30; `.data.rel.ro` 16 and then
+    each of the four against 24, `.got` 48 against 8, `.bss` 40 against 16. Linking such code
+    fixes the code's place in a line for the builds that follow, and not the data's: that is
+    set by where the code ends and by the sizes of the sections laid before the data, and a
+    change moves those. This one grew `.plt` from 48 bytes to 96, `.tdata` from
+    456 to 480, `.data.rel.ro` from 89,456 to 89,536, `.got` from 7,728 to 7,768 and `.data`
+    from 4,632 to 4,656. So on a side with such code the data's place in a line is one draw
+    of the kind this Choice reads across, and a first pad does not vary it: the data begins
+    at the same one of the four places in every placement, or, where the side's largest
+    alignment is 32 bytes, at no more than two of them across the placements. Where only the
+    head has such code, as in that run, a base whose data took four places is compared with
+    a head whose data kept one, and the A/A, the base against itself, has no build with such
+    code in it. Where both sides have it, as after such a change merges, neither side's data
+    moves in any placement, and both of the A/A's lists leave the base's data at its one
+    place. No reading of such a run sees that place, and what it is worth to a request's
+    cycles has not been measured.
+
+    A second pad in every placement gives the data its places back, so the rule does not
+    bet on what the data's place is worth. The second pad is a function nothing calls, in a section
+    of its own aligned to 16 bytes, that the
+    ordering file does not name, given last on the link line, which LLD lays last in
+    `.text`, after the C code: it moves the sections after `.text` and none of `.text`'s
+    code. One rule sizes it on both sides: `.data`'s offset in a 64-byte line is the
+    unpadded link's plus the first pad's size, mod 64, which is where a first pad
+    alone puts it on a side with no such code. Across a plan's pads the data then takes the
+    four places as often as the code before the first such section does, on both sides, and
+    the phases the first and fourth points ask of the pads' sizes are the data's phases in
+    a line again (in a page the two sides' data can lie 64 bytes apart, below). Both sides
+    carry it, the one with no such code too, and so do both lists of the
+    A/A: a second
+    pad on one side alone would put whatever a pad costs on that side, and
+    whether a pad costs something of its own is what
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
+    asks. Where one side has no such code, its A/A does not test that the sides' second pads
+    cost alike: that base took one size in every placement, so both of its A/A's lists carry
+    the same second pad, and the bet below that a difference in size costs nothing is one
+    the run's own control cannot show.
+
+    It was tried on real links, with no cycle counted (`second-pad.sh` and what it printed,
+    under the tag). Every placement of that run's plan on both sides, the base's 60 and the
+    head's 30, was linked with second pads of 16, 32, 48 and 64 bytes, and the one that puts
+    `.data` where the rule says linked once more without the map, to the same bytes each time;
+    25 links of that head before them tried 13 sizes. Exactly one of the four sizes fitted
+    each of the 90. Each of those passed the check, with every other input section of `.text`
+    and its functions where the first pad alone has them, the 90 binaries have 90 SHA-256s,
+    and the check refused, on real links of each side, a second pad that puts the data
+    elsewhere, one the ordering file names, which LLD lays second and not last, and a
+    placement with none. On both builds a second pad of s bytes moved `.data` by s + 16 bytes
+    more than the first pad alone, so the base, whose first pad already moves the data by its
+    own size, took 48 bytes in all 60 placements, and the head took 48, 64, 16 and 32 for
+    first pads of 0, 16, 32 and 48 bytes mod 64 (8, 8, 7 and 7 placements). In all 90 every
+    output section from `.plt` to `.bss` moved as `.data` did, which the check does not ask.
+    The data's place in a page is not the same on the two sides throughout: in the 7
+    placements whose first pad is 32 mod 64 the sides' data sits at one offset in a line and
+    64 bytes apart in the page, against their unpadded links. The 450 links took 646 seconds
+    with their checks (measured, in a container).
+
+    The sizes are a build's and not the plan's: they follow where `.text` ends and what lies
+    between it and the data. So the rule states the place and no sizes, the run asks the
+    linker by trying the four and keeps the smallest that fits, and a later head's build takes
+    whatever sizes it takes. It records each placement's size and `.data`'s address, which the
+    unpadded maps do not give without the linker. Two limits are worked out by LLD's rule and
+    not linked. The four
+    sizes give the four places while the sections between `.text` and the data, and the data's
+    own, are aligned to 16 bytes or less and one of them to 16, as `.plt` and `.data` are
+    here; with none aligned to 16, as with no `.plt` and a `.data` aligned to 8, these builds'
+    data would move by the pad plus 8, none of the four would fit and the side would be
+    refused with nothing aligned beyond 16 bytes. And where one of those sections is aligned
+    beyond 16 bytes a placement may have no size that fits, and the side has no reading: that
+    refuses a build for its data's alignment, whatever the pull request did. None has been
+    linked (on both sides here every output section after `.text` is aligned to 16 bytes or
+    less), so a pull request that reads one moves the limit.
+
+    Whether the data's place costs a request anything is then no duty of a pull request:
+    the rule varies the place and reads across it, as it does the place of the code before
+    the first such section. What one place is
+    worth by itself is a question for that issue, whose own controls include a pad laid
+    last in `.text`. A plan with no such code is not asked where its data begins: its
+    first pad moves the end of `.text` by its own size, and the first point reads
+    functions. A data section aligned beyond 16 bytes in such a build would hold what
+    follows it at one place all the same, and none has been seen.
+
+    A recorded spread is read for a run with second pads as for any other. A spread passes
+    nothing: it sends a single-build reading that lands inside it to a placement run. One
+    wider than such a run's own would cost runs; one narrower would leave binding a reading
+    placement could account for. The spreads here were read with one pad, on builds with no
+    such code, and a run whose data a second pad moves as a first pad moved theirs is not
+    expected to spread further, which is a bet until an A/A with second pads is recorded
+    here. The pads are no part of a spread's setup either way, so one recorded with second
+    pads is read for a run without them on the same bet. A K sized from an eligible A/A
+    read with one pad is taken for a run with two on it as well, and that covers the pilot
+    of a head that first brings such code: a pilot is an A/A with a plan of its own, so the
+    point holds for it by what its own sides show, its sides are the base's, and where they
+    have no such section the point asks no second pad of it. The floor of
+    [design Choice 71](#choice-layout-floor) is not touched: its recorded floor is for its
+    receipt's crate versions, which a build with another dependency does not match, and a
+    same-run control's pads are in the source, where a change is.
+
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in that plan's container dry run seed 1 on main moved all 3,404
     functions to a new order and kept 5 of 3,335 pairs of neighbours next to each other (as the
@@ -9497,9 +10221,20 @@ rules something out.
     source moves only what follows it, by an amount inlining and alignment decide, where one at the
     start of `.text` moves each function by an amount the run checks is exactly its size; the protocol for every change, at
     more than three times a single-build run's cost, for readings no placement could flip as well
-    as those it could; a placement run only after a single-build miss, which reads a
+    as those it could, or for every one on a setup with no recorded spread, which would read
+    again a bound further from its threshold than any recorded spread reaches; a placement run
+    only after a single-build miss, which reads a
     miss again and never a pass, though a lucky placement passes a real cost as easily as an
-    unlucky one blocks a free change; the mean across placements with a Student t bound as the
+    unlucky one blocks a free change; a setup with no recorded spread left its single-build bound
+    as the reading at any distance (this Choice as first written), which held the setups nobody
+    had read to less than the ones somebody had; a default band that also reads the A/As
+    reported here that recorded no spread, -5.47% to +13.10% as recorded, since the band reads
+    the spreads recorded here and those A/As did not resolve or their plans recorded none: its
+    high end is besides one placement of the fourth run's 100 (the next +3.89%), and a maximum
+    is the statistic one unlucky placement moves most, but its low end is not (two of the third
+    run's 60 placements on its API read under -5.3%), so there that is the only reason, a limit
+    of the band and not a finding that placement moves an unread setup less; the mean
+    across placements with a Student t bound as the
     gate's statistic, which assumes the placement medians are near normal, which nothing measured
     shows, and lets one unlucky placement move the bound as far as it is from the rest (reported
     as a diagnostic); more pairs on one build, since more pairs narrow the bound around that
@@ -9515,48 +10250,176 @@ rules something out.
     counts their direction and not their size, so it turns away an A/A whose medians all lean a
     hair one way and passes one with a few large leans; and the A/A run again with its lists
     swapped, which measures the same pairs of binaries in the same alternating order and so adds
-    turns without adding a reading.
+    turns without adding a reading; a K fixed for every plan, such as the 69 the fourth run's A/A
+    gives or the 100 it ran,
+    since the K an A/A needs moves with the spread of its placement medians, which has differed by
+    setup and workload (standard deviations of 0.96% to 2.05% so far); the normal model alone for
+    sizing, since the fourth run's medians reject it; and a pilot read beside a change's comparison
+    or counted in the gated run, which would let a plan choose its K after a look at the change.
+    For code aligned beyond 16 bytes: pads that are all
+    multiples of the largest alignment, which move every section by exactly the pad and give up
+    three of the four places in a line for all of the code, 3,443 of that head's 3,483 sections
+    and everything of Corten's, to keep a check's wording for 40, leaving each side at its
+    unpadded build's place in a line, one draw of the kind this Choice reads across (they stay
+    in every plan as a quarter of its pads); the C code compiled
+    with its functions aligned to 16 bytes for the measurement, a binary no app builds, and
+    one that none of the alignment flags tried on one file gave (above; `-Os` did, which is
+    other code); the C code's sections placed last, where that head's are already but for two
+    functions, which changes neither their shifts nor the data's, and elsewhere would replace
+    the default order no real build changes, as the shuffle did; the set, order and sizes
+    checked and the shifts only reported, which passes a placement whose sections are not where
+    LLD's rule puts them, when checking the rule costs one map a link; the sections
+    checked and the functions not, which passed a function moved inside its section; the check
+    that
+    pull request's plan wrote for itself, the pad or a multiple of 32 bytes less than 64 from it
+    for everything from the first C function on, bounds fitted to one archive rather than
+    derived from its sections' alignments; the shift stated as the pad
+    rounded up to the function's own alignment, which
+    holds for 529 of that run's 1,290 shifts, all 344 where the pad is a multiple of 64 and 185
+    of the 946 where it is not, since a function aligned to 16 laid after one aligned to 64
+    moves with it, and LLD rounds down where the gap allows (a section aligned to 64
+    moved by less than the pad in 195 of its 390 shifts); the change's placements whose pad is
+    a multiple of the largest alignment reported apart from the rest as a reading of the
+    data's place, since the side with such code has its data at one place in all of
+    them, so they set nothing apart, and 8 of 30 placement medians do not resolve the margin
+    (in that run the 8 read 0.14% more against 0.47% fewer for the other 22 on its zstd
+    request, and 0.71% fewer against 0.02% more on its uncompressed one); such a side read
+    with its data at one place and a sentence beside each bound saying so, a bet stated in
+    every pull request where a second pad varies the place for four links a placement; the
+    data's place measured by the first pull request with such code, the head against itself
+    with its data moved 16, 32 and 48 bytes, and a second pad asked of later runs only if that
+    showed an effect, which charges about 3 hours 7 minutes of turns at 60 placements
+    (estimated from the third run's 124 minutes 46 seconds for two comparisons of 60) to the
+    pull request that brings the code in, for an answer four links a placement leave no need
+    of; a second pad on the side with such code alone, which puts a pad's own cost on one side
+    of the comparison; second-pad sizes listed in a plan, which are a build's and change when
+    `.text` ends elsewhere; the size worked out from the sizes and alignments of the sections
+    after `.text`, the linker's layout written a second time, where four links ask the linker;
+    a second pad of any size that fits, which passes one of 112 bytes behind a first of 320,
+    where it leaves that head's data in its place, though the bet on a second pad's cost is
+    stated for 16 to 64; a second link of each placement without the map, which 182
+    links showed to be the same binary; a second pad asked of a pilot by the run it sizes,
+    since a pilot's plan and sides are its own, and an A/A read without second pads would size
+    the run all the same once read; the second refusal for the functions of the workspace's
+    crates and the program's alone, which takes two lists of crates to judge and reads a
+    dependency's Rust code behind aligned code at one place, though pull requests resize it
+    as they do the workspace's; every section there from an object rustc compiled refused, by
+    its input file, which leaves no reading wherever the compiler's built-ins, Rust under C
+    names, are linked behind such code, as they are last in `.text` on both recorded sides;
+    and a workload refused its reading where its request runs a function the pads cannot vary,
+    which rests on a report of what a request runs that nothing a run keeps can verify: the
+    load, the host and the tool that decide it are an author's to choose with results in hand,
+    and the one answer that keeps a reading is a function reported as not run.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
     in [design Choice 70](#choice-kept-pages); the first placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
-    its kit's normalization, which this Choice accepts for that receipt alone; and the second
+    its kit's normalization, which this Choice accepts for that receipt alone, and its `kept`
+    spread both ends of the default band; and the second
     above, tags `evidence/ca2af2ab` and `evidence/0c0c599c`, the first under the rule as written,
-    one of its two A/As resolved; and the third above, tag `evidence/stage-header-checks-2002`,
-    its three A/As at 60 placements resolved); platform (LLD
+    one of its two A/As resolved; the third above, tag `evidence/stage-header-checks-2002`,
+    its three A/As at 60 placements resolved; the fourth above, tag
+    `evidence/placement-sizing-1999`, an A/A of 100 placements on `old` that resolved, with
+    medians the normal model does not fit, and four unpadded builds read against padded ones;
+    and, for code aligned beyond 16 bytes, the layouts
+    of 90 placements two hosts built alike, tag `evidence/request-gzip-1971-placed`, and that
+    kit built again four times with every link read from its map, its head linked 25 times
+    with a second pad last, and each of its 90 placements linked with the second pad the
+    rule asks, tag `evidence/placement-aligned-code-4`: layouts alone, with no cycle counted
+    under that check or with a second pad);
+    platform (LLD
     places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
-    function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
-    by default; LLD aligns each input section to its own alignment, so a pad does not by itself
-    move every function by exactly its size; the run checks each function's shift rather than
-    assuming it, and the first run measured exactly the pad for every function it compared);
+    function in its own `.text` section, named for its symbol, aligns them to 16 bytes or less
+    (3,215 of one base's
+    3,442 sections to 16, the rest to 8, 4 and 1) and links through LLD 23 on Linux by default;
+    LLD lays each input section at the first multiple of its own alignment at or after the end
+    of the one before it, so a pad does not by itself move every function by exactly its size;
+    the run checks each function's shift rather than assuming it, and the first run measured
+    exactly the pad for every function it compared; gcc 14.2.0, at `-O2` and at `-O3`, aligned
+    code inside functions of one file of `libdeflate-sys` 1.26.1 to 64 bytes, and their
+    sections with it, which none of the alignment flags tried on it changed; said of that
+    compiler and that file, and of no other; LLD lays a function the ordering file does not
+    name, given last on the link line, last in `.text`, seen in every link made with one);
     reasoned (a release binary's placement moves with every later change, so a change's cost is
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside
     the spread is one the build's own placement could account for, by the spread one run measured;
+    with no spread of the setup's own, a bound inside the widest recorded is one placement has
+    been seen to account for elsewhere, which is reason to read it across placements and no
+    measure of that setup;
     the A/A read with its lists' labels swapped takes away any advantage one list's placements
     gave its bound, since both readings use the same pairs; and the order statistic's coverage
     holds for any distribution of placement medians that are
-    independent with a common median, which a declared set of pads assumes and does not show); bet
+    independent with a common median, which a declared set of pads assumes and does not show; a
+    section aligned to 64 bytes begins a line in every build, so pads that leave it there give
+    the placements its builds have, and the check by LLD's rule admits one layout, the
+    unpadded link's with the pad first; the data's place in a line is set by the sizes of the
+    sections before it, which later changes move, so on a side whose pads cannot move it that
+    place is one draw; a second pad sized by the first pad's size mod 64 gives the data, on
+    a side whose first pad cannot, the place a first pad gives it on any other side, so the
+    plan's phases are the data's again; a second pad on both sides of every comparison puts
+    whatever a pad costs on both; while the sections between `.text` and the data, and the
+    data's own, are aligned to 16 bytes or less, and one of them to 16, a second pad of a
+    multiple of 16, itself aligned to 16, moves the data by itself plus a constant of the
+    build, so four sizes give the four places; what the run records is copied from each
+    build's map and chooses nothing, so no plan states it; Rust code is what pull requests
+    resize, whichever crate it is from, so one test on section names keeps it from behind
+    aligned code and no list of crates is judged; and every pad moves a section
+    behind a largest alignment of A bytes by a multiple of A, so a listed function's places in
+    a line under the pads are its unpadded offset and each multiple of A from it, one behind
+    64 and two behind 32 alone, which are the places its side's builds give it until the code
+    between it and the aligned section before it changes, so what such a place costs or saves
+    a request belongs to the change that set it for as long as later builds keep it);
+    bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
     two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
     pads may understate a spread that comes from that; whatever a pad itself takes from a
-    build's cycles (padded builds read under their unpadded one in 15 of 16, against two
-    unpadded builds), it takes from both sides of a comparison alike; an A/A whose placement
-    medians spread 1.97%, as `old`'s 30 did, resolves +1% at 100 placements, by a model of
-    normal medians with a common median of zero that no run has tested; and a spread measured on one setup holds
+    build's cycles, it takes from both sides of a comparison alike (the first two runs read padded
+    builds under their unpadded one in 15 of 16, against two unpadded builds, each one side alone;
+    the fourth read one exact base and two near-base unpadded builds among their padded
+    placements and head's above its own, and head's offset less base's at -0.38%, zero inside an
+    interval that eight pads leave wide, which shows neither a difference nor its absence); on a
+    setup with no recorded spread, placement moves the single-build bound of 100 pairs of a
+    commit against itself outside the default band in fewer than one placement in 20, which no
+    run has read (the band is from three A/As of 30 placements on two CPU models, and in the
+    five A/As that record no spread 18 of 310 placement medians lie outside it: 3 of 30 on the
+    second run's `old`, 0, 1 and 8 of 60 in the third run's and 6 of 100 in the fourth's, one
+    at +13.10%, recomputed from the counts under their tags, each a median of 8 pairs, which
+    the pairs' own noise spreads further than a bound of 100); an
+    A/A sized by the rule above fails to resolve +1% no more often than it was sized for, which
+    takes the medians of the A/A it was sized from as independent and alike over time and the
+    setup's spread as holding from one run to the next
+    (in the fourth run's 100 medians no test detected drift or dependence, normality was
+    rejected, and the A/A resolved at the 100 its plan took; no run has yet been read at a K the
+    rule gave); a spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
-    protocol and code); value
+    protocol and code;
+    a second never-called function of 16 to 64 bytes laid last in `.text` costs a request
+    alike on both sides of a comparison, though the two sides' second pads can differ by up
+    to 48 bytes and their data can lie 64 bytes apart in the page, which no run has
+    measured and an A/A whose lists take one size cannot show; moving the data's place in a
+    line with a pad
+    stands in for the places a relink of other code would give it, as the first pad's
+    offsets stand in for real changes, though a real change also resizes the sections
+    between the code and the data, which a pad does not; a spread recorded with one pad,
+    and a K sized from an A/A read with one, hold for a run with two, and a spread recorded
+    with two for a run with one; and where a listed function lies in a line, which the pads
+    leave at one place or at two 32 bytes apart, moves a request's cycles by little beside
+    +1%: no run has measured it);
+    value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
     assumed: the run's own A/A says whether it can resolve +1%, and a run that cannot does not
     pass, README Values).
 
-    Revisit when: a run's A/A on a workload does not resolve +1% at a K for which
-    `resolve-sim.mjs` (tag `evidence/c448780e`) gives under 5% of draws at the standard deviation
-    an earlier A/A on its setup and workload measured, which asks for another reading (this
+    Revisit when: a run's A/A on a workload does not resolve +1% at a K sized by the rule above
+    (`size.mjs`, tag `evidence/placement-sizing-1999`), or, for a run planned before that rule,
+    at one for which `resolve-sim.mjs` (tag `evidence/c448780e`) gives under 5% of draws at the
+    standard deviation an earlier A/A on its setup and workload measured, which asks for another
+    reading (this
     entry first named an A/A not resolving at K = 30, which asks for more placements or pairs;
     the second run's on `old` did not, its medians spreading 1.97%, where that calculation has
     30 fail more often than not, so the Choice stands on the rule turning away a run that does
@@ -9567,13 +10430,45 @@ rules something out.
     take more from one side of a comparison than from the other, a base against its head or one
     list of pads against the other, so the difference of two padded builds is not the change's
     (this entry first named the unpadded build sitting clearly above or below its padded ones,
-    which the two runs' diagnostics now show, above;
+    which the first two runs' diagnostics suggested and the fourth run's exact and two near-base
+    unpadded builds did not reproduce, though head's sat above its own pads, above;
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
-    is to measure it);
-    rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
-    linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
-    is so wide that most single-build readings land inside it, so the protocol is the rule in
-    practice, or so narrow that none do; a placement run with another kernel or toolchain on an
+    asks it and stays open, its controls not run, and that run's head offset less base's, with
+    zero inside from eight pads, settles it neither way);
+    rustc stops emitting a section per function or aligns one beyond 16 bytes, the gate's
+    linker is not LLD, or LLD stops placing an ordering file's sections first or laying each
+    section at the first multiple of its alignment at or after the end of the one before (the
+    check failing on a link whose sections are unchanged); a side a pull request needs read
+    across placements
+    has a section named for a Rust-mangled symbol from the first one aligned beyond 16 bytes
+    on, as a build without LTO may, or
+    a section aligned beyond 64, which the check refuses and the rule gives no reading; a
+    pad's cost is found to change with its size or with where in `.text` it lies (that
+    issue's controls include a pad laid last), since the two sides' second pads differ in
+    size and their cost is then one the sides may not share; a request's cycles are found to
+    follow where its data lies in a page, since the rule sets the data's place in a line and
+    leaves the two sides' data 64 bytes apart in the page in some placements; a build read
+    across placements against a relink of itself that lays a listed function its request runs
+    elsewhere in its line reads apart from it by more than that run's A/A resolves, so such a
+    place is worth varying, or refusing a reading for (no run has laid such a relink or
+    counted which listed functions a request runs, and no issue asks for either); a build
+    where none of the four
+    second-pad sizes gives a placement's data the place the rule asks, as one whose data, or
+    a section between `.text` and it, is aligned beyond 16 bytes, or a side whose largest
+    alignment is 32 bytes failing the check on its first run; an A/A with second pads has
+    placement medians that reach past the spread recorded for a setup it otherwise matches,
+    so such a run needs a spread of its own; Rust code in a section not named for a mangled
+    symbol (`#[no_mangle]`, `#[export_name]`, `#[link_section]`), other than the compiler's
+    built-ins, is found from the first such section on or outside `.text`, which the test
+    does not see; a recorded spread
+    or the default band is so wide that no single-build reading lands outside it, so one build
+    decides no touched workload, or so narrow that none land inside; a pull request records or
+    replaces a spread and an end of the default band moves, which changes what one build decides
+    on every setup with no spread of its own; a commit read against itself across placements
+    at 100 pairs a placement, on a setup with no recorded spread, has more than one placement
+    in 20 with its bound outside the default band, or a single-build reading the band left
+    decided is read the other way across placements on the same commits and setup; a placement
+    run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
     spread must match; a run's time across placements falls to a single-build
     run's, so the protocol could be the rule rather than an option; or the release binary's own
@@ -9595,7 +10490,109 @@ rules something out.
     each size does not resolve, worked out the same day from those results at `c448780e0`, the
     scripts and what they print under the tag `evidence/c448780e`; 2026-11-24, the third run on
     three c-8s (base `6f1bbf055`, head `66fa66c49`, rustc 1.100.0 with LLD 23.1.5, Linux
-    6.12.117, a Xeon Platinum 8280 each, tag `evidence/stage-header-checks-2002`).
+    6.12.117, a Xeon Platinum 8280 each, tag `evidence/stage-header-checks-2002`); 2026-11-24,
+    the fourth run on a c-8 (base `14126d2a8` against itself, and unpadded builds of it, of head
+    `8d02090bf`, of `92bc32678` and of `705d14045`, rustc 1.100.0 with LLD 23.1.5, Linux
+    6.12.117, a Xeon Platinum 8280, tag `evidence/placement-sizing-1999`), with its sizing and
+    tests as the kit's `report.mjs` printed them from those results; 2026-11-24, the model
+    failure rates at K = 69, 70, 91 and 92 from that tag's `results/aa-old` at `912199b97`, by
+    `sizePilot(readPilot("../results/aa-old"), { K: [69, 70, 91, 92], draws: 200000, seed: 1983 })`
+    from `size.mjs` in its `kit/`, each model's `Math.round(rate * draws)` in `rows`,
+    and that its `pads.mjs` builds lists meeting the rule for every K from 5 to 254 and none from
+    255 to 400; 2026-11-24, that at every K from 31 to 254 those lists keep the first 30 pairs
+    of the first runs' generator (`pads.mjs` at `ee7b0b417` and, the same file, at
+    `04d4ec477`), which run on past 30 meets the rule at 31 and 32 alone, each run from its
+    tag against the rule written apart from both (`pads-compare.mjs` and what it printed at
+    `bc1d7dabc`, tag `evidence/placement-aligned-code-6`); 2026-11-24,
+    for code aligned beyond 16 bytes, the layouts of the placement run of 2026-11-23 on base
+    `14126d2a8` and head `498291116` read against LLD's rule from the files at
+    `04d4ec477` (tag `evidence/request-gzip-1971-placed`), that kit built again four times
+    in a Debian 13 container with rustc 1.100.0, LLD 23.1.5 and gcc 14.2.0 and its 92 links
+    run again with their maps, its head linked 25 times with a second pad last, each of its
+    90 placements linked with second pads of four sizes and the rule's one checked, the
+    checks run on placements written by LLD's rule, one file of `libdeflate-sys` 1.26.1
+    compiled by hand under eleven sets of flags, the input files of the head's map counted,
+    the check refusing a second pad outside the four sizes, what a run records printed
+    for both sides, and the sections after `.text` read in the 90 placements, the scripts
+    and what they print at `b1bbd52e8` (tag
+    `evidence/placement-aligned-code-4`); 2026-11-24, the `.text*` input sections of the two
+    unpadded maps kept there read by name for Rust-mangled symbols, and five written cases,
+    with node alone, by `rust-names.mjs` at `bc1d7dabc` (the tag above); 2026-11-24, the third
+    run's time read from its
+    log at `2fb31fbaa` (tag `evidence/stage-header-checks-2002`);
+    2026-11-24, the default band's two ends read from the spreads recorded above, and
+    `bench/` searched for a script that relinks a build with a pad or sizes K, none found, at
+    `df9242b56`; 2026-11-24, the third run's A/A ranges and the 18 of 310 placement medians
+    outside the default band, recomputed from the counts under `evidence/0c0c599c`
+    (`0c0c599cb`), `evidence/stage-header-checks-2002` (`2fb31fbaa`) and
+    `evidence/placement-sizing-1999` (`912199b97`), and the third and fourth runs' time a
+    placement, from the `progress.log`s under the last two (120 placements in 124 minutes 46
+    seconds on the third's API host, 132 a median 101 s apart in the fourth).
+
+73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
+    not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
+    compile time and plain JavaScript functions that read and change the DOM. Drawing that without
+    a browser means CSS layout and the cascade, text shaping, input methods, accessibility and a
+    DOM for the scripts to run against: reproducing what a browser engine does, and keeping it
+    matched to the engines every desktop already offers apps (WebView2 on Windows, WKWebView on
+    macOS, WebKitGTK on Linux) in each behavior a page relies on. A restricted subset of markup,
+    CSS and scripts that a native renderer could draw is a second component model beside the one
+    pages use, with its own rules for what works where, kept in step with the first as either
+    changes. So a page reaches a desktop as it reaches a phone, in a browser engine: the
+    browser, the installed PWA or a desktop shell around a web view. A screen that needs a native
+    toolkit is written in that toolkit, from the same screen JSON, actions and feeds, and Corten
+    owns that contract, its JSON Schema and the design tokens, not a native widget set
+    ([architecture, Desktop apps](architecture.md#desktop-apps)).
+
+    Not chosen: compiling components to each desktop toolkit (WinUI, AppKit, GTK), three renderers
+    each to be kept equal to the browser; one cross-platform renderer of Corten's that draws a
+    subset, the second component model above; and a Chromium bundled with each app (Electron),
+    which is a browser all the same, at a cost in download size and memory, and is a question for
+    a desktop shell (architecture, open decision 5), not a component model.
+
+    Stands on: bet (inside a loaded screen a native toolkit would not answer forms, tables and live
+    rows faster by an amount a person can feel, and the cold start and memory a web view shell
+    costs over a native app, estimated at a few hundred milliseconds and 100 to 300 MB against tens
+    of each, matter only for screens an app can write natively; no native or web view client has
+    been measured, and nothing compares input to paint across a browser tab, an installed PWA, a
+    web view shell and a native screen, which
+    [#1934 No benchmark measures a desktop client: cold start, input to paint and memory for a browser tab, an installed PWA, a web view shell and a native screen are all estimates](https://github.com/corten-run/corten/issues/1934)
+    is to do); measured, of the browser only (the item page reaching the mark its code sets when
+    ready 59 ms after a cold navigation starts, on the desktop profile, Chromium 148, median of 10
+    cold loads in one round, historical r16; views taking over 1,000 server-rendered rows in
+    10.2 ms from the parser finishing to ready, less the rendering of any long frame recorded in
+    between, median of 30 loads, and the first click on a taken-over row updating the DOM in
+    1.4 ms, the median of 30 fresh loads, both Chromium 156, round browser-4);
+    platform (Windows 11 includes the Evergreen WebView2 Runtime and Microsoft has installed it
+    on eligible Windows 10 devices, WKWebView is part of macOS's WebKit framework,
+    and Linux distributions package WebKitGTK, whose current stable release is 2.54.3); platform
+    (the runtime and `corten-ui` are tested in Playwright's builds of Chromium, Firefox and WebKit,
+    [Limit 10](#limit-tested-browsers), not in the system web views themselves); reasoned (a
+    component's markup, scoped CSS and DOM scripts need layout, text, input, accessibility and a
+    DOM to run, so a renderer that draws all of them is a browser engine and one that draws less is
+    a subset); reasoned (a renderer of Corten's own would have to be kept drawing what the browser
+    draws for every `html!` feature, CSS rule and runtime behavior, and tested against it, as
+    each of them changes; a subset would add rules for what works where to every component);
+    value (correctness comes before speed in the values' order, so a renderer would have to draw
+    each page as the browser does before any speed it gave counted; the platform's HTML and DOM
+    are extended rather than replaced, Values 2; one component model, Values 5; a renderer of
+    Corten's own is a concept and a dependency that has to earn its place, Values 6; one contract
+    serves every surface, Values 8).
+
+    Revisit when: the desktop benchmark (architecture, open decision 4) shows a web view losing to
+    a native screen, by the margin that decision sets on cold start, input to paint or memory, for
+    a screen most apps have; a system web view stops shipping with, or being installable on, one
+    of Windows, macOS or Linux; or an engine an app can embed draws Corten's pages faster than the
+    system web view in that benchmark. A native screen winning by that margin for one kind of
+    screen (a camera scanner, a canvas of thousands of items) can justify the app writing a native
+    desktop screen for it from its screen JSON; it does not reopen this Choice.
+
+    Last checked: 2026-11-24, Microsoft's WebView2 distribution guide, Apple's `WKWebView`
+    reference and webkitgtk.org's releases (WebKitGTK 2.54.3, released 2026-11-18), read at
+    `966bf4a65`; 2026-11-24, Playwright 1.65.1's Chromium 159.0.8154.6, Firefox 159.0 and WebKit
+    27.2, as `package.json` and [Limit 10](#limit-tested-browsers) give them at `966bf4a65`;
+    2026-11-07, round r16's Chromium browser pass, on `eea6adb`; 2026-11-11, round browser-4 on a
+    Xeon Platinum 8358, on `3fb4b1ac`.
 
 ## Rules
 

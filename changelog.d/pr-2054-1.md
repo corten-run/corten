@@ -1,0 +1,1 @@
+- Benchmark launches report when the droplet account is full without revealing its inventory or limit ([#2050 Benchmark launch hides an exhausted droplet account behind a generic controller error](https://github.com/corten-run/corten/issues/2050)).

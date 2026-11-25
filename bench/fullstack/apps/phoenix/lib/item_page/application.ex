@@ -21,8 +21,11 @@ defmodule ItemPage.Application do
       # other apps' clients have no per-host cap, so this one holds more than the profile has in
       # flight (256 users in the closed phases, up to 1,000 in the fixed phase); only an app more
       # than 1,024 requests behind in the mixed phase, already a failed phase, could reach it.
-      # Finch opens them only as they are needed.
-      {Finch, name: ItemPage.Finch, pools: %{default: [size: 1024]}},
+      # Finch opens them only as they are needed. A connection idle for 4 s is closed at checkout
+      # rather than reused: every benchmark upstream advertises a 5 s keep-alive, and a read
+      # written to a connection as the upstream closes it is lost (bench/fullstack/README.md).
+      # Finch's default keeps an idle connection indefinitely.
+      {Finch, name: ItemPage.Finch, pools: %{default: [size: 1024, conn_max_idle_time: 4_000]}},
       # Start a worker by calling: ItemPage.Worker.start_link(arg)
       # {ItemPage.Worker, arg},
       # Start to serve requests, typically the last entry

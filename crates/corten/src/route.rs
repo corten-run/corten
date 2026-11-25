@@ -5372,11 +5372,39 @@ pub mod __private {
     }
 
     /// A route's path parameters, read for [`super::Params`]: `()` when its path has none.
-    pub trait ReadPath: Sized + Send {
+    ///
+    /// It is given the whole request, so it is sealed: `Params` counts as an input whose reading a
+    /// kept page's key covers (`corten::answer::Anonymous`), which holds only while what reads a
+    /// route's path is Corten's own. An impl written by hand, which could read a header, does not
+    /// compile:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::route::{ParamsRejection, __private::ReadPath};
+    ///
+    /// struct Agent;
+    ///
+    /// impl ReadPath for Agent {
+    ///     fn read(
+    ///         parts: &mut corten::http::request::Parts,
+    ///     ) -> impl std::future::Future<Output = Result<Self, ParamsRejection>> + Send {
+    ///         let _ = parts.headers.get("user-agent");
+    ///         std::future::ready(Ok(Agent))
+    ///     }
+    /// }
+    /// ```
+    pub trait ReadPath: Sized + Send + read_path::Sealed {
         fn read(
             parts: &mut http::request::Parts,
         ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send;
     }
+
+    mod read_path {
+        /// Keeps [`super::ReadPath`] to the readers Corten writes.
+        pub trait Sealed {}
+    }
+
+    impl read_path::Sealed for () {}
+    impl<T> read_path::Sealed for InPath<T> {}
 
     impl ReadPath for () {
         #[inline]

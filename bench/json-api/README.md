@@ -10,6 +10,7 @@ fixture and API modes. The four cases have `target: "json"` and `locale: null`.
 node --test bench/json-api/*.test.mjs
 node bench/json-api/run.mjs j1 --group json-api --build --check-only
 node bench/json-api/run.mjs j2 --group json-api --build --receipts /path/to/audited-receipts.json
+# From a checkout of FULL_MEASURED_SHA; tool image references are checked against its pins:
 node bench/json-api/report.mjs bench/json-api/results/j2/summary.json --require-complete --commit FULL_MEASURED_SHA
 ```
 
@@ -264,6 +265,9 @@ a timing schedule executed or admit a baseline.
 Client timeouts do not observe app-handler completion: their classification is retained,
 but attribution remains incomplete, as do later phases with an unresolved server tail.
 No quiet interval or favorable counter count is taken as a server-drain proof.
+A structured k6 `Request Failed` warning counts against observed timeouts only when
+its error is `request timeout` or Go's `Get "<HTTP(S) URL>": request timeout` form.
+Neither form changes the status or threshold checks, and rejection messages omit the target.
 
 Fixed nominal arrivals, all observed starts/offers and observed endpoint variation remain
 separate. A late ordinary start is not rejected at zero nanoseconds or nominal-plus-N.

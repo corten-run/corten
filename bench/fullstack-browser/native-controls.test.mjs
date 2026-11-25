@@ -16,7 +16,7 @@ import { PlatformLifecycle } from "./lifecycle.mjs";
 import { replayWorkerAbsence, replayPeerApplicability } from "./native-lifetimes.mjs";
 
 const commit = "0972dc632fbfe3b66012d188ecdb30250f2469bc";
-const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+const upstreamImage = "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
 function docker(args) {
   const result = spawnSync("docker", args, { windowsHide: true, encoding: "utf8", timeout: 30000, maxBuffer: 1024 ** 2 });
   assert.ok(!result.error); return { code: result.status, stdout: result.stdout.trim() };

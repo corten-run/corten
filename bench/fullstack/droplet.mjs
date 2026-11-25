@@ -323,7 +323,7 @@ const launch = async () => {
       "docker network create rustbench >/dev/null 2>&1 || true",
       // The browser suite's run-all.mjs runs attended and expects the item API (fullstack's
       // unattended run-all.mjs starts it itself).
-      ...(suite === "browser" ? ["(docker rm -f item-api >/dev/null 2>&1; docker run -d --name item-api --network rustbench --cpuset-cpus 2-3 -v /bench/bench/fullstack:/b:ro node:24-bookworm-slim node /b/item-api/server.mjs /b/fixtures/items.json >/dev/null)"] : []),
+      ...(suite === "browser" ? ["(docker rm -f item-api >/dev/null 2>&1; docker run -d --name item-api --network rustbench --cpuset-cpus 2-3 -v /bench/bench/fullstack:/b:ro node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067 node /b/item-api/server.mjs /b/fixtures/items.json >/dev/null)"] : []),
     ].join(" && "), 90));
 
   // The round, as a script its unit runs. Only a full-stack round starts again at boot.

@@ -28,7 +28,7 @@ const json = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2)
 
 export async function prepareToolImages(docker, version) {
   assert.match(version, /^\d+\.\d+\.\d+$/, "Playwright must have a pinned image-compatible version");
-  const refs = { node: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+  const refs = { node: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
     checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
   const tools = {};
   for (const [key, ref] of Object.entries(refs)) {

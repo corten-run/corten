@@ -8,9 +8,10 @@ import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
+  verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
-  readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
+  postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
@@ -57,7 +58,7 @@ async function measuredReplay(repo, checkout, commit) {
 }
 
 const setupCensusOutcome = "setup-failed-needs-census";
-const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", setupCensusOutcome].includes(row.outcome)
+const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", "create-errored", setupCensusOutcome].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
 export function requireSetupRetryCommit(attempts, commit) {
   assert.ok(!attempts.some((row) => row.outcome === setupCensusOutcome && row.commit === commit),
@@ -68,6 +69,17 @@ const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-resu
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
 const terminal = ({ state }) => state?.id && state.destroyedAt && ["collected", "retired"].includes(state.status);
+// A provider-errored create never had a host. It is settled once its child holds no
+// launch, operation ("available") or recheck lock, unless a later read saw its posted
+// droplet again: that recorded contradiction never settles.
+const createErrored = (saved) => saved.outcome === "available" && !!saved.state?.createErrored && !saved.state.createErrored.reappeared
+  && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, createRecheckLock)) && !createContradiction(saved.local);
+const settled = (saved) => terminal(saved) || createErrored(saved);
+function verifyCreateErroredAttempt(saved) {
+  assert.ok(createErrored(saved), "unresolved custody for the selected group");
+  verifyCreateErrored(saved.local, saved.state);
+}
+const receiptSha256 = (state, file) => file === createErroredReceipt ? state.createErrored?.evidenceSha256 : state.retirement?.evidenceSha256;
 const known = ({ state }) => state?.id && state.status === "collected" && state.validation?.status === "verified";
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
@@ -144,6 +156,11 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), unlaunched = new Map(), ids = new Set();
   const indexedCustody = [];
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
+  // createFailures binds the selected group's own retry to its exact receipt and state.
+  // postedCreates is the census fence and the final-gate snapshot: every earlier
+  // provider-errored attempt's posted droplet in any group, settled or contradicted
+  // (also after its retirement), refuses a create on its account while it is listed.
+  const createFailures = [], postedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -172,7 +189,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     const { manifest, manifestSha256 } = fleet, { round, commit, single } = manifest;
     const bytes = fleetBatchLock(fleet.root), lock = bytes && digest(bytes);
     const children = manifest.jobs.map(({ group }) => readGroup(fleet, group));
-    if (lock !== null && single && !terminal(children[0])) { addPeer(fleet); return; }
+    if (lock !== null && single && !settled(children[0])) { addPeer(fleet); return; }
     const launchIntent = (single || stagedFleet(manifest)) && present(join(fleet.root, "launch-intent.json"))
       ? readLaunchIntent(fleet) : undefined;
     const remainingIntent = !single && stagedFleet(manifest) && present(join(fleet.root, "remaining-intent.json"))
@@ -186,7 +203,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       // A retained lock is spent only for its exact consumed action. A first
       // launch intent says nothing about a live remaining owner before intent.
       const consumed = [launchIntent, remainingIntent].find((it) => it && it.approvalSha256 === approvalSha256);
-      requireDeadOwner = !consumed || !consumed.subject.jobs.every((job, i) => job.outcome !== "planned" || terminal(children[i]));
+      requireDeadOwner = !consumed || !consumed.subject.jobs.every((job, i) => job.outcome !== "planned" || settled(children[i]));
       if (requireDeadOwner) {
         try { assert.equal(fleetLockSnapshot(fleet.root), lock, "continuation source has an active batch"); }
         catch (error) { refuseAdmission("batch-owner", error); }
@@ -206,8 +223,30 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const noCreate = notCreated(fleet, saved, lock);
       let outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : saved.outcome === "available" ? "uncollected" : saved.outcome;
       let receipt;
+      // Settled, contradicted or retired after its contradiction: the posted ID stays fenced.
+      // The snapshot is what the successor's child rechecks immediately before its create.
+      const postedId = (state?.createErrored ?? state?.createContradicted)?.dropletId;
+      if (postedId) {
+        // The final gate's custody check (recheckPostedCreate), applied to every posted attempt,
+        // retired or not, so a lock the gate would refuse refuses here, before approval.
+        try { createErroredCustody(saved.local); }
+        catch (cause) { refuseAdmission("posted-custody", new Error("unresolved custody: an earlier provider-errored create still holds a lock", { cause })); }
+        postedCreates.push({ root: fleet.root, round, group, manifestSha256, stateSha256, outcome: saved.outcome,
+          contradicted: postedContradiction(saved), accountId: manifest.provider.accountId, dropletId: postedId });
+      }
       if (pinned || known(saved)) outcome = "known-result";
-      else if (terminal(saved)) {
+      else if (createErrored(saved)) {
+        if (selected) {
+          try { verifyCreateErroredAttempt(saved); }
+          catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected provider-errored create is not verified", { cause })); }
+          receipt = createErroredReceipt;
+          // The successor's child rechecks this attempt again immediately before its create,
+          // and its pre-create census refuses any droplet with the posted ID, whatever its name or tags.
+          createFailures.push({ root: fleet.root, round, group, manifestSha256, stateSha256, receiptSha256: state.createErrored.evidenceSha256,
+            accountId: manifest.provider.accountId, dropletId: state.createErrored.dropletId });
+        }
+        outcome = "create-errored";
+      } else if (terminal(saved)) {
         if (state.status === "retired") {
           if (selected) {
             try { verifyRetryRetirement(saved, processStart, retainedLocks); }
@@ -268,7 +307,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       if (manifest.single && (retryable({ ...row, outcome }) || outcome === "verified"))
         assert.ok(launch, "no original group launch intent");
       states.push({ fleet, group, stateSha256: saved.stateSha256, outcome: saved.outcome, noCreate,
-        retirementFile: outcome.endsWith("-retired") && retirementFile(outcome.slice(0, -8)) });
+        retirementFile: outcome === "create-errored" ? createErroredReceipt : outcome.endsWith("-retired") && retirementFile(outcome.slice(0, -8)) });
       const selected = manifest.selection.groups.find((s) => s.group === group);
       const verified = outcome === "verified";
       if (archives) {
@@ -370,8 +409,11 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       assert.equal(current.outcome, outcome, "continuation custody changed");
       if (noCreate) assert.ok(notCreated(fleet, current, admittedGroup ? lockBytes(fleet.root) : reportBatch(fleet, processStart)),
         "no-create custody changed");
+      // The same custody predicates as the scan: a lock that appeared since refuses.
+      if (retirementFile === createErroredReceipt) assert.ok(createErrored(current), "continuation create failure custody changed");
       if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
-        retirementFile === "failed-native-host.json" ? undefined : 4096)), current.state.retirement.evidenceSha256, "continuation retirement changed");
+        retirementFile === "failed-native-host.json" ? undefined : retirementFile === createErroredReceipt ? 64 * 1024 : 4096)),
+        receiptSha256(current.state, retirementFile), "continuation retirement changed");
     }
     for (const { fleet, snapshot } of proofs) recheckCollectedGroup(fleet, snapshot);
     for (const { fleet, snapshot } of retryEvidence) recheckCollectedGroup(fleet, snapshot);
@@ -390,6 +432,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       priorAttempts: attempts.get(admittedGroup).filter((row) => retryable(row)).map(({ round, commit, manifestSha256, stateSha256, launch }) =>
         ({ round, commit, manifestSha256, stateSha256, launch })),
       ...(unconfirmed.length ? { unconfirmed } : {}),
+      ...(createFailures.length ? { createFailures } : {}),
+      ...(postedCreates.length ? { postedCreates } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
     manifestSha256: fleet.manifestSha256, ...snapshot })),

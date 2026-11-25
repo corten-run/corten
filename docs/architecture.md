@@ -18,6 +18,10 @@ One handler answers every surface. It branches on `req.mode` only to choose the 
 never to change what the action does. A new surface therefore adds a renderer, not a second
 backend.
 
+A desktop app has no column of its own. In a browser, an installed PWA or a desktop shell it is
+the Web column; a native desktop screen is the Native screen column, except that a UI written in
+Rust links `Replica` directly rather than through UniFFI ([Desktop apps](#desktop-apps)).
+
 ## What exists now
 
 1. `Mode::Data` and `Req::screen` (feature `json`): the same URL is HTML for browsers and JSON
@@ -62,6 +66,70 @@ backend.
    are not counted). Which client `corten-native` uses is an open decision (below).
 3. Design tokens come from one source and generate CSS, Swift and Kotlin. Only the components
    native screens use are mirrored.
+
+## Desktop apps
+
+A phone has one toolkit its vendor tunes the platform for. A desktop has none: Windows has Win32,
+WPF and WinUI, macOS has AppKit and SwiftUI, Linux has GTK and Qt. The one UI platform every
+desktop offers apps is a browser engine: WebView2 (Chromium), which Windows 11 includes and
+Microsoft has installed on eligible Windows 10 devices; WKWebView, part of macOS's WebKit
+framework; and WebKitGTK, which Linux distributions package. Corten's runtime and `corten-ui` are
+tested in Playwright's builds of Chromium, Firefox and WebKit
+([design Limit 10](design.md#limit-tested-browsers)), not in those system web views themselves.
+
+Fastest at the user's end is four numbers on a desktop, and they do not agree:
+
+1. Time to first use. A URL wins: no installed app beats not installing one.
+2. Latency inside a loaded screen. Corten's browser numbers are of one client, the browser. On
+   the desktop profile the item page reaches the mark its own code sets when ready 59 ms after a
+   cold navigation starts ([In the browser](performance.md#in-the-browser), historical round
+   r16). In round browser-4 ([Client-heavy screens](performance.md#client-heavy-screens)) views
+   take over 1,000 server-rendered rows in 10.2 ms, from the parser finishing to ready less the
+   rendering of any long frame (50 ms or more) recorded in between, and the first click on a
+   taken-over row updates the DOM in 1.4 ms. Nothing compares input to paint across the four
+   desktop clients (a browser tab, an installed PWA, a web view shell and a native screen). The
+   estimate is that a native toolkit would not answer faster by an amount a person can feel.
+3. Cold start of an installed app, and memory. A native app wins here. Estimated, not measured: a
+   web view shell costs a few hundred milliseconds and 100 to 300 MB, a native app tens of each.
+4. What the browser an app's users run cannot reach: an OS integration (a tray icon, global
+   shortcuts, file access without a prompt) or a device (a label printer, a scale, a scanner).
+   This differs by browser and device: Web Serial and camera capture, where a browser has them,
+   reach some devices.
+
+The estimates in 2 and 3 wait on the desktop benchmark (open decision 4, below). Until it reports,
+a desktop app on Corten is one of these, the first by default:
+
+1. The browser and the installed PWA (built). The same pages any browser gets, installable with
+   an offline fallback page by `corten::pwa` (What exists now, item 5). Nothing in them is
+   specific to a desktop.
+2. A desktop shell (not built): an installed window around a web view showing the
+   server-rendered pages, the desktop twin of the mobile shell (Native apps, item 1). An app wants
+   it when the browsers its users run cannot reach a device or an OS integration it needs (item 4
+   above). The preferred direction for the prototype is the system web view rather than a bundled
+   Chromium (Electron), which costs download size and memory to remove differences between
+   engines the runtime is already tested across; the prototype settles it. A shell's web view is
+   a browser, so it holds live streams as [design Limit 14](design.md#limit-http1) says. What the
+   framework owns in it, and how a page reaches a device, are open decision 5 (below).
+3. A native desktop screen (not built): it reads `req.screen` JSON, posts the same actions and
+   follows feeds with `Replica`, through the same planned `corten-native` core as a phone's native
+   screen (Native apps, item 2). A UI written in Rust links that core directly, without UniFFI.
+   The toolkit is the app's choice; Corten owns the contract, the JSON Schema
+   (`Types::json_schema`) and the design tokens. The app writes one only for a screen where the
+   desktop benchmark shows the web view losing by the margin open decision 4 is to set.
+
+Corten does not compile `html!` components to a native toolkit
+([design Choice 73](design.md#choice-no-native-components)). A component is HTML, a scoped
+stylesheet and plain functions over the DOM, and drawing that without a browser means
+reproducing what a browser engine does, and keeping a second component model in step with the
+first. A screen that needs a native toolkit is written in it, from the same screen JSON.
+
+Each of these still reaches the server across the network. A desktop app that carries its Corten
+server in its own process would remove that round trip. It would keep working with no connection
+only if the app also had its data and everything else it depends on locally, and the README
+sends an offline-first app whose data lives on the device elsewhere
+([When to use it](../README.md#when-to-use-it)).
+It is open decision 6, not a plan. A shell or a native desktop screen, when one is built, ships
+with a test that drives an example through it (surface rule 6, below).
 
 ## Agents
 
@@ -282,3 +350,24 @@ revisit it ([design](design.md#choices)). Measured against a production marketpl
    (above), which need no `h2`, TLS stack or trust roots on the device and on iOS keep VPN On
    Demand and background sessions, which a client on its own sockets loses (Happy Eyeballs it must
    bring itself, as hyper-util's connector does), but leave OkHttp's cap for the app to raise.
+4. The desktop benchmark: cold start, input to paint and resident memory for one screen in a
+   browser tab, an installed PWA, a web view shell and a native screen, on Windows and macOS, so
+   the estimates in [Desktop apps](#desktop-apps) become numbers. Before it runs it sets the
+   margin, on which number, by which a native screen must win before that win can justify an app
+   writing one for a kind of screen.
+   It comes first, since 5, 6 and native desktop screens are judged by it
+   ([#1934 No benchmark measures a desktop client: cold start, input to paint and memory for a browser tab, an installed PWA, a web view shell and a native screen are all estimates](https://github.com/corten-run/corten/issues/1934)).
+5. The desktop shell: whether it is the system web view (the preferred direction) or a bundled
+   engine; what the framework owns in it (how client navigation maps to windows and to back and
+   forward, which links leave the shell, deep links from the OS into a typed route); how a page
+   reaches a device, where the preferred direction is the web standard API (Web Serial, WebHID,
+   WebUSB, File System Access), and the prototype settles which of them each system web view has,
+   who supplies one it lacks, and whether a bridge of Corten's own could meet
+   [design Rule 10](design.md#rule-standard-formats); where each web view keeps the session
+   cookie; and whether these are the mobile shell's answers too
+   ([#1935 Desktop shell: prototype the system web view (WebView2, WKWebView, WebKitGTK) around server-rendered pages, and settle what the framework owns in it](https://github.com/corten-run/corten/issues/1935)).
+6. The server in the app's process: whether a desktop app may run its Corten app in process, with
+   the web view reaching it over loopback or the web view's own scheme handler, live streams with
+   no HTTP/2 proxy in front ([design Limit 14](design.md#limit-http1)), and data that stays on the
+   device or syncs. A yes would reopen the README's offline-first limit, which stands until then
+   ([#1936 A desktop app with the Corten server in its own process is the only design that removes the network round trip: unprototyped, and it would reopen the offline-first limit](https://github.com/corten-run/corten/issues/1936)).
