@@ -268,6 +268,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
 });
 const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
+const { replaySealedPhase } = await import("./campaign-journal.mjs");
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null; settleSecondWorker = false;
@@ -1075,6 +1076,12 @@ test("one root, opaque handle, all nine fixed native commands and retained faile
   for (const seal of seals) {
     const index = groupNames.indexOf(seal.group), path = `${String(index).padStart(2, "0")}-${seal.group}-${seal.phase}`;
     assert.equal(seal.nativeManifestSha256, JSON.parse(readFileSync(join(handle.directory, path, "native-manifest.json"))).sha256);
+    if (["live-delivery", "recoverable-live"].includes(seal.group)) {
+      const prefix = replaySealedPhase(handle.directory, s.plan, handle.id, seal.group, path);
+      assert.equal(prefix.version, 3);
+      assert.equal(prefix.phase.phaseManifestSha256, evidence.phaseSnapshot(join(handle.directory, path)).sha256);
+      assert.deepEqual(prefix.phase.binding, s.plan.bindings[index]);
+    }
   }
   assert.equal(status.controllerReady, false); assert.equal(campaign.collect(handle).deletionAuthorized, false);
   assert.equal(JSON.parse(readFileSync(join(handle.directory, "campaign-result.json"))).status.outcomes[0].outcome, "failed");
@@ -1399,6 +1406,12 @@ for (const [group, scenario] of [
     return;
   }
   assert.equal(status.state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  if (live) {
+    const prefix = replaySealedPhase(handle.directory, s.plan, handle.id, group, controlWindows.phase);
+    assert.equal(prefix.version, 5);
+    assert.equal(prefix.phase.phaseManifestSha256, evidence.phaseSnapshot(phase).sha256);
+    assert.equal(prefix.phase.results.at(-1).hostManifestSha256, evidence.tree(join(phase, "command-1-host")).sha256);
+  }
   if (settleNativeFails) {
     assert.equal(status.outcomes[0].outcome, "failed");
     const events = fs.readdirSync(handle.directory).filter((name) => /^\d{5}-/.test(name)).sort()

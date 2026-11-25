@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -9,6 +8,8 @@ import { retainedPrefix, verifyRound } from "../../../live/verify.mjs";
 import { groupNames } from "../../registry.mjs";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
+import { replaySealedPhase } from "../campaign-journal.mjs";
+import { commandResult } from "../composition.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 import { inspectLifetime, inspectLiveActors } from "../host-lifetime.mjs";
 import { nativeControlPartition } from "../native-roles.mjs";
@@ -50,26 +51,6 @@ function sourceHashes(files, entry) {
   sha(cargo); sha(lock); return { app, crates, cargo, lock };
 }
 
-function livePhaseSeal(campaignRoot, plan, campaign, binding, phase, snapshot, nativeManifest) {
-  const matches = readdirSync(campaignRoot).filter((name) => /^\d{5}-phase-sealed\.json$/.test(name)).flatMap((name) => {
-    const file = join(campaignRoot, name), bytes = readRegular(file), seal = JSON.parse(bytes);
-    return seal.group === binding.request.group && seal.phase === "timing" ? [{ name, file, bytes, seal }] : [];
-  });
-  assert.equal(matches.length, 1, "settled live phase lacks its unique journal seal");
-  const { name, file, bytes, seal } = matches[0];
-  assert.equal(seal.schema, "benchmark-isolated-campaign-event/v1");
-  assert.equal(seal.kind, "phase-sealed"); assert.equal(seal.sequence, Number(name.slice(0, 5)));
-  assert.equal(seal.campaign, campaign); assert.equal(seal.round, plan.round);
-  assert.equal(seal.campaignSha256, plan.campaignSha256);
-  assert.equal(seal.artifactRoot, binding.validation.artifactRoot);
-  assert.equal(seal.transferDestination, `${basename(phase)}/native`);
-  assert.equal(seal.phaseManifestSha256, snapshot.sha256);
-  assert.equal(seal.nativeManifestSha256, nativeManifest.sha256);
-  const version = seal.status?.executionVersion;
-  assert.ok(version === 5 || version === 6 && plan.schema === groupCampaignSchema, "settled live phase lacks monitored or offline scope");
-  return { file, bytes, offline: version === 6 };
-}
-
 function phaseProof(binding, folder, startedAt, actors) {
   if (basename(folder) !== "native") return null;
   const phase = dirname(folder), campaignRoot = dirname(phase), campaign = basename(campaignRoot), { group, round, commit } = binding.request;
@@ -101,42 +82,45 @@ function phaseProof(binding, folder, startedAt, actors) {
   const nativeManifest = tree(folder);
   assert.ok(isDeepStrictEqual(read("native-manifest.json"), nativeManifest), "native manifest differs");
   const before = read("host-before.json"), after = read("host-after.json");
-  const hasSettle = beforeTree.entries.some(({ path }) => path === "host-after-settled.json");
-  if (!hasSettle) verifyHostBoundary(before, after);
+  const seal = replaySealedPhase(campaignRoot, plan, campaign, group, basename(phase));
+  const { phase: recorded, version } = seal, offline = version === 6;
+  assert.equal(beforeTree.sha256, recorded.phaseManifestSha256, "live phase differs from journal seal");
+  assert.equal(nativeManifest.sha256, recorded.manifestSha256, "live native tree differs from journal seal");
+  assert.equal(recorded.results.length, 1); assert.equal(recorded.invocations.length, 1);
+  const [record] = recorded.results, [invocation] = recorded.invocations, result = commandResult(record);
+  assert.ok(beforeTree.entries.some(({ path, type }) => path === `command-${record.number}.log` && type === "file"),
+    "live command log missing from phase seal");
   // The single fresh host has no participant containers outside the native run.
   assert.deepEqual(before.containers, []); assert.deepEqual(after.containers, []);
+  const hostPath = `command-${record.number}-host`;
   const names = beforeTree.entries.filter((e) => e.type === "directory" && /^command-\d+-host$/.test(e.path));
-  assert.equal(names.length, 1, "live phase requires its one exact native command");
-  const hostPath = names[0].path, directory = join(phase, hostPath);
-  const context = read(`${hostPath}/binding.json`), terminal = read(`${hostPath}/terminal.json`);
-  const command = Number(/^command-(\d+)-host$/.exec(hostPath)[1]);
-  assert.equal(context.bootId, before.bootId);
-  const observation = inspectLifetime(binding, binding.execution.invocation, directory,
-    { campaign, command, pid: context.leaderPid, result: terminal.command, phase: "timing" });
-  if (hasSettle) {
-    const { file, bytes, offline } = livePhaseSeal(campaignRoot, plan, campaign, binding, phase, beforeTree, nativeManifest);
-    const hostEntries = beforeTree.entries.filter(({ path }) => path === hostPath || path.startsWith(hostPath + "/"))
-      .map((entry) => ({ ...entry, path: entry.path.slice(hostPath.length + 1) }));
-    assert.equal(observation.manifestSha256, deploymentSha256(hostEntries), "live terminal lifetime differs from phase seal");
-    const settled = read("host-after-settled.json");
-    if (offline) {
-      for (const census of [before, after, settled]) assert.equal(census.controlApparatus, undefined);
-      verifyOfflineWindow(read("control-ingress.json"));
-    }
-    verifyLifetimeSettledBoundary({ binding, invocation: binding.execution.invocation, round, phase: "timing",
-      lifetime: observation, before, after, settled, offline });
-    assert.ok(readRegular(file).equals(bytes), "live phase journal seal mutated");
+  assert.deepEqual(names.map(({ path }) => path), [hostPath], "live phase requires its one exact native command");
+  const observation = inspectLifetime(binding, invocation, join(phase, hostPath),
+    { campaign, command: record.number, pid: record.pid, result, phase: "timing" });
+  assert.equal(observation.manifestSha256, record.hostManifestSha256, "live terminal lifetime differs from journal seal");
+  assert.equal(observation.context.bootId, before.bootId);
+  if (offline) {
+    for (const census of [before, after]) assert.equal(census.controlApparatus, undefined);
+    verifyOfflineWindow(read("control-ingress.json"));
   }
+  if (beforeTree.entries.some(({ path }) => path === "host-after-settled.json")) {
+    assert.ok(version === 5 || offline, "settled live phase lacks monitored or offline scope");
+    assert.equal(recorded.transferDestination, `${recorded.key}/native`, "settled live phase lacks its transfer commitment");
+    const settled = read("host-after-settled.json");
+    if (offline) assert.equal(settled.controlApparatus, undefined);
+    verifyLifetimeSettledBoundary({ binding, invocation, round, phase: "timing",
+      lifetime: observation, before, after, settled, offline });
+  } else verifyHostBoundary(before, after);
   assert.equal(binding.execution.effectiveOptions.build, true);
   const first = observation.samples[0].at, last = observation.samples.at(-1).at, started = clock(startedAt);
   assert.ok(clock(before.at) <= first && first <= started && started <= last && last <= clock(after.at));
-  const result = terminal.command;
   assert.equal(result.error, null); assert.equal(result.signal, null);
   assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
   const browser = binding.execution.effectiveOptions.isolated
     ? actors && inspectLiveActors(binding, observation, actors.tools, actors.participants, actors.windows)
     : observation.identities.some((p) => p.type === "--type=renderer");
   assert.ok(isDeepStrictEqual(tree(phase), beforeTree), "external phase evidence mutated");
+  seal.verifyUnchanged();
   assert.ok(readRegular(planPath).equals(planBytes) && readRegular(reservationPath).equals(reservationBytes), "campaign membership mutated");
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }

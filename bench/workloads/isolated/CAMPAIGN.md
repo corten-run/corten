@@ -567,7 +567,9 @@ it does not accept either ordinal interchangeably. The plan and reservation must
 unchanged across replay, as must the phase's evidence tree.
 It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
 manifest, positive terminal empty scope, observed browser renderer, inherited controls and
-empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;
+empty Docker container boundaries. Before using either one or two censuses, the adapter
+replays the ordered campaign journal through the phase seal and checks that seal against
+the whole phase. The recorded command start and exit bind the lifetime it reads;
 the live controller separately establishes their execution origin and exclusive ownership.
 This composes actual host cleanup instead of requiring the native app to assert it again.
 An error-only failure with no retained target HTTP/control observation is incomplete, even

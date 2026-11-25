@@ -6,7 +6,7 @@ import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, vali
 import { digest, inspectEvidence, phaseSnapshot, readRegular, supportedGroups, tree } from "./evidence.mjs";
 import { auditSubject, inspectPreparation, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { replayJournal } from "./campaign-journal.mjs";
+import { readCampaignJournal, replayJournal } from "./campaign-journal.mjs";
 import { executionGroups, inspectNative } from "./native-replay.mjs";
 import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
@@ -52,16 +52,8 @@ export async function validateCampaign(input) {
     for (const outcome of status.outcomes) {
       if (!groups.includes(outcome.group)) assert.equal(outcome.outcome, "not-run", "unimplemented group cannot be claimed executed/qualified");
     }
-    const subtree = tree(join(folder, id)), events = subtree.entries.filter((e) => /^\d{5}-[a-z-]+\.json$/.test(e.path));
-    assert.ok(events.length > 0, "durable campaign journal missing");
-    const journal = [];
-    for (const [sequence, entry] of events.entries()) {
-      const event = read(`${id}/${entry.path}`);
-      assert.equal(event.schema, "benchmark-isolated-campaign-event/v1"); assert.equal(event.sequence, sequence);
-      assert.equal(event.campaign, id); assert.equal(event.round, round); assert.equal(event.campaignSha256, plan.campaignSha256);
-      assert.equal(entry.path, `${String(sequence).padStart(5, "0")}-${event.kind}.json`);
-      journal.push(event);
-    }
+    const campaignRoot = join(folder, id), subtree = tree(campaignRoot);
+    const journal = readCampaignJournal(campaignRoot, plan, id, subtree.entries.map(({ path }) => path)).map(({ event }) => event);
     const replay = replayJournal(plan, id, journal, status);
     let controlHost, apparatus, streamSeal, supervisedTerminal, offlineTerminal, offlineBootstrap;
     for (const [epoch, event] of replay.controlAdmissions) {
@@ -100,7 +92,7 @@ export async function validateCampaign(input) {
       offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token,
         bootstrapSealSha256: digest(JSON.stringify(offlineBootstrap.seal.ledger)) };
     }
-    const lastEvent = read(`${id}/${events.at(-1).path}`);
+    const lastEvent = journal.at(-1);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
     const collectionEntry = subtree.entries.find((e) => e.path === "collection-manifest.json");
     if (collectionEntry) {
