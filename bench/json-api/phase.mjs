@@ -22,7 +22,7 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
   const raw = { schema: timedPhaseSchema, identity: expected, phase: stage, config,
     tools: { nodeImageId: tools.node.imageId, k6ImageId: tools.k6.imageId }, captureErrors: [], priorTailUnobserved };
   const prefix = `${path}/${stage}`, output = join(folder, `${prefix}-events.jsonl`), log = join(folder, `${prefix}-stderr.jsonl`);
-  let sampler, loadSampler, loadResult, countersBefore, failure, stream;
+  let sampler, loadSampler, loadResult, loadEnding, countersBefore, failure, stream;
   const sampleErrors = [];
   const firstLine = (error) => String(error?.message ?? error).split("\n", 1)[0].slice(0, 512);
   async function joinSamplers() {
@@ -32,6 +32,8 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     if (active[1] && results[1].status === "fulfilled") {
       loadResult = results[1].value;
       raw.loadResources = loadResult.capture;
+      if (loadResult.error) sampleErrors.push(firstLine(loadResult.error));
+      loadEnding = loadResult.ending?.error;
     }
     for (const result of results) if (result.status === "rejected") sampleErrors.push(firstLine(result.reason));
   }
@@ -49,9 +51,12 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     catch (error) { failure = error; raw.command = { exit: error.exit ?? null, clock: error.clock ?? null, ioErrors: error.ioErrors ?? [error.message] }; }
     finally { await joinSamplers(); }
     const countersAfter = await io.counters(); raw.after = await io.observe();
-    if (loadResult) {
+    if (loadResult && !loadResult.error) {
       try { raw.loadResources = finalizeLoadResourceCapture(loadResult, raw.after.liveness?.load); }
-      catch (error) { sampleErrors.push(firstLine(error)); }
+      catch (error) {
+        if (loadEnding && loadEnding !== error) sampleErrors.push(firstLine(loadEnding));
+        sampleErrors.push(firstLine(error));
+      } finally { loadEnding = undefined; }
     }
     raw.counters = Object.fromEntries(Object.keys(countersBefore).map((role) => [role, { before: countersBefore[role], after: countersAfter[role] }]));
     const settled = await io.reads();
@@ -86,6 +91,7 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     // Only the command's first line is kept: its stderr is a bounded artifact.
     const cause = failure && `native command: ${firstLine(failure)}`;
     if (cause) raw.captureErrors.push(cause);
+    if (loadEnding) sampleErrors.push(firstLine(loadEnding));
     raw.captureErrors.push(...sampleErrors);
     if (error !== failure && !sampleErrors.includes(error.message)) raw.captureErrors.push(error.message);
     const thrown = cause ? new Error(cause) : error;

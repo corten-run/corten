@@ -49,7 +49,7 @@ export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadRes
       try { row = acquire({ id, pid: capture.live.pid, sequence }); }
       catch (error) {
         if (error?.code !== "ENOENT" && !(error instanceof LoadResourceLifetimeEnded)) throw error;
-        return { capture, ending: { sequence, begin, error } };
+        return { capture, ending: { sequence, begin, end: now(), error } };
       }
       capture.rows.push(row);
     }
@@ -81,10 +81,11 @@ export function finalizeLoadResourceCapture({ capture, ending, error }, terminal
   const slot = firstAt + full * loadResourcePeriodMs;
   if (ending) {
     const attemptedSlot = firstAt + ending.sequence * loadResourcePeriodMs;
-    // A speculative wake on/after the terminal boundary can only report
-    // disappearance once all mandatory slots have already been captured.
+    // Only excuse a disappearance once all full slots were captured and the
+    // exit was already observable in the failed read's whole-ms bracket.
     if (ending.sequence < full || ending.sequence > full + Number(partial) || capture.rows.length !== ending.sequence
-      || ending.begin < attemptedSlot || ending.begin >= attemptedSlot + loadResourcePeriodMs) throw ending.error;
+      || ending.begin < attemptedSlot || ending.begin >= attemptedSlot + loadResourcePeriodMs
+      || ending.end < ending.begin || finished >= msNs(ending.end + 1)) throw ending.error;
   }
   const tail = capture.rows.at(-1);
   // A genuine read in the terminal partial slot can round past the recorded

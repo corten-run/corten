@@ -265,3 +265,30 @@ test('load sampler failure retains the acquired prefix, terminal observation, k6
   assert.deepEqual(Object.keys(result.files).sort(), ['clock', 'stderr', 'stdout', 'summary']);
   assert.deepEqual(result.captureErrors, ['invalid CPU counter']);
 });
+
+test('a terminal read failure retains known and unresolved load sampler faults', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'json-load-double-failure-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  const options = { duration: 1, warmup: 1, rate: 3 }, loadId = 'a'.repeat(64), f = phaseFixture('sat64');
+  const capture = { schema: loadResourceCaptureSchema, live: { id: loadId, pid: 42 }, rows: [{ sequence: 0 }] };
+  for (const [path, fault] of [
+    ['known', { error: new Error('invalid CPU counter') }],
+    ['unresolved', { ending: { error: new Error('process vanished before terminal proof') } }],
+  ]) {
+    mkdirSync(join(folder, path));
+    let result, counterCalls = 0;
+    const io = {
+      async observe() { return { participants: { load: { containerId: loadId } } }; },
+      async counters() { if (counterCalls++) throw new Error('terminal counters failed'); return {}; },
+      sample() { return { async stop() { return {}; } }; },
+      sampleLoad() { return { async stop() { return { capture, ...fault }; } }; },
+      async execute() { return { ...f.command, stdoutBytes: 0 }; },
+      write(file, raw) { result = raw; return { path: file }; },
+    };
+    await assert.rejects(capturePhase({ folder, path, stage: 'sat64', config: loadConfig(options, 'sat64'),
+      expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), /terminal counters failed/);
+    assert.equal(result.loadResources, capture);
+    assert.equal(result.command.exit.code, f.command.exit.code);
+    assert.deepEqual(result.captureErrors, [(fault.error ?? fault.ending.error).message, 'terminal counters failed']);
+  }
+});

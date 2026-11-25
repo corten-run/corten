@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { reader, writer } from "./artifacts.mjs";
-import { descriptor, k6Image, nodeImage, sha256 } from "./contract.mjs";
+import { descriptor, k6Image, nodeImage, scheduledProducerMarker, sha256 } from "./contract.mjs";
 import { inspectJson, renderJson } from "./report.mjs";
 import { result, failedResult } from "./test-fixtures.mjs";
 
@@ -238,9 +238,9 @@ test("portable report reads hash-bound artifacts, rejects unsafe paths and stric
     const commit = git("rev-parse", "HEAD"), legacy = result([], { commit });
     for (const [path, bytes] of legacy.artifacts) writeFileSync(join(folder, path), bytes);
     const file = join(folder, "summary.json"); writeFileSync(file, JSON.stringify(legacy.summary));
-    const run = () => {
-      const child = spawnSync(process.execPath, [join(here, "report.mjs"), file, "--require-complete", "--commit", commit],
-        { cwd: folder, encoding: "utf8", windowsHide: true, timeout: 15000 });
+    const run = (cwd = folder, expectedCommit = commit) => {
+      const child = spawnSync(process.execPath, [join(here, "report.mjs"), file, "--require-complete", "--commit", expectedCommit],
+        { cwd, encoding: "utf8", windowsHide: true, timeout: 15000 });
       assert.ifError(child.error);
       assert.equal(child.signal, null, `report child terminated by ${child.signal}: ${child.stderr}`);
       return child;
@@ -253,6 +253,16 @@ test("portable report reads hash-bound artifacts, rejects unsafe paths and stric
     assert.match(partial.stdout, /INCOMPLETE: not a baseline/);
     assert.match(partial.stdout, /provenance: tree dirty after run/);
     assert.ok(descriptor().apps.every((app) => partial.stdout.includes(`| ${app} |`)), "partial CLI report retains every selected app");
+    const nested = dirname(join(folder, scheduledProducerMarker));
+    mkdirSync(nested, { recursive: true }); writeFileSync(join(folder, scheduledProducerMarker), "scheduled producer\n");
+    git("add", "--", scheduledProducerMarker); git("commit", "-qm", "scheduled benchmark source");
+    const current = git("rev-parse", "HEAD"), claimed = result([], { commit: current });
+    for (const [path, bytes] of claimed.artifacts) writeFileSync(join(folder, path), bytes);
+    writeFileSync(file, JSON.stringify(claimed.summary));
+    const downgraded = run(nested, current);
+    assert.equal(downgraded.status, 1, "the nested CLI cannot qualify the wrong producer");
+    assert.ok(downgraded.stdout.includes("differs from the measured commit policy"), "strict producer refusal is reported");
+    writeFileSync(file, JSON.stringify(s));
     const load = reader(folder);
     for (const path of ["../summary.json", "a/../../summary.json", "D:/secret", "a\\b.json", "/absolute"]) assert.throws(() => load({ path, sha256: "0".repeat(64) }));
     mkdirSync(join(folder, "nested")); const put = writer(folder), ref = put("nested/test.json", { ok: true });

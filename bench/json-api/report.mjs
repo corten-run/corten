@@ -17,7 +17,7 @@ import { replayTimedRun } from "./evidence.mjs";
 export function producerPolicyAtCommit(commit, repo = process.cwd()) {
   assert.ok(typeof commit === "string" && /^[a-f0-9]{40}$/.test(commit), "full measured commit required for strict reporting");
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
-  const result = spawnSync("git", ["--no-replace-objects", "-C", repo, "ls-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker], {
+  const result = spawnSync("git", ["--no-replace-objects", "-C", repo, "ls-tree", "--full-tree", "-z", `${commit}^{commit}`, "--", scheduledProducerMarker], {
     env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, encoding: "utf8", windowsHide: true,
     timeout: 5000, maxBuffer: 16 * 1024, stdio: ["ignore", "pipe", "ignore"],
   });

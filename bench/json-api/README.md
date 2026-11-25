@@ -144,8 +144,9 @@ lifetime, with no grace. Slots start one second after the rounded-up Docker star
 timestamp. Replay derives the schedule from the exact lifetime and requires a
 complete acquisition for each full slot. A final partial slot can contribute a
 sample only if the entire acquisition fits. A process or cgroup disappearance
-in that optional slot is resolved by the exact clean terminal Docker receipt,
-never by an intermediate status or without the required full slots. The existing
+in that optional slot is resolved only when the exact clean terminal Docker receipt
+places exit before or within the failed read's last millisecond and all full slots
+are present. A later exit in the same slot does not excuse a failed read. The existing
 five-second bound applies at both edges and across gaps. At least two observations are needed for a timed
 phase to qualify; a very short diagnostic run may end too early to prove headroom.
 CPU is the upper bound on percent of a core: the difference in cgroup

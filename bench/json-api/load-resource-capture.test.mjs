@@ -63,6 +63,10 @@ test("disappearance defers to the exact terminal receipt; no required slot or ot
     assert.equal(finalizeLoadResourceCapture(result, terminal()).rows.length, 2);
     assert.equal(finalizeLoadResourceCapture(result, terminal({ exitCode: 99 })).rows.length, 2);
     for (const ms of [2999, 3000]) assert.equal(finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })).rows.length, 2);
+    for (const ms of [3001, 3900]) {
+      assert.throws(() => finalizeLoadResourceCapture(result, terminal({ finishedAt: stamp(ms) })),
+        (error) => error === fault, "a later finish in the same slot is not evidence of disappearance");
+    }
     for (const edits of [{ finishedAt: stamp(4000) }, { startedAt: stamp(1) }, { oomKilled: true },
       { finishedAt: stamp(1999) }, { containerId: "b".repeat(64) }, { running: true }]) {
       assert.throws(() => finalizeLoadResourceCapture(result, terminal(edits)));
