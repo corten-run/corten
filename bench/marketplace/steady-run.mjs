@@ -24,13 +24,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { platform, release } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cpuSettings, imageProvenance, readLoadSummary } from "./run-contract.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings } from "./feature-contract.mjs";
-import { validateSummary } from "./report.mjs";
+import { validateColdStart, validateSummary } from "./report.mjs";
 import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { containerReceipt, imageReceipt, nodeImage } from "./raw-contract.mjs";
 import { retainLoadEvidence, validateLoadExecution } from "./load-evidence.mjs";
@@ -288,9 +288,10 @@ export function eventStream({ app, marker, file, spawn: run = spawn, graceMs = 2
  * asks for a container's log with `combined: true`, since Docker writes a container's stdout and
  * stderr to its own two streams. A pass keeps a log only as a raw file, so a combined call must name
  * that `file`: the runner writes both streams to it as they arrive and nothing is read back
- * (commandRunner returns only stdout, and with `capture: false` none). A call with `combined: false`
- * returns the container's stdout alone, as commandRunner keeps it. Every other call reaches the
- * runner with its options unchanged, and commandRunner itself is not changed, so no timed command is.
+ * (commandRunner returns only stdout, and with `capture: false` none). Every other call, including
+ * the cold probe's `combined: false` one that writes the container's stdout alone to its `file`
+ * (commandRunner's opt-in `fileStderr: false`), reaches the runner with its options unchanged;
+ * commandRunner's defaults are not changed, so no timed command is.
  */
 export function combinedRunner(command, binary = "docker") {
   return async (args, { combined = false, ...options } = {}) => {
@@ -308,28 +309,40 @@ async function waitHealth(url, { timeout = 20_000, now = Date.now, sleep = (ms) 
   throw new Error("marketplace upstream did not start");
 }
 /**
- * The cold probe's stdout (bench/catalog/cold.mjs): `catalog-probe-ready`, then once it has its
- * first 200 a JSON line with exactly first200At, successfulRequestMs, bytes, attempts and the path
- * it polled. Only stdout is read, and only up to coldOutputBytes of it; stderr, and stdout past that,
- * reach cold.log alone. Returns null until the probe is ready, true once it is ready without a
- * result, or the validated result.
+ * The cold probe's stdout (bench/catalog/cold.mjs) exactly as it wrote it: nothing until it is
+ * ready, then `catalog-probe-ready`, then once it has its first 200 one result line, exactly as
+ * JSON.stringify writes first200At, successfulRequestMs, bytes, attempts and the path it polled.
+ * Each line ends in one newline, the last perhaps not yet; any other byte (a blank line, padding,
+ * a second result) fails it. The runner reads it from a file holding the probe's stdout alone, and
+ * never more than coldOutputBytes of it (readBounded); stderr reaches cold.log alone. Returns null
+ * until the probe is ready, true once it is ready without a result, or the result, whose values
+ * validateColdStart (report.mjs) then checks as a timed round's.
  */
 export const coldOutputBytes = 4096;
 export function coldOutput(stdout, path) {
   assert.ok(typeof stdout === "string" && Buffer.byteLength(stdout) <= coldOutputBytes, `the cold probe wrote more than ${coldOutputBytes} bytes to stdout; its output is in cold.log`);
-  const lines = stdout.split("\n");
-  if (lines[0] !== "catalog-probe-ready") { assert.ok(stdout === "", "the cold probe's stdout is not its readiness line; its output is in cold.log"); return null; }
+  if (stdout === "") return null;
+  const lines = (stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout).split("\n");
+  assert.ok(lines[0] === "catalog-probe-ready", "the cold probe's stdout is not its readiness line; its output is in cold.log");
   if (lines.length === 1) return true;
   assert.equal(lines.length, 2, "the cold probe's stdout is not one readiness line and one result line; its output is in cold.log");
   let result;
   try { result = JSON.parse(lines[1]); } catch { assert.fail("the cold probe's result line is not JSON; its output is in cold.log"); }
-  const ok = result !== null && typeof result === "object" && !Array.isArray(result)
+  const ok = result !== null && typeof result === "object" && !Array.isArray(result) && lines[1] === JSON.stringify(result)
     && Object.keys(result).sort().join() === "attempts,bytes,first200At,path,successfulRequestMs"
     && typeof result.first200At === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(result.first200At) && Number.isFinite(Date.parse(result.first200At))
     && Number.isFinite(result.successfulRequestMs) && result.successfulRequestMs >= 0
     && Number.isSafeInteger(result.bytes) && result.bytes >= 0 && Number.isSafeInteger(result.attempts) && result.attempts >= 1 && result.path === path;
   assert.ok(ok, "the cold probe's result line is not first200At, successfulRequestMs, bytes, attempts and its path; its output is in cold.log");
   return result;
+}
+/** A file's text, read only up to `limit` bytes: a longer file fails with `message`, with no more than limit + 1 bytes read. */
+export function readBounded(file, limit, message) {
+  const data = Buffer.alloc(limit + 1), fd = openSync(file, "r");
+  let n = 0;
+  try { for (let r = 1; n < data.length && r > 0; n += r) r = readSync(fd, data, n, data.length - n, n); } finally { closeSync(fd); }
+  assert.ok(n <= limit, message);
+  return data.subarray(0, n).toString("utf8");
 }
 // The fixture's bytes checked as run.mjs checks them before a timed round, and their SHA-256.
 const currentFixture = (bytes) => checkFixture(bytes, records(), validateMarketplace);
@@ -423,14 +436,21 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // sidecar polls the target's own path until its first 200.
   async function coldStart(app, name, target, raw, left) {
     const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locales[0]}/item_1`;
-    let probe;
+    const stdoutFile = join(raw, "cold-stdout.log");
+    let probe, logged = false;
+    // Both of the probe's streams, written straight to cold.log and never read back, at most once.
+    const collect = async () => { logged = true; await owned.logs(probe, { file: join(raw, "cold.log") }); };
     try {
       probe = await owned.container(["--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], `${name}-probe`);
       await owned.start(probe);
       retain(join(raw, "probe-container.json"), containerReceipt(await owned.inspect(probe)));
-      // Readiness and the result come from the probe's stdout alone (coldOutput); both of its
-      // streams go to cold.log, written straight to that file and never read back.
-      const stdout = async () => coldOutput(await owned.logs(probe, { combined: false }), path);
+      // Readiness and the result come from the probe's stdout alone (coldOutput): written afresh to
+      // cold-stdout.log each time, with no stderr, and read back only up to coldOutputBytes.
+      const stdout = async () => {
+        rmSync(stdoutFile, { force: true });
+        await owned.logs(probe, { combined: false, file: stdoutFile, fileStderr: false, capture: false });
+        return coldOutput(readBounded(stdoutFile, coldOutputBytes, `the cold probe wrote more than ${coldOutputBytes} bytes to stdout; its output is in cold.log`), path);
+      };
       const deadline = clock.now() + 10_000;
       while ((await stdout()) === null) {
         if (interrupted()) throw new Error("interrupted");
@@ -439,15 +459,24 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       }
       await owned.start(app);
       const exit = await owned.docker(["wait", probe], { timeout: (options.startupTimeout + 5) * 1000 });
-      await owned.logs(probe, { file: join(raw, "cold.log") });
+      await collect();
       // The record says only whether it exited 0.
       assert.ok(exit === "0", `cold probe ${/^\d{1,3}$/.test(exit) ? `exited ${exit}` : "returned no exit status"}; its output is in cold.log`);
       const result = await stdout();
       assert.ok(typeof result === "object", "the cold probe exited 0 without a result line; its output is in cold.log");
       const info = await owned.inspect(app);
-      const ms = Date.parse(result.first200At) - Date.parse(info.State.StartedAt);
-      assert.ok(ms >= 0 && ms <= options.startupTimeout * 1000, "invalid Docker-host cold clock");
-      retain(join(raw, "cold.json"), { ...result, first200MsFromContainerStart: ms, containerStartedAt: info.State.StartedAt });
+      const cold = { ...result, first200MsFromContainerStart: Date.parse(result.first200At) - Date.parse(info.State.StartedAt), containerStartedAt: info.State.StartedAt };
+      // The timed validator's own cold-start rules; its detail goes to errors.log only.
+      try { validateColdStart(cold, path, options.startupTimeout); } catch (error) {
+        keep("cold start", error);
+        throw new Error("the cold probe's result is not a cold start a timed round accepts (validateColdStart); its output is in cold.log");
+      }
+      retain(join(raw, "cold.json"), cold);
+    } catch (error) {
+      // A failure before the probe's log was collected still collects it, through the same bounded
+      // command, so cold.log exists; the original failure stands whatever that collection does.
+      if (probe !== undefined && !logged) { try { await collect(); } catch (e) { keep("cold.log", e); } }
+      throw error;
     } finally { await settle([probe], left); }
   }
   // One adapter, source and target: a fresh container, the cold start, one long k6 pass. Before it

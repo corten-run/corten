@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clientLimits, coldOutput, coldOutputBytes, combinedRunner, eventStream, memorySampler, runSteady } from "./steady-run.mjs";
+import { clientLimits, coldOutput, coldOutputBytes, combinedRunner, eventStream, memorySampler, readBounded, runSteady } from "./steady-run.mjs";
 import { convergenceLines, eventFormat, intervalSchedule, ownerLabelKey, parseSteadyArgs, timedStartup, validateConvergence, validateSoak } from "./steady-contract.mjs";
 import { steadyReport } from "./steady-report.mjs";
 import { resultSchema } from "./run-contract.mjs";
@@ -16,7 +16,7 @@ import { groupApps } from "./groups.mjs";
 import { apps } from "./contract.mjs";
 import { k6Image } from "../load-tool.mjs";
 import { runClock } from "./alert-probe-run.mjs";
-import { commandRunner } from "../catalog/output.mjs";
+import { commandOutput, commandRunner } from "../catalog/output.mjs";
 
 const commit = "c".repeat(40);
 const k6ImageId = `sha256:${"5".repeat(64)}`, upstreamImageId = `sha256:${"4".repeat(64)}`;
@@ -63,8 +63,8 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
  * (by default the engine clock `clockMs`, written to the clock file) before its FinishedAt.
  * `override(args, state)` answers a command first: an Error is thrown, a string returned (for docker
  * logs, the container's stdout), undefined leaves it to the daemon. A docker logs call with `file`
- * appends both of the container's streams to it and returns nothing; `combined: false` returns its
- * stdout alone. `probeStderr` is what each cold probe writes to stderr. It publishes container events (start, and the app's oom, die or kill when
+ * appends both of the container's streams to it (its stdout alone with `fileStderr: false`) and
+ * returns nothing; `combined: false` returns its stdout alone. `probeStderr` is what each cold probe writes to stderr. It publishes container events (start, and the app's oom, die or kill when
  * the load does that to it, or `duringLoad(state)` emits) to every events client listening, as
  * `emit(id, action)`; `inspected(info, container)` may change an inspect answer.
  */
@@ -90,7 +90,7 @@ function fakeDocker({ exportFor, withhold = () => false, failRemove = () => fals
   const iso = () => new Date(state.now()).toISOString();
   // A container's log, as docker logs gives it: to a file, stdout alone, or both streams.
   const logged = (stdout, stderr, options) => {
-    if (options.file) { appendFileSync(options.file, stdout + stderr); return ""; }
+    if (options.file) { appendFileSync(options.file, options.fileStderr === false ? stdout : stdout + stderr); return ""; }
     return options.combined === false ? stdout : stdout + stderr;
   };
   state.docker = async (args, options = {}) => {
@@ -466,7 +466,8 @@ test("a soak whose app was OOM-killed keeps its stop and OOM observations when i
   const [cell] = s.cells;
   assert.equal(cell.failure, undefined, "the cell keeps its observations");
   assert.deepEqual(cell.memory, { samples: 180, unavailable: "1 memory sample had no time or no positive size", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
-  assert.deepEqual([cell.restarts.restarted, cell.restarts.runningAtEnd, cell.restarts.oomKilled], [true, false, true]);
+  // Stopped and OOM-killed, not restarted: the covered stream shows no start after the exit.
+  assert.deepEqual([cell.restarts.restarted, cell.restarts.runningAtEnd, cell.restarts.oomKilled], [false, false, true]);
   // A sampler that fails outright (its client holds its pipes past the bound): memory sampling
   // failed, and the same observations are still reported.
   const held = statsClient({ holds: true });
@@ -653,15 +654,21 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   const copied = last((c) => c.args[0] === "cp"), afterInspect = clean.fake.calls.findIndex((c, i) => i > copied && c.args[0] === "container" && c.args.at(-1) === app);
   assert.ok(afterInspect > copied && markerStarts[1] > afterInspect, "the second marker start is after the app's snapshot after the load");
   assert.ok(clean.fake.calls.some((c) => c.args[0] === "rm" && c.args.at(-1) === marker), "the marker is removed by its ID");
-  // A kill during the load is seen.
+  // A kill during the load is seen. It is a signal (SIGCONT, say), not a restart: StartedAt and
+  // RestartCount are unchanged and the app is still running, so it reads as a signal and Restarted: no.
   const seen = await soak("seen", { duringLoad: (state) => state.emit(state.app().id, "kill") });
-  assert.deepEqual([seen.r.eventStream, seen.r.events.map((e) => e.action), seen.r.restarted], ["seen", ["kill"], true]);
+  assert.deepEqual([seen.r.eventStream, seen.r.events.map((e) => e.action), seen.r.restarted, seen.r.runningAtEnd, seen.r.replaced, seen.r.restartCount], ["seen", ["kill"], false, true, false, 0]);
+  assert.match(steadyReport(seen.s), /\| signal \(kill\) at \d+ s \| no \|$/m);
+  // A die and then a start of the app is a restart.
+  const bounced = await soak("bounced", { duringLoad: (state) => { state.emit(state.app().id, "die"); state.emit(state.app().id, "start"); } });
+  assert.deepEqual([bounced.r.events.map((e) => e.action), bounced.r.restarted], [["die", "start"], true]);
+  assert.match(steadyReport(bounced.s), /\| exit \(die\) at \d+ s \| yes: start at \d+ s after an exit \|$/m);
   // A kill stamped a second before the load finished, delivered in a later chunk than the marker's
   // second start: the runner reads on to the fence, the marker's exit after that start, so it is
   // still seen (stopping at that start, as the runner once did, read the stream as clean).
   const inLoad = (state) => { const nanos = String(BigInt(state.now() - 1000) * 1_000_000n); for (const listener of state.listeners) listener(state.app().id, "kill", nanos); };
   const delayed = await soak("delayed", { duringLoad: inLoad, late: (row) => row.includes("|kill|") });
-  assert.deepEqual([delayed.r.eventStream, delayed.r.events.map((e) => e.action), delayed.r.restarted], ["seen", ["kill"], true]);
+  assert.deepEqual([delayed.r.eventStream, delayed.r.events.map((e) => e.action), delayed.r.restarted], ["seen", ["kill"], false]);
   const delivered = readFileSync(join(folder("delayed"), "fixture", "corten", "page", "events.log"), "utf8").split("\n");
   assert.ok(delivered.findIndex((r) => r.includes("|kill|")) > delivered.findLastIndex((r) => r.includes("|start|")), "the kill was delivered after the marker's second start");
   // Streams that look clean (no app event at all) but do not show coverage: nothing delivered, the
@@ -708,12 +715,14 @@ test("a soak reads restarts from a live event stream only when it shows it cover
   assert.deepEqual([odd.r.eventStream, odd.r.restarted], ["unavailable", null]);
   assert.match(errorsOf(folder("malformed")), /1 docker events row is not this soak's app or marker, an action and a time/);
   assert.ok(!readFileSync(join(folder("malformed"), "summary.json"), "utf8").includes("Canary"));
-  // The same unreadable stream with the app OOM-killed: the OOM and stop observations still make it a restart.
+  // The same unreadable stream with the app OOM-killed: the OOM and stop observations are kept, but
+  // they are not restart evidence, so whether it also restarted is not established.
   const oom = await soak("oom", { oomOnLoad: true, duringLoad: (state) => state.emit(state.app().id, "Leaked Canary") });
-  assert.deepEqual([oom.r.eventStream, oom.r.restarted, oom.r.oomKilled, oom.r.runningAtEnd], ["unavailable", true, true, false]);
-  // A covered stream shows the OOM and the die as events.
+  assert.deepEqual([oom.r.eventStream, oom.r.restarted, oom.r.oomKilled, oom.r.runningAtEnd], ["unavailable", null, true, false]);
+  assert.match(steadyReport(oom.s), /\| not running at the end, OOM-killed at the end, event stream unavailable \| not established: /m);
+  // A covered stream shows the OOM and the die as events, and no start after them: no restart.
   const oomSeen = await soak("oom-seen", { oomOnLoad: true });
-  assert.deepEqual([oomSeen.r.eventStream, oomSeen.r.events.map((e) => e.action), oomSeen.r.restarted], ["seen", ["oom", "die"], true]);
+  assert.deepEqual([oomSeen.r.eventStream, oomSeen.r.events.map((e) => e.action), oomSeen.r.restarted], ["seen", ["oom", "die"], false]);
   // A client that cannot run at all.
   const broken = () => { const child = new EventEmitter(); Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kill() { return true; } }); setImmediate(() => { child.emit("error", Object.assign(new Error("spawn docker ENOENT"), { code: "ENOENT" })); child.emit("close", -2); }); return child; };
   const failed = await soak("failed", { spawnEvents: broken });
@@ -975,8 +984,11 @@ test("the cold probe's readiness and result come from its stdout alone, bounded 
   assert.equal(JSON.parse(readFileSync(join(raw, "cold.json"), "utf8")).first200MsFromContainerStart, 5);
   assert.ok(readFileSync(join(raw, "cold.log"), "utf8").includes(late), "both streams are in cold.log");
   assert.equal(readFileSync(join(raw, "app.log"), "utf8"), "app log\n");
-  // Every log is read as stdout alone or written to its own file; none is read back combined.
-  for (const c of fake.calls.filter((x) => x.args[0] === "logs")) assert.ok(c.combined === false || typeof c.file === "string", JSON.stringify(c));
+  // Every log is written to its own file; none is read back from the runner. The probe's stdout
+  // alone goes to cold-stdout.log, which holds the probe's two lines and nothing of its stderr.
+  for (const c of fake.calls.filter((x) => x.args[0] === "logs")) assert.ok(typeof c.file === "string", JSON.stringify(c));
+  assert.ok(readFileSync(join(raw, "cold-stdout.log"), "utf8").startsWith("catalog-probe-ready\n{"), "the probe's stdout");
+  assert.ok(!readFileSync(join(raw, "cold-stdout.log"), "utf8").includes(late), "no stderr in the stdout file");
   // A result line with an extra field, the wrong path or no attempts, or more stdout than the
   // bound, fails the cold start; the raw output is still in cold.log.
   const result = (extra) => JSON.stringify({ first200At: new Date().toISOString(), successfulRequestMs: 1, bytes: 1, attempts: 1, path: "/marketplace/en-US/item_1", ...extra });
@@ -994,6 +1006,108 @@ test("the cold probe's readiness and result come from its stdout alone, bounded 
   assert.equal(coldOutput("catalog-probe-ready", "/p"), true);
   assert.throws(() => coldOutput("noise", "/p"), /not its readiness line/);
   assert.throws(() => coldOutput("catalog-probe-ready\n{}\n{}", "/p"), /not one readiness line and one result line/);
+  // Exactly the probe's lines: one newline after each, the last perhaps not yet, and the result
+  // exactly as JSON.stringify writes it.
+  const line = JSON.stringify({ first200At: "2026-11-25T00:00:00.000Z", successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/p" });
+  assert.equal(coldOutput("catalog-probe-ready\n", "/p"), true);
+  assert.equal(coldOutput(`catalog-probe-ready\n${line}\n`, "/p").bytes, 10);
+  assert.equal(coldOutput(`catalog-probe-ready\n${line}`, "/p").bytes, 10);
+  for (const text of [`catalog-probe-ready\n${line}\n\n`, `catalog-probe-ready\n${line}   `, `catalog-probe-ready\n ${line}`, `\ncatalog-probe-ready\n${line}`, "catalog-probe-ready\n\n", "\n", `catalog-probe-ready\r\n${line}`])
+    assert.throws(() => coldOutput(text, "/p"), /cold probe/, JSON.stringify(text));
+});
+
+test("the cold probe's stdout is read from its file as the probe wrote it, not as commandRunner trims or tails it", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t21", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // Between the runner and the fake daemon, Catalog's own command output (commandOutput), as
+  // commandRunner puts it there: a docker logs call's file and return value are what commandRunner
+  // would give, including its trimmed stdout.
+  const throughOutput = (fake) => combinedRunner(async (binary, args, opts = {}) => {
+    if (args[0] !== "logs") return fake.docker(args, opts);
+    const stdout = await fake.docker(args, { combined: false });
+    const output = commandOutput({ file: opts.file, capture: opts.capture ?? true, fileStderr: opts.fileStderr ?? true });
+    try { output.stdout(Buffer.from(stdout)); } finally { output.close(); }
+    return output.result();
+  });
+  const probeSays = (tail) => (args, state) => {
+    if (args[0] !== "logs" || args[1] !== state.ids["marketplace-test-run-corten-probe"]) return undefined;
+    const app = state.app();
+    if (!state.calls.some((c) => c.args[0] === "wait")) return "catalog-probe-ready\n";
+    return `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(app.state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/marketplace/en-US/item_1" })}${tail}`;
+  };
+  // The probe's own output, one newline after each line: the cold start is read.
+  const good = fakeDocker({ exportFor: () => k6Export(flat(8)), override: probeSays("\n") });
+  const g = await run({ ...good, docker: throughOutput(good) }, options, folder("good"));
+  assert.equal(g.complete, true, JSON.stringify([g.failures, g.cells]));
+  // A valid result followed by 5,000 spaces (past the bound), by blank lines, or by padding within
+  // the bound: commandRunner's trimmed stdout reads as the probe's lines, the file does not.
+  for (const [name, tail] of [["spaces", " ".repeat(5000)], ["blank", "\n\n\n"], ["padding", "   \n"]]) {
+    const bad = fakeDocker({ exportFor: () => k6Export(flat(8)), override: probeSays(tail) });
+    const b = await run({ ...bad, docker: throughOutput(bad) }, options, folder(name));
+    assert.deepEqual([b.cells[0].failure, b.cells[0].verdict], ["cold-start", null], name);
+    assert.ok(!existsSync(join(folder(name), "fixture", "corten", "page", "cold.json")), name);
+  }
+  assert.match(errorsOf(folder("spaces")), new RegExp(`the cold probe wrote more than ${coldOutputBytes} bytes to stdout`));
+  assert.match(errorsOf(folder("blank")), /the cold probe's stdout is not one readiness line and one result line/);
+  assert.match(errorsOf(folder("padding")), /the cold probe's result line is not first200At/);
+  // readBounded reads the bound and refuses a byte more.
+  writeFileSync(join(folder("good"), "bounded"), "x".repeat(coldOutputBytes));
+  assert.equal(readBounded(join(folder("good"), "bounded"), coldOutputBytes, "too long").length, coldOutputBytes);
+  appendFileSync(join(folder("good"), "bounded"), "x");
+  assert.throws(() => readBounded(join(folder("good"), "bounded"), coldOutputBytes, "too long"), /too long/);
+});
+
+test("a cold start with an empty first 200 fails as the timed validator fails it, even with a healthy load after it", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t22", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const empty = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
+    if (args[0] !== "logs" || args[1] !== state.ids["marketplace-test-run-corten-probe"]) return undefined;
+    if (!state.calls.some((c) => c.args[0] === "wait")) return "catalog-probe-ready";
+    return `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(state.app().state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 0, attempts: 2, path: "/marketplace/en-US/item_1" })}`;
+  } });
+  const s = await run(empty, options, folder("empty"));
+  assert.deepEqual([s.cells[0].failure, s.cells[0].verdict], ["cold-start", null]);
+  assert.ok(!existsSync(join(folder("empty"), "fixture", "corten", "page", "cold.json")));
+  assert.ok(errorsOf(folder("empty")).includes("the cold probe's result is not a cold start a timed round accepts (validateColdStart); its output is in cold.log"));
+  assert.ok(!empty.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === empty.ids["marketplace-test-run-k6"]), "no load runs after a refused cold start");
+});
+
+test("a cold probe that never becomes ready still leaves its log in cold.log, and a failed collection does not replace that failure", async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t23", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  // A probe that writes nothing to stdout and a diagnostic to stderr; `failCollect` fails the
+  // collection of its whole log. Each wait of the readiness poll moves the fake clock on a second.
+  const quietProbe = (failCollect = false) => {
+    const fake = fakeDocker({ exportFor: () => k6Export(flat(8)) }), docker = fake.docker;
+    fake.docker = async (args, opts = {}) => {
+      if (args[0] !== "logs" || args[1] !== fake.ids["marketplace-test-run-corten-probe"]) return docker(args, opts);
+      fake.calls.push({ args, file: opts.file });
+      // Its stdout: written to the file when one is named for stdout alone, otherwise returned.
+      if (opts.file === undefined || opts.fileStderr === false) { if (opts.file !== undefined) appendFileSync(opts.file, ""); return ""; }
+      if (failCollect) throw new Error("docker logs: exit 1");
+      appendFileSync(opts.file, "probe diagnostic\n");
+      return "";
+    };
+    return fake;
+  };
+  const fast = (fake) => runClock({ now: fake.now, sleep: async () => { fake.offset += 1000; } });
+  const early = quietProbe();
+  const s = await run(early, options, folder("early"), { clock: fast(early) });
+  assert.deepEqual([s.cells[0].failure, s.cells[0].verdict], ["cold-start", null]);
+  assert.match(errorsOf(folder("early")), /cold sidecar did not become ready/);
+  assert.equal(readFileSync(join(folder("early"), "fixture", "corten", "page", "cold.log"), "utf8"), "probe diagnostic\n");
+  // The probe was collected before it was removed.
+  const collected = early.calls.findIndex((c) => c.args[0] === "logs" && c.file?.endsWith("cold.log"));
+  const removed = early.calls.findIndex((c) => c.args[0] === "rm" && c.args.at(-1) === early.ids["marketplace-test-run-corten-probe"]);
+  assert.ok(collected >= 0 && collected < removed, "cold.log is collected before the probe is removed");
+  // A collection that fails: the readiness failure stands, and the collection's error is kept.
+  const failing = quietProbe(true);
+  const f = await run(failing, options, folder("failing"), { clock: fast(failing) });
+  assert.deepEqual([f.cells[0].failure, f.cells[0].verdict], ["cold-start", null]);
+  const errors = errorsOf(folder("failing"));
+  assert.match(errors, /cold sidecar did not become ready/);
+  assert.match(errors, /cold\.log: Error: docker logs: exit 1/);
+  assert.ok(errors.indexOf("cold.log: Error") < errors.indexOf("cold sidecar did not become ready"), "the collection is tried before the failure is recorded");
 });
 
 test("the mounted fixture copy is kept while a container may still mount it, and a copy that could not be removed fails the pass", async (t) => {

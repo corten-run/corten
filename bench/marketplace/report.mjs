@@ -13,6 +13,21 @@ import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetric
 import { maxStatsSamples } from "./raw-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
+/**
+ * A cold start as a timed round saves it (bench/catalog/cold.mjs's result, timed from the app
+ * container's StartedAt): its first 200 at or after that start and within the startup timeout, the
+ * path the probe polled, at least one attempt, a request time and a body of at least one byte. A
+ * steady pass (steady-run.mjs) checks its own cold start with this too.
+ */
+export function validateColdStart(cold, path, startupTimeout) {
+  const coldStart = time(cold.containerStartedAt), first = time(cold.first200At);
+  assert.ok(first >= coldStart);
+  assert.equal(cold.first200MsFromContainerStart, first - coldStart);
+  assert.ok(cold.first200MsFromContainerStart <= startupTimeout * 1000);
+  assert.equal(cold.path, path);
+  assert.ok(Number.isSafeInteger(cold.attempts) && cold.attempts > 0);
+  finite(cold.successfulRequestMs); assert.ok(Number.isSafeInteger(cold.bytes) && cold.bytes > 0);
+}
 function loadEvidence(p) {
   assert.ok(Number.isSafeInteger(p.requests) && p.requests > 0);
   finite(p.rps, Number.MIN_VALUE);
@@ -158,12 +173,8 @@ function validateApp(s, a, start, end, v3, validateQualificationRecord) {
         assert.ok(runStart >= start && runEnd > runStart && runEnd <= end);
         const cold = run.cold, coldStart = time(cold.containerStartedAt), first = time(cold.first200At);
         assert.ok(coldStart >= runStart && first >= coldStart && first <= runEnd);
-        assert.equal(cold.first200MsFromContainerStart, first - coldStart);
         assert.equal(cold.measuredBeforeReadinessOrWarmup, true);
-        assert.ok(cold.first200MsFromContainerStart <= s.options.startupTimeout * 1000);
-        assert.equal(cold.path, target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? locales[0] : locale}/item_1`);
-        assert.ok(Number.isSafeInteger(cold.attempts) && cold.attempts > 0);
-        finite(cold.successfulRequestMs); assert.ok(Number.isSafeInteger(cold.bytes) && cold.bytes > 0);
+        validateColdStart(cold, target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? locales[0] : locale}/item_1`, s.options.startupTimeout);
         if (run.stopped?.phase !== "warmup") loadEvidence(run.warmup);
         if (!run.stopped) assert.deepEqual(Object.keys(run.phases).sort(), [...phases].sort(), "unexpected/missing run phases");
         for (const phase of phases.filter((p) => run.phases[p])) {

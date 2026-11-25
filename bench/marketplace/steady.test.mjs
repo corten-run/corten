@@ -321,8 +321,16 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.ok(Math.abs(cell.memory.startMiB - 102.95) < 1e-9 && Math.abs(cell.memory.endMiB - 132.95) < 1e-9 && Math.abs(cell.memory.growthMiB - 30) < 1e-9, JSON.stringify(cell.memory));
   assert.deepEqual(cell.p99, { first: 20, last: 30, max: 30 });
   assert.deepEqual(cell.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "clean", events: [], runningAtEnd: true, oomKilled: false });
-  const restarted = summarizeSoak({ ...base, after: { ...held, running: false, oomKilled: true }, events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }] });
-  assert.deepEqual(restarted.restarts, { restarted: true, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }], runningAtEnd: false, oomKilled: true });
+  // An OOM kill and an exit with no start after them: stopped, not restarted.
+  const stopped = summarizeSoak({ ...base, after: { ...held, running: false, oomKilled: true }, events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }] });
+  assert.deepEqual(stopped.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 70 }, { action: "die", atSeconds: 70.1 }], runningAtEnd: false, oomKilled: true });
+  // Restart evidence is a changed RestartCount or StartedAt (below), a restart event, or a start after
+  // a die. A kill alone (any signal, SIGCONT among them) is not, nor a start with no die before it,
+  // and with no evidence an unavailable stream leaves the claim not established.
+  for (const [events, restarted] of [[[{ action: "kill", atSeconds: 1 }], false], [[{ action: "die", atSeconds: 1 }], false], [[{ action: "start", atSeconds: 1 }], false],
+    [[{ action: "start", atSeconds: 1 }, { action: "die", atSeconds: 2 }], false], [[{ action: "kill", atSeconds: 1 }, { action: "die", atSeconds: 1.1 }, { action: "start", atSeconds: 2 }], true],
+    [[{ action: "restart", atSeconds: 1 }], true], [null, null]])
+    assert.equal(summarizeSoak({ ...base, events }).restarts.restarted, restarted, JSON.stringify(events));
   // Only readEvents's restart-relevant list is accepted.
   assert.throws(() => summarizeSoak({ ...base, events: [{ action: "exec_start", atSeconds: 1 }] }), /readEvents's list or null/);
   assert.equal(summarizeSoak({ ...base, after: { ...held, restartCount: 2 } }).restarts.restarted, true);
@@ -348,10 +356,10 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: "bench/marketplace/results/w2/summary.json", selected: ["corten", "aspnet"], admitted: ["corten"] } });
   validateSoak(s);
   const text = soakReport(s);
-  assert.match(text, /^\| corten \| fixture \| page \| held \| 50\.0 \| 80\.0 \| \+30\.0 MiB \(60\.0%\) \| 20\.0 \/ 80\.0 \/ 80\.0 \| 0 \| no \|$/m);
+  assert.match(text, /^\| corten \| fixture \| page \| held \| 50\.0 \| 80\.0 \| \+30\.0 MiB \(60\.0%\) \| 20\.0 \/ 80\.0 \/ 80\.0 \| 0 \| none \| no \|$/m);
   assert.match(text, /those timed round w2 .* admitted, of corten, aspnet/);
   // Memory and p99 are figures; only the fixed rate has a held criterion.
-  assert.match(text, /it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held and whether the app restarted/);
+  assert.match(text, /it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held, whether the app restarted, and any exit, signal or OOM kill of it/);
   assert.match(text, /^Memory and p99 are reported figures, not held or not held: no criterion is applied to them\./m);
   assert.doesNotMatch(text, /memory, tail latency and process held/);
   // The report states both clocks: memory intervals are their own, not the latency intervals.
@@ -363,17 +371,24 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.match(soakReport(grouped), /^Group production: its images and container settings\.$/m);
   assert.equal(steadyReport(s), text);
   const replaced = structuredClone(s); replaced.cells = [soakCell({ after: { ...held, startedAt: "2026-11-20T00:30:00Z" } })];
-  assert.match(soakReport(replaced), /\| yes: another instance \(ID or StartedAt\) at the end \|$/m);
+  assert.match(soakReport(replaced), /\| none \| yes: another instance \(ID or StartedAt\) at the end \|$/m);
+  // One kill of a still-running app with StartedAt and RestartCount unchanged is a signal, not a restart.
+  const signalled = structuredClone(s); signalled.cells = [soakCell({ events: [{ action: "kill", atSeconds: 1 }] })];
+  validateSoak(signalled);
+  assert.equal(signalled.cells[0].restarts.restarted, false);
+  assert.match(soakReport(signalled), /\| signal \(kill\) at 1 s \| no \|$/m);
+  // A saved v6 soak that claims a restart from the kill alone contradicts its own observations.
+  const claimed = structuredClone(signalled); claimed.cells[0].restarts.restarted = true;
+  assert.throws(() => validateSoak(claimed), /the restart claim contradicts its counters, events and final state/);
   // A saved soak whose claims contradict its own counters, totals or cleanup is refused.
   for (const [mutate, pattern] of [
     [(v) => { v.cells[0].memory.growthMiB = 0; }, /memory/],
     [(v) => { v.cells[0].p99.max = -1; }, /p99 contradicts its intervals/],
     [(v) => { v.cells[0].p99.max = null; }, /p99 contradicts its intervals/],
     [(v) => { v.cells[0].restarts.restartCount = 1; }, /restart claim contradicts/],
-    [(v) => { v.cells[0].restarts.runningAtEnd = false; }, /restart claim contradicts/],
-    [(v) => { v.cells[0].restarts.oomKilled = true; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }]; }, /event stream's state contradicts its events/],
-    [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }]; v.cells[0].restarts.eventStream = "seen"; }, /restart claim contradicts/],
+    [(v) => { v.cells[0].restarts.events = [{ action: "die", atSeconds: 5 }, { action: "start", atSeconds: 6 }]; v.cells[0].restarts.eventStream = "seen"; }, /restart claim contradicts/],
+    [(v) => { v.cells[0].restarts.events = [{ action: "restart", atSeconds: 5 }]; v.cells[0].restarts.eventStream = "seen"; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.eventStream = "unavailable"; }, /restart claim contradicts/],
     [(v) => { v.cells[0].restarts.eventStream = "maybe"; }, /restarts/],
     [(v) => { v.cells[0].restarts.replaced = true; }, /restart claim contradicts/],
@@ -389,6 +404,11 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cells[0].failedRequests = 270001; }, /aggregate failures/],
     [(v) => { v.cells[0].failedRequests = 1; }, /aggregate failures/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), pattern); }
+  // A stop, an OOM kill or an exit with no start after it is an observation, not restart evidence:
+  // saved with no restart, it reads.
+  for (const mutate of [(r) => { r.runningAtEnd = false; }, (r) => { r.oomKilled = true; }, (r) => { r.events = [{ action: "die", atSeconds: 5 }]; r.eventStream = "seen"; }]) {
+    const v = structuredClone(s); mutate(v.cells[0].restarts); validateSoak(v);
+  }
   // A soak whose k6 dropped iterations did not run the fixed rate: stated, and not presented as a fixed-rate result.
   assert.equal(readDropped({ metrics: { dropped_iterations: { count: 37, rate: 0.02 } } }), 37);
   assert.equal(readDropped({ metrics: {} }), 0);
@@ -566,7 +586,7 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
   // A zero sample (an app the kernel killed reads 0 B), and a sampler that failed outright.
   const zero = summarizeSoak({ ...base, memory: [{ atSeconds: 1, mib: 60 }, { atSeconds: 1799, mib: 0 }] });
   assert.deepEqual(zero.memory, { samples: 2, unavailable: "1 memory sample had no time or no positive size", startMiB: null, endMiB: null, growthMiB: null, growthPct: null });
-  assert.deepEqual(zero.restarts, { restarted: true, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 900 }], runningAtEnd: false, oomKilled: true });
+  assert.deepEqual(zero.restarts, { restarted: false, restartCount: 0, replaced: false, eventStream: "seen", events: [{ action: "oom", atSeconds: 900 }], runningAtEnd: false, oomKilled: true });
   const failed = summarizeSoak({ ...base, memory: null });
   assert.equal(failed.memory.unavailable, "memory sampling failed");
   assert.equal(failed.restarts.oomKilled, true);
@@ -574,7 +594,7 @@ test("memory that cannot be read leaves the restart, stop and OOM observations i
   const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...zero }], { commit: "d".repeat(40) });
   validateSoak(s);
   const text = soakReport(s);
-  assert.match(text, /^\| corten \| fixture \| page \| held \| unavailable \| unavailable \| unavailable \| .* \| yes: oom at 900 s, not running at the end, OOM-killed \|$/m);
+  assert.match(text, /^\| corten \| fixture \| page \| held \| unavailable \| unavailable \| unavailable \| .* \| OOM kill \(oom\) at 900 s, not running at the end, OOM-killed at the end \| no \|$/m);
   assert.match(text, /^corten fixture page: memory unavailable \(1 memory sample had no time or no positive size\); its restart, stop and OOM observations are still reported\.$/m);
   for (const mutate of [(v) => { v.cells[0].memory.unavailable = "something Docker said"; }, (v) => { v.cells[0].memory.startMiB = 60; }]) {
     const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), /unavailable memory/);
@@ -862,7 +882,7 @@ test("a soak's two marker starts must be distinct and bracket the load: one at o
   assert.deepEqual(summarizeSoak({ ...base, events: null }).restarts, { restarted: null, restartCount: 0, replaced: false, eventStream: "unavailable", events: [], runningAtEnd: true, oomKilled: false });
   assert.deepEqual([summarizeSoak({ ...base, events: [] }).restarts.eventStream, summarizeSoak({ ...base, events: [] }).restarts.restarted], ["clean", false]);
   const oom = summarizeSoak({ ...base, events: null, after: { ...held, running: false, oomKilled: true } });
-  assert.deepEqual([oom.restarts.eventStream, oom.restarts.restarted, oom.memory.unavailable], ["unavailable", true, "memory sampling failed"]);
+  assert.deepEqual([oom.restarts.eventStream, oom.restarts.restarted, oom.memory.unavailable], ["unavailable", null, "memory sampling failed"]);
 });
 
 test("a soak keeps an app event stamped inside the load wherever the stream put it, and compares the load's times to the nanosecond", () => {
@@ -872,13 +892,13 @@ test("a soak keeps an app event stamped inside the load wherever the stream put 
   // The fence the stream must show: the marker's exit after its second start.
   const fence = row(marker, "die", 1802n * s);
   // An OOM kill stamped 15 s into the load, delivered after the second marker start: it is the
-  // load's, not teardown, so it is kept and the soak reads restarted, never clean.
+  // load's, not teardown, so it is kept and the stream reads seen, never clean.
   const late = readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "oom", 15n * s) + row(app, "die", 15n * s + 1n) + fence, ids);
   assert.deepEqual(late, [{ action: "oom", atSeconds: 15 }, { action: "die", atSeconds: 15.000000001 }]);
   const held = { id: app, startedAt, restartCount: 0, running: true, oomKilled: false };
   const restarts = summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows(Array(30).fill(150), () => 10, 60), tail: 0, unrecorded: 0, requests: 270000, iterations: 270000,
     latencyMaxMs: 25, memory: null, before: held, after: held, arrivals: onSchedule(), events: late }).restarts;
-  assert.deepEqual([restarts.eventStream, restarts.restarted], ["seen", true]);
+  assert.deepEqual([restarts.eventStream, restarts.events.map((e) => e.action)], ["seen", ["oom", "die"]]);
   // Stamped at the load's FinishedAt exactly is still inside it; one nanosecond later, after the
   // second marker start, is teardown and is left out.
   assert.deepEqual(readEvents(row(marker, "start", -s) + row(marker, "start", 1801n * s) + row(app, "kill", 1800n * s) + row(app, "die", 1800n * s + 1n) + fence, ids), [{ action: "kill", atSeconds: 1800 }]);

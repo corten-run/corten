@@ -190,9 +190,17 @@ the copy only once every container of the pass is confirmed removed, and keeps i
 container may still mount it; a copy that could not be removed makes the pass incomplete. A
 container's log (`cold.log`, `app.log`) is written straight to its file with its stderr as well as
 its stdout, and is not read back. The cold probe's readiness and result are read from its stdout
-alone, at most 4,096 bytes of it (`coldOutput`): one readiness line, then one result line with
-exactly the fields `bench/catalog/cold.mjs` writes and the path it polled; anything else fails the
-cold start, and what the probe wrote, stderr included, is in `cold.log`. Results
+alone: each read writes the probe's stdout, without its stderr, straight to `cold-stdout.log`
+(Catalog's `commandRunner` with its opt-in `fileStderr: false`; its defaults are unchanged), and
+the file is read back only up to 4,096 bytes, a longer one failing the cold start (`readBounded`).
+It must hold exactly what `bench/catalog/cold.mjs` writes (`coldOutput`): the readiness line, then
+one result line as `JSON.stringify` writes the fields it names and the path it polled, each line
+ended by one newline; padding, a blank line or anything else fails the cold start, nothing is
+trimmed. The result must then pass the timed validator's own cold-start rules
+(`validateColdStart` in [report.mjs](report.mjs)), so a first 200 with an empty body fails the cold
+start in a pass as it fails a timed round. What the probe wrote, stderr included, is in `cold.log`,
+collected before the probe is removed even when it never became ready (a collection that fails is
+recorded in `errors.log` and leaves the original failure as it was). Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
 Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
@@ -293,8 +301,8 @@ the raw `load-clock.json` and container receipts), the app container's before an
 RestartCount and its running and OOM states, and the app must be running and not OOM-killed
 before the load, `appInstance` and `appBefore`; a missing counter or malformed timestamp on
 either side fails the cell rather than comparing equal. Then, for a convergence cell: the same ID
-and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart,
-stop and OOM observations it saves), the cold-start clock, the k6 export's metric names and every
+and StartedAt, running, not restarted or OOM-killed, `heldThrough`; for a soak: the restart
+evidence and the exit, signal and OOM observations it saves), the cold-start clock and result, the k6 export's metric names and every
 row of a soak's live Docker event stream, with whether it showed the marker's two starts. A saved
 summary records their outcome (a cell that failed one has no reading) but cannot be re-verified
 from summary.json alone; the raw files beside it (`app-container.json` and
@@ -302,8 +310,8 @@ from summary.json alone; the raw files beside it (`app-container.json` and
 `load.json`, `events.log`, `events.json`) are what they read.
 
 A soak reports memory at the start and the end (the median sample in the first and last memory
-interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate) and
-any restart, replacement, stop or OOM kill. Memory and p99 are reported figures: no criterion
+interval), p99 per latency interval, failed requests (in its intervals and in k6's aggregate),
+whether the app restarted, and, separately, any exit, signal or OOM kill. Memory and p99 are reported figures: no criterion
 says whether they held. Only the fixed rate (below) is reported as held or not. Restart events
 come from a live `docker events` stream filtered to the app and a small marker container, started
 before the load. A retrospective `docker events --since/--until` query replays only what the
@@ -329,15 +337,20 @@ latest daemon time before the app's last inspect, which has none of its own). Th
 use the full nanoseconds of the load container's StartedAt and FinishedAt and of each event, so a
 marker start earlier in the same millisecond as FinishedAt is not after it. An app event is the
 load's whenever it is stamped at or before FinishedAt, even if the stream delivered it after the
-second marker start (an OOM kill stamped 15 s into the load reads as a restart, never clean); only
+second marker start (an OOM kill stamped 15 s into the load is seen, never clean); only
 an app event both after the second marker start and stamped after FinishedAt is teardown. The stream is saved
 as one of three states: unavailable (the stream failed, did not show both marker starts and the
 fence within its bound, showed another marker row where the fence belongs, had witnesses that do not bracket the load, or had a row that was not the app's or the
 marker's ID, an action and a nanosecond time, so none of its rows is used), clean (read, covering the load, with no start, restart, die, kill or OOM event) or seen
-(with those events). "Restarted" is yes on any sign of a restart, no only when the stream was
-clean and nothing else showed one, and not established when the stream was unavailable and
-nothing else showed one; the container states and the memory samples are read independently of
-it. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
+(with those events). "Restarted" is yes only on restart evidence: a RestartCount increase,
+another container ID or StartedAt at the end, a `restart` event, or a `start` of the app after a
+`die` of it. It is no when there is none and the stream was read and covered the load (clean or
+seen), and not established when there is none and the stream was unavailable. A `kill` is a signal,
+which need not stop the app (SIGCONT, for one), a `die` with no start after it is an exit, and an
+`oom` event or an app not running or OOM-killed at the end is what it says: the report lists these
+in their own column, as observations, never as a restart. A soak is saved as
+`marketplace-soak/v6`; a v5 soak counted those observations as restarts and is not read. The container states and the memory
+samples are read independently of the stream. What the `docker stats` and `docker events` clients write is bounded (`clientLimits` in
 [steady-run.mjs](steady-run.mjs): bytes read, bytes in one row, rows read, all counted on what the
 client wrote, blank rows and escape sequences included): past a limit that observation is
 unavailable at once, no wait on the event stream succeeds any more (not even for a marker row read
@@ -372,7 +385,7 @@ Otherwise it reports the shortfall, names each interval that did not hold with i
 schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
 interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is
 reported as unavailable, with the reason, when sampling failed, a sample had no positive size or
-the first or last interval had none; the restart, stop and OOM observations are reported either
+the first or last interval had none; the restart, exit, signal and OOM observations are reported either
 way. A saved soak whose rate, memory, p99, restart or state claims contradict its counters is
 refused.
 

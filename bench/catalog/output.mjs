@@ -6,8 +6,10 @@ import { performance } from "node:perf_hooks";
 // Retain bounded diagnostics without repeatedly copying a growing multi-MiB string.
 // Raw artifacts are written independently and never truncated to the diagnostic tail.
 // With `receipt`, it notes where this command's bytes begin, so `segment()` can hash them
-// once the file is closed; nothing is hashed while the command runs.
-export function commandOutput({ file, capture = true, receipt = false } = {}) {
+// once the file is closed; nothing is hashed while the command runs. With `fileStderr: false` the
+// client's stderr stays out of `file` (it is kept for the diagnostic alone), so the file holds the
+// client's stdout byte for byte.
+export function commandOutput({ file, capture = true, receipt = false, fileStderr = true } = {}) {
   const fd = file === undefined ? null : openSync(file, "a");
   let start = null;
   // The descriptor is this helper's from open onward: a failure before it is returned closes it.
@@ -32,12 +34,12 @@ export function commandOutput({ file, capture = true, receipt = false } = {}) {
   const stdout = tail(capture ? 8 * 1024 * 1024 : 65536), stderr = tail(65536);
   // With `receipt` only: every byte a write call accepted, including those before a failed write.
   let written = 0, writeError, closed = false;
-  const append = (chunk, buffer) => {
+  const append = (chunk, buffer, toFile = true) => {
     if (closed) throw new Error("command output already closed");
     // After a failed write nothing more reaches the file, so it ends at the bytes counted.
     if (writeError) throw writeError;
     const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    if (fd !== null) {
+    if (fd !== null && toFile) {
       let offset = 0;
       try {
         while (offset < data.length) offset += writeSync(fd, data, offset, data.length - offset);
@@ -64,7 +66,7 @@ export function commandOutput({ file, capture = true, receipt = false } = {}) {
   };
   return {
     stdout: (chunk) => append(chunk, stdout),
-    stderr: (chunk) => append(chunk, stderr),
+    stderr: fileStderr ? (chunk) => append(chunk, stderr) : (chunk) => append(chunk, stderr, false),
     result: () => capture ? stdout.text().trim() : "",
     diagnostic: () => stderr.text() || stdout.text(),
     receiptBytes: () => start === null ? null : written,
@@ -204,9 +206,9 @@ function stopTree(child, { cwd, helperMs, boundMs, taskkill }) {
 // flag test, and command setup and settlement changed. Its timing effect was not measured.
 export function commandRunner({ cwd, interrupted = () => false, interruptMessage = "catalog run interrupted", killOptions = {} } = {}) {
   const running = new Set();
-  async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false, receipt = false } = {}) {
+  async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false, receipt = false, fileStderr = true } = {}) {
     if (interrupted() && !cleanup) throw new Error(interruptMessage);
-    const output = commandOutput({ file, capture, receipt });
+    const output = commandOutput({ file, capture, receipt, fileStderr });
     let child;
     // The output's descriptor is closed when the client cannot even be spawned.
     try { child = spawn(binary, args, { cwd, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }

@@ -15,7 +15,7 @@ import { groupNames } from "./groups.mjs";
 // interval from the arrivals k6 started in it, and the event stream is a live one whose coverage of
 // the load is shown by a marker container started before and after it.
 export const convergenceSchema = "marketplace-convergence/v4";
-export const soakSchema = "marketplace-soak/v5";
+export const soakSchema = "marketplace-soak/v6";
 // The targets and sources of the timed profiles: a page in rotating locales and locale-neutral JSON,
 // from memory and from the HTTP upstream.
 export const steadyTargets = Object.freeze(["page", "json"]);
@@ -743,14 +743,16 @@ function soakMemory(memory, seconds, end) {
  * the last memory interval (soakMemoryClock), or unavailable with a stated reason (sampling failed,
  * a sample with no positive size, or none in the first or last interval) while everything else is
  * still reported; p99 is kept per interval; the fixed rate is held only as soakArrivals says, from
- * `arrivals` per interval; a restart is any RestartCount increase, another container ID or
- * StartedAt at the end (a `docker restart` keeps RestartCount), any start, restart, die, kill or OOM
- * event during the soak, or a container not running or OOM-killed at the end. `before` and `after`
+ * `arrivals` per interval; a restart is shown only by restart evidence (restartClaim): a RestartCount
+ * increase, another container ID or StartedAt at the end (a `docker restart` keeps RestartCount), a
+ * restart event, or a start of the app after a die of it. A kill (a signal, which need not stop the
+ * app), a die, an OOM event and an app not running or OOM-killed at the end are saved as they are
+ * and reported as observations of their own, not as restarts. `before` and `after`
  * have appInstance's forms, and the app must have been running before the load. `memory` is null
  * when sampling failed. `events` is readEvents's list, or null when the live event stream could not
  * be read or did not show it covered the load; the stream's state is saved as eventStream:
- * "unavailable", "clean" (read and covering the load, with no restart-relevant event) or "seen" (at
- * least one). With no other sign of a restart, an unavailable stream leaves `restarted` null (not
+ * "unavailable", "clean" (read and covering the load, with no start, restart, die, kill or OOM
+ * event) or "seen" (at least one). With no restart evidence, an unavailable stream leaves `restarted` null (not
  * established) rather than false. Memory and the event stream are independent: either can be
  * unavailable while the other and the container states are reported.
  */
@@ -771,10 +773,14 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
 }
-// The restart claim from its observations: true on any sign of a restart, false only when the
-// event stream was read, covered the load and showed none, and null (not established) otherwise.
+/** The events that show a restart: a restart event, or a start of the app after a die of it. */
+export const restartsSeen = (events) => events.filter((e, i) => e.action === "restart" || (e.action === "start" && events.slice(0, i).some((d) => d.action === "die")));
+// The restart claim from its observations: true only on restart evidence (a RestartCount increase,
+// another instance at the end, or restartsSeen), false when there is none and the event stream was
+// read and covered the load, and null (not established) otherwise. A kill, a die with no start
+// after it, an OOM kill and an app not running at the end are observations, not restart evidence.
 function restartClaim(r) {
-  const seen = r.restartCount > 0 || r.replaced || r.events.length > 0 || !r.runningAtEnd || r.oomKilled;
+  const seen = r.restartCount > 0 || r.replaced || restartsSeen(r.events).length > 0;
   return { restarted: seen ? true : r.eventStream === "unavailable" ? null : false, ...r };
 }
 /** Validates a saved soak, including that its rate, p99, memory and restart claims agree with its own counters. Returns it. */

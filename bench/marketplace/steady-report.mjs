@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { convergenceSchema, failureCodes, flattenRule, parseSaved, ruleText, soakMemoryClock, soakSchema, startups, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { convergenceSchema, failureCodes, flattenRule, parseSaved, restartsSeen, ruleText, soakMemoryClock, soakSchema, startups, timedWarmupVus, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 
 // Every value printed here has been checked by validateConvergence or validateSoak first: a code
 // is printed as its text from steady-contract.mjs, and anything else is a validated number or a
@@ -15,7 +15,7 @@ const header = (s, title) => [`# Marketplace ${title} ${s.name}`, "",
     : `Adapters: ${s.options.apps.join(", ")}, as selected; no timed round's admission was checked.`,
   s.options.group ? `Group ${s.options.group}: its images and container settings.` : "No group: the ungrouped images and container settings, not a group's timed configuration.",
   `Each adapter, source and target ran in a fresh container started by ${startups[s.startup]}; windows are the k6 engine's clock from the start of the load, which follows that first 200.`,
-  `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held and whether the app restarted" : "it gives each adapter's throughput by window and whether the end of the pass stayed within a stated tolerance"}, not how fast it is beside another.`];
+  `This is not a timed round and ranks nothing: ${s.schema === soakSchema ? "it reports each adapter's memory at the start and end and its p99 by interval as figures, with no criterion for whether they held, and says whether the fixed rate held, whether the app restarted, and any exit, signal or OOM kill of it" : "it gives each adapter's throughput by window and whether the end of the pass stayed within a stated tolerance"}, not how fast it is beside another.`];
 /** A convergence pass as Markdown, with each cell's tolerance reading and windows. It sets no timed warmup. */
 export function convergenceReport(s) {
   validateConvergence(s);
@@ -40,23 +40,24 @@ export function convergenceReport(s) {
   }
   return lines.join("\n");
 }
-/** A soak as Markdown: memory at the start and end, p99 per interval and any restart. */
+/** A soak as Markdown: memory at the start and end, p99 per interval, any restart, and any exit, signal or OOM kill. */
 export function soakReport(s) {
   validateSoak(s);
   const o = s.options;
   const lines = [...header(s, "soak"), "",
     `A fixed rate of ${o.rate} requests/second asked for, for ${o.minutes} min per adapter, source and target, in ${o.windowSeconds}s intervals of the k6 engine's clock. Clocks: ${soakMemoryClock}.`,
-    "", "| Adapter | Source | Target | Fixed rate | Start MiB | End MiB | Growth | p99 first / last / max ms | Failed requests | Restarted |", "|---|---|---|---|---:|---:|---:|---|---:|---|"];
+    "", "| Adapter | Source | Target | Fixed rate | Start MiB | End MiB | Growth | p99 first / last / max ms | Failed requests | Exits, signals, OOM | Restarted |", "|---|---|---|---|---:|---:|---:|---|---:|---|---|"];
   const unmet = s.cells.filter((c) => c.failure === undefined && !c.rate.held), blind = s.cells.filter((c) => c.failure === undefined && c.memory.unavailable !== undefined);
   const mib = (v) => (v === null ? "unavailable" : v.toFixed(1));
   for (const c of s.cells) {
-    if (c.failure !== undefined) { lines.push(`| ${c.app} | ${c.source} | ${c.target} | - | - | - | - | - | - | no reading: the cell failed (${failureCodes[c.failure]}) |`); continue; }
-    const r = c.restarts, m = c.memory;
-    const why = [r.restartCount ? `RestartCount +${r.restartCount}` : null, r.replaced ? "another instance (ID or StartedAt) at the end" : null, ...r.events.map((e) => `${e.action} at ${e.atSeconds.toFixed(0)} s`), r.runningAtEnd ? null : "not running at the end", r.oomKilled ? "OOM-killed" : null,
-      r.eventStream === "unavailable" ? "event stream unavailable" : null];
+    if (c.failure !== undefined) { lines.push(`| ${c.app} | ${c.source} | ${c.target} | - | - | - | - | - | - | - | no reading: the cell failed (${failureCodes[c.failure]}) |`); continue; }
+    const r = c.restarts, m = c.memory, restarts = restartsSeen(r.events);
+    const at = (e) => `${{ kill: "signal (kill)", die: "exit (die)", oom: "OOM kill (oom)" }[e.action] ?? e.action} at ${e.atSeconds.toFixed(0)} s`;
+    const why = [r.restartCount ? `RestartCount +${r.restartCount}` : null, r.replaced ? "another instance (ID or StartedAt) at the end" : null, ...restarts.map((e) => (e.action === "start" ? `${at(e)} after an exit` : at(e)))];
     const restarted = r.restarted === null ? "not established: the event stream was unavailable or did not cover the load, and nothing else showed a restart" : r.restarted ? `yes: ${why.filter(Boolean).join(", ")}` : "no";
+    const seen = [...r.events.filter((e) => !restarts.includes(e)).map(at), r.runningAtEnd ? null : "not running at the end", r.oomKilled ? "OOM-killed at the end" : null, r.eventStream === "unavailable" ? "event stream unavailable" : null].filter(Boolean);
     const growth = m.growthMiB === null ? "unavailable" : `${m.growthMiB >= 0 ? "+" : ""}${m.growthMiB.toFixed(1)} MiB (${m.growthPct.toFixed(1)}%)`;
-    lines.push(`| ${c.app} | ${c.source} | ${c.target} | ${c.rate.held ? "held" : "not held"} | ${mib(m.startMiB)} | ${mib(m.endMiB)} | ${growth} | ${ms(c.p99.first)} / ${ms(c.p99.last)} / ${ms(c.p99.max)} | ${c.failedRequests} | ${restarted} |`);
+    lines.push(`| ${c.app} | ${c.source} | ${c.target} | ${c.rate.held ? "held" : "not held"} | ${mib(m.startMiB)} | ${mib(m.endMiB)} | ${growth} | ${ms(c.p99.first)} / ${ms(c.p99.last)} / ${ms(c.p99.max)} | ${c.failedRequests} | ${seen.length ? seen.join(", ") : "none"} | ${restarted} |`);
   }
   lines.push("", `Fixed rate: "held" means the rate was sustained throughout: k6 dropped no iteration, recorded at least the schedule's floor(1e9 / rate) ns arrivals over the soak (${s.options.windows * s.options.windowSeconds} s, from slot 0) less the allowance of one second of arrivals plus the boundary slot (for an iteration the engine's stop cut off), and in every interval started a number of iterations, by the k6 engine's clock, within that allowance of the interval's own share of the schedule. A soak whose requests arrived early and left later intervals short did not hold it. The counts below are k6's own.`);
   for (const c of s.cells.filter((x) => x.failure === undefined)) {
@@ -65,7 +66,7 @@ export function soakReport(s) {
   }
   for (const c of unmet) lines.push("", `${c.app} ${c.source} ${c.target}: the fixed ${o.rate} requests/second was not held, so this is not a fixed-rate result: its memory and p99 are under a lower or uneven load.`);
   for (const c of blind) lines.push("", `${c.app} ${c.source} ${c.target}: memory unavailable (${c.memory.unavailable}); its restart, stop and OOM observations are still reported.`);
-  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes on any RestartCount increase, another instance at the end, a start, restart, die, kill or OOM event, or an app not running or OOM-killed at the end; no only when Docker's live event stream for the app, started before the load, was read in full, showed a marker container's starts before and after the load (so it covered the load), and showed none of these; not established when that stream could not be read or did not show that it covered the load, and nothing else showed a restart.");
+  lines.push("", "Memory and p99 are reported figures, not held or not held: no criterion is applied to them. \"Restarted\" is yes only on evidence of a restart: a RestartCount increase, another instance (container ID or StartedAt) at the end, a restart event, or a start of the app after an exit (die) of it; no when there is none and Docker's live event stream for the app, started before the load, was read in full and showed a marker container's starts before and after the load (so it covered the load); not established when there is none and that stream could not be read or did not show that it covered the load. \"Exits, signals, OOM\" lists every other event the stream showed for the app (a signal is any kill, which need not stop the app) and an app not running or OOM-killed at the end; these are observations, not restarts.");
   lines.push("", "## Intervals", "");
   for (const c of s.cells) if (c.failure === undefined) lines.push(`${c.app} ${c.source} ${c.target} p99 ms by interval: ${c.windows.map((w) => ms(w.p99)).join(", ")}`, "", `${c.app} ${c.source} ${c.target} arrivals by interval (scheduled): ${c.rate.intervals.map((i) => `${i.arrivals} (${i.scheduled})`).join(", ")}`, "");
   return lines.join("\n");
