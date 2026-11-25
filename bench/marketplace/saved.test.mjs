@@ -464,6 +464,24 @@ test("stopped profiles replay actual phase/sidecar/event evidence, never invente
   withTerminal.summary[appName] = summarizeSamples(withTerminal.samples[appName]);
   const terminalLog = (CPUPerc, MemUsage) => cleanLog + JSON.stringify({ Name: appName, CPUPerc, MemUsage }) + "\n";
   const beyondDouble = "9".repeat(309), conversionOverflow = `1${"0".repeat(308)}GiB`;
+  await t.test("rejects coerced Docker participant names without exposing saved data", () => {
+    const edit = rows.find((row) => row.Name === appName);
+    try {
+      writeFileSync(log, cleanLog.replace(JSON.stringify(edit), JSON.stringify({ ...edit, Name: [appName] })));
+      assert.throws(() => validateSaved(args), fixedFault("invalid Docker stats container name"));
+    } finally { writeFileSync(log, cleanLog); }
+  });
+  for (const [message, mutate] of [
+    ["missing/extra raw participants", (saved) => { saved.summary[canary] = {}; }],
+    ["stats history differs from raw Docker samples", (saved) => { saved.samples[appName][0].cpu = canary; }],
+    ["stats aggregate differs from raw history", (saved) => { saved.summary[appName].cpuAvgPct = canary; }],
+  ]) await t.test(`saved stats rejection without a diff: ${message}`, () => {
+    const saved = structuredClone(stats); mutate(saved);
+    try {
+      writeFileSync(statsPath, JSON.stringify(saved));
+      assert.throws(() => validateSaved(args), fixedFault(message));
+    } finally { writeFileSync(statsPath, cleanStats); }
+  });
   for (const [label, cpu, memory, expected] of [
     ["accepts a well-formed terminal zero", "0.00%", "0B / 0B"],
     ["rejects a non-finite displayed CPU", `${beyondDouble}%`, "0B / 0B", /non-finite Docker CPU display/],

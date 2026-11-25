@@ -615,6 +615,12 @@ test("timed resource proof rejects internally consistent busy, exhausted or inco
   const original = f.files.get(file), app = `${f.summary.runId}-fastapi`, load = `${f.summary.runId}-k6`, upstream = `${f.summary.runId}-upstream`;
   const subject = { app: "fastapi", source: "api", target: "page", phase: "sat256", seconds: 60, instance: f.reader.readJson(`${root}/container.json`) };
   const reader = { readJson: (key) => f.reader.readJson(`${root}/${key}`), readText: (key) => f.reader.readText(`${root}/${key}`) };
+  const statsLog = `${root}/sat256-stats.log`;
+  const completeLog = f.reader.readText(statsLog);
+  assert.doesNotThrow(() => verifyTimedPhase(f.summary, subject, reader));
+  f.put(statsLog, completeLog.replace(/ \/ [^"\n]+/g, ""));
+  assert.throws(() => verifyTimedPhase(f.summary, subject, reader), /memory display missing its limit/);
+  f.put(statsLog, completeLog);
   for (const [mutate, message] of [
     [(s) => { for (const v of s[load]) v.cpu = 320; }, /generator.*headroom/],
     [(s) => { for (const v of s[upstream]) v.cpu = 80; }, /busy upstream/],

@@ -1,6 +1,7 @@
 // Bracket load resource reads and replay them against the exact Docker lifetime.
 import assert from "node:assert/strict";
 import { closeSync, constants, fstatSync, openSync, readSync, statfsSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { timestampNs } from "./fixed-stream.mjs";
 
 const root = "/sys/fs/cgroup", cgroup2 = 0x63677270;
@@ -13,6 +14,7 @@ const positive = (n) => natural(n) && n > 0;
 const containerId = (id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id);
 const objectId = (id) => typeof id === "string" && /^\d{1,20}:[1-9]\d{0,19}$/.test(id);
 const fdPath = (fd) => `/proc/self/fd/${fd}`;
+const same = (actual, expected, message) => assert.ok(isDeepStrictEqual(actual, expected), message);
 export class LoadResourceLifetimeEnded extends Error {}
 export class LoadProcessAbsentBeforeRead extends LoadResourceLifetimeEnded {}
 
@@ -152,7 +154,7 @@ function validateRow(row, id, pid) {
   assert.ok(typeof before.mount === "string" && before.mount.length <= 4096 && !/[\r\n]/.test(before.mount), "load mount identity missing");
   fullMount(before.mount);
   pathParts(before.path, id);
-  assert.deepEqual(after, before, "load process/cgroup identity or population changed during acquisition");
+  same(after, before, "load process/cgroup identity or population changed during acquisition");
   assert.ok(clockDelta(row.begin, row.end) <= msNs(loadResourcePeriodMs), "load acquisition exceeded bound");
   assert.ok([row.usageUsec, row.memoryCurrent, row.inactiveFile].every(natural), "load CPU/memory evidence missing or malformed");
 }
@@ -167,7 +169,7 @@ export function replayLoadResources(rows, { id, pid, startedAt, finishedAt, memo
   assert.ok(exited > born, "invalid load lifetime");
   let previous, cpuMaxPctUpper = 0, memMaxBytes = 0;
   for (const [sequence, row] of rows.entries()) {
-    assert.equal(row?.sequence, sequence, "duplicate, missing or unordered load acquisition");
+    assert.ok(row?.sequence === sequence, "duplicate, missing or unordered load acquisition");
     validateRow(row, id, pid);
     const lower = msNs(row.begin.at), upper = msNs(row.end.at + 1);
     assert.ok(lower >= born && upper <= exited, "load acquisition outside container lifetime");
@@ -177,7 +179,7 @@ export function replayLoadResources(rows, { id, pid, startedAt, finishedAt, memo
     assert.ok(memory > 0 && memory < memoryBytes, "load memory missing/at budget");
     memMaxBytes = Math.max(memMaxBytes, memory);
     if (previous) {
-      assert.deepEqual(row.before, previous.before, "load process/cgroup identity changed between acquisitions");
+      same(row.before, previous.before, "load process/cgroup identity changed between acquisitions");
       assert.ok(clockDelta(previous.begin, row.end) <= edgeNs, "gap in load resource coverage");
       const elapsedMin = Math.min(row.begin.at - previous.end.at - 1, row.begin.monotonic - previous.end.monotonic);
       const delta = row.usageUsec - previous.usageUsec;
@@ -201,11 +203,11 @@ export function loadResourceFirstSlot(startedAt) {
 
 export function replayScheduledLoadResources(capture, life, { memoryBytes, quota }) {
   assert.ok(capture?.schema === loadResourceCaptureSchema, "missing scheduled load resource evidence");
-  assert.deepEqual(Object.keys(capture).sort(), ["live", "rows", "schema"], "invalid scheduled load resource fields");
+  same(Object.keys(capture).sort(), ["live", "rows", "schema"], "invalid scheduled load resource fields");
   const { live, rows } = capture;
   assert.ok(live?.id === life.containerId && live.startedAt === life.startedAt && positive(live.pid),
     "live resource observation differs from terminal Docker lifetime");
-  assert.deepEqual(Object.keys(live).sort(), ["id", "pid", "startedAt"], "invalid live resource observation fields");
+  same(Object.keys(live).sort(), ["id", "pid", "startedAt"], "invalid live resource observation fields");
   const firstAt = loadResourceFirstSlot(life.startedAt), finished = timestampNs(life.finishedAt);
   const span = finished - msNs(firstAt), period = msNs(loadResourcePeriodMs);
   assert.ok(span >= 0n, "load stopped before the first resource slot");

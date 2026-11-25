@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { memoryMiB, summarizeSamples } from "./stats.mjs";
+import { parseStatsSample, summarizeSamples } from "./stats.mjs";
 import { leanApps, leanProfile } from "./contract.mjs";
 import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
 import { observeLoadLimits, verifyLoadLimits } from "./cgroup.mjs";
@@ -184,9 +184,9 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
   const raw = readText(`${phase}-stats.log`), parsed = Object.fromEntries(sampled.map((name) => [name, []]));
   assert.ok(raw.endsWith("\n"), "timed stats framing incomplete");
   for (const line of raw.split("\n").filter((s) => s.trim())) {
-    const row = JSON.parse(line); assert.ok(typeof row.Name === "string" && Object.hasOwn(parsed, row.Name), "unknown timed sample");
-    assert.match(row.CPUPerc, /^\d+(?:\.\d+)?%$/, "malformed timed CPU percentage");
-    parsed[row.Name].push({ cpu: parseFloat(row.CPUPerc), mem: memoryMiB(row.MemUsage.split("/")[0]) });
+    const { name, cpu, mem } = parseStatsSample(line);
+    assert.ok(Object.hasOwn(parsed, name), "unknown timed sample");
+    parsed[name].push({ cpu, mem });
   }
   const derived = {};
   for (const name of sampled) {

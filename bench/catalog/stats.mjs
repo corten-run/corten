@@ -35,6 +35,7 @@ export function parseStatsSample(line) {
   catch { throw new Error("invalid Docker stats sample JSON"); }
   if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("invalid Docker stats sample record");
   const { Name: name, CPUPerc: cpuDisplay, MemUsage } = row;
+  if (typeof name !== "string") throw new Error("invalid Docker stats container name");
   if (typeof cpuDisplay !== "string" || !/^\d+(?:\.\d+)?%$/.test(cpuDisplay)) throw new Error("invalid Docker CPU display");
   const cpu = Number(cpuDisplay.slice(0, -1));
   if (!Number.isFinite(cpu)) throw new Error("non-finite Docker CPU display");

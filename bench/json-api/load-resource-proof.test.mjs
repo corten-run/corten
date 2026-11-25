@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { inspect } from "node:util";
 import { acquireLoadResources, loadResourceCaptureSchema, loadResourceFirstSlot, replayLoadResources, replayScheduledLoadResources } from "./load-resource-proof.mjs";
 
 const id = "a".repeat(64), pid = 42, path = `/system.slice/docker-${id}.scope`;
@@ -53,6 +54,16 @@ function fixture(terminalMs = 3500) {
     plan: { firstAt: epoch + 100, count: 4 } };
 }
 const samples = () => Array.from({ length: 4 }, (_, i) => capture(i));
+
+test("saved load resource identities refuse mismatches without quoting the changed cgroup path", () => {
+  const secret = "SAVEDCGROUPCANARY", changed = `/${secret}${path}`;
+  const rows = samples();
+  rows[1].after.path = changed;
+  const safe = (message) => (error) => error.message === message && !inspect(error).includes(secret);
+  assert.throws(() => replayLoadResources(rows, fixture()), safe("load process/cgroup identity or population changed during acquisition"));
+  rows[1].before.path = changed;
+  assert.throws(() => replayLoadResources(rows, fixture()), safe("load process/cgroup identity changed between acquisitions"));
+});
 
 test("delayed transport retains all fully in-lifetime acquisitions, including the CPU anchor's memory", () => {
   const rows = samples(), bounds = fixture(), steady = replayLoadResources(rows, bounds);

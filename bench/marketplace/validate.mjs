@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { posix } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parseStatsSample, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
 import { admitted } from "./feature-contract.mjs";
@@ -16,7 +17,8 @@ import { assertSameEvidence, verifyK6Provenance } from "../load-tool.mjs";
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "invalid receipt timestamp"); return n; };
 const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const sameKeys = (v, keys) => Object.keys(v).length === keys.length && keys.every((key) => Object.hasOwn(v, key));
-const exactKeys = (v, keys) => assert.deepEqual(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
+const same = (actual, expected, message) => assert.ok(isDeepStrictEqual(actual, expected), message);
+const exactKeys = (v, keys) => same(Object.keys(v ?? {}).sort(), [...keys].sort(), "missing/extra raw participants");
 const id = (s) => assert.match(s, /^[a-f0-9]{64}$/);
 const imageId = (s) => assert.ok(typeof s === "string" && /^sha256:[a-f0-9]{64}$/.test(s), "malformed image ID");
 function cpuSet(value) {
@@ -276,7 +278,7 @@ function replay({ folder, round, commit }) {
         validateLocaleCounters(profile, k6Summary.metrics, clock.testRunDurationMs, seconds, k6.env);
         const rawCounters = files.json(`${base}/${phase}-cpu.json`);
         const counted = Object.fromEntries(Object.keys(raw.before).filter((n) => raw.after[n] !== undefined).map((n) => [n, { usec: raw.after[n] - raw.before[n] }]));
-        assert.deepEqual(rawCounters, counted, "saved CPU deltas differ from before/after counters");
+        same(rawCounters, counted, "saved CPU deltas differ from before/after counters");
         if (profile.source === "api") {
           assert.equal(raw.upstreamReads.before.status, 200); assert.equal(raw.upstreamReads.after.status, 200);
           assert.equal(upstreamErrors(raw.upstreamReads.before, raw.upstreamReads.after), 0);
@@ -345,16 +347,16 @@ function replay({ folder, round, commit }) {
           for (const name of participants) {
             const samples = sampled.samples[name];
             assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= maxStatsSamples, "invalid/bounded stats history required");
-            assert.deepEqual(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
+            same(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
             let last = start;
             for (const p of samples) {
               assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && (stop || p.cpu >= 0 && p.mem > 0), "invalid stats clock/value");
               last = p.t;
             }
-            stats[name] = summarizeSamples(samples); assert.deepEqual(sampled.summary[name], stats[name], "stats aggregate differs from raw history");
+            stats[name] = summarizeSamples(samples); same(sampled.summary[name], stats[name], "stats aggregate differs from raw history");
             if (!stop) {
               assert.ok(samples.at(-1).t - samples[0].t >= Math.max(0, s.options.duration - 5) * 1000, "truncated stats coverage");
-              const usec = raw.after[name] - raw.before[name]; assert.deepEqual(rawCounters[name], { usec }, "CPU delta differs from raw counters");
+              const usec = raw.after[name] - raw.before[name]; same(rawCounters[name], { usec }, "CPU delta differs from raw counters");
               stats[name].cpuUsec = usec;
             }
           }
@@ -364,7 +366,7 @@ function replay({ folder, round, commit }) {
           }
         }
         if (stop) break;
-        assert.deepEqual(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
+        same(phase === "warmup" ? run.warmup : run.phases[phase], metrics, "summary metrics differ from raw k6/counters/history");
       }
     }
   }
