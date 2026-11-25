@@ -3,6 +3,16 @@ set -eu
 
 app=$(cd "$1" && pwd -P)
 evidence=$(cd "$2" && pwd -P)
+if [ ! -r "$evidence" ]; then
+    echo "Spring proof cannot check the evidence directory; use mktemp -d for each run." >&2
+    exit 1
+fi
+for entry in "$evidence"/* "$evidence"/.[!.]* "$evidence"/..?*; do
+    if [ -e "$entry" ] || [ -L "$entry" ]; then
+        echo "Spring proof requires an empty evidence directory; use mktemp -d for each run." >&2
+        exit 1
+    fi
+done
 proof=$(cd "$(dirname "$0")" && pwd -P)
 scratch=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 work=$(mktemp -d "$scratch/spring-transport-proof.XXXXXXXX")

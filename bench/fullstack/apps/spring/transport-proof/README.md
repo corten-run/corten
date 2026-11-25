@@ -13,6 +13,9 @@ evidence=$(mktemp -d)
 sh "$spring/transport-proof/run.sh" "$spring" "$evidence"
 ```
 
+Use a new empty evidence directory for each run. The runner refuses a nonempty
+directory before starting either probe and does not remove any existing reports.
+
 The timed Dockerfile copies only the ordinary `pom.xml` and `src` and still
 runs `package -DskipTests`. That flag skips execution, not compilation, so **all**
 probe sources live in this separate tree. The runner adds the MVC probe and its
