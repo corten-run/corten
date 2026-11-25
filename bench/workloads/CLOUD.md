@@ -1259,6 +1259,50 @@ controller checks the unit is idle, saves the campaign and native output roots
 host and roots again. A changed or live host is retained. Neither the wrapper
 archive nor the later capture qualifies the group or supplies timing results.
 
+### Retire An Already Captured Handoff Failure
+
+Ordinary collection still keeps a host when the native outcome is
+`native-validated` but the wrapper exits 2. For a closed, settled single-group
+monitor with the original measured-controller capture already saved, use the
+same `--retire-failed-native` action from a clean, reviewed, merged descendant
+that passes the source comparison above. Preview from that checkout:
+
+```sh
+node bench/workloads/droplet.mjs "$round" --state-dir "$state_dir" \
+  --retire-failed-native --print-approval
+```
+
+Require recovery policy `grouped-handoff-failure-existing-custody-only`. Compare
+its measured and capture controller commits, host and account, launch and
+monitor identities, reservation and capture digests, and both archive digests
+against the already collected attempt. Run the same command with
+`--approve-reviewed-merged-ready <approvalSha256>` instead of `--print-approval`.
+The controller checks that exact approval again under the operation lock,
+reproduces the original capture script hash, and verifies both retained archives
+and extracted trees before contacting the host. Revoked or unsettled monitor
+custody, competing or retained locks, and unexplained prior retirement traces
+are refusals, not grounds to take over, recapture or repack.
+
+The action uses the existing fresh full rehash, final quiescence and ownership
+fences, and bounded DELETE. Before intent and dispatch it rechecks the held
+lock, verified custody file identities, both extraction inventories, and the
+approved capture and retirement receipt. These checks read metadata and small
+records, not archive or extraction payloads, inside the same proof deadline.
+The handoff controller checks the approved reservation bytes and file identity
+before every state write, including SSH requests and acknowledgements, and only
+advances that expectation after publishing its own verified replacement.
+Unexpected state is not repaired or overwritten; the operation lock is retained.
+It records the merged repair commit separately from the unchanged original
+capture. If DELETE was uncertain and the operation lock was released cleanly,
+take a new preview at the same repair commit. With a recorded deletion intent,
+the action can only verify exact authenticated absence. It rechecks local
+custody under the held lock after that observation, before recording completion,
+whether DELETE was acknowledged or this is an absence-only retry. It cannot
+repeat DELETE, qualify the group, promote the wrapper exit, or publish the
+native output.
+
+### Earlier Failed Native Migrations
+
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at
 `dbe1a34c753ee8ef4ac9927484dc3930d36f6e37`, round `r21`, host ID 620052965,
