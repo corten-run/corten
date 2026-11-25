@@ -1,0 +1,5 @@
+GET /items/item_1 HTTP/1.1
+Host: fsw-corten:8080
+User-Agent: Grafana k6/2.4.0
+Accept-Encoding: identity
+

@@ -1,0 +1,5 @@
+6752695,,instructions:u,1003523814,100.00,1.74,insn per cycle
+1797355,,instructions:k,1003499094,100.00,0.59,insn per cycle
+3879801,,cycles:u,1003494933,100.00,,
+3065254,,cycles:k,1003491067,100.00,,
+48393,,L1-icache-load-misses,1003476963,100.00,,

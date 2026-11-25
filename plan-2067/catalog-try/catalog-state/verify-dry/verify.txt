@@ -1,0 +1,11 @@
+DRYRUN (the base's image stands in for the head's; nothing here is read): base sha256:6accacb6cc1487e17fc5e9b0e4c36203c30b428c849a5c756a4c405134b26938, head sha256:6accacb6cc1487e17fc5e9b0e4c36203c30b428c849a5c756a4c405134b26938
+1. perf counts instructions:u, instructions:k, cycles:u, cycles:k, L1-icache-load-misses:u at 100% on CPU 1 over an idle second
+2. page: k6 sends "GET /items/item_1 HTTP/1.1" with 3 header lines, ["Host: fsw-corten:8080","User-Agent: Grafana k6/2.4.0","Accept-Encoding: identity"]; Host is line 1 of 3 (first)
+2. json: k6 sends "GET /api/items/item_76 HTTP/1.1" with 3 header lines, ["Host: fsw-corten:8080","User-Agent: Grafana k6/2.4.0","Accept-Encoding: identity"]; Host is line 1 of 3 (first)
+3. base, start 1 (answered after 141 ms): 1000 answers, every status 200; asked twice, the same status line, headers but Date and body each time
+3. base, start 2 (answered after 147 ms): 1000 answers, every status 200; asked twice, the same status line, headers but Date and body each time
+3. the base's two starts: the same status line, headers but Date and body at every path; no header value differs, so nothing is masked
+3. page: /items/item_1 answers "HTTP/1.1 200 OK" with 14 header lines but Date; bodies from 6136 to 9977 bytes
+3. json: /api/items/item_1 answers "HTTP/1.1 200 OK" with 9 header lines but Date; bodies from 3150 to 8938 bytes
+3. the base's image standing in for the head (answered after 119 ms): 1000 answers, every status 200, each the base's: status line, headers but Date, and body byte for byte
+VERIFY-OK (DRYRUN)

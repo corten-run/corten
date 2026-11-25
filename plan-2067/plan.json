@@ -1,0 +1,61 @@
+{
+  "plan": 1,
+  "name": "scope-lines-one-pass-2067",
+  "base": "c6e9be955bedd2766795eab240e061c1b14ee5d0",
+  "head": "9a79ad877fd2d324bb4dfda76fb22f74927046c0",
+  "probe": {
+    "dir": "probe",
+    "tree": ["Cargo.toml", "Cargo.lock", "README.md", "crates", "docs"],
+    "toolchain": "1.100.0",
+    "env": { "ZSTD_SYS_USE_PKG_CONFIG": "1" },
+    "build": "cargo build --release",
+    "binary": "release/probe",
+    "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain"
+  },
+  "host": {
+    "cpuModel": null,
+    "cpus": { "server": 2, "load": [4, 5], "driver": 7 }
+  },
+  "load": { "threads": 2, "connections": 64, "seconds": 3 },
+  "R": 8,
+  "placementSeconds": 600,
+  "pilot": { "K": 100 },
+  "workloads": [
+    {
+      "name": "text",
+      "declared": "GET /text with no request header of its own: a short text from a route of the app. Touched: its answer brings no header line of its scope, so on the head it is given them in one pass in place of three stages. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/text", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112511,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    },
+    {
+      "name": "api",
+      "declared": "GET /api/value with no request header of its own: a short text from a route under an API. Touched: its answer takes the pass with the API's lines. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/api/value", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112512,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    },
+    {
+      "name": "plain",
+      "declared": "GET /private with no request header of its own: the record page for one visitor, about 6 KB, not kept. Touched: a page does not take the pass, and on the head meets the test that decides so before the stages it met on the base. Margin +1%, no floor; no reduction claimed.",
+      "request": { "path": "/private", "headers": [] },
+      "status": 200,
+      "mask": [],
+      "K": "pilot",
+      "seed": 2026112513,
+      "reads": ["margin"],
+      "reduction": null,
+      "recordsSpread": false
+    }
+  ]
+}

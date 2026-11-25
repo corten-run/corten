@@ -1,0 +1,12 @@
+{
+  "k6": {
+    "image": "grafana/k6@sha256:70949facc324f13a8903d24ee5b817ff32aca02bda3458389611e6aa4b38a097",
+    "imageId": "sha256:70949facc324f13a8903d24ee5b817ff32aca02bda3458389611e6aa4b38a097",
+    "repoDigests": [
+      "grafana/k6@sha256:70949facc324f13a8903d24ee5b817ff32aca02bda3458389611e6aa4b38a097"
+    ],
+    "platform": "linux/amd64",
+    "version": "2.4.0",
+    "versionOutput": "k6 v2.4.0 (commit/dd9395906d, go1.27.3, linux/amd64)"
+  }
+}

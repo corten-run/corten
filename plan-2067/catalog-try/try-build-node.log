@@ -1,0 +1,30 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 182B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:trixie-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/2] FROM docker.io/library/debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
+#4 resolve docker.io/library/debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 0.0s done
+#4 DONE 0.0s
+
+#5 [2/2] RUN apt-get update -q && apt-get install -y -q nodejs linux-perf procps ca-certificates && rm -rf /var/lib/apt/lists/*
+#5 CACHED
+
+#6 exporting to image
+#6 exporting layers done
+#6 exporting manifest sha256:15dc1bf9bb0f33eb3cd54e8d5a0e5251cb881cfe73170019833134ed53030119 done
+#6 exporting config sha256:9ab78a70d3295107a314b780787ec5ef9e07bd28b963653c7e28a797f2f44185 done
+#6 exporting attestation manifest sha256:fdbcf3be2291759d8d9d80a80fec55792c024c69c57935303e28f282b3cb87b8 0.0s done
+#6 exporting manifest list sha256:a0233820e6139035f1e10c66bde8cb4b956d115cd8100efd769ad8fea7bf09e4 0.0s done
+#6 naming to docker.io/library/sa-cat-node:latest done
+#6 unpacking to docker.io/library/sa-cat-node:latest
+#6 unpacking to docker.io/library/sa-cat-node:latest done
+#6 DONE 0.1s

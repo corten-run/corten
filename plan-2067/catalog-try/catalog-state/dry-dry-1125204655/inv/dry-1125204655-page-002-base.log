@@ -1,0 +1,5 @@
+counting on kernel 6.8.0-149-generic, perf stat -C 1
+2026-11-25T20:52:42.591Z perf stat -C 1 -G fsw-corten
+2026-11-25T20:52:43.098Z counting fsw-corten
+corten page {"requests":5000,"failed":0,"userPerRequest":75932,"kernelPerRequest":34509,"userCyclesPerRequest":80526,"kernelCyclesPerRequest":73733,"userL1iMissesPerRequest":5184,"perfRunningPct":{"instructions:u":100,"instructions:k":100,"cycles:u":100,"cycles:k":100,"L1-icache-load-misses:u":100},"perfDiagnostics":{}}
+done

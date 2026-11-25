@@ -1,0 +1,577 @@
+{
+ "mode": "dry",
+ "prefix": "dry-1125204655",
+ "pairs": 2,
+ "run": {
+  "mode": "dry prefix dry-1125204655 pairs 0..2 (0 not recorded)",
+  "base": "cb-corten-base sha256:6accacb6cc1487e17fc5e9b0e4c36203c30b428c849a5c756a4c405134b26938",
+  "head": "cb-corten-base sha256:6accacb6cc1487e17fc5e9b0e4c36203c30b428c849a5c756a4c405134b26938",
+  "kernel": "6.8.0-149-generic",
+  "started": "2026-11-25T20:46:55Z"
+ },
+ "exit": 0,
+ "targets": {
+  "page": {
+   "verdict": "no bound (too few pairs for a 95% rank)",
+   "pairs": 2,
+   "valid": 2,
+   "rank": null,
+   "measures": {
+    "cycles user+kernel": {
+     "changes": [
+      0.1827079477256155,
+      0.005387043867780772
+     ],
+     "n": 2,
+     "min": 0.005387043867780772,
+     "max": 0.1827079477256155,
+     "median": 0.09404749579669813,
+     "bound": null,
+     "base": {
+      "median": 148445.5,
+      "min": 142632,
+      "max": 154259
+     },
+     "head": {
+      "median": 161891,
+      "min": 155090,
+      "max": 168692
+     }
+    },
+    "cycles user": {
+     "changes": [
+      0.25441216034436365,
+      0.02421578123835788
+     ],
+     "n": 2,
+     "min": 0.02421578123835788,
+     "max": 0.25441216034436365,
+     "median": 0.13931397079136076,
+     "bound": null,
+     "base": {
+      "median": 77433,
+      "min": 74340,
+      "max": 80526
+     },
+     "head": {
+      "median": 87864.5,
+      "min": 82476,
+      "max": 93253
+     }
+    },
+    "cycles kernel": {
+     "changes": [
+      0.10465354653546544,
+      -0.015176379640052584
+     ],
+     "n": 2,
+     "min": -0.015176379640052584,
+     "max": 0.10465354653546544,
+     "median": 0.044738583447706426,
+     "bound": null,
+     "base": {
+      "median": 71012.5,
+      "min": 68292,
+      "max": 73733
+     },
+     "head": {
+      "median": 74026.5,
+      "min": 72614,
+      "max": 75439
+     }
+    },
+    "instructions user": {
+     "changes": [
+      0.0011190100052658192,
+      0.000987725859979971
+     ],
+     "n": 2,
+     "min": 0.000987725859979971,
+     "max": 0.0011190100052658192,
+     "median": 0.001053367932622895,
+     "bound": null,
+     "base": {
+      "median": 75946,
+      "min": 75932,
+      "max": 75960
+     },
+     "head": {
+      "median": 76026,
+      "min": 76007,
+      "max": 76045
+     }
+    },
+    "instructions kernel": {
+     "changes": [
+      -0.00147563693308439,
+      -0.04219189197021067
+     ],
+     "n": 2,
+     "min": -0.04219189197021067,
+     "max": -0.00147563693308439,
+     "median": -0.02183376445164753,
+     "bound": null,
+     "base": {
+      "median": 33857.5,
+      "min": 33206,
+      "max": 34509
+     },
+     "head": {
+      "median": 33105,
+      "min": 33053,
+      "max": 33157
+     }
+    },
+    "L1 icache misses user": {
+     "changes": [
+      0.02046086611044884,
+      -0.018711419753086433
+     ],
+     "n": 2,
+     "min": -0.018711419753086433,
+     "max": 0.02046086611044884,
+     "median": 0.0008747231786812026,
+     "bound": null,
+     "base": {
+      "median": 5109,
+      "min": 5034,
+      "max": 5184
+     },
+     "head": {
+      "median": 5112,
+      "min": 5087,
+      "max": 5137
+     }
+    }
+   },
+   "notValid": [],
+   "invocations": [
+    {
+     "pair": 0,
+     "first": "head",
+     "valid": true,
+     "base": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 75973,
+       "kernelPerRequest": 33241,
+       "userCyclesPerRequest": 72387,
+       "kernelCyclesPerRequest": 68106,
+       "userL1iMissesPerRequest": 5177,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.7
+     },
+     "head": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 76099,
+       "kernelPerRequest": 33381,
+       "userCyclesPerRequest": 83685,
+       "kernelCyclesPerRequest": 72789,
+       "userL1iMissesPerRequest": 5116,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.6
+     }
+    },
+    {
+     "pair": 1,
+     "first": "base",
+     "valid": true,
+     "base": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 75960,
+       "kernelPerRequest": 33206,
+       "userCyclesPerRequest": 74340,
+       "kernelCyclesPerRequest": 68292,
+       "userL1iMissesPerRequest": 5034,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.6
+     },
+     "head": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 76045,
+       "kernelPerRequest": 33157,
+       "userCyclesPerRequest": 93253,
+       "kernelCyclesPerRequest": 75439,
+       "userL1iMissesPerRequest": 5137,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.7
+     }
+    },
+    {
+     "pair": 2,
+     "first": "head",
+     "valid": true,
+     "base": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 75932,
+       "kernelPerRequest": 34509,
+       "userCyclesPerRequest": 80526,
+       "kernelCyclesPerRequest": 73733,
+       "userL1iMissesPerRequest": 5184,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.7
+     },
+     "head": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 76007,
+       "kernelPerRequest": 33053,
+       "userCyclesPerRequest": 82476,
+       "kernelCyclesPerRequest": 72614,
+       "userL1iMissesPerRequest": 5087,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.7
+     }
+    }
+   ]
+  },
+  "json": {
+   "verdict": "no bound (too few pairs for a 95% rank)",
+   "pairs": 2,
+   "valid": 2,
+   "rank": null,
+   "measures": {
+    "cycles user+kernel": {
+     "changes": [
+      0.14746899094870924,
+      0.22878187933750582
+     ],
+     "n": 2,
+     "min": 0.14746899094870924,
+     "max": 0.22878187933750582,
+     "median": 0.18812543514310753,
+     "bound": null,
+     "base": {
+      "median": 118377.5,
+      "min": 117435,
+      "max": 119320
+     },
+     "head": {
+      "median": 140609,
+      "min": 136916,
+      "max": 144302
+     }
+    },
+    "cycles user": {
+     "changes": [
+      0.1703336196770744,
+      0.4056525051699742
+     ],
+     "n": 2,
+     "min": 0.1703336196770744,
+     "max": 0.4056525051699742,
+     "median": 0.2879930624235243,
+     "bound": null,
+     "base": {
+      "median": 56083.5,
+      "min": 55126,
+      "max": 57041
+     },
+     "head": {
+      "median": 72122.5,
+      "min": 66757,
+      "max": 77488
+     }
+    },
+    "cycles kernel": {
+     "changes": [
+      0.1265274008895454,
+      0.07230095170842099
+     ],
+     "n": 2,
+     "min": 0.07230095170842099,
+     "max": 0.1265274008895454,
+     "median": 0.09941417629898319,
+     "bound": null,
+     "base": {
+      "median": 62294,
+      "min": 62279,
+      "max": 62309
+     },
+     "head": {
+      "median": 68486.5,
+      "min": 66814,
+      "max": 70159
+     }
+    },
+    "instructions user": {
+     "changes": [
+      0.0018827010035469272,
+      0.004491697929108529
+     ],
+     "n": 2,
+     "min": 0.0018827010035469272,
+     "max": 0.004491697929108529,
+     "median": 0.003187199466327728,
+     "bound": null,
+     "base": {
+      "median": 59466,
+      "min": 59443,
+      "max": 59489
+     },
+     "head": {
+      "median": 59655.5,
+      "min": 59601,
+      "max": 59710
+     }
+    },
+    "instructions kernel": {
+     "changes": [
+      0.012206855081178691,
+      -0.01063003881755753
+     ],
+     "n": 2,
+     "min": -0.01063003881755753,
+     "max": 0.012206855081178691,
+     "median": 0.0007884081318105807,
+     "bound": null,
+     "base": {
+      "median": 33375,
+      "min": 33260,
+      "max": 33490
+     },
+     "head": {
+      "median": 33400,
+      "min": 33134,
+      "max": 33666
+     }
+    },
+    "L1 icache misses user": {
+     "changes": [
+      0.015194954128440408,
+      0.06753246753246755
+     ],
+     "n": 2,
+     "min": 0.015194954128440408,
+     "max": 0.06753246753246755,
+     "median": 0.04136371083045398,
+     "bound": null,
+     "base": {
+      "median": 3476.5,
+      "min": 3465,
+      "max": 3488
+     },
+     "head": {
+      "median": 3620,
+      "min": 3541,
+      "max": 3699
+     }
+    }
+   },
+   "notValid": [],
+   "invocations": [
+    {
+     "pair": 0,
+     "first": "head",
+     "valid": true,
+     "base": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 59650,
+       "kernelPerRequest": 33495,
+       "userCyclesPerRequest": 58590,
+       "kernelCyclesPerRequest": 61967,
+       "userL1iMissesPerRequest": 3537,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.7
+     },
+     "head": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 59630,
+       "kernelPerRequest": 33095,
+       "userCyclesPerRequest": 65339,
+       "kernelCyclesPerRequest": 64215,
+       "userL1iMissesPerRequest": 3617,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.8
+     }
+    },
+    {
+     "pair": 1,
+     "first": "base",
+     "valid": true,
+     "base": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 59489,
+       "kernelPerRequest": 33260,
+       "userCyclesPerRequest": 57041,
+       "kernelCyclesPerRequest": 62279,
+       "userL1iMissesPerRequest": 3488,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.8
+     },
+     "head": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 59601,
+       "kernelPerRequest": 33666,
+       "userCyclesPerRequest": 66757,
+       "kernelCyclesPerRequest": 70159,
+       "userL1iMissesPerRequest": 3541,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.8
+     }
+    },
+    {
+     "pair": 2,
+     "first": "head",
+     "valid": true,
+     "base": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 59443,
+       "kernelPerRequest": 33490,
+       "userCyclesPerRequest": 55126,
+       "kernelCyclesPerRequest": 62309,
+       "userL1iMissesPerRequest": 3465,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.7
+     },
+     "head": {
+      "row": {
+       "requests": 5000,
+       "failed": 0,
+       "userPerRequest": 59710,
+       "kernelPerRequest": 33134,
+       "userCyclesPerRequest": 77488,
+       "kernelCyclesPerRequest": 66814,
+       "userL1iMissesPerRequest": 3699,
+       "perfRunningPct": {
+        "instructions:u": 100,
+        "instructions:k": 100,
+        "cycles:u": 100,
+        "cycles:k": 100,
+        "L1-icache-load-misses:u": 100
+       },
+       "perfDiagnostics": {}
+      },
+      "checksFailed": 0,
+      "seconds": 34.8
+     }
+    }
+   ]
+  }
+ },
+ "seconds": {
+  "n": 12,
+  "median": 34.7,
+  "min": 34.6,
+  "max": 34.8
+ }
+}

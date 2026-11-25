@@ -1,0 +1,5 @@
+mode dry prefix dry-1125204655 pairs 0..2 (0 not recorded)
+base cb-corten-base sha256:6accacb6cc1487e17fc5e9b0e4c36203c30b428c849a5c756a4c405134b26938
+head cb-corten-base sha256:6accacb6cc1487e17fc5e9b0e4c36203c30b428c849a5c756a4c405134b26938
+kernel 6.8.0-149-generic
+started 2026-11-25T20:46:55Z

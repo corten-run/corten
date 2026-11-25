@@ -1,0 +1,21 @@
+{
+ "corten/page": [
+  {
+   "requests": 5000,
+   "failed": 0,
+   "userPerRequest": 75960,
+   "kernelPerRequest": 33206,
+   "userCyclesPerRequest": 74340,
+   "kernelCyclesPerRequest": 68292,
+   "userL1iMissesPerRequest": 5034,
+   "perfRunningPct": {
+    "instructions:u": 100,
+    "instructions:k": 100,
+    "cycles:u": 100,
+    "cycles:k": 100,
+    "L1-icache-load-misses:u": 100
+   },
+   "perfDiagnostics": {}
+  }
+ ]
+}
