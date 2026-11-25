@@ -306,7 +306,8 @@ test("semver snapshot pins same-read library bytes before actual worker executio
 test("only named replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
   const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs" || path === "bench/fullstack/edge.mjs"
     || path === "bench/fullstack-browser/document-navigation.mjs"
-    || path === "bench/workloads/isolated/native-roles.mjs" || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
+    || path === "bench/workloads/isolated/native-roles.mjs" || path === "bench/marketplace/steady-contract.mjs"
+    || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
     "bench/fullstack-browser/document-navigation.mjs",
@@ -314,6 +315,7 @@ test("only named replay dependencies extend the worker source budget", { timeout
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
+    "bench/marketplace/steady-contract.mjs",
     "bench/typescript.mjs",
     "bench/workloads/isolated/native-roles.mjs",
   ]);
