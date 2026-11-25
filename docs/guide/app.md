@@ -286,7 +286,7 @@ first two are what HTTP requires, and the third is Corten's choice where HTTP le
    for an address of a later version, none is defined, and RFC 3986 asks for an error where
    the version is not known); and a target that names its host
    (`GET http://shop.example/ HTTP/1.1`, or a host alone) where that host and port are not
-   what item 2 holds a `Host` to: a user in it (`http://user@shop.example/`), which HTTP says
+   what a `Host` is held to above: a user in it (`http://user@shop.example/`), which HTTP says
    a server should treat as an error, a port that is no number (`http://shop.example:abc/`),
    or an address in brackets that is not IPv6 or has a zone (`http://[v1.fe80]/`,
    `http://[fe80::1%25eth0]/`). The target's host is the one the request asks for, so the
@@ -1362,16 +1362,18 @@ glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
-([Host names](#host-names)) added to a request whose first header line is not `Host`: 46 to 50
-with `Host` second, and 80 to 85 with it last of a browser's eight lines, about where
+([Host names](#host-names)) added to a request whose first header line is not `Host`: 17 to 19
+with `Host` second, and 49 to 54 with it last of a browser's eight lines, about where
 Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first, and so does
 nginx as the deploy guide sets it up). A request with `Host` first is no longer searched for it
-and costs 60 to 96 fewer than before in an app that names its hosts. An app that answers to any
-host now reads `Host` too: 177 to 184 more with it first and 377 to 384 with it last of eight
-(counted over a socket at the final code, `31212aa1d`, each build in turn, each figure the
+and costs 90 to 126 fewer than before in an app that names its hosts. An app that answers to any
+host now reads `Host` too, every byte of it, to refuse one that is no host: 111 to 113 more with
+it first, of which 34 to 36 find the line and the rest read `localhost:8080`, and 311 to 312 with
+it last of eight
+(counted over a socket at `5c7b006dc`, each build in turn, each figure the
 difference of the two builds' medians of three runs, with main built a
-second time counting within 4 of main but for one request, 12 away, so the 46 is not told from
-34; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
+55; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
