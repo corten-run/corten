@@ -27,6 +27,7 @@ import { prefetch } from "./smoke/prefetch.mjs";
 import { pageRefresh } from "./smoke/page-refresh.mjs";
 import { dataClients } from "./smoke/data-clients.mjs";
 import { withoutJs } from "./smoke/without-js.mjs";
+import { dataAddress } from "./smoke/address.mjs";
 
 // Areas run in order and share their pages, routes, and listeners.
 await runSmoke(async (browser) => {
@@ -73,4 +74,5 @@ await runSmoke(async (browser) => {
   await withoutJs(browser, signsIn);
   await earlyNavigation(browser);
   await formSubmission(browser);
+  await dataAddress(browser);
 });

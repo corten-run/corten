@@ -2724,6 +2724,85 @@ impl Req {
     /// }
     /// # let _ = App::new(url::router()).router();
     /// ```
+    ///
+    /// A GET form marked `data-address` as well says that its answer is the page at the address it
+    /// asked for (a filter or scope that draws only its part): once the patch is drawn, the runtime
+    /// puts that address in place of the history entry's, as the browser shows the form's address
+    /// without JavaScript, but adding no entry, so a reload or a link to it reads the page at that
+    /// address (`docs/guide/requests-and-forms.md`, Filters and lists that grow).
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="get" data-patch data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {
+    /// assert!(scope().to_html().contains("data-patch data-address"));
+    /// // A spread after the method: the browser keeps the first `method`, this one.
+    /// let extra: [(&str, &str); 1] = [("class", "scope")];
+    /// let spread = html! { <form method="get" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// assert!(spread.to_html().contains(r#"data-address class="scope""#));
+    /// # }
+    /// ```
+    ///
+    /// `html!` refuses the mark where the runtime would never change the address: on anything but a
+    /// `<form>`,
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <section data-patch data-address><button>"Apply"</button></section> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// on a form without `data-patch`, which the browser sends and changes the address for itself,
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="get" data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// and on a form that posts, whose answer stays at the page's address. A `method` written as an
+    /// expression is known only when the form is sent, and the runtime changes the address only for
+    /// a GET; so is one after a spread, which may write the `method` the browser keeps, the first.
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="post" data-patch data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// A dialog's form closes its dialog and sends nothing, so it is refused too:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="dialog" data-patch data-address><button>"Close"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// A `method` before every spread is the one the browser keeps:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// # fn main() {
+    /// let extra: [(&str, &str); 1] = [("class", "scope")];
+    /// let _ = html! { <form method="post" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// # }
+    /// ```
     pub fn patch_or<For, Kind: crate::answer::PatchingKind, F, Fut>(
         &self,
         view: impl crate::view::Patch,
