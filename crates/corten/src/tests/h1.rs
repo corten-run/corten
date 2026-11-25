@@ -991,8 +991,9 @@ async fn a_body_left_unread_behind_a_head_that_fills_a_read_keeps_its_connection
         for own in BOTH {
             let served = Served::start(App::new(routes()).max_request_head(limit), own).await;
             let mut got = Vec::new();
-            // The head ends in the read's last bytes, so the body is cut by the read's end.
-            for ends in [read - 3, read - 1, read] {
+            // The head ends in the read's last bytes, so the body is cut by the read's end, at each
+            // of its bytes in turn. (A chunk cut inside its data is the cut hyper closes at.)
+            for ends in read - 15..=read {
                 let head = |framing: &str| {
                     let padded =
                         |pad: usize| format!("POST /unread HTTP/1.1\r\n{HOST}{framing}\r\nx-pad: {}\r\n\r\n", "p".repeat(pad));
