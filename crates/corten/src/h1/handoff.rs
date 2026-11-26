@@ -15,7 +15,20 @@
 //! answer, so the bytes hyper is given are the ones the client sent, in the allocation they were
 //! read into: no byte is copied, dropped or made.
 
+//!
+//! **Types of its own.** hyper's connection here is not the one a server without
+//! [`crate::App::own_http1`] runs, though it is the same code: its IO, its service, the future
+//! that service gives and the body of its answers are each a type only this module's connections
+//! have ([`Apart`], [`Handed`]). The compiler makes one copy of a generic function for each set
+//! of types it is used with, and inlines a function into its one caller where it would not into
+//! two. Sharing the types gave the functions on hyper's path a second caller each, and a request
+//! to a server that never turns this on cost more instructions for it
+//! (`docs/design.md#choice-own-http1` has the count). With these, that server's path is compiled
+//! as it is without this module in the program.
+
 use std::{
+    convert::Infallible,
+    future::Future,
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -23,6 +36,143 @@ use std::{
 
 use bytes::{Buf, Bytes};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+use crate::{body::Body, watch::Answered};
+
+/// A future or an IO as a type of its own, which passes every call on: what Corten's own
+/// connection reads, writes and polls is `Apart`, so nothing generic over it is the function
+/// hyper's connection runs on a server without [`crate::App::own_http1`] (the module's text).
+pub(crate) struct Apart<T>(pub T);
+
+impl<F: Future + Unpin> Future for Apart<F> {
+    type Output = F::Output;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        Pin::new(&mut self.get_mut().0).poll(cx)
+    }
+}
+
+impl<I: AsyncRead + Unpin> AsyncRead for Apart<I> {
+    #[inline]
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<I: AsyncWrite + Unpin> AsyncWrite for Apart<I> {
+    #[inline]
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+    }
+
+    #[inline]
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+
+    #[inline]
+    fn poll_write_vectored(self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &[io::IoSlice<'_>]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().0).poll_write_vectored(cx, bufs)
+    }
+
+    #[inline]
+    fn is_write_vectored(&self) -> bool {
+        self.0.is_write_vectored()
+    }
+}
+
+/// The connection's service as hyper calls it once the connection is hyper's: the service
+/// Corten's own connection called, given the request hyper read with the body hyper reads for
+/// it, as `corten::app::Connection` is given one on a server without [`crate::App::own_http1`].
+/// Its answer's body gives its bytes as [`HandedData`], so hyper's writer too is this
+/// connection's own copy (the module's text).
+pub(crate) struct Handed<S>(pub S);
+
+impl<S> hyper::service::Service<hyper::Request<hyper::body::Incoming>> for Handed<S>
+where
+    S: tower_service::Service<http::Request<Body>, Response = http::Response<Answered>, Error = Infallible> + Clone,
+    S::Future: Unpin,
+{
+    type Response = http::Response<HandedBody>;
+    type Error = Infallible;
+    type Future = HandedAnswer<S::Future>;
+
+    fn call(&self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
+        // Marks a read of the body that waits for the client, for the deadline, as
+        // `Connection` does for hyper's request.
+        let req = req.map(|body| Body::new(crate::extract::Arriving(body)));
+        // Called without `poll_ready`: the router's is ready at once, always
+        // (`docs/design.md#choice-axum-router`), and a connection's service only passes it on.
+        HandedAnswer(self.0.clone().call(req))
+    }
+}
+
+/// [`Handed`]'s future: the service's, with the answer's body as a [`HandedBody`].
+pub(crate) struct HandedAnswer<F>(F);
+
+impl<F: Future<Output = Result<http::Response<Answered>, Infallible>> + Unpin> Future for HandedAnswer<F> {
+    type Output = Result<http::Response<HandedBody>, Infallible>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.get_mut().0).poll(cx).map(|answer| answer.map(|answer| answer.map(HandedBody)))
+    }
+}
+
+/// An answer's body on a connection handed to hyper: [`Answered`], each piece a [`HandedData`].
+pub(crate) struct HandedBody(Answered);
+
+impl http_body::Body for HandedBody {
+    type Data = HandedData;
+    type Error = crate::body::BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<HandedData>, crate::body::BoxError>>> {
+        Pin::new(&mut self.get_mut().0)
+            .poll_frame(cx)
+            .map(|frame| frame.map(|frame| frame.map(|frame| frame.map_data(HandedData))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.0.size_hint()
+    }
+}
+
+/// A piece of a [`HandedBody`]: the `Bytes` it is, under a type of its own.
+pub(crate) struct HandedData(Bytes);
+
+impl Buf for HandedData {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.0.remaining()
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self.0.chunk()
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        self.0.advance(cnt);
+    }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        self.0.copy_to_bytes(len)
+    }
+}
 
 /// An IO with bytes already read from it put back in front: they are read first, then the IO.
 ///

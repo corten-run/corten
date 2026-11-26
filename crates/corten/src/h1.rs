@@ -57,7 +57,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use http::{HeaderMap, Method, Version};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-pub(crate) use handoff::Rewound;
+pub(crate) use handoff::{Apart, Handed, Rewound};
 use head::{Asked, Coding, Head, Known, Refusal};
 
 use crate::{body::Body, watch::Answered};

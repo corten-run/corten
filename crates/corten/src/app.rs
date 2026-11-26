@@ -2231,7 +2231,8 @@ impl OwnConnection {
         };
         // The connection is told that shutdown began by `ending`, and polled again.
         let ending = std::sync::atomic::AtomicBool::new(false);
-        let io = crate::watch::Watched { io, watch, _open: permit };
+        // The IO as a type of this connection's own (`Apart` says why), watched as hyper's is.
+        let io = crate::watch::Watched { io: crate::h1::Apart(io), watch, _open: permit };
         // What the connection gave back, if it stopped at a request that is hyper's.
         let handed = 'own: {
             let mut conn = std::pin::pin!(crate::h1::serve(io, data.service(connection), head, &ending));
@@ -2315,7 +2316,7 @@ async fn handed_over<I, D>(
     I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     D: ConnectionData,
 {
-    let service = hyper_util::service::TowerToHyperService::new(service);
+    let service = crate::h1::Handed(service);
     let mut conn = std::pin::pin!(http.serve_connection(hyper_util::rt::TokioIo::new(io), service).with_upgrades());
     // The connection is polled first: the request it was handed over at has arrived, and is
     // answered though shutdown began before hyper read it.
@@ -2360,12 +2361,8 @@ pub(crate) trait ConnectionData: Clone + Send + Sync + 'static {
             Response = http::Response<crate::watch::Answered>,
             Error = Infallible,
             Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
-        > + tower_service::Service<
-            Request,
-            Response = http::Response<crate::watch::Answered>,
-            Error = Infallible,
-            Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
-        > + Clone
+        > + tower_service::Service<Request, Response = http::Response<crate::watch::Answered>, Error = Infallible, Future = OwnAnswer>
+        + Clone
         + Send
         + 'static;
 
@@ -2410,12 +2407,19 @@ impl<T: Clone + Send + Sync + 'static> tower_service::Service<hyper::Request<hyp
     }
 }
 
-/// The same service for a request Corten's own connection read ([`crate::h1`]), which has no
-/// body. A second implementation, so the one hyper calls is compiled as it is without it.
+/// What a connection's service gives a request of a server with [`App::own_http1`]: the future
+/// it gives hyper's on a server without, as a type of its own ([`crate::h1::Apart`] says why).
+pub(crate) type OwnAnswer =
+    crate::watch::Answer<crate::client::WithPeer<crate::h1::Apart<<Router as tower_service::Service<Request>>::Future>>>;
+
+/// The same service for a request of a server with [`App::own_http1`]: one Corten's own
+/// connection read ([`crate::h1`]), which has no body, or one hyper read once the connection was
+/// its ([`crate::h1::Handed`]). A second implementation, with a future of its own type, so the
+/// one hyper calls on a server without is compiled as it is without this one.
 impl<T: Clone + Send + Sync + 'static> tower_service::Service<Request> for Informed<T> {
     type Response = http::Response<crate::watch::Answered>;
     type Error = Infallible;
-    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+    type Future = OwnAnswer;
 
     fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         tower_service::Service::<Request>::poll_ready(&mut self.connection, cx)
@@ -2430,7 +2434,7 @@ impl<T: Clone + Send + Sync + 'static> tower_service::Service<Request> for Infor
 impl tower_service::Service<Request> for Connection {
     type Response = http::Response<crate::watch::Answered>;
     type Error = std::convert::Infallible;
-    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+    type Future = OwnAnswer;
 
     fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         tower_service::Service::<Request>::poll_ready(&mut self.router, cx)
@@ -2438,13 +2442,14 @@ impl tower_service::Service<Request> for Connection {
 
     fn call(&mut self, req: Request) -> Self::Future {
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
+        // A `CONNECT` comes here from hyper alone, once the connection is its.
+        let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
             bound.arrived();
         }
-        let call = tower_service::Service::<Request>::call(&mut self.router, req);
+        let call = crate::h1::Apart(tower_service::Service::<Request>::call(&mut self.router, req));
         let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
-        // Never a `CONNECT`: that request is hyper's, with the rest of its connection.
-        crate::watch::Answer { inner, watch, connect: false }
+        crate::watch::Answer { inner, watch, connect }
     }
 }
 
