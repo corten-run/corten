@@ -294,8 +294,8 @@ struct Conn<I> {
     inbox: Inbox,
     /// How long the head being read was when it was last found unfinished.
     partial: Option<usize>,
-    /// The read that brought the last of those bytes filled what it was offered, so the bytes
-    /// the next read brings may have come with them ([`Conn::parse`]).
+    /// The read that brought the last of those bytes filled what it was offered and no read has
+    /// waited since, so the bytes the next read brings came with them ([`Conn::parse`]).
     together: bool,
     indices: Vec<head::Indices>,
     /// The header map of the last answer, emptied, for the next request.
@@ -356,10 +356,11 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             // that brought the ones before them: its first read is of `READ` bytes and this
             // connection's of `FIRST`, and what is wrong in a head is refused when a parse sees
             // it, whether the head ends or not. So as far as hyper's first read reaches, bytes
-            // that came together (the read before these filled what it was offered) are parsed
-            // together: a wrong line in the first `READ` bytes of a head that came at once is
-            // refused here as there. A head of that length that is right is parsed once more
-            // than its end alone would have it parsed only if it is longer than two reads.
+            // that came together (the read before these filled what it was offered, and these
+            // were there without a wait) are parsed together: a wrong line in the first `READ`
+            // bytes of a head that came at once is refused here as there. A head of that length
+            // that is right is parsed once more than its end alone would have it parsed only if
+            // it is longer than two reads.
             Some(had) if self.together && had < READ => {
                 head::scan(&bytes[..bytes.len().min(READ)], self.limit, &mut self.indices)?
             }
@@ -457,6 +458,8 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         // What is unread is part of a head, shorter than the limit (`parse`).
         let read = self.inbox.poll_fill(&mut self.io, cx, self.limit);
         if read.is_pending() {
+            // What comes after a wait did not come with what was read before it (`parse`).
+            self.together = false;
             self.rest();
         }
         read

@@ -1,7 +1,9 @@
 //! Corten's own HTTP/1.1 connection ([`crate::h1`], [`App::own_http1`]) over a socket: what it
 //! refuses, when it keeps a connection, what it does with pipelined requests, where it hands a
-//! connection to hyper, that every limit an app sets holds on it, and that what it answers is what
-//! hyper's connection answers, byte for byte. `h1_fuzz` compares the two on streams made at random.
+//! connection to hyper, that every limit an app sets holds on it, and where what it answers is
+//! what hyper's connection answers, byte for byte but `Date`, and where it is not (trailers, a
+//! body that fails, a head refused at the limit). `h1_fuzz` compares the two on streams made at
+//! random.
 
 use super::*;
 use bytes::Bytes;
@@ -1797,6 +1799,21 @@ async fn a_head_that_is_wrong_is_refused_before_its_end_comes() {
         assert_eq!(read(&mut client, Duration::from_millis(300)).await, (String::new(), false));
         client.shutdown().await.unwrap();
         assert_eq!(read(&mut client, SOON).await, (String::new(), true));
+    }
+    // A wrong line that comes after a wait, behind a part that was right, is not looked at until
+    // the head's end comes, on both: each looks through an unfinished head again only when its
+    // end may have come, and what came later was not in hyper's first read either. (The part
+    // before the wait fills a first read of Corten's connection, which alone does not make the
+    // bytes behind it ones that came with it.)
+    for served in [&hyper, &own] {
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        client.write_all(&long.as_bytes()[..crate::h1::FIRST]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        client.write_all(format!("{}bad name: x\r\n", &long[crate::h1::FIRST..]).as_bytes()).await.unwrap();
+        assert_eq!(read(&mut client, Duration::from_millis(300)).await, (String::new(), false));
+        client.write_all(b"\r\n").await.unwrap();
+        let (answers, closed) = read(&mut client, SOON).await;
+        assert_eq!((statuses(&answers), closed), (vec![400], true), "{answers}");
     }
     hyper.stop().await;
     own.stop().await;
