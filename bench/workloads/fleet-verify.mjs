@@ -440,13 +440,17 @@ function setupRetryIdle({ local, stateRoot, outcome }) {
     && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
 }
 
-export function verifySetupRetry(saved) {
-  const { local, state, stateSha256 } = saved;
-  setupRetryIdle(saved);
-  verifyFailedSetupRetirement(local, state);
+function checkSetupRetryRecords({ local, state, stateSha256 }) {
+  physical(local);
   assert.equal(digest(regular(join(local, "state.json"), 1024 * 1024)), stateSha256, "setup retirement state changed during replay");
   assert.equal(digest(regular(join(local, failedSetupRetirementFile), state.control ? 8 * 1024 * 1024 : 4096)),
     state.retirement.evidenceSha256, "setup retirement receipt changed during replay");
+}
+
+export function verifySetupRetry(saved) {
+  setupRetryIdle(saved);
+  verifyFailedSetupRetirement(saved.local, saved.state);
+  checkSetupRetryRecords(saved);
   setupRetryIdle(saved);
 }
 
@@ -465,13 +469,16 @@ export function recheckSetupRetirement(root, row, indexedCustody) {
   assert.ok(saved.stateSha256 === row.stateSha256 && saved.state?.status === "retired" && saved.state.destroyedAt,
     "prior setup retirement reservation changed");
   verifySetupRetry(saved);
-  const stillIdle = () => {
-    setupRetryIdle(saved);
+  const checkBatch = () => {
     const batch = fleetBatchLock(fleet.root);
     assert.equal(batch && digest(batch), row.batchSha256, "prior setup retirement fleet lock changed");
   };
-  stillIdle();
-  return stillIdle;
+  checkBatch();
+  return () => {
+    checkSetupRetryRecords(saved);
+    checkBatch();
+    setupRetryIdle(saved);
+  };
 }
 
 // Absence of an old ID in the provider account is necessary but not sufficient:

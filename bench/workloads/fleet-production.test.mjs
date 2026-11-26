@@ -130,6 +130,12 @@ function fixture(t, mode = "success", fakeRoleGroup, dispatch) {
       const roleDefault = "compiler, roleCheck, remainingAdmission = false";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
       assert.equal(source.split(roleDefault).length, 2, "review role-check fixture default");
+      if (dispatch?.move) {
+        const beforeCheck = "for (const stillIdle of setupIdleChecks) stillIdle();";
+        const pathLiteral = JSON.stringify(path.join(h.base, ...dispatch.path));
+        assert.equal(source.split(beforeCheck).length, 2, "review retired state movement seam");
+        source = source.replace(beforeCheck, `syntheticFs.renameSync(${pathLiteral}, ${pathLiteral} + '.moved');\n          ${beforeCheck}`);
+      }
       source = source.replace(before, after).replace(roleDefault, "compiler, roleCheck = syntheticRoleCheck, remainingAdmission = false") + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
@@ -916,12 +922,13 @@ test("a settled continuation placement refusal leaves the unallocated slot avail
   assert.deepEqual(p.events(), []);
 });
 
-for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "cancel at provider", "new batch after intent"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
+for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "cancel at provider", "new batch after intent", "state moved during replay"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
   const group = "json-api", lockFile = "stream-recovery.lock", childDir = [group, group, "groups-r19"];
   const markers = { "after create intent": [...childDir, lockFile], "cancel before dispatch": [...childDir, "cancelled"],
     "cancel at provider": [...childDir, "cancelled"], "new batch after intent": [group, ".fleet-operation.lock"] };
   const cancel = { "cancel before dispatch": 2, "cancel at provider": 3 }[change];
-  const dispatch = markers[change] ? { path: markers[change], cancel } : undefined;
+  const dispatch = markers[change] ? { path: markers[change], cancel } : change === "state moved during replay"
+    ? { path: [...childDir, "state.json"], move: true } : undefined;
   const p = fixture(t, "ssh-late", group, dispatch), root = p.h.base, prior = path.join(root, group);
   p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
   fs.writeFileSync(path.join(root, "index.json"), "[]");
@@ -967,10 +974,12 @@ for (const change of ["none", "after handoff", "after create intent", "cancel be
   assert.equal(code, change === "none" ? 3 : 2);
   if (change !== "none") {
     const lock = dispatch ? path.join(root, ...dispatch.path) : path.join(local, lockFile);
-    assert.ok(fs.existsSync(lock));
+    if (dispatch?.move) assert.ok(!fs.existsSync(lock) && fs.existsSync(lock + ".moved"));
+    else assert.ok(fs.existsSync(lock));
     const nextState = p.saved(path.join(`${group}--r21`, group));
     assert.equal(nextState.createIntentAt, undefined); assert.equal(nextState.status, "reserved");
-    fs.unlinkSync(lock);
+    if (dispatch?.move) fs.renameSync(lock + ".moved", lock);
+    else fs.unlinkSync(lock);
     const admission = await continuationAdmission(root, group);
     assert.equal(admission.rows.find((row) => row.group === group).outcome, "not-created");
   }
