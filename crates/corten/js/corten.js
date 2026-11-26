@@ -2184,7 +2184,8 @@ const holdsNav = (el) => matchesOf(el, NAV) || !!queryOne(el, NAV);
  * Sets `aria-current="page"` on `<a data-nav>` links to this page (`data-nav="section"`: to this
  * page or any page under it) and removes it from the rest, after a navigation and after a patch
  * that puts one on the page or removes one. A link whose `href` is not a path on this site
- * (`isPath`) is never current. Of the links of one `data-nav-group` (`Req::nav_of`),
+ * (`isPath`) is never current, and its URL is not parsed: one no browser can parse (`//[`) does not
+ * stop the rest from being ranked. Of the links of one `data-nav-group` (`Req::nav_of`),
  * only the deepest that holds the page is current; a link holds it at its own URL or, in a group the
  * server named with a trailing `+`, at one of the paths in its `data-nav-also` (`NavTo::also`), all
  * of them compared by comparison key there (`alsoDepth`). The shell is not re-rendered by client
@@ -2206,12 +2207,16 @@ function markCurrent(kept = []) {
   /** The comparison key of `here`, made for the first group with other addresses. @type {string | undefined} */
   let page;
   for (const link of Array.from(document.querySelectorAll(NAV))) {
-    const path = new URL(/** @type {HTMLAnchorElement} */ (link).href).pathname;
-    const base = path.replace(/\/+$/, "");
-    const holds = here === path || (link.getAttribute("data-nav") === "section" && here.startsWith(`${base}/`));
     const named = link.getAttribute("data-nav-group");
     const group = named ?? link;
-    const depth = !isPath(link) ? -1 : named?.endsWith("+") ? alsoDepth(link, path, (page ??= keyOf(here))) : holds ? base.length : -1;
+    let depth = -1;
+    // Tested before the URL is parsed, which one that is not a path (`//[`) may fail.
+    if (isPath(link)) {
+      const path = new URL(/** @type {HTMLAnchorElement} */ (link).href).pathname;
+      const base = path.replace(/\/+$/, "");
+      if (named?.endsWith("+")) depth = alsoDepth(link, path, (page ??= keyOf(here)));
+      else if (here === path || (link.getAttribute("data-nav") === "section" && here.startsWith(`${base}/`))) depth = base.length;
+    }
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
   }

@@ -740,7 +740,7 @@ fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
 
     // Without other addresses, and for a lone link, the same: never current, even where the
     // request path is the URL's text.
-    for url in far.into_iter().chain(["https://corten.invalid/old", "old", "?tab=2", " /old", ""]) {
+    for url in far.into_iter().chain(["https://corten.invalid/old", "old", "?tab=2", " /old", "", "//["]) {
         let to = Hand(url);
         for path in ["/old", "//corten.invalid/old", url] {
             let expected: &[&str] = if path.starts_with('/') { &["Root"] } else { &[] };
@@ -758,6 +758,47 @@ fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
     // A path on this site stays one, `/` and a query or fragment straight after it included.
     for (path, url) in [("/", "/"), ("/", "/?tab=2"), ("/", "/#top"), ("/a//b", "/a//b"), ("/a", "/a?b//c")] {
         assert!(crate::page::is_current_for_tests(path, url, false), "{url:?} at {path:?}");
+    }
+}
+
+/// An entry whose URL is empty ends where the entry before it does, so it is not taken for that
+/// entry when its other addresses (`NavTo::also`) are written: only the entry that has them writes
+/// `data-nav-also` (#2119).
+#[test]
+fn an_empty_nav_url_does_not_write_the_entry_before_its_other_addresses() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    /// A URL as a route implemented by hand writes it.
+    struct Hand(&'static str);
+    impl crate::Route for Hand {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let (settings, old, empty, after) =
+        (Local::parse("/settings").unwrap(), Local::parse("/old").unwrap(), Hand(""), Hand("?tab=2"));
+    for path in ["/settings", "/old", "/"] {
+        let links: Vec<String> = nav_links(
+            path,
+            [(NavTo::page(&settings).also(&old), "Settings"), (NavTo::page(&empty), "Empty"), (NavTo::page(&after), "Query")],
+        )
+        .links()
+        .map(|(link, _)| {
+            let mut out = String::new();
+            link.render_attrs(&mut out);
+            out
+        })
+        .collect();
+        assert!(links[0].contains(r#" data-nav-also="/old""#), "{path}: {links:?}");
+        assert_eq!(links[0].contains("aria-current"), path != "/", "{path}: {links:?}");
+        for link in &links[1..] {
+            assert!(!link.contains("data-nav-also") && !link.contains("aria-current"), "{path}: {links:?}");
+        }
     }
 }
 

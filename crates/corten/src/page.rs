@@ -577,10 +577,13 @@ impl<'a> NavTo<'a> {
     /// first, as every engine does, so `/old/%2e%2e/x` is `/x` and kept. A typed route never writes
     /// such an escape and a [`crate::Local`] cannot hold one; only a route
     /// implemented by hand can. A path with such an escape typed by hand is compared as written, so
-    /// it is never the address with the plain character. That is the one limit, in any nav: WebKit
-    /// asks for `/%73ettings` as `/settings`, so its first render marks the entry at `/settings` and
-    /// its runtime, at the same address, does not; Chromium and Firefox ask for it as written and
-    /// neither marks it.
+    /// it is never the address with the plain character. That is one limit, in any nav: WebKit asks
+    /// for `/%73ettings` as `/settings`, so its first render marks the entry at `/settings` and its
+    /// runtime, at the same address, does not; Chromium and Firefox ask for it as written and
+    /// neither marks it. The other is a nav without other addresses, which compares the paths as
+    /// written: an entry at `/old%7chome` is unmarked in WebKit's first render, which asks for
+    /// `/old%7Chome`, and marked by its runtime, whose `location.pathname` keeps `%7c`, as an entry
+    /// at `/a|b` is in Chromium, which asks for and shows `/a%7Cb`.
     ///
     /// An address that is not a path on this site, `//host/old` (or `/\host/old`, or a tab or line
     /// break after the first `/`, which a browser drops), names another host, so it is left out,
@@ -673,13 +676,18 @@ struct Also {
 }
 
 impl Also {
-    /// Writes ` data-nav-also="…"` for the entry whose URL ends at `url_end`, when it has other
-    /// addresses. Out of line and reached only from a nav that has some, so a link of a nav without
-    /// them looks nothing up.
+    /// Writes ` data-nav-also="…"` for `link`'s entry, found by where its URL ends, when it has
+    /// other addresses. Only an entry whose URL is a path on this site has some
+    /// ([`other_addresses`]), and such a URL, never empty, ends where no other entry's does but an
+    /// empty URL straight after it, which has none. Out of line and reached only from a nav that has
+    /// some, so a link of a nav without them looks nothing up.
     #[cold]
     #[inline(never)]
-    fn write(&self, url_end: usize, out: &mut String) {
-        if let Ok(i) = self.ends.binary_search_by_key(&url_end, |&(of, _)| of) {
+    fn write(&self, link: &NavLink<'_>, out: &mut String) {
+        if let Ok(i) = self.ends.binary_search_by_key(&link.url_end, |&(of, _)| of) {
+            if link.url.is_empty() {
+                return;
+            }
             let start = if i == 0 { 0 } else { self.ends[i - 1].1 };
             out.push_str(r#" data-nav-also=""#);
             crate::view::escape_into(&self.paths[start..self.ends[i].1], out);
@@ -745,7 +753,7 @@ impl crate::view::Attrs for NavLink<'_> {
         out.push_str(self.group);
         out.push('"');
         if let Some(also) = self.also {
-            also.write(self.url_end, out);
+            also.write(self, out);
         }
         if self.current {
             out.push_str(r#" aria-current="page""#);

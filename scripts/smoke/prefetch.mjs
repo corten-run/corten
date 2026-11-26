@@ -530,20 +530,26 @@ export async function navAlso(browser, swaps) {
  * nav with other addresses, in one without and as a lone `req.nav` link (`/smoke/far/{name}`). None
  * is current at `/smoke/far/old`, nor at `/smoke/far/older`, an other address the server leaves out
  * of an off-site entry; only the sections are. Here, whose other address leads off too and is left
- * out, is current at its kept one, `/smoke/far/before`. The server's answer to the browser's own
- * request, and the runtime after a client navigation on copies of the links it never saw marked.
+ * out, is current at its kept one, `/smoke/far/before`. The nav without other addresses holds
+ * `//[` too, which no browser parses as a URL: never current, and the runtime ranks its siblings
+ * at a full load and after a client navigation without throwing. The server's answer to the
+ * browser's own request, and the runtime after a client navigation on copies of the links it never
+ * saw marked.
  */
 export async function navFar(browser, swaps) {
   const name = "a nav link that leads off this site is never current, by the server and the runtime alike";
   const context = await browser.newContext();
   const page = await context.newPage();
-  const labels = ["Far", "Slashes", "Backslash", "Tab", "Here", "Plain far", "Plain slashes", "Plain backslash", "Plain tab", "Lone"];
-  const sections = "page - - - - page - - - -";
+  /** What the page threw: the runtime ranking the links must not. @type {string[]} */
+  const thrown = [];
+  page.on("pageerror", (error) => thrown.push(`${page.url()}: ${error.message}`));
+  const labels = ["Far", "Slashes", "Backslash", "Tab", "Here", "Plain far", "Plain slashes", "Plain backslash", "Plain tab", "Plain malformed", "Lone"];
+  const sections = "page - - - - page - - - - -";
   /** Each page, with the marks the server and the runtime give the links there. */
   const visits = [
     ["/smoke/far/old", sections],
     ["/smoke/far/older", sections],
-    ["/smoke/far/before", "- - - - page page - - - -"],
+    ["/smoke/far/before", "- - - - page page - - - - -"],
   ];
   /** The aria-current of each link in one answer. */
   const marks = (/** @type {string} */ html) =>
@@ -553,6 +559,7 @@ export async function navFar(browser, swaps) {
   const drawn = await (await page.request.get(`${base}/smoke/far/here`)).text();
   if (!/<a href="\/\/corten\.invalid\/smoke\/far\/old" data-nav data-nav-group="[0-9a-f]{8}\+">Slashes<\/a>/.test(drawn)) seen.push("server wrote other addresses for the off-site entry, or not its group");
   if (!/<a href="\/smoke\/far\/here" data-nav data-nav-group="[0-9a-f]{8}\+" data-nav-also="\/smoke\/far\/before" aria-current="page">Here<\/a>/.test(drawn)) seen.push("server did not write Here's kept address alone");
+  if (!/<a href="\/\/\[" data-nav data-nav-group="[0-9a-f]{8}">Plain malformed<\/a>/.test(drawn)) seen.push("server did not write the malformed link as it is, unmarked");
   for (const [visit, expected] of visits) {
     const outside = marks(await (await page.request.get(new URL(visit, base).href)).text());
     if (outside !== expected) seen.push(`server at ${visit}: ${outside}`);
@@ -561,6 +568,7 @@ export async function navFar(browser, swaps) {
     if (at !== expected) seen.push(`server at the browser's request for ${visit}: ${at}`);
   }
   if (!swaps) {
+    seen.push(...thrown);
     check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
     skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
     await context.close();
@@ -591,6 +599,7 @@ export async function navFar(browser, swaps) {
     const copies = await page.evaluate(() => Array.from(document.querySelectorAll("#far-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
     if (copies !== expected) seen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${copies}`);
   }
+  seen.push(...thrown);
   check(name, seen.length === 0, seen.join("; ") || "server and runtime marked only the sections, and Here at its kept address");
   await context.close();
 }

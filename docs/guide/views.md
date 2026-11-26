@@ -623,9 +623,15 @@ address with one, which only a route implemented by hand can write. `also` check
 `/x` and kept. An address typed by hand with
 such an escape is compared as written, so it is never the address with the plain character, as
 Corten's router matches a route's fixed text as sent (`/%73ettings` is not the route `/settings`).
-That leaves one limit, in any nav: WebKit asks for `/%73ettings` as `/settings`, so its server
+That leaves two limits. In any nav, WebKit asks for `/%73ettings` as `/settings`, so its server
 answer marks the Settings entry there and its runtime, after a client navigation to the same
-address, does not. Chromium and Firefox ask for it as written, and neither marks it.
+address, does not. Chromium and Firefox ask for it as written, and neither marks it. And a nav
+without other addresses compares the paths as written, the request's on the server and
+`location.pathname` in the runtime, so where an engine asks for a path in another spelling than
+it shows they can differ: an entry at `/old%7chome` is unmarked in WebKit's server answer, which
+it asks for as `/old%7Chome`, and marked by its runtime, whose `location.pathname` keeps `%7c`; an
+entry at `/a|b` is the same in Chromium, which asks for and shows `/a%7Cb`. A nav with other
+addresses compares by keys, and both mark them.
 
 Structured data for search engines is a head tag too: `head={JsonLd { value: &product }}`
 (feature `json`) writes a `ToJson` value in `<script type="application/ld+json">` with `<` as

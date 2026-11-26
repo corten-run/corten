@@ -179,16 +179,18 @@ async fn nav_team(req: Req, Params(_): Params<url::NavTeam<'_>>) -> HtmlResult {
 /// a tab after the first `/`, which the browser reads as that host's `/smoke/far/old`: in a nav with
 /// other addresses (one of them also at `/smoke/far/older`, which is left out, and Here, whose other
 /// address `//corten.invalid/smoke/far/old` is left out and `/smoke/far/before` kept), in one
-/// without, and as a lone `req.nav` link. At `/smoke/far/old` and `/smoke/far/older` only the two
-/// sections are current, at `/smoke/far/before` Here and the plain nav's section.
+/// without (beside `//[`, which no browser can parse as a URL), and as a lone `req.nav` link. At
+/// `/smoke/far/old` and `/smoke/far/older` only the two sections are current, at `/smoke/far/before`
+/// Here and the plain nav's section.
 async fn far_page(req: Req, Params(_): Params<url::FarPage<'_>>) -> HtmlResult {
     let section = corten::Local::parse("/smoke/far").expect("a local path");
     let older = corten::Local::parse("/smoke/far/older").expect("a local path");
     let before = corten::Local::parse("/smoke/far/before").expect("a local path");
-    let (slashes, backslash, tab) = (
+    let (slashes, backslash, tab, malformed) = (
         OlderNav("//corten.invalid/smoke/far/old"),
         OlderNav("/\\corten.invalid/smoke/far/old"),
         OlderNav("/\t/corten.invalid/smoke/far/old"),
+        OlderNav("//["),
     );
     let here = url::FarPage { name: "here" };
     let aliased = req.nav_of([
@@ -203,6 +205,7 @@ async fn far_page(req: Req, Params(_): Params<url::FarPage<'_>>) -> HtmlResult {
         (corten::NavTo::page(&slashes), "Plain slashes"),
         (corten::NavTo::page(&backslash), "Plain backslash"),
         (corten::NavTo::page(&tab), "Plain tab"),
+        (corten::NavTo::page(&malformed), "Plain malformed"),
     ]);
     let lone = req.nav(&slashes);
     req.page(html! {
