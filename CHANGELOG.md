@@ -22,7 +22,7 @@ while values a script reads move from `data-` attributes to typed refs (copied `
 update with `corten ui add --merge <name>`, or `--all`). `corten check` refuses a missing or stale `Cargo.lock`,
 `data-on` is written single-quoted, and under `Policy::hsts` a plain-http page can no longer
 write to the app.
-`corten build --profile-from` makes a profile-guided release build, which the image `corten new`
+`corten build --profile-from <command>` makes a profile-guided release build, which the image `corten new`
 writes can use. Apps need Rust 1.89 or later and, with scripts, TypeScript 6.0 or later;
 `corten-cluster` apps move to async-nats 0.53. Entries about `bench/` and CI change nothing an app
 builds against.
@@ -1875,7 +1875,8 @@ builds against.
   .25rem, so with the kit's theme a `Checkboxes` or `RadioGroup` row is 2.25rem tall and its
   choices are 2.5rem apart (2rem before), the first choice's text .5rem further under the legend.
   An app with a copied `checkbox.css`, `radio_group.css` or `switch.css` takes the change with
-  `corten ui add --force`, or `--merge` for an edited copy (`corten ui diff` shows which). A theme
+  `corten ui add --force checkbox radio_group switch` (naming the copies it has), or `--merge` in
+  place of `--force` for an edited copy (`corten ui diff` shows which). A theme
   that declares `choice-list-gap` at the kit's old .75rem (one `corten ui init` wrote, or one that
   took `corten ui add`'s suggested line) keeps it, so once its copies are updated its rows are 3rem
   apart unless it sets .25rem in `tokens/ui.tokens.json`
