@@ -833,8 +833,8 @@ binds a port of its own names it on the second, with `--port 8443` before `--pro
 to be a release that has `--port`. One without it builds nothing with the line: where the
 Dockerfile's own check of the command (below) has not refused it first, it refuses `--port`
 as an argument `corten build` does not take, before it builds the app. The fix is to move the
-version on the Dockerfile's install line to a release that has `--port`. Not tried in an image
-build: no release has the option yet.
+version on the Dockerfile's install line to a release that has `--port`: 0.3.0 is the first. An
+older release refusing `--port` in an image build has not been tried.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
@@ -858,13 +858,14 @@ What the argument asks of the app and its build, which the ordinary build does n
   release without the option is refused there, before the app is built. 0.2.0 is one: its
   `corten build` took no arguments and would build the ordinary binary without a word. A
   `corten` built from a commit between releases writes the number of the release before it,
-  so its Dockerfile is refused this way until that line names a release that has the option.
+  so its Dockerfile installs that release's command, not the commit's, and is refused this way
+  only when that release lacks the option (a command built before 0.3.0 wrote 0.2.0).
 - `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
   builds with its own, and `corten build` refuses a toolchain without the component, naming
   it; that file's `components` is where rustup takes it from. Not tried in an image build.
 - The build takes longer, and the app's target cache holds the instrumented copy beside the
   release. The starter's own image at `f909c0d2d`, its install line pointed at that checkout
-  since no release has the option yet, so the 45 seconds are not an install from crates.io;
+  since no release had the option then, so the 45 seconds are not an install from crates.io;
   one build each on a desktop with a lint run beside it:
   69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
   afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the

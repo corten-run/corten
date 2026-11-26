@@ -87,8 +87,12 @@ function serve() {
   }
 
   let requests = 0;
+  /** Each connection's request heads, in the order the connections were accepted. @type {string[][]} */
+  const connections = [];
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     part.opened += 1;
+    const seen = /** @type {string[]} */ ([]);
+    connections.push(seen);
     let unread = "";
     socket.on("data", (chunk) => {
       unread += chunk.latin1Slice();
@@ -96,6 +100,7 @@ function serve() {
       unread = /** @type {string} */ (heads.pop());
       part.mostInARead = Math.max(part.mostInARead, heads.length);
       for (const head of heads) {
+        seen.push(head);
         part.requests += 1;
         requests += 1;
         const line = /** @type {string} */ (head.split("\r\n")[0]).replace(/ HTTP\/1\.1$/, "");
@@ -118,6 +123,7 @@ function serve() {
     socket.on("error", () => {});
   });
   process.on("SIGTERM", () => {
+    writeFileSync(join(/** @type {string} */ (state), "connections.json"), JSON.stringify(connections));
     dump(true);
     process.exit(0);
   });

@@ -1510,9 +1510,18 @@ impl Missed {
         }
         let (mut parts, body) = res.into_parts();
         // Exact size: one held `Bytes`.
-        let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
-            // A body of an exact size that could not be read: not a page to send as it is.
-            return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = match crate::body::to_bytes(body, usize::MAX).await {
+            Ok(body) => body,
+            // A body of an exact size that could not be read: not a page to send as it is. The
+            // failure in its place is Corten's, not the handler's, so it is never shared whatever
+            // the page said (the error page drawn for it may read the request's `Cookie`).
+            Err(error) => {
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: a page to keep could not be read");
+                let failed =
+                    crate::response::IntoResponse::into_response(crate::Error::corten("corten: the page could not be read"));
+                return crate::cache::unshared_in_place_of(&parts.extensions, failed);
+            }
         };
         // A copy of its own length: a page's buffer is sized for the last page rendered and an
         // eighth more, and the bytes made from it would hold all of that for as long as they are
