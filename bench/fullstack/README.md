@@ -2084,16 +2084,19 @@ valid. The side's image is the ID `run.json` pins for the side of the invocation
 schedule; a replay reads each record against that, not against the image the record names.
 `count.mjs` attaches `perf` to the counted container by the ID `docker run` gave and removes
 it by that ID. k6 reaches it by its name, `fsw-corten`, which Docker's DNS answers for every
-running container on the load's network that has it as its name or an alias, so before `perf`
+running container on the load's network that has it as its name or an alias, in any case
+(`FSW-CORTEN` too), so before `perf`
 attaches and again once it stops, `count.mjs` lists the network's containers and records the
-count failed unless exactly one answers to `fsw-corten` and it is that ID. A container that joins
+count failed unless exactly one answers to `fsw-corten` and it is that ID. It reads each
+container's endpoint by the network's name, as Docker keys it, even where `BENCH_NETWORK` gives
+the network's ID. A container that joins
 and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
 the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
 count runs or the host differ from `run.json`, or the host cannot be established; one
 interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
 honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a
 container named `corten-count-pairs-lock` (made from the base's image, with no network, and
-running `sleep` for seven days, past the longest schedule, so `docker container prune`, which
+running `sleep` for seven days, so `docker container prune`, which
 removes stopped containers, leaves it while a run goes on) keep two runners apart, whatever directory each starts from: the daemon makes that container for one
 runner only, and the lock stands for its `cb-corten` tag and the `fsw-corten` container
 `count.mjs` starts. Each lock is made only where none is and removed only by the runner that made

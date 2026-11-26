@@ -47,13 +47,20 @@ function k6(base, target, envs, summary) {
  * Why the load may not reach the container with this ID, or null. k6 reaches the app by the name
  * `answer` on the load's network, and Docker's DNS answers that name for every running container
  * there that has it as its name or an alias (a leftover one included), so this ID must be the only
- * one. A container that joins and leaves between two checks is not seen (README, the count's host).
+ * one. Docker keys a container's endpoints by the network's name, which `network` (BENCH_NETWORK)
+ * may give as an ID, so they are read by the name the network inspect gives; and its DNS answers a
+ * name in any case, so `FSW-CORTEN` is that name too. A container that joins and leaves between
+ * two checks is not seen (README, the count's host).
  */
 function answersError(id, answer) {
-  const net = docker("network", "inspect", "-f", "{{json .Containers}}", network);
-  let members = null;
-  try { members = Object.keys(JSON.parse(net.stdout ?? "") ?? {}); } catch {}
-  if (net.status !== 0 || !members) return `cannot list the containers on ${network}, so where the load goes is not known`;
+  const net = docker("network", "inspect", "-f", "{{json .Name}} {{json .Containers}}", network);
+  let members = null, canonical = null;
+  try {
+    const n = /^("[^"]*") (.*)$/.exec((net.stdout ?? "").trim());
+    canonical = n && JSON.parse(n[1]);
+    members = n && Object.keys(JSON.parse(n[2]) ?? {});
+  } catch {}
+  if (net.status !== 0 || !members || !canonical) return `cannot list the containers on ${network}, so where the load goes is not known`;
   const seen = members.length ? docker("inspect", "-f", "{{.Id}} {{json .Name}} {{json .NetworkSettings.Networks}}", ...members) : { status: 0, stdout: "" };
   if (seen.status !== 0) return `cannot inspect the containers on ${network}, so where the load goes is not known`;
   const answering = [];
@@ -61,11 +68,11 @@ function answersError(id, answer) {
     const m = /^([0-9a-f]{64}) ("[^"]*") (.*)$/.exec(line);
     let names = null;
     try {
-      const at = m && JSON.parse(m[3])?.[network];
+      const at = m && JSON.parse(m[3])?.[canonical];
       names = m && [JSON.parse(m[2]).replace(/^\//, ""), ...(at?.Aliases ?? []), ...(at?.DNSNames ?? [])];
     } catch {}
     if (!m || !names) return `cannot read a container on ${network}, so where the load goes is not known`;
-    if (names.includes(answer)) answering.push(m[1]);
+    if (names.some((n) => typeof n === "string" && n.toLowerCase() === answer.toLowerCase())) answering.push(m[1]);
   }
   if (answering.length !== 1 || answering[0] !== id) return `${answer} on ${network} answers for ${answering.length} running containers where it must answer for the counted one alone, so the load may reach another`;
   return null;

@@ -83,8 +83,9 @@ export const MAX_PAIRS = 999;
 export const DAEMON_LOCK = "corten-count-pairs-lock";
 const HOLDER = "run.corten.count-pairs.holder";
 /**
- * How long the daemon's lock runs, in seconds: seven days, past the longest schedule (999 pairs of
- * both targets, 7,992 invocations, about 77 hours at #2066's 34.8 s each, estimated). It runs so that
+ * How long the daemon's lock runs, in seconds: seven days, an expiry and not a bound on a schedule
+ * (999 pairs of both targets, 7,992 invocations, are about 77 hours at #2066's 34.8 s each, estimated;
+ * a slower run can outlast it, and then stops at its next check, as the lock is not running). It runs so that
  * `docker container prune`, which removes stopped containers, cannot remove it while a run goes on,
  * and exits by itself after this so one a killed runner left stops.
  */

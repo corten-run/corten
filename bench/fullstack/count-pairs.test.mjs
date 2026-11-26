@@ -754,9 +754,10 @@ const fakeDocker = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const file = path.join(process.env.FAKE_DIR, "docker.json");
 const s = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { names: {}, aliases: {}, calls: [], made: 0 };
-const net = process.env.BENCH_NETWORK ?? "rustbench";
-// A container that is not fsw-corten but holds that name as its alias on the load's network, as a leftover would.
-const leftover = () => { const id = hex(++s.made); s.names["leftover"] = id; s.aliases[id] = ["fsw-corten"]; };
+// The network's name, by which Docker keys a container's endpoints, whatever BENCH_NETWORK gives.
+const net = process.env.FAKE_NET_NAME ?? process.env.BENCH_NETWORK ?? "rustbench";
+// A container that is not fsw-corten but holds that name (in FAKE_ALIAS_TEXT's case) as its alias on the load's network, as a leftover would.
+const leftover = () => { const id = hex(++s.made); s.names["leftover"] = id; s.aliases[id] = [process.env.FAKE_ALIAS_TEXT ?? "fsw-corten"]; };
 const a = process.argv.slice(2), hex = (n) => n.toString(16).padStart(64, "0");
 s.calls.push(a);
 let out = "", status = 0;
@@ -765,7 +766,7 @@ for (let i = 0; i < a.length; i++) if (a[i] === "-e") { const [k, ...v] = a[i + 
 if (a[0] === "image") out = JSON.stringify([{ Id: "sha256:" + "a".repeat(64), RepoDigests: [process.env.FAKE_K6], Os: "linux", Architecture: "amd64" }]);
 else if (a[0] === "run" && a.at(-1) === "version") out = "k6 v2.4.0 (stand-in)";
 else if (a[0] === "run" && a[1] === "-d") { const id = hex(++s.made); s.names[a[a.indexOf("--name") + 1]] = id; out = id; if (process.env.FAKE_ALIAS === "start") leftover(); }
-else if (a[0] === "network" && a[1] === "inspect") out = JSON.stringify(Object.fromEntries(Object.values(s.names).map((id) => [id, { Name: "x" }])));
+else if (a[0] === "network" && a[1] === "inspect") out = JSON.stringify(net) + " " + JSON.stringify(Object.fromEntries(Object.values(s.names).map((id) => [id, { Name: "x" }])));
 else if (a[0] === "run") {
   const summary = a[a.indexOf("--summary-export") + 1].replace("/bench", a[a.indexOf("-v") + 1].split(":/bench")[0]);
   const n = Number(env.ITERATIONS ?? 100);
@@ -823,10 +824,10 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     chmodSync(join(bin, "docker"), 0o755);
     chmodSync(join(bin, "perf"), 0o755);
     const { k6Image } = await import("../load-tool.mjs");
-    const count = async (/** @type {string} */ round, /** @type {string} */ replace, alias = "none") => {
+    const count = async (/** @type {string} */ round, /** @type {string} */ replace, alias = "none", /** @type {Record<string, string>} */ extra = {}) => {
       const dir = join(root, round);
       mkdirSync(dir);
-      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: replace, FAKE_ALIAS: alias, HOME: process.env.HOME ?? root };
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: replace, FAKE_ALIAS: alias, HOME: process.env.HOME ?? root, ...extra };
       const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "pipe", "ignore"] });
       let log = "";
       child.stdout.on("data", (d) => (log += d));
@@ -851,7 +852,7 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     const counting = lines.findIndex((l) => l.includes(" counting "));
     assert.ok(attach >= 0 && counting > attach, kept.log);
     assert.match(lines[counting], / counting fsw-corten$/);
-    const refused = (/** @type {string} */ when, /** @type {number} */ n) => ({ failed: `${when} the load: fsw-corten on rustbench answers for ${n} running containers where it must answer for the counted one alone, so the load may reach another` });
+    const refused = (/** @type {string} */ when, /** @type {number} */ n, net = "rustbench") => ({ failed: `${when} the load: fsw-corten on ${net} answers for ${n} running containers where it must answer for the counted one alone, so the load may reach another` });
     // Another container takes the name after the receipt: in the warmup, so before perf attaches,
     // which it then never does, or under the counted load, which is then not counted.
     for (const [replace, when] of [["closed", "before"], ["iterations", "after"]]) {
@@ -878,6 +879,19 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       assert.deepEqual(got.row, refused(when, 2), alias);
       assert.deepEqual(got.docker.calls.at(-1), ["rm", "-f", first], alias);
     }
+    // Docker's DNS answers a name in any case, so a leftover holding FSW-CORTEN is refused too; and
+    // BENCH_NETWORK given as the network's ID still finds the endpoints Docker keys by its name.
+    const byId = "f".repeat(64);
+    for (const [round, extra, net] of [["alias-case", { FAKE_ALIAS_TEXT: "FSW-CORTEN" }, "rustbench"], ["alias-by-id", { BENCH_NETWORK: byId, FAKE_NET_NAME: "rustbench" }, byId]]) {
+      const got = await count(round, "none", "start", extra);
+      assert.equal(got.code, 0, round);
+      assert.deepEqual(got.perf, [], round);
+      assert.deepEqual(got.row, refused("before", 2, net), round);
+    }
+    // The control: the counted container alone, with the network given by its ID, is counted.
+    const alone = await count("alone-by-id", "none", "none", { BENCH_NETWORK: byId, FAKE_NET_NAME: "rustbench" });
+    assert.equal(alone.code, 0);
+    assert.ok(Array.isArray(alone.row) && alone.row[0].requests === 5000, JSON.stringify(alone.row));
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(root, { recursive: true, force: true });
