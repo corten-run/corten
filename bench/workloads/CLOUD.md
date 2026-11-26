@@ -1425,7 +1425,33 @@ prefix rule such a receipt could never be recovered anyway, because the retry's
 appended controls make it fail the full-ledger check. A v1 setup receipt and the
 unused and pinned unused receipts record no digest and keep their recovery by full
 verification against the current state; the pinned unused reservation is locked
-by its digest, so it cannot carry one.
+by its digest, so it cannot carry one. `controllerState` accepts
+`pendingRetirement` only on a bound `starting` or `running` host with its
+archive, evidence hash and extracted evidence preserved, and with no
+`retirement`, `deletionIntentAt` or `destroyedAt`.
+
+The digest is saved before the receipt is published, so a published v2 or v3
+receipt always has one, and a collect stopped between the two saves only the
+digest: the next collect finds no receipt and retires on a fresh proof. A v2 or
+v3 receipt and its history copy are published whole: each is written and synced
+as `<name>.stage` in the same directory, then hard-linked to its final name,
+which fails rather than replace an existing file, and the directory is synced.
+A write interrupted before publication therefore leaves only that stage, never a
+partial receipt or history copy. A stage is never read: the next collect removes
+a stage with exactly that name before it reads the receipt or the history copy,
+including one left beside a published file whose stage link was not yet removed.
+The v1, unused and pinned unused receipts keep their exclusive direct writes.
+
+The bytes this process wrote, not the file, are the authority for the DELETE.
+After publication the receipt is read back and must match that digest before
+the intent is saved, and again after the DELETE's account preflight, just
+before the request is sent. A receipt edited before the intent refuses with
+`published retirement receipt differs from the bytes written; preserve host`,
+saving no intent; its recorded digest stays, so a later collect refuses it as an
+interrupted receipt that differs from its recorded digest. Edited after the
+intent, it refuses with the same message before the DELETE is sent, and a later
+collect refuses with `retirement evidence changed`. Neither sends a DELETE; the
+host is handled by the operator cleanup below.
 
 The drain proof is narrow. It can settle only a setup job whose host shows no
 Docker socket or daemon at query time (in practice one that failed before

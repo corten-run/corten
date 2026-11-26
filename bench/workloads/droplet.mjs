@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
+import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
 import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
@@ -186,13 +186,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     saved.control.monitor.phase = phase; publish(saved); state = saved;
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
-  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
+  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration, beforeDelete) {
     const creating = binary === "doctl" && args[0] === "compute" && args[1] === "droplet" && args[2] === "create";
     const prepareDelete = typeof deleteProofExpiresAtMs === "object" ? deleteProofExpiresAtMs : undefined;
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
       assert.ok(prepareDelete || Number.isSafeInteger(deleteProofExpiresAtMs));
     }
+    if (beforeDelete !== undefined) assert.ok(binary === "doctl" && args[2] === "delete" && typeof beforeDelete === "function");
     const settleUnsentCreate = () => {
       try {
         boundary();
@@ -202,7 +203,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         writeState(state, renameSync, "create-unsent");
       } catch (cause) { preserveOperationLock = true; throw cause; }
     };
-    const invoke = async (argv, permittedFailure = false, expiry) => {
+    const invoke = async (argv, permittedFailure = false, expiry, beforeDispatch) => {
       try { check(); }
       catch (error) {
         if (creating && argv[2] === "create") settleUnsentCreate();
@@ -235,6 +236,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.deletionIntentAt = new Date().toISOString(); save();
         }
       }
+      // After the account preflight and the proof's deadline, the last local check before the request.
+      beforeDispatch?.();
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r === unsentCreate) {
@@ -284,7 +287,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
     }
     const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
-    const result = await invoke(scoped(args), allowFail, expiry);
+    const result = await invoke(scoped(args), allowFail, expiry, beforeDelete);
     if (prepareDelete) assert.ok(result.status === 0 && !result.error, "delete outcome uncertain; preserve intent");
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
@@ -982,11 +985,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // digest was saved before it was published. v1, unused and pinned unused receipts are
     // still recovered only by full verification against the current state.
     const recorded = kind === "setup-failed" && !!state.control;
+    const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
+    // Such a receipt and its history copy are published whole (durableNew), so a write
+    // interrupted before publication leaves only an untrusted stage, removed here unread.
+    if (recorded) discardPublicationStage(path);
     if (existsSync(path)) {
       // A crash between receipt and state writes is recoverable. Preserve the
       // exact old record, but only this operation's fresh probe authorizes intent.
       assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
-      const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
       const prior = regular(path, limit), hash = digest(prior);
       if (recorded) {
         assert.ok(state.pendingRetirement, "interrupted retirement receipt has no recorded digest; preserve host");
@@ -995,19 +1001,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       verifyRetirementRecord(prior, kind, true);
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
+      if (recorded) discardPublicationStage(retained);
       if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
-      else durable(retained, prior);
+      else (recorded ? durableNew : durable)(retained, prior);
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
       unlinkSync(path); syncDirectory(local);
     }
-    // Supersedes any earlier digest; the retirement state below clears it.
-    if (recorded) { state.pendingRetirement = { kind, evidenceSha256: digest(bytes) }; save(); }
-    durable(path, bytes);
+    // Supersedes any earlier digest; the retirement state below clears it. The digest is
+    // saved before the receipt is published, so a published receipt always has one.
+    const written = digest(bytes);
+    if (recorded) { state.pendingRetirement = { kind, evidenceSha256: written }; save(); }
+    (recorded ? durableNew : durable)(path, bytes);
     if (bounded) requireFreshProof();
+    // The bytes this process wrote, not the file, are the authority: the published receipt
+    // must still be them before the intent and again just before the DELETE is sent.
+    const requirePublished = () => assert.equal(digest(regular(path, limit)), written,
+      "published retirement receipt differs from the bytes written; preserve host");
+    requirePublished();
     delete state.pendingRetirement;
-    Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+    Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs, undefined, undefined, requirePublished);
     await confirmDeleted();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };

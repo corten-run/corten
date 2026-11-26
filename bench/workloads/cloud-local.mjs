@@ -1,8 +1,8 @@
 // Physical, bounded local evidence. No provider or campaign execution here.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { constants, closeSync, createReadStream, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync,
-  readSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { constants, closeSync, createReadStream, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync,
+  readSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -110,6 +110,22 @@ export function durable(path, bytes) {
   physical(dirname(path)); const fd = openSync(path, "wx", 0o600);
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
+}
+// A file published whole or not at all: written and synced under its own stage name in
+// the same directory, then hard-linked to its final name, which fails rather than
+// replacing an existing file. A stage is never read; a stage left by an interrupted
+// write is this function's own name, so the next write removes it first.
+export const publicationStage = (path) => `${path}.stage`;
+export function discardPublicationStage(path) {
+  const stage = publicationStage(path);
+  if (!lstatSync(stage, { throwIfNoEntry: false })) return;
+  unlinkSync(stage); syncDirectory(dirname(path));
+}
+export function durableNew(path, bytes) {
+  physical(dirname(path)); discardPublicationStage(path);
+  const stage = publicationStage(path);
+  durable(stage, bytes);
+  linkSync(stage, path); unlinkSync(stage); syncDirectory(dirname(path));
 }
 export function durableCopy(source, destination, expected) {
   const file = opened(source, archiveLimit), hash = createHash("sha256");

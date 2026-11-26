@@ -3,8 +3,9 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import fs, { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { basename, join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
@@ -456,9 +457,35 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   }
 });
 
+// Wraps node:fs functions for the rest of the test; the controller's named imports see them.
+const hookFs = (t, wrappers) => {
+  const mocks = Object.entries(wrappers).map(([name, wrap]) => t.mock.method(fs, name, wrap(fs[name])));
+  syncBuiltinESMExports();
+  t.after(() => { for (const m of mocks) m.mock.restore(); syncBuiltinESMExports(); });
+};
+// The first exclusive write of a file whose name matches is torn: 80 bytes, then an error.
+const tearWrite = (t, pattern) => {
+  const fds = new Set(); let torn = false;
+  hookFs(t, {
+    openSync: (original) => (path, flags, ...rest) => {
+      const fd = original(path, flags, ...rest);
+      if (!torn && flags === "wx" && pattern.test(basename(String(path)))) { torn = true; fds.add(fd); }
+      return fd;
+    },
+    writeFileSync: (original) => (target, data, ...rest) => {
+      if (!fds.has(target)) return original(target, data, ...rest);
+      fds.delete(target); fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+      throw new Error("injected torn write");
+    },
+  });
+  return () => torn;
+};
+const receiptName = /^failed-setup-host\.json(?:\.stage)?$/, historyName = /^failed-setup-host\.interrupted-[a-f0-9]{64}\.json(?:\.stage)?$/;
+
 // The first bootstrap session stays open until its watcher misses its deadline, so the
 // exit archive holds a real watch-failure and no receipt for it.
-for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time", "receipt-expired", "receipt-expired-kept", "receipt-expired-rebound", "receipt-expired-edited", "receipt-expired-unrecorded"]) test({
+for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time", "receipt-expired", "receipt-expired-kept", "receipt-expired-rebound", "receipt-expired-edited", "receipt-expired-unrecorded",
+  "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -472,6 +499,11 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-expired-rebound": "an interrupted receipt edited to name an earlier ledger prefix refuses, keeps nothing and sends no DELETE",
   "receipt-expired-edited": "an interrupted receipt whose local start time alone was edited refuses, keeps nothing and sends no DELETE",
   "receipt-expired-unrecorded": "an interrupted receipt with no digest recorded before it was written refuses, keeps nothing and sends no DELETE",
+  "receipt-expired-history-torn": "a history copy torn while it is written is never published, and the next collect keeps it whole and deletes once",
+  "receipt-edited-before-intent": "a receipt edited after it is published and before the intent refuses with no intent and no DELETE",
+  "receipt-edited-before-delete": "a receipt edited during the DELETE's account preflight refuses before the DELETE is sent",
+  "receipt-torn": "a receipt torn while it is written is never published, so the next collect retires on a fresh proof",
+  "receipt-unpublished": "a receipt that fails at publication leaves only its recorded digest, and the next collect retires on a fresh proof",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -484,11 +516,17 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
   const token = fleet.jobs[1].token;
   kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource, drainSource: setupDrainSource }) + "\n");
-  let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry;
+  let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry, editAtPreflight = false, edited;
+  const receipt = join(h.local, "failed-setup-host.json");
+  const editReceipt = () => {
+    const bytes = readFileSync(receipt), record = JSON.parse(bytes); record.startedAtMs -= 1000;
+    writeFileSync(receipt, `${JSON.stringify(record, null, 2)}\n`); edited = bytes;
+  };
   const run = async (binary, args, timeout, allowFail, expiry, control) => {
     if (!control) {
       // After the intent, the first provider read is the DELETE's own account preflight.
       if (stall && !stalled && binary === "doctl" && args[0] === "account" && h.saved().deletionIntentAt) { stalled = true; offset += stall; }
+      if (editAtPreflight && !edited && binary === "doctl" && args[0] === "account" && h.saved().deletionIntentAt) editReceipt();
       if (binary === "doctl" && args[2] === "delete") deleteExpiry = expiry;
       return h.run(binary, args, timeout, allowFail);
     }
@@ -537,6 +575,73 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   assert.ok(h.saved().preBootstrapTerminal); assert.deepEqual(h.saved().control.sealed, []);
   assert.equal(h.saved().control.monitor.phase, "pending"); assert.ok(failed);
   const lock = join(h.local, "operation.lock");
+  const deletesSent = () => h.calls.filter(([binary, ...args]) => binary === "doctl" && args[2] === "delete").length;
+  // Every exclusive write or link of the receipt sees its digest already saved.
+  const atPublication = [];
+  const recordPublication = (path) => { if (receiptName.test(basename(String(path)))) atPublication.push(h.saved().pendingRetirement ?? null); };
+  if (mode === "drained") hookFs(t, {
+    openSync: (original) => (path, flags, ...rest) => { if (flags === "wx") recordPublication(path); return original(path, flags, ...rest); },
+    linkSync: (original) => (from, to) => { recordPublication(to); return original(from, to); },
+  });
+  if (mode === "receipt-edited-before-intent" || mode === "receipt-edited-before-delete") {
+    if (mode === "receipt-edited-before-intent") {
+      // The first clock read after publication is the proof check just before the intent.
+      const real = Date.now;
+      t.mock.method(Date, "now", () => { if (!edited && existsSync(receipt)) editReceipt(); return real(); });
+    } else editAtPreflight = true;
+    await assert.rejects(h.task({ run }).collect(), /published retirement receipt differs from the bytes written; preserve host/);
+    const saved = h.saved();
+    assert.ok(edited); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(saved.destroyedAt, undefined); assert.notEqual(digest(readFileSync(receipt)), digest(edited));
+    if (mode === "receipt-edited-before-intent") {
+      assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+      assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(edited) });
+      // The edited receipt stays refused on restart.
+      await assert.rejects(h.task({ run }).collect(), /interrupted retirement receipt differs from its recorded digest; preserve host/);
+    } else {
+      assert.ok(saved.deletionIntentAt); assert.equal(saved.retirement.evidenceSha256, digest(edited));
+      await assert.rejects(h.task({ run }).collect(), /retirement evidence changed/);
+    }
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (mode === "receipt-torn" || mode === "receipt-unpublished") {
+    const stage = `${receipt}.stage`;
+    if (mode === "receipt-torn") tearWrite(t, receiptName);
+    else {
+      // Fail at the publication itself, after the digest save: the exclusive create of the
+      // receipt, or the link that publishes its stage.
+      let failedOnce = false;
+      const refuse = () => { if (failedOnce) return false; failedOnce = true; return true; };
+      hookFs(t, {
+        openSync: (original) => (path, flags, ...rest) => {
+          if (flags === "wx" && basename(String(path)) === "failed-setup-host.json" && refuse()) throw new Error("injected publication failure");
+          return original(path, flags, ...rest);
+        },
+        linkSync: (original) => (from, to) => {
+          if (basename(String(to)) === "failed-setup-host.json" && refuse()) throw new Error("injected publication failure");
+          return original(from, to);
+        },
+      });
+    }
+    await assert.rejects(h.task({ run }).collect(), mode === "receipt-torn" ? /injected torn write/ : /injected publication failure/);
+    const interrupted = h.saved(), published = existsSync(receipt);
+    assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(interrupted.deletionIntentAt, undefined); assert.equal(interrupted.retirement, undefined);
+    // The checkpoint is the digest alone, saved before the receipt was published.
+    assert.equal(interrupted.pendingRetirement?.kind, "setup-failed");
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved(), current = readFileSync(receipt);
+    assert.equal(published, false, "an interrupted write published the receipt");
+    assert.equal(existsSync(stage), false);
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.equal(s.retirement.evidenceSha256, digest(current)); assert.equal(s.pendingRetirement, undefined);
+    assert.notEqual(s.retirement.evidenceSha256, interrupted.pendingRetirement.evidenceSha256);
+    assert.equal(JSON.parse(current).observation.control.requests.length, s.control.ledger.length);
+    assert.ok(!readdirSync(h.local).some((name) => name.endsWith(".stage")));
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
   if (mode === "pending-monitor") {
     writeFileSync(join(h.local, "monitor-registration.json"), "{}");
     await assert.rejects(h.task({ run }).collect(), /ambiguous pre-bootstrap custody/);
@@ -572,7 +677,6 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     // 60-second deadline from the query's start, 20 seconds does not.
     const real = Date.now; t.mock.method(Date, "now", () => real() + offset);
     stall = mode === "delete-expired" ? 61000 : 20000;
-    const deletesSent = () => h.calls.filter(([binary, ...args]) => binary === "doctl" && args[2] === "delete").length;
     if (mode === "delete-in-time") {
       assert.equal(await h.task({ run }).collect(), 1);
       const record = JSON.parse(readFileSync(join(h.local, "failed-setup-host.json")));
@@ -599,13 +703,12 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   if (mode.startsWith("receipt-expired")) {
     // The clock passes the proof's 60-second deadline once, just after its receipt is written
     // and before the intent, so the receipt stays without an intent.
-    const receipt = join(h.local, "failed-setup-host.json"), real = Date.now;
+    const real = Date.now;
     let jumped = false;
     t.mock.method(Date, "now", () => {
       if (!jumped && existsSync(receipt)) { jumped = true; offset += 61000; }
       return real() + offset;
     });
-    const deletesSent = () => h.calls.filter(([binary, ...args]) => binary === "doctl" && args[2] === "delete").length;
     await assert.rejects(h.task({ run }).collect(), /retirement proof expired before deletion/);
     const interrupted = h.saved(), old = readFileSync(receipt), oldRecord = JSON.parse(old);
     assert.ok(jumped); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
@@ -615,8 +718,38 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     // The digest was saved before the receipt was published, and stays until the retirement state.
     assert.deepEqual(interrupted.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) });
     const kept = join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`);
+    if (mode === "receipt-expired") {
+      // A digest belongs only to a bound, unretired setup failure with its archive preserved.
+      assert.deepEqual(controllerState(structuredClone(interrupted), "r21").pendingRetirement, interrupted.pendingRetirement);
+      const variants = {
+        retired: (s) => Object.assign(s, { status: "retired", retirement: { ...s.pendingRetirement }, deletionIntentAt: at }),
+        "retired and destroyed": (s) => Object.assign(s, { status: "retired", retirement: { ...s.pendingRetirement }, deletionIntentAt: at, destroyedAt: at }),
+        "no archive": (s) => { delete s.archiveSha256; delete s.evidenceSha256; delete s.evidence; },
+        "no evidence tree": (s) => { delete s.evidence; },
+        preparing: (s) => { s.status = "preparing"; delete s.preBootstrapTerminal; delete s.archiveSha256; delete s.evidenceSha256; delete s.evidence; },
+      };
+      for (const [name, change] of Object.entries(variants)) {
+        const s = structuredClone(interrupted); change(s);
+        assert.throws(() => controllerState(s, "r21"), /pending retirement (?:cannot coexist|requires)/, name);
+      }
+    }
     // As if an earlier recovery kept the history copy, then stopped before removing the receipt.
     if (mode === "receipt-expired-kept") writeFileSync(kept, old);
+    if (mode === "receipt-expired-history-torn") {
+      const torn = tearWrite(t, historyName);
+      await assert.rejects(h.task({ run }).collect(), /injected torn write/);
+      assert.ok(torn()); assert.equal(queries, 2); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+      assert.ok(readFileSync(receipt).equals(old)); assert.deepEqual(h.saved().pendingRetirement, interrupted.pendingRetirement);
+      const historyPublished = existsSync(kept);
+      assert.equal(await h.task({ run }).collect(), 1);
+      assert.equal(historyPublished, false, "a torn history copy was published");
+      const s = h.saved();
+      assert.equal(queries, 3); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+      assert.ok(readFileSync(kept).equals(old)); assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt)));
+      assert.ok(!readdirSync(h.local).some((name) => name.endsWith(".stage")));
+      assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+      return;
+    }
     if (mode === "receipt-expired-edited" || mode === "receipt-expired-unrecorded") {
       let edited = old.toString("utf8");
       if (mode === "receipt-expired-edited") {
@@ -663,6 +796,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   const s = h.saved(), record = JSON.parse(readFileSync(join(h.local, "failed-setup-host.json")));
   assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "setup-failed"); assert.ok(s.destroyedAt);
   assert.equal(s.pendingRetirement, undefined);
+  assert.ok(atPublication.length > 0);
+  for (const seen of atPublication) assert.deepEqual(seen, { kind: "setup-failed", evidenceSha256: s.retirement.evidenceSha256 }, "receipt published before its digest was saved");
   assert.equal(record.schema, "benchmark-failed-setup-retirement/v3"); assert.equal(record.observation.control.drained[0].id, failed.id);
   assert.equal(s.validation, undefined); assert.equal(s.collectedAt, undefined);
   // The original failure, archive and exit stay as they were; no receipt is filled in.

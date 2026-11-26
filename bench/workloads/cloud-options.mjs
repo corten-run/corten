@@ -275,6 +275,13 @@ export function controllerState(s, round, options) {
     assert.equal(p.kind, "setup-failed", "only a controlled setup retirement records its receipt digest");
     full(p.evidenceSha256, /[a-f0-9]{64}/, "pending retirement hash");
     assert.ok(s.control, "pending retirement requires a controlled host");
+    // Only a bound, archived but unretired setup failure can be retiring: retire() runs
+    // from a starting or running host whose archive is preserved, and the retirement
+    // state that carries the intent removes the digest.
+    assert.ok(["starting", "running"].includes(s.status) && s.id && s.ip, "pending retirement requires a bound starting or running host");
+    for (const key of ["retirement", "deletionIntentAt", "destroyedAt"])
+      assert.equal(s[key], undefined, "pending retirement cannot coexist with a retirement or deletion");
+    assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "pending retirement requires preserved archive evidence");
   }
   if (s.createPending !== undefined) {
     // An accepted POST whose create action had not settled when the launch stopped.
