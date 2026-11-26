@@ -7,7 +7,7 @@ mod views;
 
 use corten::{
     extract::FromRequestParts,
-    http::{HeaderMap, header, request::Parts},
+    http::{header, request::Parts},
     i18n::Locale,
     prelude::*,
 };
@@ -21,44 +21,16 @@ use trace::TraceParent;
 struct AppState {
     source: Source,
     alerts: alerts::Store,
-    public_origin: Option<PublicOrigin>,
+    hardening_edge: bool,
 }
 
-#[derive(Clone)]
-struct PublicOrigin {
-    origin: Arc<str>,
-    authority: Arc<str>,
-}
+const HARDENING_ORIGIN: &str = "https://localhost:8080";
 
-impl PublicOrigin {
-    fn new(origin: &str) -> Self {
-        let uri: corten::http::Uri = origin.parse().expect("MARKETPLACE_PUBLIC_ORIGIN must be an HTTP(S) origin");
-        let scheme = uri.scheme_str().filter(|scheme| matches!(*scheme, "http" | "https"));
-        let authority = uri.authority();
-        let (Some(scheme), Some(authority)) = (scheme, authority) else {
-            panic!("MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin");
-        };
-        assert!(
-            origin == format!("{scheme}://{authority}")
-                && !authority.as_str().contains('@')
-                && authority.host().bytes().all(|byte| !byte.is_ascii_uppercase())
-                && authority.port_u16() != Some(if scheme == "https" { 443 } else { 80 }),
-            "MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin"
-        );
-        Self { origin: origin.into(), authority: authority.as_str().into() }
-    }
-
-    fn allows(&self, headers: &HeaderMap) -> bool {
-        let mut host = headers.get_all(header::HOST).iter();
-        let first = host.next();
-        if host.next().is_some() {
-            return false;
-        }
-        if !first.is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(self.authority.as_bytes())) {
-            return true; // The app's separate direct listener keeps Corten's native check.
-        }
-        let mut origin = headers.get_all(header::ORIGIN).iter();
-        origin.next().is_some_and(|value| value.as_bytes() == self.origin.as_bytes()) && origin.next().is_none()
+fn hardening_edge(config: Option<&str>) -> bool {
+    match config {
+        None => false,
+        Some(HARDENING_ORIGIN) => true,
+        Some(_) => panic!("MARKETPLACE_PUBLIC_ORIGIN must match the Hardening TLS edge"),
     }
 }
 
@@ -68,8 +40,20 @@ impl FromRequestParts<AppState> for PublicAlertOrigin {
     type Rejection = corten::Error;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        if state.public_origin.as_ref().is_some_and(|origin| !origin.allows(&parts.headers)) {
-            return Err(Refused::forbidden().into());
+        if state.hardening_edge {
+            let mut hosts = parts.headers.get_all(header::HOST).iter();
+            let host = hosts.next();
+            if hosts.next().is_some() {
+                return Err(Refused::forbidden().into());
+            }
+            // The separate direct preflight retains Corten's native check.
+            if host.is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"localhost:8080")) {
+                let mut origin = parts.headers.get_all(header::ORIGIN).iter();
+                if !origin.next().is_some_and(|value| value.as_bytes() == HARDENING_ORIGIN.as_bytes()) || origin.next().is_some()
+                {
+                    return Err(Refused::forbidden().into());
+                }
+            }
         }
         Ok(Self)
     }
@@ -173,8 +157,8 @@ async fn read_alerts(State(alerts): State<alerts::Store>, session: alerts::Sessi
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>, trace: TraceParent) -> JsonResult<Arc<Record>> {
     Ok(Json(source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?))
 }
-fn app(source: Source, public_origin: Option<PublicOrigin>) -> App {
-    let state = AppState { source, alerts: Default::default(), public_origin };
+fn app(source: Source, hardening_edge: bool) -> App {
+    let state = AppState { source, alerts: Default::default(), hardening_edge };
     let app = App::new(routes::router(state.clone()))
         .api(|routes| api::api(routes, state))
         .assets(views::Static)
@@ -191,12 +175,12 @@ fn app(source: Source, public_origin: Option<PublicOrigin>) -> App {
 async fn main() -> std::io::Result<()> {
     let source = Source::from_env().map_err(|error| std::io::Error::other(error.to_string()))?;
     let origin = std::env::var("MARKETPLACE_PUBLIC_ORIGIN");
-    let public_origin = match origin {
-        Ok(origin) => Some(PublicOrigin::new(&origin)),
+    let origin = match origin {
+        Ok(origin) => Some(origin),
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => panic!("MARKETPLACE_PUBLIC_ORIGIN must be valid Unicode"),
     };
-    corten::serve(app(source, public_origin)).await
+    corten::serve(app(source, hardening_edge(origin.as_deref()))).await
 }
 
 #[cfg(test)]
@@ -207,28 +191,27 @@ mod tests {
         i18n::{Decimal, Messages, Minor},
     };
     fn client() -> corten::testing::Client {
-        client_with_origin(None)
+        client_with_edge(false)
     }
-    fn client_with_origin(public_origin: Option<PublicOrigin>) -> corten::testing::Client {
+    fn client_with_edge(hardening_edge: bool) -> corten::testing::Client {
         let record: Record = serde_json::from_str(include_str!("../tests/marketplace.json")).unwrap();
-        app(Source::Fixture(Arc::new(std::collections::HashMap::from([(record.id.clone(), Arc::new(record))]))), public_origin)
+        app(Source::Fixture(Arc::new(std::collections::HashMap::from([(record.id.clone(), Arc::new(record))]))), hardening_edge)
             .test()
     }
     fn at(tag: &str) -> routes::Marketplace<'static> {
         routes::Marketplace { locale: Locale::parse(tag).unwrap(), id: "item_1", query: Default::default() }
     }
     #[test]
-    fn public_origin_setting_must_match_browser_serialization() {
-        for origin in ["https://localhost:443", "http://localhost:80", "https://Localhost:8080", "https://localhost:8080/"] {
-            assert!(std::panic::catch_unwind(|| PublicOrigin::new(origin)).is_err(), "{origin}");
+    fn public_origin_setting_is_the_fixed_benchmark_authority() {
+        for origin in ["https://localhost:443", "https://127.1:8443", "https://Localhost:8080", "https://localhost:8080/"] {
+            assert!(std::panic::catch_unwind(|| hardening_edge(Some(origin))).is_err(), "{origin}");
         }
-        assert_eq!(PublicOrigin::new("https://localhost").authority.as_ref(), "localhost");
-        assert_eq!(PublicOrigin::new("https://localhost:8080").authority.as_ref(), "localhost:8080");
+        assert!(hardening_edge(Some(HARDENING_ORIGIN)));
+        assert!(!hardening_edge(None));
     }
     #[tokio::test]
     async fn public_origin_pin_preserves_direct_alerts_and_requires_https_on_the_public_host() {
-        let public = "https://localhost:8080";
-        let app = client_with_origin(Some(PublicOrigin::new(public)));
+        let app = client_with_edge(true);
         let route = at("en-US");
         let fields = AlertForm::FIELDS;
         let post = |host: &str, origin: &str| {
@@ -238,7 +221,7 @@ mod tests {
                 .field(fields.email, "a@example.test")
                 .field(fields.target_price, "1")
         };
-        let accepted = post("localhost:8080", public).await;
+        let accepted = post("localhost:8080", HARDENING_ORIGIN).await;
         assert_eq!(accepted.status(), StatusCode::OK);
         let session = accepted.cookie(alerts::COOKIE).unwrap();
         let read = || app.get(&api::Alerts).cookie(alerts::COOKIE, session);

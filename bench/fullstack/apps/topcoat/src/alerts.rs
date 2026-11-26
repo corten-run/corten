@@ -109,6 +109,8 @@ mod tests {
     use super::*;
     use topcoat::router::{Body, Router, request::Request, to_bytes};
 
+    static WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn public_cookie_security_does_not_apply_to_the_direct_listener() {
         let public = Some("https://localhost:8080");
@@ -137,6 +139,7 @@ mod tests {
 
     #[tokio::test]
     async fn public_and_direct_sessions_set_the_cookie_for_their_own_transport() {
+        let _writes = WRITES.lock().await;
         let router = Router::builder().route(public_append).route(read).build();
         for (host, secure) in [("localhost", true), ("127.0.0.1", false)] {
             let response =
@@ -160,6 +163,7 @@ mod tests {
     }
     #[tokio::test]
     async fn native_cookie_store_is_ordered_isolated_concurrent_and_expires() {
+        let _writes = WRITES.lock().await;
         let router = std::sync::Arc::new(Router::builder().route(append_route).route(read).build());
         let response = router.handle(Request::post("/append").body(Body::empty()).unwrap()).await;
         assert_eq!(response.status(), 200);
