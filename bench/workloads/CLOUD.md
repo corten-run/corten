@@ -55,6 +55,12 @@ A reservation without the marker regenerates its original job, which pulls
 `node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
 A new reservation's measured commit must therefore include that move; merged main does.
 
+New dedicated Catalog, Marketplace, Mixed Production and Hardening reservations use
+their runners' Playwright containers. JSON API does not launch a browser. These
+reservations save `skipHostChromium: true` and omit only the host Chromium install.
+Fullstack Browser, Client Heavy, Live Delivery and Recoverable Live still install
+host Chromium. Unmarked reservations keep their original job, packer and unit bytes.
+
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
 `umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`

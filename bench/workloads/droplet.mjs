@@ -6,7 +6,7 @@ import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdt
   renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
@@ -1334,7 +1334,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           ...(fleet ? { group: options.group, fleet } : {}),
           ...(remainingPlacement ? { remainingPlacement } : {}) }),
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true, gitSource: true, trixieUpstream: true,
-          ...(options.group === "hardening" ? { hardeningContainerBrowser: true } : {}),
+          ...(fleet && canSkipHostChromium(options.group) ? { skipHostChromium: true } : {}),
           ...(fleet ? { quietBootstrap: "prelogin" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
             ...(fleet?.single?.offlineHandoff ? {} :

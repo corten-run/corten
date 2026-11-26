@@ -33,6 +33,9 @@ export const fleetCatalogSlugs = Object.freeze({
 });
 export const fleetCatalogCommand = Object.freeze(["compute", "placement", "catalog", "--output", "json"]);
 export const stagedFleet = (fleet) => fleet?.schema === stagedFleetSchema;
+// These runners either use Chromium in a container or do not use a browser.
+export const canSkipHostChromium = (group) =>
+  ["catalog-page", "json-api", "localized-marketplace", "mixed-production", "hardening"].includes(group);
 const createMode = (region) => region === host.region ? "dedicated" : `dedicated-${region}`;
 export function fleetCreateMode(group, fleet, remainingRegion) {
   if (group === "catalog-page") return catalogFleetPlacement.loadLayout;
@@ -304,8 +307,8 @@ export function validateState(s, round, options) {
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   if (s.gitSource !== undefined) assert.equal(s.gitSource, true, "Git source marker");
   if (s.trixieUpstream !== undefined) assert.equal(s.trixieUpstream, true, "Debian 13 upstream image marker");
-  if (s.hardeningContainerBrowser !== undefined)
-    assert.ok(s.hardeningContainerBrowser === true && dedicated && s.group === "hardening", "Hardening container browser marker");
+  if (s.skipHostChromium !== undefined)
+    assert.ok(s.skipHostChromium === true && dedicated && canSkipHostChromium(s.group), "host Chromium skip marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
     assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated
@@ -891,7 +894,7 @@ ${s.benchPackage ? `bootstrap_stage=bench-dependencies
 timeout 900 npm --prefix bench ci --no-audit --no-fund
 ` : ""}bootstrap_stage=browser-dependencies
 timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
-${s.hardeningContainerBrowser ? "" : `bootstrap_stage=browser-install
+${s.skipHostChromium ? "" : `bootstrap_stage=browser-install
 timeout 900 npx --no-install playwright install --with-deps chromium
 `}bootstrap_stage=upstream-image
 timeout 900 docker pull ${s.trixieUpstream ? upstreamImages.trixie : upstreamImages.bookworm}

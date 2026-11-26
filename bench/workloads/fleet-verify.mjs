@@ -269,7 +269,7 @@ function unboundCreateBinding(fleet, { report = false, removed = false } = {}) {
   if (removed) {
     assert.ok(Object.keys(state).every((k) => [
       "schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "group", "fleet", "createdAt",
-      "status", "provider", "fullGroupQualified", "benchPackage", "gitSource", "trixieUpstream", "quietBootstrap",
+      "status", "provider", "fullGroupQualified", "benchPackage", "gitSource", "trixieUpstream", "skipHostChromium", "quietBootstrap",
       "control", "createIntentAt", "createPending",
     ].includes(k)), "external posted create cannot claim setup or collection");
   }

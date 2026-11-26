@@ -6,6 +6,7 @@ import test from "node:test";
 import { fleetPlan, remoteFiles, reservation, supervisorBootstrap, upstreamImages } from "./cloud-contract.mjs";
 import { controllerState } from "./cloud-options.mjs";
 import { remoteFiles as uploadedFiles } from "./cloud-remote.mjs";
+import { groupNames } from "./registry.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
 test("bootstrap prepares upstream stable Git and proves required immutable-query flags before clone", () => {
@@ -38,7 +39,7 @@ test("bootstrap prepares the actual client dependency roots and Node 26 before t
   assert.ok(job.includes('node -e \'if (process.versions.node.split(".")[0] !== "26") process.exit(1)\''));
 });
 
-test("new Hardening jobs use their existing container browser without installing Chromium on the host", () => {
+test("new dedicated jobs omit the host Chromium install only when their workload does not need it", () => {
   const createdAt = "2026-11-26T00:00:00.000Z";
   const savedGroup = (group) => {
     const provider = { accountId: "user:account", context: "context" };
@@ -47,20 +48,25 @@ test("new Hardening jobs use their existing container browser without installing
       createdAt, undefined, { stagedPlacement: true, single: { group, indexSha256: "0".repeat(64), checkout: "/local/controller" } });
     return { ...reservation({ round, commit, token, group, fleet }, createdAt), provider, fullGroupQualified: false };
   };
-  const saved = savedGroup("hardening"), marked = { ...saved, hardeningContainerBrowser: true };
-  const before = uploadedFiles(saved), after = uploadedFiles(marked);
   const install = "bootstrap_stage=browser-install\ntimeout 900 npx --no-install playwright install --with-deps chromium\n";
-  assert.ok(before["job.sh"].includes(install));
-  assert.ok(after["job.sh"] === before["job.sh"].replace(install, ""), "only the unused host install is removed");
-  assert.equal(after["pack.sh"], before["pack.sh"]);
-  assert.equal(after[saved.unit], before[saved.unit]);
-  assert.equal(controllerState(marked, marked.round), marked);
-  for (const other of [state, savedGroup("fullstack-browser")]) {
-    assert.ok(uploadedFiles(other)["job.sh"].includes(install));
-    assert.throws(() => uploadedFiles({ ...other, hardeningContainerBrowser: true }), /Hardening container browser marker/);
+  const hostBrowserGroups = ["client-heavy", "fullstack-browser", "live-delivery", "recoverable-live"];
+  for (const group of groupNames) {
+    const saved = savedGroup(group), before = uploadedFiles(saved), marked = { ...saved, skipHostChromium: true };
+    assert.ok(before["job.sh"].includes(install), group + ": unmarked saved jobs keep the host install");
+    if (hostBrowserGroups.includes(group)) {
+      assert.throws(() => uploadedFiles(marked), /host Chromium skip marker/);
+      continue;
+    }
+    const after = uploadedFiles(marked);
+    assert.ok(after["job.sh"] === before["job.sh"].replace(install, ""), group + ": only the unused host install is removed");
+    assert.equal(after["pack.sh"], before["pack.sh"]);
+    assert.equal(after[saved.unit], before[saved.unit]);
+    assert.equal(controllerState(marked, marked.round), marked);
   }
-  for (const hardeningContainerBrowser of [false, "true", null])
-    assert.throws(() => uploadedFiles({ ...saved, hardeningContainerBrowser }), /Hardening container browser marker/);
+  assert.ok(uploadedFiles(state)["job.sh"].includes(install));
+  assert.throws(() => uploadedFiles({ ...state, skipHostChromium: true }), /host Chromium skip marker/);
+  for (const skipHostChromium of [false, "true", null])
+    assert.throws(() => uploadedFiles({ ...savedGroup("hardening"), skipHostChromium }), /host Chromium skip marker/);
 });
 
 // Saved reservations without the Debian 13 marker regenerate the bytes they uploaded. These are the
