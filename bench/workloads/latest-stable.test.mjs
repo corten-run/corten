@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -7,8 +8,11 @@ import { readLatestStable } from "../client-heavy/build.mjs";
 import { candidateDependencies } from "../client-heavy/contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
-const original = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => ["policy", "manifest", "lockfile"].includes(key)).map(([key, path]) =>
-  [key, readFileSync(new URL(`../../${path}`, import.meta.url))]));
+const solid1Commit = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2";
+const inputsAt = (commit) => Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
+  [key, execFileSync("git", ["show", `${commit}:${path}`], { cwd: new URL("../../", import.meta.url) })]));
+const { policy, manifest, lockfile } = inputsAt(solid1Commit);
+const original = { policy, manifest, lockfile };
 // The historical v1 record is intentionally preserved, not relabeled v2.
 original.policy = Buffer.from(JSON.stringify(JSON.parse(original.policy).legacy));
 const inputs = () => ({ group: "client-heavy", ...structuredClone(original) });
@@ -152,21 +156,87 @@ for (const key of Object.keys(latestStableSources)) for (const value of [undefin
     assert.deepEqual(result.candidates ?? [], []);
   });
 
+test("prior reviewed v2 bytes still replay without qualifying previously blocked Remix", () => {
+  const commit = "10cad96e18436eaa75bef711292eb7ce21f3a17e";
+  const prior = { group: "client-heavy", ...Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
+    [key, execFileSync("git", ["show", `${commit}:${path}`], { cwd: new URL("../../", import.meta.url) })])) };
+  const result = evaluateLatestStable(prior);
+  assert.equal(result.schema, candidateLatestStableSchema);
+  assert.equal(result.valid, true, JSON.stringify(result.errors));
+  assert.equal(result.checkedOn, "2026-11-17");
+  assert.equal(result.groupComparisonEligible, false);
+  const remix = result.candidates.find((r) => r.app === "remix");
+  assert.equal(remix.status, "blocked");
+  assert.equal(remix.latestStableEligible, false);
+  assert.deepEqual(remix.incompatible, [{ from: "node_modules/@remix-run/test", kind: "dependency",
+    package: "esbuild", range: "^0.27.1", resolved: "node_modules/esbuild", version: "0.28.2" }]);
+  assert.equal(result.candidates.find((r) => r.app === "solid").status, "unsupported");
+  assert.equal(Object.keys(result.observation.packages).length, 13);
+  assert.equal(Object.hasOwn(result.observation.packages, "@remix-run/test"), false);
+  const current = candidateInputs();
+  invalid({ ...current, policy: prior.policy }, "manifest:unreviewed-overrides");
+  invalid({ ...prior, policy: current.policy }, "manifest:unreviewed-overrides");
+});
+
+test("the pinned prior policy still excludes Solid and cannot be paired with the new install", () => {
+  const prior = { group: "client-heavy", ...inputsAt(solid1Commit) };
+  const result = evaluateLatestStable(prior);
+  assert.equal(result.valid, true);
+  const solid = result.candidates.find((r) => r.app === "solid");
+  assert.equal(solid.status, "unsupported");
+  assert.equal(solid.reason, unsupportedSolidReason);
+  assert.equal(solid.latestStableEligible, false);
+  assert.equal(Object.hasOwn(result.observation.packages, "@solidjs/compiler"), false);
+  invalid({ ...candidateInputs(), policy: prior.policy }, "manifest:babel-preset-solid:non-exact-or-shadowed-root");
+});
+
+for (const [what, edit, error] of [
+  ["version", (p) => { p.version = "0.27.7"; }, "archive"],
+  ["archive URL", (p) => { delete p.resolved; }, "archive"],
+  ["archive integrity", (p) => { delete p.integrity; }, "archive"],
+  ["platform declarations", (p) => { delete p.optionalDependencies; }, "dependencies"],
+]) test(`the private esbuild requires the reviewed ${what}`, () => {
+  invalid(mutateCandidate("lockfile", (p) => edit(p.packages["node_modules/@remix-run/test/node_modules/esbuild"])),
+    `lockfile:unreviewed-remix-test-esbuild-${error}`);
+});
+
+for (const field of ["resolved", "integrity"]) for (const change of ["missing", "substituted"]) {
+  test(`the private esbuild consumer rejects ${change} archive ${field}`, () => {
+    invalid(mutateCandidate("lockfile", ({ packages }) => {
+      const owner = packages["node_modules/@remix-run/test"];
+      if (change === "missing") delete owner[field];
+      else owner[field] = packages["node_modules/remix"][field];
+    }), "lockfile:unreviewed-remix-test-archive");
+  });
+}
+
 test("production builder recomputes candidate-specific latest targets without inventing latest-all-transitives or native qualification", () => {
   const input = candidateInputs(), result = evaluateLatestStable(input);
   assert.equal(result.schema, candidateLatestStableSchema); assert.equal(result.valid, true, JSON.stringify(result.errors));
   assert.deepEqual(result, readLatestStable());
   assert.deepEqual(result.candidates.map((r) => r.app), selectedApps("client-heavy"));
   for (const row of result.candidates) {
-    assert.deepEqual(row.roots, candidateDependencies[row.app]);
-    assert.equal(row.measurements, null); assert.equal(row.latestStableEligible, !["solid", "remix"].includes(row.app));
-    assert.equal(row.blockers.length > 0, ["solid", "remix"].includes(row.app));
-    assert.equal(row.dependencies.some((d) => d.package === "@babel/core"), row.app === "solid");
-    assert.equal(row.status, row.app === "solid" ? "unsupported" : row.app === "remix" ? "blocked" : "satisfied");
+    assert.deepEqual(row.roots, row.app === "solid" ? ["@solidjs/compiler", "@solidjs/web", "esbuild", "solid-js"] : candidateDependencies[row.app]);
+    assert.equal(row.measurements, null); assert.equal(row.latestStableEligible, true);
+    assert.deepEqual(row.blockers, []);
+    assert.equal(row.dependencies.some((d) => d.package === "@babel/core" || d.package === "solid-js-legacy"), false);
+    assert.equal(row.status, "satisfied");
   }
-  assert.equal(result.candidates.find((r) => r.app === "solid").reason, unsupportedSolidReason);
-  assert.deepEqual(result.candidates.find((r) => r.app === "remix").incompatible, [{ from: "node_modules/@remix-run/test", kind: "dependency",
-    package: "esbuild", range: "^0.27.1", resolved: "node_modules/esbuild", version: "0.28.2" }]);
+  const solid = result.candidates.find((r) => r.app === "solid");
+  assert.equal(solid.reason, null);
+  assert.ok(solid.dependencies.some((d) => d.path === "node_modules/@solidjs/signals" && d.version === "2.0.3"));
+  assert.equal(solid.targets.includes("@solidjs/signals"), false);
+  assert.equal(result.groupComparisonEligible, false);
+  const { packages } = result.observation;
+  for (const [name, version] of Object.entries({ "@babel/core": "8.1.3", "@babel/parser": "8.1.3", "solid-js": "2.0.3",
+    "@solidjs/web": "2.0.3", "@solidjs/compiler": "2.0.2", vue: "3.5.46", "@vue/compiler-sfc": "3.5.46", svelte: "5.59.1", remix: "3.3.0", "@remix-run/test": "1.2.0" }))
+    assert.equal(packages[name].version, version, name);
+  const esbuilds = (row) => row.dependencies.filter((d) => d.package === "esbuild");
+  const root = { path: "node_modules/esbuild", package: "esbuild", version: "0.28.2" };
+  const privateTool = { path: "node_modules/@remix-run/test/node_modules/esbuild", package: "esbuild", version: "0.27.2" };
+  for (const row of result.candidates) {
+    assert.deepEqual(esbuilds(row), row.app === "remix" ? [privateTool, root] : [root]);
+  }
   const vue = result.candidates.find((r) => r.app === "vue");
   assert.ok(vue.dependencies.some((d) => d.package === "@babel/parser" && d.version.startsWith("7.")));
   assert.equal(vue.targets.includes("@babel/parser"), false);
@@ -177,25 +247,67 @@ test("production builder recomputes candidate-specific latest targets without in
   }
 });
 
+for (const [field, value] of [
+  ["resolved", "https://example.test/signals.tgz"],
+  ["integrity", "sha512-other"],
+  ["version", "2.0.4"],
+  ["dependencies", { "solid-js": "^2.0.3" }],
+]) test(`the executable Signals runtime requires published ${field} with the other Solid runtime archives unchanged`, () => {
+  invalid(mutateCandidate("lockfile", ({ packages }) => {
+    packages["node_modules/@solidjs/signals"][field] = value;
+  }), "lockfile:@solidjs/signals:unreviewed-solid-2-archive");
+});
+
+test("the executable Signals runtime cannot resolve from a nested install", () => {
+  invalid(mutateCandidate("lockfile", ({ packages }) => {
+    packages["node_modules/solid-js/node_modules/@solidjs/signals"] = structuredClone(packages["node_modules/@solidjs/signals"]);
+  }), "lockfile:@solidjs/signals:ambiguous-resolution");
+});
+
+for (const [target, selector, value] of [
+  ["linux-x64-gnu", "os", ["win32"]],
+  ["linux-x64-gnu", "cpu", ["arm64"]],
+  ["linux-x64-gnu", "libc", ["musl"]],
+  ["linux-x64-gnu", "libc", undefined],
+  ["darwin-arm64", "libc", ["glibc"]],
+]) test(`the Solid compiler ${target} binding requires its published ${selector} selector (${value ?? "omitted"})`, () => {
+  const name = `@solidjs/compiler-${target}`;
+  invalid(mutateCandidate("lockfile", ({ packages }) => {
+    const pkg = packages[`node_modules/${name}`];
+    if (value === undefined) delete pkg[selector];
+    else pkg[selector] = value;
+  }), `lockfile:${name}:unreviewed-solid-compiler-binding`);
+});
+
 for (const [name, key, edit] of [
   ["invented latest", "policy", (p) => { const r = p.observations.packages["solid-js"]; const body = JSON.parse(r.raw); body.version = "3.0.0"; r.raw = JSON.stringify(body); }],
   ["missing raw primary bytes", "policy", (p) => { delete p.observations.packages.react.raw; }],
   ["missing primary package", "policy", (p) => { delete p.observations.packages.react; }],
   ["forged registry URL", "policy", (p) => { p.observations.packages.react.url = "https://example.test/latest"; }],
-  ["stale observation relabeled current", "policy", (p) => { p.checkedOn = "2026-11-18"; }],
+  ["stale observation relabeled current", "policy", (p) => { p.checkedOn = "2026-11-23"; }],
   ["candidate missing", "policy", (p) => { delete p.candidates.solid; }],
   ["candidate membership changed", "policy", (p) => { p.candidates.react.push("@babel/core"); }],
-  ["invented unsupported peer", "policy", (p) => { p.unsupported.app = "react"; }],
-  ["unsupported reason missing", "policy", (p) => { delete p.unsupported.reason; }],
+  ["invented unsupported peer", "policy", (p) => { p.unsupported = { app: "react", reason: unsupportedSolidReason }; }],
+  ["unsupported field missing", "policy", (p) => { delete p.unsupported; }],
+  ["new compiler source missing", "policy", (p) => { delete p.solid2; }],
+  ["new compiler source not exact", "policy", (p) => { p.solid2.raw += " "; }],
   ["unknown schema", "policy", (p) => { p.schema = "benchmark-latest-stable-policy/v3"; }],
   ["manifest alternate version", "manifest", (p) => { p.devDependencies.react = "19.0.0"; }],
   ["manifest alternate resolution", "manifest", (p) => { p.dependencies = { react: "19.3.1" }; }],
-  ["forced peer override", "manifest", (p) => { p.overrides["@babel/core"] = "8.1.2"; }],
+  ["forced peer override", "manifest", (p) => { p.overrides = { "@babel/core": "8.1.3" }; }],
+  ["former Remix override", "manifest", (p) => { p.overrides = { "@remix-run/test": { esbuild: "$esbuild" } }; }],
   ["lock alternate version", "lockfile", (p) => { p.packages["node_modules/react"].version = "19.0.0"; }],
   ["lock missing dependency", "lockfile", (p) => { delete p.packages["node_modules/react-dom"]; }],
-  ["lock duplicate compiler", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid/node_modules/@babel/core"] = structuredClone(p.packages["node_modules/@babel/core"]); }],
+  ["lock duplicate compiler", "lockfile", (p) => { p.packages["node_modules/@solidjs/web/node_modules/@solidjs/compiler"] = structuredClone(p.packages["node_modules/@solidjs/compiler"]); }],
   ["lock duplicate framework", "lockfile", (p) => { p.packages["node_modules/somewhere/node_modules/react"] = { version: "19.3.1" }; }],
-  ["forced compiler peer", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid"].peerDependencies["@babel/core"] = "^8.0.0"; }],
+  ["unrelated nested esbuild", "lockfile", (p) => { p.packages["node_modules/remix/node_modules/esbuild"] = { version: "0.28.2" }; }],
+  ["forged Remix test range", "lockfile", (p) => { p.packages["node_modules/@remix-run/test"].dependencies.esbuild = "^0.28.0"; }],
+  ["unreviewed Remix test release", "lockfile", (p) => { p.packages["node_modules/@remix-run/test"].version = "1.2.1"; }],
+  ["forged Solid web peer", "lockfile", (p) => { p.packages["node_modules/@solidjs/web"].peerDependencies["solid-js"] = "^1.9.16 || ^2.0.3"; }],
+  ["missing native compiler archive checksum", "lockfile", (p) => { delete p.packages["node_modules/@solidjs/compiler-linux-x64-gnu"].integrity; }],
+  ["unpublished compiler archive", "lockfile", (p) => { p.packages["node_modules/@solidjs/compiler"].resolved = "https://example.test/compiler.tgz"; }],
+  ["unpublished Solid runtime archive", "lockfile", (p) => { p.packages["node_modules/solid-js"].integrity = "sha512-other"; }],
+  ["nested Solid runtime", "lockfile", (p) => { p.packages["node_modules/@solidjs/web/node_modules/solid-js"] = { version: "1.9.19" }; }],
   ["tooling parser declaration", "toolingManifest", (p) => { p.devDependencies.semver = "7.8.5"; }],
   ["tooling parser alias", "toolingManifest", (p) => { p.dependencies = { semver: "npm:semver@7.8.6" }; }],
   ["tooling parser forced override", "toolingManifest", (p) => { p.overrides = { semver: "7.8.5" }; }],
@@ -205,6 +317,32 @@ for (const [name, key, edit] of [
 ]) test(`candidate policy fails closed on ${name}`, () => {
   const r = evaluateLatestStable(mutateCandidate(key, edit)); assert.equal(r.valid, false); assert.equal(r.status, "invalid");
   assert.equal(r.groupComparisonEligible, false); assert.ok(!r.candidates?.length); assert.ok(r.errors.length > 0);
+});
+
+test("the Remix test package cannot fall back to the incompatible root esbuild", () => {
+  const r = evaluateLatestStable(mutateCandidate("lockfile", (p) => {
+    delete p.packages["node_modules/@remix-run/test/node_modules/esbuild"];
+  }));
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  const remix = r.candidates.find((row) => row.app === "remix");
+  assert.equal(remix.latestStableEligible, false);
+  assert.deepEqual(remix.incompatible, [{ from: "node_modules/@remix-run/test", kind: "dependency",
+    package: "esbuild", range: "^0.27.1", resolved: "node_modules/esbuild", version: "0.28.2" }]);
+  assert.ok(r.candidates.filter((row) => !["remix", "solid"].includes(row.app)).every((row) => row.latestStableEligible));
+});
+
+test("Remix still needs the observed latest root bundler even with a compatible private tool", () => {
+  const input = mutateCandidate("manifest", (p) => { p.devDependencies.esbuild = "0.28.1"; });
+  const lock = JSON.parse(input.lockfile);
+  lock.packages[""].devDependencies.esbuild = "0.28.1";
+  lock.packages["node_modules/esbuild"].version = "0.28.1";
+  input.lockfile = JSON.stringify(lock);
+  const r = evaluateLatestStable(input);
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  const remix = r.candidates.find((row) => row.app === "remix");
+  assert.deepEqual(remix.incompatible, []);
+  assert.deepEqual(remix.blockers, ["not-latest-stable:esbuild"]);
+  assert.equal(remix.latestStableEligible, false);
 });
 
 test("an actual shared compiler consumer remains blocked instead of borrowing another candidate's disposition", () => {

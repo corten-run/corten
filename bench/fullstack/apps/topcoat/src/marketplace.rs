@@ -284,7 +284,11 @@ pub mod source {
             }
             let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
             Source::Api {
-                client: reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("HTTP client"),
+                client: reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .pool_idle_timeout(crate::catalog::source::UPSTREAM_IDLE)
+                    .build()
+                    .expect("HTTP client"),
                 base: base.parse().expect("API_BASE is a URL"),
             }
         })

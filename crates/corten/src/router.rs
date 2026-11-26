@@ -10,8 +10,9 @@
 //! without the body; a method the route has no handler for is a `405` whose `Allow` names those
 //! it has, and one no route in the app has a handler for is a `501` (RFC 9110 9.1; axum's router
 //! answered it `405`); a `HEAD` says the length its `GET` has (`Content-Length`, which the server
-//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body. A
-//! request's handler is boxed once, and so are the stages around it.
+//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body,
+//! `Content-Length` or `Transfer-Encoding`. A request's handler is boxed once, and so are the
+//! stages around it.
 //!
 //! [matchit]: https://docs.rs/matchit
 
@@ -38,6 +39,7 @@ use http::Uri;
 use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, SeqAccess, Visitor};
 
 use crate::form::FormError;
+use crate::kept::Verdict;
 
 /// A request's answer on its way: what an [`Endpoint`] and the stages give.
 pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
@@ -48,6 +50,12 @@ pub(crate) trait Endpoint: Send + Sync + 'static {
 
     fn action_patches(&self) -> bool {
         false
+    }
+
+    /// Under `corten dev`, this route with each [`Keeping`] in it the copy that says what a
+    /// release build does with its answer ([`Telling`]); `None` for one with none.
+    fn telling(&self) -> Option<Route> {
+        None
     }
 }
 
@@ -72,23 +80,28 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`.
+/// An answer that is a status alone: the router's `404` and `405`. No handler answered it, so it
+/// is marked so as it is made ([`crate::cache::Unshared`]): the error page in its place, and the
+/// answer in any form a middleware turns it into (another status, a redirect, a body of its own),
+/// are never shared. A middleware that answers with a response of its own instead has answered
+/// the request itself.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
     fn call(&self, _: Request) -> Answering {
-        Box::pin(std::future::ready(self.0.into_response()))
+        Box::pin(std::future::ready(crate::cache::unshared(self.0.into_response())))
     }
 }
 
 /// The router's `501` for a method no route in the app has, marked so the error page tells it
-/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]).
+/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]), and as
+/// no handler's answer, as [`Status`] marks its own.
 struct Unimplemented;
 
 impl Endpoint for Unimplemented {
     #[cold]
     fn call(&self, _: Request) -> Answering {
-        let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
+        let mut res = crate::cache::unshared(StatusCode::NOT_IMPLEMENTED.into_response());
         res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
         Box::pin(std::future::ready(res))
     }
@@ -111,20 +124,26 @@ impl Endpoint for Giving {
     fn action_patches(&self) -> bool {
         self.inner.action_patches()
     }
+
+    fn telling(&self) -> Option<Route> {
+        let inner = self.inner.telling()?;
+        Some(Arc::new(Giving { gives: self.gives, inner }))
+    }
 }
 
 /// A handler whose answer is the same for everyone (`Public`), a page or a whole body: a kept
 /// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
 /// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
-/// route.
-struct Keeping {
+/// route. `TELL` is `corten dev`'s copy ([`Telling`]), which keeps nothing and records what a
+/// release build does with the answer; a release build's, with `TELL` false, is the code it was.
+struct Keeping<const TELL: bool> {
     shape: crate::kept::Shape,
     /// Of a route of whole bodies: whether any of the answers it made last was kept.
     unkept: Option<Arc<crate::kept::Unkept>>,
     inner: Route,
 }
 
-impl Endpoint for Keeping {
+impl<const TELL: bool> Endpoint for Keeping<TELL> {
     #[inline]
     fn call(&self, req: Request) -> Answering {
         // A route none of whose bodies is kept (each too small, most often) is its handler's, as
@@ -143,6 +162,25 @@ impl Endpoint for Keeping {
         // In a full store a URL not asked for before is the handler's as any other request.
         let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+        // Under `corten dev`, a future of its own with the same return before `Missed::keep`, so
+        // what it says of a drawn key is what a release build does, and the release build's future
+        // is left as it is (`tests/router_cost.rs`). The mark it reads is the one the release
+        // build reads (below).
+        if TELL {
+            let answer = self.inner.call(req);
+            return Box::pin(async move {
+                let res = answer.await;
+                let res = match here {
+                    Some(here) => here.fill(res).await,
+                    None => res,
+                };
+                if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
+                    missed.drew_key();
+                    return res;
+                }
+                missed.keep::<true>(res).await
+            });
+        }
         let answer = self.inner.call(req);
         Box::pin(async move {
             let res = answer.await;
@@ -157,7 +195,71 @@ impl Endpoint for Keeping {
             if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
                 return res;
             }
-            missed.keep(res).await
+            missed.keep::<false>(res).await
+        })
+    }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
+    }
+
+    fn telling(&self) -> Option<Route> {
+        let (shape, unkept, inner) = (self.shape, self.unkept.clone(), self.inner.clone());
+        Some(Arc::new(Keeping::<true> { shape, unkept, inner }))
+    }
+}
+
+/// Under `corten dev`, a `Public` handler with what goes around it ([`Table::telling`]): says in the
+/// log whether a release build would keep its answer to a `GET` while its store has room, and if
+/// not the first reason, as the code that decides it found it ([`Verdict`]), once for each verdict
+/// the route has. Nothing is kept under `corten dev`, so this is where an author learns it; a
+/// release build has none. The route's [`Keeping`] is its `corten dev` copy, which finds the
+/// verdict of the answer.
+struct Telling {
+    /// What the route's answer is kept as, or why it never is, known when the route was made.
+    public: Result<crate::kept::Shape, Verdict>,
+    /// The verdicts it has said, a bit each ([`Verdict::tell`]).
+    told: Arc<std::sync::atomic::AtomicU32>,
+    inner: Route,
+}
+
+impl Endpoint for Telling {
+    fn call(&self, req: Request) -> Answering {
+        // A `HEAD` or a write is not kept, whatever its route.
+        if *req.method() != Method::GET {
+            return self.inner.call(req);
+        }
+        let path = req.uri().path().to_owned();
+        let signal = req.extensions().get::<crate::Signal>().cloned();
+        // What the request decides, read as the route's `Keeping` reads it: a reason the author can
+        // change (an app that keeps none, a caller read for it, its URL changed), or one for the
+        // request alone, not said.
+        let asked = match (self.public, &signal) {
+            (Ok(shape), Some(_)) => crate::kept::Asked::checked::<true>(&req, shape).map(|_| ()),
+            _ => Ok(()),
+        };
+        let (public, told) = (self.public, self.told.clone());
+        let answer = self.inner.call(req);
+        Box::pin(async move {
+            // A drawn submit key, and each refusal of the answer, the route's `Keeping` found
+            // where a release build's does.
+            let res = answer.await;
+            let verdict = match (public, &signal, asked) {
+                (Err(unkept), _, _) => Some(unkept),
+                // An unstaged route's request has no signal, and no answer kept for it.
+                (_, None, _) => Some(Verdict::Unstaged),
+                (_, Some(_), Err(said)) => said,
+                (_, Some(signal), Ok(())) => Verdict::of(signal),
+            };
+            match (verdict, &signal) {
+                (Some(verdict), _) => {
+                    verdict.tell(&path, &told);
+                    res
+                }
+                // One a release build would keep: what becomes of its body as it is read here is said.
+                (None, Some(signal)) => crate::kept::tell_read(res, signal, move |verdict| verdict.tell(&path, &told)),
+                (None, None) => res,
+            }
         })
     }
 
@@ -171,7 +273,8 @@ impl Endpoint for Keeping {
 /// so the body, a multipart upload's too, is still the chosen handler's to read, under its limit.
 /// A name the page has no post for, a post that names none where the page has no plain `post`,
 /// and a post that names two are a `400`: the address is the app's own, so the request is at
-/// fault, and no other handler is tried in its place.
+/// fault, and no other handler is tried in its place. No handler answers that `400`, so it is
+/// marked as the router's own `404` is ([`Status`]).
 struct Chooser {
     plain: Option<Route>,
     actions: Box<[(&'static str, Route)]>,
@@ -214,7 +317,7 @@ impl Chooser {
             Named::One(name) => format!("the page has no post named {name:?} (do={name}); its posts are {names}"),
             Named::Twice => format!("this post's address names do twice; it names one of the page's posts ({names})"),
         };
-        Box::pin(std::future::ready((StatusCode::BAD_REQUEST, message).into_response()))
+        Box::pin(std::future::ready(crate::cache::unshared((StatusCode::BAD_REQUEST, message).into_response())))
     }
 }
 
@@ -275,18 +378,27 @@ pub(crate) fn named(query: Option<&str>) -> Named<'_> {
     found
 }
 
-/// A handler for some methods, waiting for its state (`S`) or with it.
-enum Slot<S> {
+/// A handler for some methods, waiting for its state (`S`) or with it, and, of a `Public` one,
+/// what `corten dev` says of it ([`Telling`]).
+struct Slot<S> {
+    held: Held<S>,
+    /// Of a `Public` handler: what its answer is kept as, or why a release build never keeps it,
+    /// known when the route is made (`crate::handler::Handler::public`).
+    public: Option<Result<crate::kept::Shape, Verdict>>,
+}
+
+enum Held<S> {
     Unbound(Arc<dyn Fn(S) -> Route + Send + Sync>),
     Bound(Route),
 }
 
 impl<S> Clone for Slot<S> {
     fn clone(&self) -> Self {
-        match self {
-            Slot::Unbound(make) => Slot::Unbound(make.clone()),
-            Slot::Bound(route) => Slot::Bound(route.clone()),
-        }
+        let held = match &self.held {
+            Held::Unbound(make) => Held::Unbound(make.clone()),
+            Held::Bound(route) => Held::Bound(route.clone()),
+        };
+        Slot { held, public: self.public }
     }
 }
 
@@ -294,38 +406,59 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
     fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
         // Known when the route is made, so no other route's requests ask.
         let keeps = handler.keeps();
-        Slot::Unbound(Arc::new(move |state| {
+        let public = handler.public();
+        let held = Held::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
                 Some(shape) => {
                     let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
-                    Arc::new(Keeping { shape, unkept, inner: handled })
+                    Arc::new(Keeping::<false> { shape, unkept, inner: handled })
                 }
                 None => handled,
             }
-        }))
+        }));
+        Slot { held, public }
     }
 
     fn bind<S2>(self, state: &S) -> Slot<S2> {
-        match self {
-            Slot::Unbound(make) => Slot::Bound(make(state.clone())),
-            Slot::Bound(route) => Slot::Bound(route),
-        }
+        let held = match self.held {
+            Held::Unbound(make) => Held::Bound(make(state.clone())),
+            Held::Bound(route) => Held::Bound(route),
+        };
+        Slot { held, public: self.public }
     }
 
     fn gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
-        match self {
-            Slot::Unbound(make) => Slot::Unbound(Arc::new(move |state| Arc::new(Giving { gives, inner: make(state) }))),
-            Slot::Bound(inner) => Slot::Bound(Arc::new(Giving { gives, inner })),
-        }
+        let held = match self.held {
+            Held::Unbound(make) => Held::Unbound(Arc::new(move |state| Arc::new(Giving { gives, inner: make(state) }))),
+            Held::Bound(inner) => Held::Bound(Arc::new(Giving { gives, inner })),
+        };
+        Slot { held, public: self.public }
+    }
+
+    /// Under `corten dev`: a `Public` handler's requests through [`Telling`], outside all else
+    /// that goes around it.
+    fn telling(self) -> Self {
+        let Some(public) = self.public else { return self };
+        let told = Arc::<std::sync::atomic::AtomicU32>::default();
+        // Its `Keeping`, if any, the copy that finds what a release build does with its answer.
+        let tell = |route: Route| route.telling().unwrap_or(route);
+        let held = match self.held {
+            Held::Unbound(make) => Held::Unbound(Arc::new(move |state| {
+                Arc::new(Telling { public, told: told.clone(), inner: tell(make(state)) }) as Route
+            })),
+            Held::Bound(inner) => Held::Bound(Arc::new(Telling { public, told, inner: tell(inner) })),
+        };
+        // Told once: the slot is not wrapped again.
+        Slot { held, public: None }
     }
 }
 
 impl Slot<()> {
     fn route(self) -> Route {
-        match self {
-            Slot::Unbound(make) => make(()),
-            Slot::Bound(route) => route,
+        match self.held {
+            Held::Unbound(make) => make(()),
+            Held::Bound(route) => route,
         }
     }
 }
@@ -513,6 +646,12 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
         }
     }
 
+    /// Under `corten dev`: each `Public` handler's requests through [`Telling`]. A page's named
+    /// posts are writes, which are never kept.
+    fn telling(self) -> Self {
+        MethodSet { slots: self.slots.map(|slot| slot.map(Slot::telling)), fallback: self.fallback.map(Slot::telling), ..self }
+    }
+
     /// Each handler marking its request with the layout reads it gives itself.
     pub(crate) fn gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
         MethodSet {
@@ -658,11 +797,17 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
         self
     }
 
-    /// Whether a route's answer is one the app keeps (`Public`: a page, or a whole body in a
-    /// build that compresses): an app with none has nothing a write could drop, so it counts no
-    /// writes ([`crate::kept`]).
+    /// Whether a route's answer is one the app keeps (`Public`: a page or a whole body): an app
+    /// with none has nothing a write could drop, so it counts no writes ([`crate::kept`]).
     pub(crate) fn keeps(&self) -> bool {
         self.routes.iter().any(|placed| placed.methods.keeps)
+    }
+
+    /// Under `corten dev`: each `Public` handler's requests through [`Telling`], which says what a
+    /// release build does with its answer.
+    pub(crate) fn telling(self) -> Self {
+        let routes = self.routes.into_iter().map(|placed| Placed { methods: placed.methods.telling(), ..placed });
+        Table { routes: routes.collect() }
     }
 
     /// The routes with the state their handlers take.
@@ -908,7 +1053,8 @@ impl Dispatch {
 
 /// What the router does to every answer on its way out, as HTTP has it: a `405`'s `Allow`; and,
 /// outside every layer, no body for a `HEAD`, which keeps the length its `GET` would say when
-/// the body's is known, nor for a `2xx` to `CONNECT`.
+/// the body's is known, nor for a `2xx` to `CONNECT`, which loses its `Content-Length` and
+/// `Transfer-Encoding` too.
 ///
 /// The length of any other answer is left to the server, which writes it from the body's exact
 /// size into the head it sends (hyper 1.12's HTTP/1 encoder, `content-length: 0` included where
@@ -948,12 +1094,14 @@ impl Fix {
         use http_body::Body as _;
         if self.method == Asked::Connect && res.status().is_success() {
             // RFC 9110 9.3.6: a `2xx` to `CONNECT` switches the connection to a tunnel, so it has no
-            // content. Its headers are left as they are, as axum left them.
-            let headers = res.headers();
-            if headers.contains_key(header::CONTENT_LENGTH)
-                || headers.contains_key(header::TRANSFER_ENCODING)
-                || res.body().size_hint().lower() != 0
-            {
+            // content, and a server must not send `Content-Length` or `Transfer-Encoding` in it.
+            // hyper refuses to send a head with either (hyper 1.12's HTTP/1 encoder), which would
+            // close the connection with no answer at all (#1915), so both go with the body. Its
+            // other headers are left as they are.
+            let headers = res.headers_mut();
+            let length = headers.remove(header::CONTENT_LENGTH).is_some();
+            let chunked = headers.remove(header::TRANSFER_ENCODING).is_some();
+            if length || chunked || res.body().size_hint().lower() != 0 {
                 res = res.map(|_| Body::empty());
             }
             return res;

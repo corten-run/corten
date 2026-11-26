@@ -105,7 +105,10 @@ def emit(frame):
         if mode == 'namespace': rows[20]['net'] = '999'
         if mode == 'affinity': rows[20]['cpus'] = '0-1'
         if mode == 'unknown-login': add(999, 10, '/foreign.scope')
-        if mode != 'lost-lease': put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
+        if mode == 'failed-group':
+            # A failed timing group finishes without producing an audit subject.
+            put('stream-state.json', {'kind': 'seal', 'payload': {}})
+        elif mode != 'lost-lease': put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
     elif kind == 'challenge':
         if mode == 'exit-after-renewals' and frame['payload']['sequence'] == 3:
             data['/bench/exit-code'] = b'2\n'
@@ -165,7 +168,7 @@ fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 21, uname=lambd
 scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'private': lambda p: None, 'read': read, 'write': write,
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)
-terminal, failed, drain, reason = False, False, None, None
+terminal, failed, drain, reason, drain_status = False, False, None, None, None
 if mode == 'already-exited':
     data['/bench/exit-code'] = b'2\n'
 try:
@@ -177,11 +180,19 @@ except AssertionError as error:
 if terminal:
     rows.pop(21)
     if mode != 'drain-survivor': rows.pop(20)
+    if mode == 'drain-listener': rows.pop(10)
+    if mode == 'drain-scope': add(999, 1, session)
     if mode == 'drain-unknown': add(999, 1, '/user.slice/user-0.slice/user@0.service')
-    try: drain = scope['stream_drain'](Path(root))
-    except AssertionError: failed = True
+    drain_output = bytearray()
+    scope['sys'] = types.SimpleNamespace(stdout=types.SimpleNamespace(buffer=types.SimpleNamespace(write=drain_output.extend)))
+    try: drain_status = scope['main'](['stream-drain', token])
+    except Exception: drain_status = 254  # The shipped CLI's generic failure status.
+    failed = drain_status not in (0, 3)
+    if drain_output: drain = json.loads(drain_output)
+    assert data.get(root + '/stream-drain.json', b'') == drain_output
 print(json.dumps({'binding': binding, 'registration': next((v['payload'] for v in output if v['kind'] == 'registered'), None),
     'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'reason': reason, 'drain': drain,
+    'drainStatus': drain_status,
     'renewal': json.loads(data[root + '/stream-lease.json'])['renewal'] if root + '/stream-lease.json' in data else None,
     'invalid': root + '/stream-invalid.json' in data, 'diagnostic': diagnostic.decode(),
     'auditPublished': folder + '/json-audit-delivery-pending.json' in data,

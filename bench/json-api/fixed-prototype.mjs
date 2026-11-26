@@ -25,20 +25,29 @@ const readBounded = (file, cap) => {
   } finally { closeSync(fd); }
 };
 const json = (file, cap) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(readBounded(file, cap)));
+function isRequestTimeout(error) {
+  if (error === "request timeout") return true;
+  if (typeof error !== "string") return false;
+  // Go's URL error wraps the same timeout; do not retain or echo the target.
+  const wrapped = /^Get "(https?:\/\/(?![/?#])[^"\\\s\x00-\x1f\x7f]+)": request timeout$/.exec(error);
+  return wrapped !== null && !/%(?![0-9a-f]{2})/i.test(wrapped[1]) && URL.canParse(wrapped[1]);
+}
 export function verifyPrototypeLogs(text, exitCode, { timeouts = 0, dropped = 0 } = {}) {
   assert.ok(Buffer.byteLength(text) <= prototypeLimits.logBytes, "log byte cap exceeded");
   let thresholds = 0, timeoutWarnings = 0;
   for (const line of text.split("\n")) if (line) {
     assert.ok(Buffer.byteLength(line) <= streamLimits.lineBytes, "log line over cap");
-    const entry = JSON.parse(line);
-    assert.ok(typeof entry.msg === "string" && ["debug", "info", "warning", "error"].includes(entry.level), "unknown k6 log record");
+    let entry;
+    try { entry = JSON.parse(line); }
+    catch { throw new Error("malformed k6 log record"); }
+    assert.ok(typeof entry?.msg === "string" && ["debug", "info", "warning", "error"].includes(entry.level), "unknown k6 log record");
     if (entry.level === "error") {
       assert.ok(exitCode === 99 && /^thresholds on metrics '(?:checks|http_req_failed|dropped_iterations)(?:, (?:checks|http_req_failed|dropped_iterations))*' have been crossed$/.test(entry.msg),
         "k6 output/marshal/write/runtime error");
       thresholds++;
     }
     if (entry.level === "warning") {
-      if (entry.msg === "Request Failed" && entry.error === "request timeout") timeoutWarnings++;
+      if (entry.msg === "Request Failed" && isRequestTimeout(entry.error)) timeoutWarnings++;
       else assert.ok(dropped > 0 && /^Insufficient VUs, reached \d+ active VUs and cannot initialize more$/.test(entry.msg), "unclassified k6 warning");
     }
   }

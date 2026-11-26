@@ -4,14 +4,17 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { verifyRound } from "../../../live/verify.mjs";
+import { retainedPrefix, verifyRound } from "../../../live/verify.mjs";
 import { groupNames } from "../../registry.mjs";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
+import { replaySealedPhase } from "../campaign-journal.mjs";
+import { commandResult } from "../composition.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 import { inspectLifetime, inspectLiveActors } from "../host-lifetime.mjs";
 import { nativeControlPartition } from "../native-roles.mjs";
-import { verifyHostBoundary } from "../host-observation.mjs";
+import { verifyOfflineWindow } from "../control-admission.mjs";
+import { verifyHostBoundary, verifyLifetimeSettledBoundary } from "../host-observation.mjs";
 import { liveCaptureSchema, liveContracts } from "../../live.mjs";
 import { negativeRequests } from "../../../live/admission.mjs";
 
@@ -70,29 +73,54 @@ function phaseProof(binding, folder, startedAt, actors) {
   assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
   assert.equal(reservation.campaignSha256, campaignSha256);
   assert.equal(basename(phase), `${String(index).padStart(2, "0")}-${group}-timing`);
-  const beforeTree = tree(phase), read = (name) => JSON.parse(readRegular(join(phase, name)));
-  assert.ok(isDeepStrictEqual(read("native-manifest.json"), tree(folder)), "native manifest differs");
+  const beforeTree = tree(phase);
+  const read = (name) => {
+    const bytes = readRegular(join(phase, name)), entry = beforeTree.entries.find(({ path }) => path === name);
+    assert.equal(digest(bytes), entry?.sha256, "live boundary record differs from phase snapshot");
+    return JSON.parse(bytes);
+  };
+  const nativeManifest = tree(folder);
+  assert.ok(isDeepStrictEqual(read("native-manifest.json"), nativeManifest), "native manifest differs");
   const before = read("host-before.json"), after = read("host-after.json");
-  verifyHostBoundary(before, after);
+  const seal = replaySealedPhase(campaignRoot, plan, campaign, group, basename(phase));
+  const { phase: recorded, version } = seal, offline = version === 6;
+  assert.equal(beforeTree.sha256, recorded.phaseManifestSha256, "live phase differs from journal seal");
+  assert.equal(nativeManifest.sha256, recorded.manifestSha256, "live native tree differs from journal seal");
+  assert.equal(recorded.results.length, 1); assert.equal(recorded.invocations.length, 1);
+  const [record] = recorded.results, [invocation] = recorded.invocations, result = commandResult(record);
+  assert.ok(beforeTree.entries.some(({ path, type }) => path === `command-${record.number}.log` && type === "file"),
+    "live command log missing from phase seal");
   // The single fresh host has no participant containers outside the native run.
   assert.deepEqual(before.containers, []); assert.deepEqual(after.containers, []);
+  const hostPath = `command-${record.number}-host`;
   const names = beforeTree.entries.filter((e) => e.type === "directory" && /^command-\d+-host$/.test(e.path));
-  assert.equal(names.length, 1, "live phase requires its one exact native command");
-  const directory = join(phase, names[0].path), context = JSON.parse(readRegular(join(directory, "binding.json")));
-  const terminal = JSON.parse(readRegular(join(directory, "terminal.json"))), command = Number(/^command-(\d+)-host$/.exec(names[0].path)[1]);
-  assert.equal(context.bootId, before.bootId);
-  const observation = inspectLifetime(binding, binding.execution.invocation, directory,
-    { campaign, command, pid: context.leaderPid, result: terminal.command });
+  assert.deepEqual(names.map(({ path }) => path), [hostPath], "live phase requires its one exact native command");
+  const observation = inspectLifetime(binding, invocation, join(phase, hostPath),
+    { campaign, command: record.number, pid: record.pid, result, phase: "timing" });
+  assert.equal(observation.manifestSha256, record.hostManifestSha256, "live terminal lifetime differs from journal seal");
+  assert.equal(observation.context.bootId, before.bootId);
+  if (offline) {
+    for (const census of [before, after]) assert.equal(census.controlApparatus, undefined);
+    verifyOfflineWindow(read("control-ingress.json"));
+  }
+  if (beforeTree.entries.some(({ path }) => path === "host-after-settled.json")) {
+    assert.ok(version === 5 || offline, "settled live phase lacks monitored or offline scope");
+    assert.equal(recorded.transferDestination, `${recorded.key}/native`, "settled live phase lacks its transfer commitment");
+    const settled = read("host-after-settled.json");
+    if (offline) assert.equal(settled.controlApparatus, undefined);
+    verifyLifetimeSettledBoundary({ binding, invocation, round, phase: "timing",
+      lifetime: observation, before, after, settled, offline });
+  } else verifyHostBoundary(before, after);
   assert.equal(binding.execution.effectiveOptions.build, true);
   const first = observation.samples[0].at, last = observation.samples.at(-1).at, started = clock(startedAt);
   assert.ok(clock(before.at) <= first && first <= started && started <= last && last <= clock(after.at));
-  const result = terminal.command;
   assert.equal(result.error, null); assert.equal(result.signal, null);
   assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
   const browser = binding.execution.effectiveOptions.isolated
     ? actors && inspectLiveActors(binding, observation, actors.tools, actors.participants, actors.windows)
     : observation.identities.some((p) => p.type === "--type=renderer");
   assert.ok(isDeepStrictEqual(tree(phase), beforeTree), "external phase evidence mutated");
+  seal.verifyUnchanged();
   assert.ok(readRegular(planPath).equals(planBytes) && readRegular(reservationPath).equals(reservationBytes), "campaign membership mutated");
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }
@@ -178,6 +206,8 @@ export async function inspectLiveSaved(binding, folder, group) {
       result.blockers = [...missing]; return result;
     }
     const plan = await json("plan.json"), ledger = await json("coverage.json");
+    const cancelled = ledger.cancelled === true;
+    if (cancelled) missing.add("native-live-run-cancelled");
     const actorFiles = [...names].filter((name) => name.endsWith("-host-actor.json"));
     assert.equal(plan.isolated ?? false, options.isolated ?? false, "live isolation differs from binding");
     const actors = options.isolated ? { tools: null, participants: [], windows: [] } : null;
@@ -212,7 +242,7 @@ export async function inspectLiveSaved(binding, folder, group) {
     clock(plan.startedAt);
     const provenance = new Map();
     const legacyMeasurements = new Set();
-    let allAttempted = true, failed = false, failedEvidenceComplete = true;
+    let allAttempted = !cancelled, failed = false, failedEvidenceComplete = true;
     for (const [index, entry] of plan.inventory.entries()) {
       const app = apps[index], cell = ledger.cells[index], outcome = result.outcomes[index];
       assert.equal(entry.app, app); assert.equal(cell.implementation, entry.implementation);
@@ -234,7 +264,8 @@ export async function inspectLiveSaved(binding, folder, group) {
       if (names.has(manifestName)) {
         assert.ok(supported); assert.equal(cell.artifact, manifestName);
         const manifest = await json(manifestName); assert.equal(manifest.app, app); assert.equal(manifest.group, group);
-        assert.deepEqual(manifest.files.map((f) => f.file), settings.scenarios.map((s) => `${app}-${s}.json.gz`));
+        retainedPrefix(manifest.files, settings.scenarios.map((s) => `${app}-${s}.json.gz`),
+          cancelled || startup, "incomplete native scenarios");
         for (const [i, file] of manifest.files.entries()) {
           const bytes = await readFile(join(folder, file.file)); assert.equal(digest(bytes), file.sha256);
           const a = JSON.parse(gunzipSync(bytes, { maxOutputLength: 32 * 1024 * 1024 }));
@@ -247,20 +278,27 @@ export async function inspectLiveSaved(binding, folder, group) {
           }
           retained.push(a);
         }
+        if (retained.length < settings.scenarios.length) {
+          allAttempted = false; missing.add(`native-scenarios-not-run:${app}`);
+        }
       } else {
         if (cell.artifact !== undefined) {
           assert.equal(cell.artifact, manifestName); missing.add(`native-scenario-manifest-missing:${app}`);
         }
         if (supported && !startup) { allAttempted = false; missing.add(`native-scenarios-not-run:${app}`); }
       }
-      const qualificationPassed = retained.length > 0 && retained.every((a) => a.schema === "native-live-evidence/v1");
+      const qualificationPassed = retained.length === settings.scenarios.length && retained.every((a) => a.schema === "native-live-evidence/v1");
       if (retained.some((a) => a.schema === "native-live-failure/v1")) { failed = true; outcome.outcome = "failed"; }
       if (!supported) { assert.equal(retained.length, 0); assert.equal(startup, null); outcome.outcome = "unsupported"; missing.add(`native-port-unsupported:${app}`); }
       if (names.has(measurementName)) {
         assert.ok(options.measure && qualificationPassed); assert.equal(cell.measurementArtifact, measurementName);
         const measured = await json(measurementName);
         assert.equal(measured.app, app); assert.equal(measured.group, group); assert.deepEqual(measured.profile, settings.measurement);
-        assert.deepEqual(measured.files.map((f) => f.file), settings.measurement.clients.map((n) => `${app}-fanout-${n}.json.gz`));
+        retainedPrefix(measured.files, settings.measurement.clients.map((n) => `${app}-fanout-${n}.json.gz`),
+          cancelled || startup, "incomplete native measurements");
+        if (measured.files.length < settings.measurement.clients.length) {
+          allAttempted = false; missing.add(`native-measurements-not-run:${app}`);
+        }
         for (const file of measured.files) {
           const bytes = await readFile(join(folder, file.file)); assert.equal(digest(bytes), file.sha256);
           const a = JSON.parse(gunzipSync(bytes, { maxOutputLength: 32 * 1024 * 1024 }));
@@ -308,7 +346,8 @@ export async function inspectLiveSaved(binding, folder, group) {
     if (actorFiles.length) {
       // A native startup/harness failure can leave a container receipt before
       // any replayable browser work. Keep its failure, never clear resources.
-      assert.ok(actorFiles.every((name) => apps.some((app) => name === `${app}-host-actor.json` && names.has(`${app}-failure.json`))),
+      assert.ok(actorFiles.every((name) => apps.some((app, i) => name === `${app}-host-actor.json`
+        && (names.has(`${app}-failure.json`) || (cancelled && ledger.cells[i].reason === "Cancelled before first scenario")))),
         "unbound native live actor receipt");
       missing.add("native-live-actor-without-browser-evidence");
     }
@@ -330,7 +369,7 @@ export async function inspectLiveSaved(binding, folder, group) {
     for (const row of result.outcomes) if (row.outcome === "not-run" && native.passed.includes(row.app)
       && (!options.measure || native.measured.includes(row.app))) row.outcome = "passed";
     const passed = result.outcomes.every((r) => r.outcome === "passed");
-    if (passed) { assert.deepEqual(native.missing, []); assert.deepEqual(native.unqualified, []); assert.equal(native.readyForLoad, true); }
+    if (passed) { assert.deepEqual(native.missing, []); assert.deepEqual(native.unqualified, []); assert.equal(native.readyForLoad, !cancelled); }
     resourceStage = true;
     for (const p of provenance.values()) {
       assert.deepEqual(p.container, { nanoCpus: binding.resources.app.cpu * 1e9,

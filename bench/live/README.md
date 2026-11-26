@@ -138,6 +138,17 @@ not standalone production latency/efficiency numbers. Each app container has one
 has a 45-second hard deadline (180 seconds for the larger explicit native-feed fixture),
 individual waits are bounded, startup is bounded, and owned containers are removed
 in `finally`. The local browser runs outside that app budget and is explicitly inventoried.
+Chromium is owned by one adapter at a time: it starts after the app is ready and closes before
+the next adapter. A disconnect remains a case failure with its browser stage, not an app crash
+or a retried success. Cooperative cancellation stops the run instead of opening another
+browser. The runner saves the attempted scenario and fan-out prefixes in the usual manifests,
+including failures; replay lists the remaining cases as unattempted and never qualifies a
+cancelled round. This does not recover writes interrupted by an abrupt process or host loss.
+
+The lifecycle test in `browser-lifetime.test.mjs` drives the production adapter loop with
+bundled Chromium and the ASP.NET and Express clients on loopback. It deliberately closes the
+first browser, replays the retained failure, and verifies that the next adapter completes its
+normal journey. Cancellation tests exercise the same loop without starting app images or timing fan-out.
 
 Each final detach closes the real EventSource and waits for the native subscription, writer
 task and queue to reach zero. The independent post-detach write is acknowledged, followed
@@ -173,6 +184,19 @@ cases before all three requested measurement levels. These are separate partial 
 not a manufactured passing whole-group ledger. Earlier build/rate/timing failures remain
 unchanged in their original captures. [Validation record](VALIDATION.md) lists checks,
 limits, measured observations and every changed path.
+
+The gzip captures checked in under `evidence/` here and in `bench/recoverable-live/evidence/` stay
+where they are: their paths are cited and the hostile tests read them, and removing them would
+shrink no full clone, since their blobs stay reachable in history. `scripts/bench-size.allow`
+lists each at its blob. New captures are not committed. A normal full clone fetches every version
+of a committed file still reachable in history, so Git
+ignores the gzip files `parity.mjs` writes under its default outputs, `results/parity/` here
+and `bench/recoverable-live/results/`; the round's `coverage.json`, `plan.json` and other JSON
+there stay visible. A new round commits its summary and provenance; a maintainer publishes the
+captures where they will be kept, and the provenance records where they can be fetched and their
+SHA-256 ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check` fails
+on a `.json.gz` or other name with an archive suffix under `bench/`, in any commit of the pull
+request, unless the base's list has it at that path and blob.
 
 Historical `native-live-plan/v1` evidence retains its original three-port inventory. The
 verifier checks that versioned inventory, not today's available adapters; adding a port never

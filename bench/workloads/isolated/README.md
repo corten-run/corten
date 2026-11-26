@@ -104,12 +104,15 @@ It does not replace any native admission gate or default profile.
 | Recoverable live | Safe explicit round; `--build --isolated` | Same bounded defaults, six recovery scenarios. Entire `bench/recoverable-live/results/<round>` and shared verifier. Missing registrations and Corten's default-profile incompatibility are blockers, not substituted transports. |
 | Hardening | `wN --build --review <exact-subject-hash>` | Existing bounded profile and matched native production adapters, all 216 cells. Direct/edge qualification stays separate. The required review-reference string alone establishes no approval. Entire results tree, raw controls/receipts and native verifier. |
 
-Four named override recipes exist: `marketplace-short-window` (three passes,
+Named override recipes include `marketplace-short-window` (three passes,
 15 s phases/10 s warmup/rate 150), `mixed-measure` (adds measurement without changing the
 default native profile/settings), `mixed-production-measure` (the separately reviewed
-production procedure adds measurement and the native matched profile), and `native-feed-measure` for either live group
+production procedure adds measurement and the native matched profile), `mixed-production-django-asgi`
+(the dedicated Mixed recipe selects Django's ASGI build and keeps the same timing, resources, and gates),
+`native-feed-measure` for either live group
 (native-feed for every candidate, 1,044 events, queue 1,024/history 1,025, then the native
-1/2/4-browser measurement levels). No arbitrary numeric tuning, caller-selected profile,
+1/2/4-browser measurement levels), and [`client-heavy-comparison-v1`](../../client-heavy/README.md#dedicated-comparison-recipe)
+for dedicated client-heavy campaigns. No arbitrary numeric tuning, caller-selected profile,
 sustained attack override or alternative deployment selection is accepted.
 
 `reviewSubject(request)` returns the exact source/registry/round/recipe subject hash.

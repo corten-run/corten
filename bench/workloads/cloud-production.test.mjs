@@ -8,12 +8,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { controllerPaths, nativePaths, parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
-import { benchPackagePaths } from "./droplet.mjs";
+import { benchPackagePaths, publicError } from "./droplet.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
-import { sourceUrl } from "./cloud-remote.mjs";
+import { bootstrapReadScript, sourceUrl } from "./cloud-remote.mjs";
+import { providerFailure } from "./cloud-options.mjs";
 import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
 import { controlRegistration, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
@@ -390,6 +391,66 @@ test("supervised approved audit delivery uses locked production approval and the
 test("supervised audit startup surfaces a controller failure before the ready marker", async (t) => {
   await assert.rejects(supervisedAudit(t, "json-api", { bootstrapError: true }), {
     controllerStage: "controller-launch", message: /^common bootstrap marker observation failed/,
+  });
+});
+
+test("bootstrap marker diagnostic preserves command acknowledgement, polling, and custody", async (t) => {
+  for (const [mode, detail, uncertain] of [
+    ["lost-completion", "remote-completion-unconfirmed", true],
+    ["unacknowledged-pending", "remote-completion-unconfirmed", true],
+    ["local-process-error", "local-control-uncertain", true],
+    ["acknowledged-refusal", "acknowledged-exit-refused", false],
+    ["invalid-marker", "marker-invalid", false],
+    ["pending-then-ready", undefined, false],
+  ]) await t.test(mode, async (t) => {
+    const p = productionHarness(t, { active: true, bootstrapPending: ["pending-then-ready", "unacknowledged-pending"].includes(mode) ? 1 : 0,
+      bootstrapError: mode === "acknowledged-refusal" });
+    p.deps.compiler = () => true; // Synthetic launch stops at the controller and never loads the compiler.
+    const input = `set -euo pipefail\n${bootstrapReadScript}\n`, readDigest = digest(input), readRows = () => p.h.saved().control.ledger
+      .filter(({ request }) => request.invocation.requestSha256 === readDigest);
+    const locks = [join(p.h.local, "operation.lock"), join(p.h.base, ".groups-launch.lock")];
+    const raw = "SYNTHETIC_PRIVATE_BOOTSTRAP_OUTPUT";
+    const spawn = p.deps.spawn, streamSpawn = p.deps.streamSpawn;
+    let reads = 0, monitors = 0, error;
+    p.deps.streamSpawn = (...args) => { monitors++; return streamSpawn(...args); };
+    p.deps.spawn = (binary, argv, options) => {
+      const result = spawn(binary, argv, options);
+      if (binary !== "ssh" || !options.input?.endsWith(input)) return result;
+      reads++;
+      assert.deepEqual(locks.map(existsSync), [true, true]);
+      if (["lost-completion", "unacknowledged-pending"].includes(mode)) {
+        assert.equal(result.status, mode === "lost-completion" ? 0 : 3);
+        return { ...result, stdout: raw, stderr: result.stderr.split("\n")[0] + "\n" + raw };
+      }
+      if (mode === "local-process-error") return { ...result, status: null, stdout: raw, error: new Error(raw) };
+      return mode === "invalid-marker" ? { ...result, stdout: raw } : result;
+    };
+    const approval = await p.approve("--detach");
+    if (detail) await assert.rejects(productionMain(approval, p.deps), (value) => { error = value; return true; });
+    else assert.equal(await productionMain(approval, p.deps), 3);
+    assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+    const saved = p.h.saved(), rows = readRows();
+    assert.equal(saved.status, "running");
+    assert.deepEqual(locks.map(existsSync), [uncertain, uncertain]);
+    if (detail) {
+      assert.equal(reads, 1); assert.equal(monitors, 0);
+      assert.equal(p.calls.at(-1)[0], "ssh");
+      assert.ok(p.calls.at(-1)[2].input.endsWith(input), "no request follows the refused marker read");
+      assert.deepEqual(saved.control.sealed, []); assert.equal(saved.control.monitor.phase, "pending");
+      assert.equal(saved.control.monitor.registrationSha256, undefined);
+      assert.deepEqual(rows, saved.control.ledger.slice(-1));
+      assert.deepEqual(rows.map(({ localTerminal, code }) => [localTerminal, code]),
+        [[!uncertain, uncertain ? undefined : mode === "acknowledged-refusal" ? 1 : 0]]);
+      assert.equal(!!error.controlTreeUncertain, uncertain);
+      assert.ok(!publicError(error).includes(raw));
+      t.diagnostic(publicError(error));
+      assert.deepEqual(providerFailure(error), { code: "bootstrap-marker", detail });
+      assert.equal(publicError(error), `${publicError()} Controller stage: controller-launch. Bootstrap marker: ${detail}.`);
+    } else {
+      assert.equal(reads, 2); assert.equal(monitors, 1);
+      assert.deepEqual(rows.map(({ localTerminal, code }) => [localTerminal, code]), [[true, 3], [true, 0]]);
+      assert.deepEqual(saved.control.sealed, ["bootstrap"]); assert.equal(saved.control.monitor.phase, "closed");
+    }
   });
 });
 
@@ -837,6 +898,23 @@ test("approved running collect observes once; terminal blocked collect retains e
     if (active) assert.equal(p.h.units, 1);
     else { assert.ok(p.h.saved().destroyedAt); assert.ok(existsSync(join(p.h.local, "results.tgz"))); }
   }
+});
+
+test("production collect preserves closed replay stages but not private inspector evidence", async (t) => {
+  const privateText = "SYNTHETIC_PRIVATE_REPLAY";
+  for (const [stage, inspect] of [
+    ["collect-native-replay-start", () => { throw new Error(privateText); }],
+    ["collect-native-replay-refused", async () => { throw new Error(privateText); }],
+    ["collect-native-report-refused", async () => ({ invalidReport: privateText })],
+  ]) await t.test(stage, async (child) => {
+    const p = productionHarness(child, { active: false }); p.h.seed();
+    p.deps.inspect = inspect;
+    const approval = await p.approve();
+    await assert.rejects(productionMain(approval, p.deps), (error) =>
+      error.controllerStage === stage && publicError(error) === `${publicError()} Controller stage: ${stage}.`);
+    assert.equal(p.h.deletes, 0);
+    assert.ok(existsSync(join(p.h.local, "results.tgz")));
+  });
 });
 
 test("approval binds saved identity and detects state changes during merge verification", async (t) => {

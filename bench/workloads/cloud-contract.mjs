@@ -12,6 +12,15 @@ export const catalogFleetPlacement = Object.freeze({
   loadLayout: "c16-generator-v1",
   cpuEnv: Object.freeze({ ...catalogCpuEnv, CATALOG_LOAD_CPUS: "4-15" }),
 });
+// Opt-in only (issue 2057): saved as an independent json-api fleet's single.loadLayout.
+// Fleets, reservations and jobs without that marker keep their exact bytes. The pins
+// equal bench/json-api/placement.mjs c16Env, which its test checks.
+export const jsonFleetPlacement = Object.freeze({
+  host: Object.freeze({ ...legacyHost, size: "c-16" }),
+  loadLayout: "json-c16-generator-v1",
+  cpuEnv: Object.freeze({ JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: "4-15" }),
+});
+const jsonWide = (fleet, group) => group === "json-api" && fleet?.single?.loadLayout === jsonFleetPlacement.loadLayout;
 const historicalFleetSchema = "benchmark-group-fleet/v1", uniformFleetSchema = "benchmark-group-fleet/v2",
   pinnedFleetSchema = "benchmark-group-fleet/v3", launchFleetSchema = "benchmark-group-fleet/v4";
 const stagedFleetSchema = "benchmark-group-fleet/v5";
@@ -27,16 +36,24 @@ export const stagedFleet = (fleet) => fleet?.schema === stagedFleetSchema;
 const createMode = (region) => region === host.region ? "dedicated" : `dedicated-${region}`;
 export function fleetCreateMode(group, fleet, remainingRegion) {
   if (group === "catalog-page") return catalogFleetPlacement.loadLayout;
+  if (jsonWide(fleet, group)) return jsonFleetPlacement.loadLayout;
   return createMode(stagedFleet(fleet) && !fleet.single ? fleetHost(remainingRegion).region : fleet.host.region);
 }
 export function providerCreateHost(mode) {
   if (mode === "legacy" || mode === alternateFleetMode) return legacyHost;
   if (mode === "dedicated") return host;
   if (mode === catalogFleetPlacement.loadLayout) return catalogFleetPlacement.host;
+  if (mode === jsonFleetPlacement.loadLayout) return jsonFleetPlacement.host;
   if (mode === "dedicated-lon1" || mode === "dedicated-blr1") return fleetHost(mode.slice("dedicated-".length));
   assert.equal(mode, null, "unknown provider create mode");
 }
 export const tags = Object.freeze(["corten-bench", "corten-bench-groups"]);
+// The native upstream image each fresh host pulls. Reservations saved before Debian 13 (no
+// trixieUpstream marker) regenerate the job bytes they uploaded, with the Debian 12 image.
+export const upstreamImages = Object.freeze({
+  bookworm: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1",
+  trixie: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
+});
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const full = (value, pattern, name) => {
   assert.equal(typeof value, "string", `${name} must be a string`);
@@ -65,7 +82,12 @@ const historicalSelections = new Set([
   "d9c74b1fee3f6d5c71cee7405b24db73da1ffbef8f0d00c66924ebf7b475a251", // Retained r21 fleets.
   "57bf46a0e3e03d8a48bdcca952b522c148d91a7892c74e6bfbe2e860b927e19a", // 19defc76, immediately before placement.
 ]);
-const historicalSelection = (selected) => selected && historicalSelections.has(digest(selected));
+// The standalone all-group host also used the pre-rotation registry. It is
+// readable for collection, not an additional fleet roster or a launch input.
+const historicalHostSelections = new Set([...historicalSelections,
+  "dbf01bfc107ae1bec0861900558613fe120c32ab2957b03e9e65f019739c6871", // 83b3b8772, per-locale marketplace timing.
+]);
+const historicalSelection = (selected, allowed = historicalSelections) => selected && allowed.has(digest(selected));
 function buildFleet(input, createdAt, schema, placement, selected, single) {
   exact(input, ["round", "commit", "token", "tokens", "provider", "sshKey"]);
   const { round, commit, token, tokens, provider, sshKey } = input;
@@ -79,10 +101,11 @@ function buildFleet(input, createdAt, schema, placement, selected, single) {
   const jobs = names.map((group) => {
     const ownership = full(tokens[group], /[a-f0-9]{16}/, "ownership token");
     const wide = [pinnedFleetSchema, launchFleetSchema, stagedFleetSchema].includes(schema) && group === "catalog-page";
+    const json = schema === stagedFleetSchema && jsonWide({ single }, group);
     return { group, token: ownership, name: `corten-bench-groups-${round}-${ownership}`,
       tag: `corten-bench-groups-run-${ownership}`, ...(wide ? {
         host: { ...catalogFleetPlacement.host }, loadLayout: catalogFleetPlacement.loadLayout,
-      } : {}) };
+      } : json ? { host: { ...jsonFleetPlacement.host }, loadLayout: jsonFleetPlacement.loadLayout } : {}) };
   });
   assert.equal(new Set([token, ...jobs.map((row) => row.token)]).size, jobs.length + 1, "unique fleet/host tokens required");
   const body = { schema, round, commit, token, createdAt,
@@ -96,8 +119,10 @@ function fleetHost(region, regions = fleetRegions) {
 function fleetSelection(single) {
   const current = selection();
   if (!single) return current;
-  exact(single, ["group", "indexSha256", "checkout"]);
+  exact(single, ["group", "indexSha256", "checkout", ...["offlineHandoff", "loadLayout"].filter((key) => single[key] !== undefined)]);
+  if (single.offlineHandoff !== undefined) assert.equal(single.offlineHandoff, true, "offline handoff marker");
   assert.ok(groupNames.includes(single.group), "unknown independent group");
+  if (single.loadLayout !== undefined) assert.ok(jsonWide({ single }, single.group), "unknown independent group load layout");
   full(single.indexSha256, /[a-f0-9]{64}/, "continuation index digest");
   full(single.checkout, /[^\r\n\0]{1,4096}/, "measured checkout");
   return { ...current, groups: current.groups.filter(({ group }) => group === single.group) };
@@ -149,7 +174,7 @@ export const savedLoadLayout = (s) => s.fleet?.jobs.find((job) => job.group === 
 export function savedPlacement(s) {
   if (s.fleet?.schema !== launchFleetSchema && !stagedFleet(s.fleet)) return;
   const mode = fleetCreateMode(s.group, s.fleet, s.remainingPlacement?.region);
-  if (mode !== "dedicated" && mode !== catalogFleetPlacement.loadLayout) return mode;
+  if (!["dedicated", catalogFleetPlacement.loadLayout, jsonFleetPlacement.loadLayout].includes(mode)) return mode;
 }
 function reservationRegion(fleet, job, placement) {
   if (!stagedFleet(fleet) || job.host || fleet.single) {
@@ -163,7 +188,7 @@ function reservationRegion(fleet, job, placement) {
 
 // Keep the wider catalog job fixed, and use one common region for all other jobs.
 // Both directional listings must agree for each candidate pair.
-export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, staged = false, group } = {}) {
+export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, staged = false, group, loadLayout } = {}) {
   const listed = (kind, slug, membership, optional) => {
     assert.ok(Array.isArray(catalog?.[kind]), "invalid fleet catalog listing");
     const rows = catalog[kind].filter((row) => row?.slug === slug);
@@ -187,6 +212,11 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
     assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
     return host.region; // The fixed catalog job carries its own c-16 placement.
   }
+  if (loadLayout !== undefined) {
+    assert.ok(staged && jsonWide({ single: { loadLayout } }, group), "unknown independent group load layout");
+    assert.ok(available(jsonFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
+    return host.region; // The opted-in JSON API job carries its own c-16 placement.
+  }
   if (remainingOnly || group !== undefined) assert.ok(staged || reservedRegion !== undefined, "remaining placement must already be reserved");
   else assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
   const regions = staged ? fleetRegions : pinnedFleetRegions;
@@ -197,7 +227,9 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
 }
 export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
+  if (plan.single?.offlineHandoff) assert.deepEqual(peers, [], "offline handoff requires no live peer");
   const peerRows = new Set(peers.map((s) => {
+    assert.ok(!s.fleet.single?.offlineHandoff, "offline handoff cannot authorize a parallel host");
     assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
       && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
       "peer belongs to a different reservation or account");
@@ -265,11 +297,20 @@ export function validateState(s, round, options) {
   } else {
     assert.deepEqual(s.host, legacyHost);
     assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet") && !Object.hasOwn(s, "remainingPlacement"), "legacy host cannot select a group");
-    if (!historicalSelection(s.selection))
+    if (!historicalSelection(s.selection, historicalHostSelections))
       assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
+  if (s.gitSource !== undefined) assert.equal(s.gitSource, true, "Git source marker");
+  if (s.trixieUpstream !== undefined) assert.equal(s.trixieUpstream, true, "Debian 13 upstream image marker");
+  // Saved reservations without this marker must regenerate the original job.
+  if (s.quietBootstrap !== undefined)
+    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated
+      && (s.control?.monitor || s.fleet.single?.offlineHandoff), "quiet bootstrap requires a registered group");
+  if (s.fleet?.single?.offlineHandoff && (s.control || s.status !== "reserved"))
+    assert.ok(s.control && !s.control.monitor && s.quietBootstrap === "prelogin",
+    "offline handoff requires the prelogin policy and no monitor");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -294,7 +335,8 @@ export function validateState(s, round, options) {
     assert.ok(s.control.sealed.every((e) => ["bootstrap", "audit-json-api", "audit-mixed-production"].includes(e)));
     const ids = new Set();
     for (const [sequence, row] of s.control.ledger.entries()) {
-      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : [])]);
+      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : []),
+        ...(row.setupProofRejected === undefined ? [] : ["setupProofRejected"])]);
       const request = row.request, invocation = request.invocation;
       exact(request, ["invocation", "helperSha256", "epoch", "sequence", ...(request.seal === undefined ? [] : ["seal"])]);
       exact(invocation, ["schema", "round", "commit", "token", "id", "channel", "purpose", "requestSha256", "deadlineMs"]);
@@ -309,6 +351,9 @@ export function validateState(s, round, options) {
       full(invocation.id, /[a-f0-9]{32}/, "control invocation"); assert.ok(!ids.has(invocation.id)); ids.add(invocation.id);
       assert.equal(typeof row.localTerminal, "boolean");
       if (row.localTerminal) assert.ok(Number.isInteger(row.code) && row.code >= 0 && row.code <= 255);
+      if (row.setupProofRejected !== undefined) assert.ok(row.setupProofRejected === true && row.localTerminal && row.code === 0
+        && s.preBootstrapTerminal && s.status === "starting" && s.evidence && sequence === s.control.ledger.length - 1
+        && request.epoch === "collection" && invocation.channel === "ssh", "invalid setup proof rejection");
       if (request.seal !== undefined) {
         assert.notEqual(request.epoch, "collection"); assert.equal(invocation.channel, "ssh");
         const expected = s.control.ledger.slice(0, sequence + 1).filter((r) => r.request.epoch === request.epoch)
@@ -345,12 +390,15 @@ export function validateState(s, round, options) {
 export function ownedDroplet(droplets, s, options) {
   validateState(s, s.round, options);
   assert.ok(Array.isArray(droplets));
+  // An ownership tag is an exact member of a well-formed tag array (non-empty strings),
+  // never a substring of a string or a member beside malformed entries.
+  const tagged = (d, tag) => Array.isArray(d.tags) && d.tags.every((t) => typeof t === "string" && t.length > 0) && d.tags.includes(tag);
   const matches = droplets.filter((d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag));
   assert.equal(matches.length, 1, "owned droplet missing or ambiguous; preserve reservation");
   const d = matches[0];
   full(String(d.id), /[1-9]\d*/, "droplet ID");
   assert.equal(d.name, s.name);
-  for (const tag of [...tags, s.tag]) assert.ok(d.tags?.includes(tag), `missing ownership tag ${tag}`);
+  for (const tag of [...tags, s.tag]) assert.ok(tagged(d, tag), `missing ownership tag ${tag}`);
   assert.equal(d.size_slug ?? d.size?.slug, s.host.size);
   assert.equal(d.region?.slug, s.host.region);
   if (s.ip) assert.equal(d.networks?.v4?.filter((n) => n.type === "public").find((n) => n.ip_address === s.ip)?.ip_address, s.ip,
@@ -523,7 +571,7 @@ const dedicatedWorkspaceSha256 = createHash("sha256").update(`set -euo pipefail\
 // of the inspecting controller. Historical uploaded job bytes stay the same.
 export function bootstrapWorkspaceScript(s, { launch = false } = {}) {
   const row = s.control?.ledger[1];
-  return s.group && s.control?.monitor && (launch || (row?.localTerminal === true && row.code === 0
+  return s.group && (s.control?.monitor || s.fleet?.single?.offlineHandoff) && (launch || (row?.localTerminal === true && row.code === 0
     && row.request.sequence === 1 && row.request.epoch === "bootstrap" && !row.request.seal
     && row.request.invocation.channel === "ssh" && row.request.invocation.deadlineMs === 60000
     && row.request.invocation.requestSha256 === dedicatedWorkspaceSha256))
@@ -565,30 +613,42 @@ test ! -L '${sshIngressSnapshot}'
 test -s '${sshIngressSnapshot}'
 ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 
-// Fixed source-bound entry point. No caller-provided command or adapter filtering.
-export function remoteFiles(s) {
-  validateState(s, s.round);
-  const loadLayout = savedLoadLayout(s);
-  const placement = savedPlacement(s);
-  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
-  // Dedicated group runners are system services. Their root SSH sessions need
-  // logind scopes, not a user service manager. Leave any existing session alone.
-  const marker = s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
-  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
-test -f '${marker}'
+export const rootManagerDrainSeconds = 120;
+export const rootManagerCheckSeconds = 15;
+
+const rootManagerDropIn = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
+// Fixed create body, never caller-supplied cloud-init. Before the guardian
+// exists, the condition checks the drop-in itself. /run is private to this boot.
+export const preloginUserData = `#cloud-config
+bootcmd:
+  - |
+    set -eu
+    umask 077
+    d=/run/systemd/system/user@0.service.d
+    test ! -L "$d"
+    mkdir -p -- "$d"
+    dropin=${rootManagerDropIn}
+    test ! -e "$dropin" && test ! -L "$dropin" || exit 1
+    ( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}' > "$dropin" )
+    systemctl daemon-reload
+`;
+const rootManagerBinding = (s) => s.group && s.control && (s.control.monitor || s.fleet?.single?.offlineHandoff)
+  ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+const rootManagerPolicy = (marker, prelogin = false) => `test -f '${marker}'
 test ! -L '${marker}'
-dropin=/run/systemd/system/user@0.service.d/90-corten-benchmark.conf
+dropin=${rootManagerDropIn}
 test ! -L /run/systemd/system/user@0.service.d
-mkdir -p -- /run/systemd/system/user@0.service.d
+${prelogin ? `test -f "$dropin" && test ! -L "$dropin" || exit 1
+test "$(stat -c '%u:%g:%a:%h' -- "$dropin")" = 0:0:600:1
+cmp -s -- "$dropin" <(printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}')
+test ! -e "$dropin.next" && test ! -L "$dropin.next" || exit 1
+( umask 077; set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin.next" )
+mv -T -- "$dropin.next" "$dropin"` : `mkdir -p -- /run/systemd/system/user@0.service.d
 test ! -e "$dropin"
 test ! -L "$dropin"
-( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )
-systemctl daemon-reload
-` : "";
-  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
-timeout 120 bash -ec '
-  while :; do
-    echo "root-manager: querying ActiveState" >&2
+( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )`}
+`;
+const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
     state=$(systemctl show user@0.service --property=ActiveState --value)
     case "$state" in
       active|activating|deactivating|reloading|inactive|failed) ;;
@@ -597,7 +657,129 @@ timeout 120 bash -ec '
     echo "root-manager: ActiveState=$state; querying MainPID" >&2
     main_pid=$(systemctl show user@0.service --property=MainPID --value)
     [[ "$main_pid" =~ ^[0-9]{1,10}$ ]] || { echo "root-manager: invalid MainPID" >&2; exit 1; }
-    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2
+    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2`;
+
+export function installBenchmarkUnit(s) {
+  const install = `bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${s.unit} /etc/systemd/system/${s.unit} && systemd-analyze verify /etc/systemd/system/${s.unit}`;
+  const binding = rootManagerBinding(s);
+  assert.ok(!s.quietBootstrap || binding, "quiet bootstrap requires a guardian binding");
+  return s.quietBootstrap
+    ? `${install} || exit 1\n${rootManagerPolicy(binding, s.quietBootstrap === "prelogin")}systemctl daemon-reload`
+    : `${install} && systemctl daemon-reload`;
+}
+
+// Fixed source-bound entry point. No caller-provided command or adapter filtering.
+// Only file reconstruction for destroyed native failures needs the r27/r41
+// single-group roster. Do not admit it to reservation, launch or live custody.
+export function validateRemoteFileState(s) {
+  const priorSelection = s.status === "retired" && s.destroyedAt && s.retirement?.kind === "native-failed"
+    && s.schema === "benchmark-dedicated-group-host/v1" && s.fleet?.single?.group === "localized-marketplace"
+    && s.fleet.selection && digest(s.fleet.selection) === "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8";
+  return validateState(s, s.round, { priorSelection });
+}
+
+// Embed the exact CI verifier in job.sh: a fresh guest has no checkout, and the
+// pinned controller/worker must not load a new, unbound runtime input.
+// git-source.test.mjs checks it against scripts/benchmark-evidence-git.sh.
+const sourceGitInstall = String.raw`bootstrap_stage=git-install
+timeout -k 10 900 apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends gpgv libcurl4-gnutls-dev libexpat1-dev libpcre2-dev libssl-dev perl pkg-config xz-utils zlib1g-dev
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+(
+  git_build=$(mktemp -d /tmp/corten-git-build.XXXXXXXXXX)
+  trap 'code=$?; timeout -k 5 60 rm -rf -- "$git_build" || exit 1; exit "$code"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  cd "$git_build"
+  timeout -k 10 420 /bin/sh <<'CORTEN_GIT_VERIFY'
+#!/bin/sh
+# Run in an empty build directory. Git signs the .tar, not the .tar.xz.
+set -eu
+base=https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar
+get() { curl --proto '=https' --proto-redir '=https' -fsSL --retry 3 --max-time 90 "$1" -o "$2"; }
+get "$base.xz" git.tar.xz
+echo 'f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f  git.tar.xz' | sha256sum -c -
+get "$base.sign" git.tar.sign
+get https://github.com/gitster.gpg release-key.asc
+export GNUPGHOME="$PWD/gnupg"
+mkdir -m 700 "$GNUPGHOME"
+gpg --batch --dearmor -o release-key.gpg release-key.asc
+xz -dc git.tar.xz > git.tar
+gpgv --status-fd 1 --keyring "$PWD/release-key.gpg" git.tar.sign git.tar > signer
+verified=$(awk '$1=="[GNUPG:]" && $2=="VALIDSIG"{print $3, $NF}' signer)
+test "$verified" = \
+  'E1F036B1FEE7221FC778ECEFB0B5E88696AFE6CB 96E07AF25771955980DAD10020D04E5A713660A7'
+CORTEN_GIT_VERIFY
+  timeout -k 10 120 tar -xf git.tar
+  timeout -k 10 900 make -C git-2.56.1 -j2 prefix=/usr/local INSTALL_STRIP=-s INSTALL_SYMLINKS=1 \
+    NO_RUST=1 NO_GETTEXT=1 NO_TCLTK=1 NO_GITWEB=1 USE_LIBPCRE2=1 install
+  timeout -k 5 60 /bin/bash -euo pipefail <<'CORTEN_GIT_CHECK'
+test "$(command -v git)" = /usr/local/bin/git
+test -x "$(git --exec-path)/git-remote-https"
+version=$(git --no-replace-objects --no-lazy-fetch --version)
+test "$version" = 'git version 2.56.1'
+unset GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
+git init -q source
+printf evidence > source/blob
+git -C source add blob
+git -C source -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture
+git -C source config uploadpack.allowFilter true
+git clone -q --no-local --no-checkout --filter=blob:none "$PWD/source" replay
+git -C replay config protocol.file.allow always
+oid=$(git -C source rev-parse HEAD:blob)
+if git --no-replace-objects --no-lazy-fetch -C replay cat-file blob "$oid" >/dev/null 2>&1; then exit 1; fi
+test "$(git --no-replace-objects -C replay cat-file blob "$oid")" = evidence
+test "$(git --no-replace-objects --no-lazy-fetch -C replay cat-file blob "$oid")" = evidence
+replacement=$(printf replaced | git -C source hash-object -w --stdin)
+git -C source replace "$oid" "$replacement"
+test "$(git -C source cat-file blob "$oid")" = replaced
+test "$(git --no-replace-objects -C source cat-file blob "$oid")" = evidence
+{
+  printf '%s\n' "$version" 'git-source-url=https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz'
+  printf 'git-source-sha256='; sha256sum git.tar.xz | cut -d ' ' -f 1
+  printf 'git-source-signer='; awk '$1=="[GNUPG:]" && $2=="VALIDSIG"{print $3, $NF}' signer
+} >> /bench/host.txt
+CORTEN_GIT_CHECK
+)
+`;
+
+export function remoteFiles(s) {
+  validateRemoteFileState(s);
+  const loadLayout = savedLoadLayout(s);
+  const placement = savedPlacement(s);
+  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
+  // Dedicated group runners are system services. Their root SSH sessions need
+  // logind scopes, not a user service manager. Leave any existing session alone.
+  const marker = rootManagerBinding(s);
+  const prelogin = s.quietBootstrap === "prelogin", afterStart = prelogin || s.quietBootstrap === "after-start";
+  // Type=exec acknowledges this unit after exec. Anchor the host deadline to
+  // that event, not to how long metadata collection or scheduling happened to take.
+  const drain = afterStart ? `bootstrap_stage=root-manager-drain
+sample_manager() {
+  echo "root-manager: $1" >&2
+  timeout 5 systemctl show user@0.service --all --property=ActiveState,MainPID,ActiveEnterTimestampMonotonic
+}
+start_us=$(timeout 5 systemctl show ${s.unit} --property=ExecMainStartTimestampMonotonic --value)
+[[ "$start_us" =~ ^[1-9][0-9]{0,19}$ ]] || { echo "root-manager: missing unit start time" >&2; exit 1; }
+sample_manager before-drain
+python3 -I -c 'import sys,time
+start = int(sys.argv[1])
+elapsed = time.monotonic_ns() // 1000 - start
+if elapsed < 0: sys.exit("invalid unit start time")
+time.sleep(max(0, ${rootManagerDrainSeconds} - elapsed / 1000000))' "$start_us"
+sample_manager after-drain
+` : "";
+  const checkWindow = afterStart ? `python3 -I -c 'import sys,time
+elapsed = time.monotonic_ns() // 1000 - int(sys.argv[1])
+if not ${rootManagerDrainSeconds * 1_000_000} <= elapsed < ${(rootManagerDrainSeconds + rootManagerCheckSeconds) * 1_000_000}:
+    sys.exit("root-manager: idle proof outside post-start quiet window")' "$start_us"
+` : "";
+  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
+${rootManagerPolicy(marker)}systemctl daemon-reload
+` : "";
+  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
+timeout ${rootManagerDrainSeconds} bash -ec '
+  while :; do
+${observeRootManager}
     case "$state" in
       inactive) test "$main_pid" = 0; break ;;
       failed) exit 1 ;;
@@ -605,6 +787,37 @@ timeout 120 bash -ec '
     esac
   done'
 ` : "";
+  const requireIdleUserManager = (stage) => `bootstrap_stage=${stage}
+timeout ${rootManagerCheckSeconds} bash -e -o pipefail -c '
+    test -f "$1" && test ! -L "$1" || exit 1
+    test -f "$2" && test ! -L "$2" || exit 1
+    cmp -s -- "$2" <(printf "%s\\n" "[Unit]" "$3")
+    # The condition must be mandatory (not a trigger), negated and in the loaded unit.
+    busctl --json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/user_400_2eservice org.freedesktop.systemd1.Unit Conditions |
+      python3 -I -c "
+import json, sys
+reply = json.load(sys.stdin)
+expected = [\\"ConditionPathExists\\", False, True, sys.argv[1]]
+sys.exit(not (reply[\\"type\\"] == \\"a(sbbsi)\\" and any(row[:4] == expected for row in reply[\\"data\\"])))
+" "\${3#ConditionPathExists=!}" ||
+      { echo "root-manager: effective binding condition missing" >&2; exit 1; }
+${observeRootManager}
+${prelogin ? `    busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSessions |
+      python3 -I -c "
+import json, os, sys, time
+raw = sys.stdin.buffer.read(8193)
+assert len(raw) <= 8192
+reply = json.loads(raw)
+assert reply[\\"type\\"] == \\"a(susso)\\"
+sessions, = reply[\\"data\\"]
+assert isinstance(sessions, list) and all(len(s) == 5 and type(s[1]) is int for s in sessions)
+count = sum(s[1] == 0 for s in sessions)
+linger = os.path.exists(\\"/var/lib/systemd/linger/root\\")
+print(f\\"root-manager: monotonic-us={time.monotonic_ns() // 1000} root-sessions={count} linger-file={int(linger)}\\", file=sys.stderr)
+${stage === "root-manager-idle" ? 'if count: sys.exit(\\"root-manager: root session before provisioning\\")' : "# The registered monitor may now have a session."}"
+` : ""}    test "$state" = inactive && test "$main_pid" = 0
+' root-manager '${marker}' '${rootManagerDropIn}' 'ConditionPathExists=!${marker}'
+`;
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
@@ -624,9 +837,9 @@ bootstrap_stage=supervisor
 bootstrap_error() { local code=$?; trap - ERR; printf 'benchmark job failed: stage=%s line=%s exit=%s\\n' "$bootstrap_stage" "$1" "$code" >&2; return "$code"; }
 trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
-bootstrap_stage=cloud-init
+${drain}${s.quietBootstrap ? requireIdleUserManager("root-manager-idle") : ""}${checkWindow}bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
-${loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+${s.quietBootstrap ? "" : loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 bootstrap_stage=package-services
@@ -638,7 +851,7 @@ timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq gnupg curl ca-certificates build-essential
 ${sshIngress ? `bootstrap_stage=ssh-ingress-install
 ${installSshIngress}
-` : ""}# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
+` : ""}${s.gitSource ? sourceGitInstall : `# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
 # Distribution Git may lack --no-lazy-fetch; never weaken immutable native queries.
 bootstrap_stage=git-install
 # Use the signed PPA directly; add-apt-repository's metadata API can truncate reads.
@@ -654,7 +867,7 @@ rm /tmp/corten-git-ppa.keys /tmp/corten-git-ppa.asc
 timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq git
 timeout 30 git --no-replace-objects --no-lazy-fetch --version >> /bench/host.txt
-bootstrap_stage=docker-install
+`}bootstrap_stage=docker-install
 timeout 900 bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
 bootstrap_stage=node-install
 timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_26.x | bash -'
@@ -679,7 +892,7 @@ timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
 bootstrap_stage=browser-install
 timeout 900 npx --no-install playwright install --with-deps chromium
 bootstrap_stage=upstream-image
-timeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
+timeout 900 docker pull ${s.trixieUpstream ? upstreamImages.trixie : upstreamImages.bookworm}
 bootstrap_stage=rust-install
 timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 export PATH=/root/.cargo/bin:$PATH
@@ -714,7 +927,7 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-${waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
+${s.quietBootstrap ? requireIdleUserManager("root-manager-verification") : waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
 ${verifySshIngress}
 ` : ""}bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}${placement ? ` --placement ${placement}` : ""}
@@ -726,7 +939,7 @@ Wants=network-online.target
 [Service]
 Type=exec
 ExecStart=/bin/bash /bench/job.sh
-WorkingDirectory=/bench
+${s.fleet?.single?.offlineHandoff ? "ExecStopPost=-/usr/bin/timeout -k 5 15 /usr/sbin/nft delete table inet corten_bench_native\n" : ""}WorkingDirectory=/bench
 Delegate=cpu cpuset memory pids
 DelegateSubgroup=supervisor
 Restart=no

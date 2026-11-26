@@ -10,7 +10,7 @@ of the read-only controller/HEEx page and numeric JSON route remain unchanged.
 The LiveView retains submitted email/target values after accepted and rejected
 actions, so the next localized validation uses the actual native form state.
 The form has a stable ID and `phx-change` handler for native LiveView form
-recovery. LiveView 1.2.13 skips recovery on the first join. A native
+recovery. LiveView skips recovery on the first join (1.2.15, as 1.2.13 did). A native
 `dom.onBeforeElUpdated` callback therefore copies only dirty email/target values
 into that initial patch, including blurred edits. The form's native mounted hook
 then synchronizes those edits through the same non-writing `change` event.

@@ -259,7 +259,7 @@ async fn up_to(body: Body, max: usize, past: usize, over: Option<Over>) -> Resul
     let mut small: Vec<u8> = Vec::new();
     let mut len: usize = 0;
     while let Some(piece) = stream.next().await {
-        let piece = piece.map_err(|e| Error::new(e).with_status(StatusCode::BAD_REQUEST))?;
+        let piece = piece.map_err(|e| Error::corten(e).with_status(StatusCode::BAD_REQUEST))?;
         len = len.saturating_add(piece.len());
         if len > max {
             drop((pieces, small));
@@ -355,6 +355,8 @@ impl std::fmt::Display for BodyRejection {
 
 impl std::error::Error for BodyRejection {}
 
+/// Corten's refusal of the request's body, never shared wherever it is answered
+/// ([`crate::cache::Unshared`]).
 impl crate::http::IntoResponse for BodyRejection {
     #[inline]
     fn may_share() -> crate::answer::sealed::MayShare {
@@ -362,7 +364,7 @@ impl crate::http::IntoResponse for BodyRejection {
     }
 
     fn into_response(self) -> crate::http::Response {
-        crate::http::IntoResponse::into_response((self.status, self.text))
+        crate::cache::unshared(crate::http::IntoResponse::into_response((self.status, self.text)))
     }
 }
 
@@ -566,6 +568,12 @@ enum End {
 }
 
 /// Why [`Pieces::chunk`] stopped. `?` turns it into an [`Error`] with its status.
+///
+/// That `Error` is Corten's refusal of the request, never shared, wherever the handler answers it:
+/// a body is the request's, and its failure can say who sent it. A value the handler builds itself
+/// is treated the same way: building one opts in to a refusal's caching, as a `Refused` does. A
+/// failure of the handler's own is an `Error` of its own (`Error::status`), which keeps its usual
+/// caching.
 #[derive(Debug)]
 pub enum BodyError {
     /// The body is over the limit (413). It was read past, so a client still sending reads the
@@ -595,7 +603,8 @@ impl From<BodyError> for Error {
             BodyError::Stalled => StatusCode::REQUEST_TIMEOUT,
             BodyError::Broken(_) => StatusCode::BAD_REQUEST,
         };
-        Error::new(error.to_string()).with_status(status)
+        // The request's, read by Corten: never shared, wherever the handler answers it.
+        Error::corten(error.to_string()).with_status(status)
     }
 }
 

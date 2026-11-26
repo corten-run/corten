@@ -1,24 +1,29 @@
-import { base, swapped, shadowing, engine, skip, check, precommits, entriesWhileRecordingAddresses } from "./helpers.mjs";
+import { base, swapped, shadowing, engine, skip, check, precommits, entriesWhileRecordingAddresses, pollFor } from "./helpers.mjs";
 
-export async function sectionNavigation(feedSources, page, redirectName, openFeeds, delayWatch, abandoned, openStreams, swaps) {
+export async function sectionNavigation(feedSources, page, redirectName, openFeeds, holdWatch, abandoned, openStreams, swaps) {
   // The feed sources before the write: a write that swaps the page in brings the component a new one.
   const feedsBeforeGo = (await feedSources()).length;
   let goSwapped = false;
   if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
   else {
     goSwapped = true;
-    await page.click("#busy-wgo");
-    const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
-    await page
-      .waitForFunction(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
-      .catch(() => {});
+    // Pressed and read in one task in the page, so the mark is read before the write's answer
+    // can come back, however slowly the browser runs.
+    const goBusy = await page.evaluate(() => {
+      /** @type {HTMLButtonElement} */ (document.getElementById("busy-wgo")).click();
+      return /** @type {any} */ (window).__goHeld.getAttribute("aria-busy");
+    });
+    // Settled within 5 s, a page that settles after them failing the check.
+    const goSettled = !!(await pollFor(5000, () =>
+      page.evaluate(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]")),
+    ));
     const goAfter = await page.evaluate(() => ({
       held: /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"),
       cleared: /** @type {any} */ (window).__goCleared ?? null,
       path: location.pathname,
       form: !!document.getElementById("busy-w"),
     }));
-    check(redirectName, goBusy === "true" && goAfter.held === null && goAfter.cleared?.pageIn === true && goAfter.path === "/" && !goAfter.form, JSON.stringify({ goBusy, goAfter }));
+    check(redirectName, goSettled && goBusy === "true" && goAfter.held === null && goAfter.cleared?.pageIn === true && goAfter.path === "/" && !goAfter.form, JSON.stringify({ goSettled, goBusy, goAfter }));
   }
   await page.unroute("**/busy-write*");
   await page.evaluate(() => ["busy-w", "busy-w-said", "busy-wa", "busy-wb", "busy-wgo"].forEach((id) => document.getElementById(id)?.remove()));
@@ -56,20 +61,78 @@ export async function sectionNavigation(feedSources, page, redirectName, openFee
   const styleLinks = () => page.$$eval("link[data-corten-style]", (links) => links.length);
   check("a page outside the section does not link its stylesheet", (await styleLinks()) === 0);
   // A navigation abandons a pending submit, whose reply was for the page being left, and the
-  // newer submit that waited for it.
-  delayWatch.value = 1200;
-  let posted = 0;
+  // newer submit that waited for it. The first write is held until the page has gone and the
+  // page has given it up, so the second press and the link meet it still out however slowly they
+  // come; each press runs in the page and is counted, so a second press that sends nothing is
+  // seen to have been made (#2014). The held write counts as given up only if it failed while it
+  // was still held, within 5 s of the page's leaving; the listeners, the hold and the press count
+  // go however the case ends.
   /** @param {import("@playwright/test").Request} r */
-  const onPost = (r) => r.method() === "POST" && r.url().endsWith("/watch") && (posted += 1);
+  const isWatchPost = (r) => r.method() === "POST" && r.url().endsWith("/watch");
+  const stockOf = (/** @type {import("@playwright/test").Request} */ r) => new URLSearchParams(r.postData() ?? "").get("id");
+  /** @type {(string | null)[]} */
+  const posted = [];
+  /** The writes that failed while the first was held, and after. @type {(string | null)[]} */
+  const gaveUp = [];
+  /** @type {(string | null)[]} */
+  const failedAfter = [];
+  let held = true;
+  /** @param {import("@playwright/test").Request} r */
+  const onPost = (r) => isWatchPost(r) && posted.push(stockOf(r));
+  /** @param {import("@playwright/test").Request} r */
+  const onGaveUp = (r) => isWatchPost(r) && (held ? gaveUp : failedAfter).push(stockOf(r));
+  const pressWatch = () => page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
+  let releaseWatch = () => {};
+  holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
+  let presses = 0;
+  /** @type {string | null} */
+  let first = null;
+  let gaveUpInTime = false;
+  /** What the case saw, read before its listeners go. */
+  let seen = { posted: "", gaveUp: "", failedAfter: "" };
   page.on("request", onPost);
-  await page.click("#watch-form button");
-  await page.selectOption("select[name=id]", "NRTH");
-  await page.click("#watch-form button");
-  await page.click('header a[href="/news"]');
-  await page.waitForFunction(() => document.title === "News | Watchlist");
-  await page.waitForTimeout(1600);
-  page.off("request", onPost);
-  check("navigating away abandons a pending submit and the one that waited", abandoned.length === 1 && posted === 1, `${abandoned.join()}; posts: ${posted}`);
+  page.on("requestfailed", onGaveUp);
+  try {
+    try {
+      await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__watchPresses = 0;
+        w.__watchPressCount = new AbortController();
+        // Capturing on the window, so the submit is heard before any listener of the page's.
+        window.addEventListener("submit", (e) => e.target === document.getElementById("watch-form") && (w.__watchPresses += 1), { capture: true, signal: w.__watchPressCount.signal });
+      });
+      // The first, of the stock the form shows, is out before the form changes.
+      first = stockOf((await Promise.all([page.waitForRequest(isWatchPost, { timeout: 6000 }), pressWatch()]))[0]);
+      await page.selectOption("select[name=id]", "NRTH");
+      await pressWatch();
+      presses = await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__watchPressCount.abort();
+        return /** @type {number} */ (w.__watchPresses);
+      });
+      await page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click());
+      await page.waitForFunction(() => document.title === "News | Watchlist");
+      // The page gives the held write up as it leaves (every engine reports it failed while the
+      // route still holds it).
+      gaveUpInTime = !!(await pollFor(5000, async () => gaveUp.length > 0));
+    } finally {
+      held = false;
+      holdWatch.value = null;
+      releaseWatch();
+    }
+    // Time in which a send the navigation must not let through would be seen.
+    await page.waitForTimeout(1600);
+    seen = { posted: posted.join(), gaveUp: gaveUp.join(), failedAfter: failedAfter.join() };
+  } finally {
+    page.off("request", onPost);
+    page.off("requestfailed", onGaveUp);
+    await page.evaluate(() => /** @type {any} */ (window).__watchPressCount?.abort()).catch(() => {});
+  }
+  check(
+    "navigating away abandons a pending submit and the one that waited",
+    presses === 2 && first !== null && first !== "NRTH" && abandoned.length === 1 && seen.posted === first && gaveUpInTime && seen.gaveUp === first && seen.failedAfter === "",
+    `${abandoned.join()}; presses: ${presses}; posts: ${seen.posted}; given up while held: ${seen.gaveUp || (gaveUpInTime ? "" : "none within 5 s")}; failed after the release: ${seen.failedAfter || "none"}`,
+  );
   check("the feed stream closes when its component leaves the page (its signal aborts)", (await openFeeds()) === 0);
   check("the <corten-live> stream closes when it leaves the page", (await openStreams("/live/trades")) === 0);
   check("client navigation moves aria-current in the shell", (await current()) === "/news");
@@ -1299,6 +1362,488 @@ export async function currentLinks(browser, swaps, noSwaps) {
       await bothPage.context().close();
     } else for (const name of bothNames) skip(name, noSwaps);
   }
+}
+
+export async function fragmentTargets(browser) {
+  // A page the runtime draws at a `#fragment` is scrolled there as a full load's is, by the
+  // browser's own scroll to the fragment: `:target` is its element, an `<a name>` is found as an id
+  // is, and the fragment is tried as written, then percent-decoded as HTML decodes it. A page
+  // without one starts at the top, not where the last one was scrolled. Read from inside the page,
+  // which Playwright's WebKit with the Navigation API needs (openWatchlist), so WebKit is checked
+  // too: one document's navigations in one `evaluate`, each document on a page of its own. The news
+  // page is given a named anchor and ids that need decoding at the end of <main>, below a short
+  // window's fold, and an id after <main>, which a navigation's swap leaves in place.
+  const names = [
+    "a client navigation without a #fragment starts at the top",
+    "a client navigation to an #id scrolls to it and :target matches it",
+    "a client navigation to an <a name> scrolls to it and :target matches it",
+    "a percent-encoded #fragment finds the element its decoded text names",
+    "a link the server redirects keeps its #fragment, scrolled to on the redirect's page",
+    "a replace to the #fragment of an element outside <main>, already :target, scrolls to it again",
+    "a #fragment with a malformed escape finds what a full load finds",
+    "a #fragment that is not UTF-8 once decoded finds what a full load finds",
+    "a #fragment that starts with an escaped U+FEFF finds the id that keeps it, not the one without",
+    "a #fragment that is one id as written and another decoded finds the one as written",
+    "a focus handler that changes the address in the scroll to a #fragment ends the navigation, which scrolls no further",
+    "the browser's scroll to a kept :target that runs a focus handler is not scrolled again",
+    "a client navigation to a heading's #fragment from a focused link makes the heading :target",
+    "a client navigation to a #fragment that names nothing moves focus off the link kept outside <main>",
+    "a focus handler that moves focus back in the browser's scroll to a kept :target keeps it there, not scrolled again",
+    "focus moved while a page with a #fragment that names nothing loads stays where it was moved",
+    "a kept :target's own focus handler that blurs it in the browser's scroll is not scrolled again",
+    "a browser scroll to a #fragment that throws leaves no focus listener of the runtime's on the window",
+  ];
+  // Two spellings of one fragment, each an id, far enough apart that one is out of view when the
+  // other is in it: the one HTML finds, and the one it would find if it dropped a leading U+FEFF
+  // or decoded before trying the fragment as written.
+  const apart = `<p>${"<br>".repeat(24)}</p>`;
+  const spellings = `<p id="smoke-bom">BOM dropped</p>${apart}<p id="\ufeffsmoke-bom">BOM kept</p>${apart}<p id="smoke-%41">As written</p>${apart}<p id="smoke-A">Decoded</p>`;
+  // A heading Tab goes on from, and a button a focus handler is on, far from the place it sends the address to.
+  const focusing = `<h2 id="smoke-heading">Heading</h2><button id="smoke-after-heading">After heading</button>${apart}<button id="smoke-focus-inside">Inside</button>${apart}<p id="smoke-after-focus">After focus</p>`;
+  // A navigation answer whose address has `hold` waits for `held.release()`, so focus can move
+  // while it loads; `held.reached` settles once it waits. Both are made before the request.
+  const gate = () => {
+    let [reach, release] = [() => {}, () => {}];
+    const reached = new Promise((done) => (reach = () => done(true)));
+    const released = new Promise((done) => (release = () => done(undefined)));
+    return { reach, reached, release, released };
+  };
+  let held = gate();
+  const open = async () => {
+    const page = await browser.newPage({ viewport: { width: 360, height: 200 } });
+    await page.route(
+      (url) => url.pathname === "/news",
+      async (route) => {
+        // A page, whole or a navigation's; not a form's or a part's answer on the same path.
+        const asked = route.request().headers().corten;
+        if (route.request().method() !== "GET" || (asked && asked !== "nav")) return route.fallback();
+        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        // At the end of <main>: before its end tag in a whole page, and at the end of a navigation's
+        // answer, which ends with what <main> holds and has no <main> tag. The id after <main> is in
+        // the whole page only.
+        const anchors = `<p><a name="smoke-named">Named</a></p><p id="smoke-caf\u00e9">Decoded</p><p id="caf\u00e9%xx">Malformed</p><p id="bad\ufffd">Not UTF-8</p>${spellings}${focusing}`;
+        const text = await res.text();
+        const body = text.includes("</main>") ? text.replace("</main>", `${anchors}</main><p id="smoke-outside">Outside</p>${apart}<button id="smoke-outside-button">Outside</button>`) : text + anchors;
+        if (asked && new URL(route.request().url()).searchParams.has("hold")) {
+          const { reach, released } = held;
+          reach();
+          await released;
+        }
+        await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+      },
+    );
+    await page.addInitScript(() => {
+      const w = /** @type {any} */ (window);
+      /**
+       * Where the page is, what `:target` is, and whether the elements `place` and `other` select are in view.
+       * @param {string} [place] @param {string} [other]
+       */
+      w.__at = (place, other) => {
+        const target = document.querySelector(":target");
+        // Layout in fractions of a pixel can leave the top a fraction above the scroll position.
+        const shown = (/** @type {string | undefined} */ selector) => {
+          const top = (selector && document.querySelector(selector)?.getBoundingClientRect().top) ?? -1;
+          return top > -1 && top < innerHeight;
+        };
+        return {
+          url: location.pathname + location.search + location.hash,
+          target: target ? target.id || `name=${target.getAttribute("name")}` : null,
+          inView: shown(place),
+          otherInView: shown(other),
+          y: Math.round(scrollY),
+          swapped: w.__marker === 1,
+          error: "",
+        };
+      };
+      w.__drawn = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      // The id or text of the focused element, else "body".
+      w.__focus = () => {
+        const el = document.activeElement;
+        return !el || el === document.body ? "body" : el.id || `${el.localName}: ${el.textContent?.trim()}`;
+      };
+      // The elements scrolled to with `scrollIntoView`, which the runtime uses, captured before it loads.
+      /** @type {string[]} */
+      w.__scrolledInto = [];
+      const into = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (/** @type {any} */ ...args) {
+        w.__scrolledInto.push(this.id);
+        return into.apply(this, args);
+      };
+      // The focus and scroll listeners on the window, as added and not yet removed, counted from
+      // before the runtime loads.
+      /** @type {Map<unknown, Set<string>>} */
+      const listening = new Map();
+      w.__listening = () => [...listening.values()].reduce((count, types) => count + types.size, 0);
+      /** @param {string} type @param {boolean | { capture?: boolean } | undefined} options */
+      const kind = (type, options) => /^(focus|focusin|blur|focusout|scroll)$/.test(type) && `${type} ${typeof options === "boolean" ? options : !!options?.capture}`;
+      const [add, remove] = [EventTarget.prototype.addEventListener, EventTarget.prototype.removeEventListener];
+      EventTarget.prototype.addEventListener = function (/** @type {any} */ type, /** @type {any} */ fn, /** @type {any} */ options) {
+        const as = (this ?? window) === window && kind(type, options);
+        if (as) listening.set(fn, (listening.get(fn) ?? new Set()).add(as));
+        return add.call(this ?? window, type, fn, options);
+      };
+      EventTarget.prototype.removeEventListener = function (/** @type {any} */ type, /** @type {any} */ fn, /** @type {any} */ options) {
+        const as = (this ?? window) === window && kind(type, options);
+        if (as) listening.get(fn)?.delete(as);
+        return remove.call(this ?? window, type, fn, options);
+      };
+      /**
+       * @param {string} url @param {string} [place] a selector for the element the fragment names
+       * @param {"push" | "replace"} [history] @param {string} [other] a selector for one it must not be at
+       */
+      w.__to = async (url, place, history = "push", other) => {
+        const error = await w.navigation.navigate(url, { history }).finished.then(() => "", (/** @type {Error} */ e) => String(e));
+        await w.__drawn();
+        return { ...w.__at(place, other), error };
+      };
+    });
+    return page;
+  };
+  /** @typedef {{ url: string, target: string | null, inView: boolean, otherInView: boolean, y: number, swapped: boolean, error: string }} Step */
+  let page = await open();
+  await page.goto(`${base}/news`);
+  if (!(await page.evaluate(() => "navigation" in window))) {
+    for (const name of names) skip(name, "no Navigation API: navigations are full page loads");
+    await page.close();
+    return;
+  }
+  const precommit = await page.evaluate(precommits);
+  const seen = await page.evaluate(async (precommit) => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    scrollTo(0, document.documentElement.scrollHeight);
+    const before = Math.round(scrollY);
+    /** @type {Step & { before: number }} */
+    const top = { ...(await w.__to("/news?mine=on")), before };
+    /** @type {Step} */
+    const id = await w.__to("/news#briefing", "#briefing");
+    /** @type {Step} */
+    const named = await w.__to("/news?mine=on#smoke-named", 'a[name="smoke-named"]');
+    /** @type {Step} */
+    const decoded = await w.__to("/news#smoke-caf%C3%A9", '[id="smoke-caf\u00e9"]');
+    // A full load keeps the link's #fragment on the redirect's page, and so does the address
+    // where it waits for the answer: /account sends someone signed out to the stocks page with a
+    // 303, which draws its picks at the end of its <main>.
+    /** @type {Step | null} */
+    const redirected = precommit ? await w.__to("/account#picks", "#picks") : null;
+    return { top, id, named, decoded, redirected };
+  }, precommit);
+  await page.close();
+  const { top, id, named, decoded, redirected } = seen;
+  // Firefox's scroll() goes to a document's fragment only the first time, the #id here: the
+  // runtime scrolls to the later ones itself, which leaves `:target` unset.
+  const once = engine === "firefox";
+  /** @param {Step} step @param {string} want @param {boolean} [first] */
+  const at = (step, want, first = false) =>
+    step.swapped && step.inView && step.y > 0 && !step.error && (step.target === want || (once && !first && step.target === null));
+  check(names[0], top.swapped && top.before > 0 && top.y === 0 && !top.error, JSON.stringify(top));
+  check(names[1], at(id, "briefing", true), JSON.stringify(id));
+  check(names[2], at(named, "name=smoke-named"), JSON.stringify(named));
+  check(names[3], at(decoded, "smoke-caf\u00e9"), JSON.stringify(decoded));
+  if (redirected) check(names[4], redirected.url === "/#picks" && at(redirected, "picks"), JSON.stringify(redirected));
+  else skip(names[4], "no precommitHandler: the runtime follows the redirect to fetch's address, which has no #fragment");
+  if (once) skip(":target after a document's first #fragment", "Firefox's NavigateEvent.scroll() sets it only for the first");
+
+  // An element a swap leaves in place stays `:target`. Firefox does not scroll to it again for a
+  // later address with its #fragment (its first scroll to a fragment was this one), and the page
+  // must be, as after a full load at that address.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const kept = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    /** @type {Step} */
+    const first = await w.__to("/news?mine=on#smoke-outside", "#smoke-outside");
+    scrollTo(0, 0);
+    await w.__drawn();
+    /** @type {Step} */
+    const away = w.__at("#smoke-outside");
+    /** @type {Step} */
+    const again = await w.__to("/news?sector=energy#smoke-outside", "#smoke-outside", "replace");
+    return { first, away, again };
+  });
+  await page.close();
+  check(names[5], at(kept.first, "smoke-outside", true) && !kept.away.inView && at(kept.again, "smoke-outside"), JSON.stringify(kept));
+
+  // HTML decodes a fragment's escapes even beside a malformed one, and bytes that are not UTF-8 as
+  // U+FFFD. Compared with a full load at the same #fragment in this browser: a client navigation
+  // finds the element when it does, and is where it is when it does not.
+  for (const [index, fragment, want] of /** @type {const} */ ([
+    [6, "caf%C3%A9%xx", "caf\u00e9%xx"],
+    [7, "bad%FF", "bad\ufffd"],
+  ])) {
+    const place = `[id="${want}"]`;
+    page = await open();
+    await page.goto(`${base}/news#${fragment}`);
+    await page.evaluate(() => /** @type {any} */ (window).__drawn());
+    /** @type {Step} */
+    const full = await page.evaluate((place) => /** @type {any} */ (window).__at(place), place);
+    await page.close();
+    page = await open();
+    await page.goto(`${base}/news`);
+    /** @type {Step} */
+    const client = await page.evaluate(
+      async ([fragment, place]) => {
+        const w = /** @type {any} */ (window);
+        w.__marker = 1;
+        scrollTo(0, 0);
+        return w.__to(`/news?mine=on#${fragment}`, place);
+      },
+      [fragment, place],
+    );
+    await page.close();
+    const found = full.target === want && full.inView;
+    const same = found ? at(client, want) : client.swapped && !client.error && client.inView === full.inView && client.target === full.target;
+    check(names[index], same, `${found ? "found by a full load" : "not found by a full load, so compared with it"}: ${JSON.stringify({ full, client })}`);
+  }
+
+  // HTML keeps a leading U+FEFF a fragment decodes to, and tries the fragment as written before
+  // decoded. Each fragment here has both spellings on the page: a client navigation must be at the
+  // one HTML names, whether the browser's scroll or the runtime's found it, and not at the other.
+  // A full load's result is in the detail only.
+  for (const [index, fragment, want, other] of /** @type {const} */ ([
+    [8, "%EF%BB%BFsmoke-bom", "\ufeffsmoke-bom", "smoke-bom"],
+    [9, "smoke-%41", "smoke-%41", "smoke-A"],
+  ])) {
+    const [place, wrong] = [`[id="${want}"]`, `[id="${other}"]`];
+    page = await open();
+    await page.goto(`${base}/news#${fragment}`);
+    await page.evaluate(() => /** @type {any} */ (window).__drawn());
+    /** @type {Step} */
+    const full = await page.evaluate(([place, wrong]) => /** @type {any} */ (window).__at(place, wrong), [place, wrong]);
+    await page.close();
+    page = await open();
+    await page.goto(`${base}/news`);
+    /** @type {Step} */
+    const client = await page.evaluate(
+      async ([fragment, place, wrong]) => {
+        const w = /** @type {any} */ (window);
+        w.__marker = 1;
+        scrollTo(0, 0);
+        return w.__to(`/news?mine=on#${fragment}`, place, "push", wrong);
+      },
+      [fragment, place, wrong],
+    );
+    await page.close();
+    check(names[index], at(client, want) && !client.otherInView, JSON.stringify({ client, full }));
+  }
+
+  // The browser's scroll focuses a button the fragment names, and a focus handler of the page's
+  // changes the address: that ends the navigation (its `finished` rejects), and the runtime then
+  // scrolls to neither fragment, the address's new one included. The change is the page's own.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const focused = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    scrollTo(0, 0);
+    let fired = false;
+    addEventListener("focusin", (e) => {
+      if (fired || /** @type {Element} */ (e.target).id !== "smoke-focus-inside") return;
+      fired = true;
+      history.replaceState(null, "", "#smoke-after-focus");
+    });
+    /** @type {Step} */
+    const step = await w.__to("/news?mine=on#smoke-focus-inside", "#smoke-focus-inside", "push", "#smoke-after-focus");
+    return { ...step, fired, scrolledInto: /** @type {string[]} */ (w.__scrolledInto) };
+  });
+  await page.close();
+  check(
+    names[10],
+    focused.fired && /abort/i.test(focused.error) && focused.url === "/news?mine=on#smoke-after-focus" && focused.inView && !focused.otherInView && focused.scrolledInto.length === 0,
+    JSON.stringify(focused),
+  );
+
+  // A button the swap leaves in place (after <main>) is the target, then focus leaves it, and a
+  // later address has its #fragment again. A browser whose scroll goes there focuses it, and the
+  // page's focus handler scrolls elsewhere: the runtime must not scroll to it on top. Whether it
+  // did is read from its `scrollIntoView` calls, not the position: Chromium's own scroll comes
+  // after the focus handler's, and WebKit's comes again after layout. Firefox's goes neither there
+  // nor to the button, and the runtime scrolls to it.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const handled = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    /** @type {Step} */
+    const first = await w.__to("/news?mine=on#smoke-outside-button", "#smoke-outside-button");
+    /** @type {HTMLElement} */ (document.activeElement).blur();
+    scrollTo(0, 0);
+    await w.__drawn();
+    w.__scrolledInto.length = 0;
+    let fired = false;
+    addEventListener("focusin", (e) => {
+      if (/** @type {Element} */ (e.target).id !== "smoke-outside-button") return;
+      fired = true;
+      scrollTo(0, 500);
+    });
+    /** @type {Step} */
+    const again = await w.__to("/news?sector=energy#smoke-outside-button", "#smoke-outside-button", "replace");
+    return { first, again, fired, scrolledInto: /** @type {string[]} */ ([...w.__scrolledInto]) };
+  });
+  await page.close();
+  check(
+    names[11],
+    at(handled.first, "smoke-outside-button", true) && handled.again.swapped && !handled.again.error && (handled.fired ? handled.scrolledInto.length === 0 : handled.again.inView),
+    JSON.stringify(handled),
+  );
+
+  // As the last, but the page's focus handler sends focus back to the header link that had it
+  // (and scrolls elsewhere): focus is where the page has put it, the same element as before the
+  // browser's scroll, and the runtime neither scrolls to the button on top nor moves focus off it.
+  // Firefox's scroll goes neither there nor to the button, and the runtime scrolls to it.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const returned = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    /** @type {Step} */
+    const first = await w.__to("/news?mine=on#smoke-outside-button", "#smoke-outside-button");
+    const link = /** @type {HTMLElement} */ (document.querySelector("header a[href]"));
+    link.focus();
+    scrollTo(0, 0);
+    await w.__drawn();
+    w.__scrolledInto.length = 0;
+    let fired = false;
+    addEventListener("focusin", (e) => {
+      if (fired || /** @type {Element} */ (e.target).id !== "smoke-outside-button") return;
+      fired = true;
+      link.focus();
+      scrollTo(0, 500);
+    });
+    /** @type {Step} */
+    const again = await w.__to("/news?sector=energy#smoke-outside-button", "#smoke-outside-button", "replace");
+    return { first, again, fired, focus: w.__focus(), link: link === document.activeElement, scrolledInto: /** @type {string[]} */ ([...w.__scrolledInto]) };
+  });
+  await page.close();
+  check(
+    names[14],
+    at(returned.first, "smoke-outside-button", true) && returned.again.swapped && !returned.again.error && (returned.fired ? returned.link && returned.scrolledInto.length === 0 : returned.again.inView),
+    JSON.stringify(returned),
+  );
+
+  // As the last two, but the button's own `focus` handler blurs it and scrolls elsewhere: no
+  // `focusin` follows (Chromium, WebKit), and focus ends where it was before the browser's scroll,
+  // on the body. The runtime still must not scroll to the button on top. Firefox's scroll goes
+  // neither there nor to the button, and the runtime scrolls to it.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const blurred = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    /** @type {Step} */
+    const first = await w.__to("/news?mine=on#smoke-outside-button", "#smoke-outside-button");
+    /** @type {HTMLElement} */ (document.activeElement).blur();
+    scrollTo(0, 0);
+    await w.__drawn();
+    w.__scrolledInto.length = 0;
+    const button = /** @type {HTMLElement} */ (document.querySelector("#smoke-outside-button"));
+    let fired = false;
+    button.addEventListener("focus", () => {
+      if (fired) return;
+      fired = true;
+      button.blur();
+      scrollTo(0, 500);
+    });
+    /** @type {Step} */
+    const again = await w.__to("/news?sector=energy#smoke-outside-button", "#smoke-outside-button", "replace");
+    return { first, again, fired, focus: w.__focus(), scrolledInto: /** @type {string[]} */ ([...w.__scrolledInto]) };
+  });
+  await page.close();
+  check(
+    names[16],
+    at(blurred.first, "smoke-outside-button", true) && blurred.again.swapped && !blurred.again.error && (blurred.fired ? blurred.scrolledInto.length === 0 : blurred.again.inView),
+    JSON.stringify(blurred),
+  );
+
+  // A handler of the page's own that calls the navigation's `scroll()` first makes the runtime's
+  // call throw, which rejects the navigation's `finished`: the runtime leaves no listener behind.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const thrown = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    const before = w.__listening();
+    const first = (/** @type {any} */ e) => e.intercept({ handler: () => e.scroll() });
+    w.navigation.addEventListener("navigate", first);
+    /** @type {Step} */
+    const step = await w.__to("/news?mine=on#briefing", "#briefing");
+    w.navigation.removeEventListener("navigate", first);
+    return { ...step, before, after: w.__listening() };
+  });
+  await page.close();
+  check(names[17], thrown.swapped && /InvalidState/.test(thrown.error) && thrown.after === thrown.before, JSON.stringify(thrown));
+
+  // A full load at a heading's #fragment starts the next Tab from the heading (HTML's sequential
+  // focus navigation starting point). A client navigation there from a link kept outside <main>
+  // that has focus makes the heading `:target` too, but the Navigation API's focus reset after it
+  // may start the next Tab at the top (Chromium's does), and no API moves that starting point: the
+  // next Tab after each is in the detail only, as the guide says.
+  /** @param {string} fragment @param {boolean} client */
+  const tabbed = async (fragment, client) => {
+    page = await open();
+    await page.goto(`${base}/news${client ? "" : `?mine=on#${fragment}`}`);
+    const was = await page.evaluate(
+      async ([fragment, client]) => {
+        const w = /** @type {any} */ (window);
+        await w.__drawn();
+        if (!client) return { focus: w.__focus(), target: document.querySelector(":target")?.id ?? null, swapped: false, error: "" };
+        w.__marker = 1;
+        /** @type {HTMLElement} */ (document.querySelector("header a[href]")).focus();
+        /** @type {Step} */
+        const step = await w.__to(`/news?mine=on#${fragment}`);
+        return { focus: w.__focus(), target: step.target, swapped: step.swapped, error: step.error };
+      },
+      /** @type {const} */ ([fragment, client]),
+    );
+    await page.keyboard.press("Tab");
+    const tab = await page.evaluate(() => /** @type {any} */ (window).__focus());
+    await page.close();
+    return { ...was, tab };
+  };
+  const [heading, headingFull] = [await tabbed("smoke-heading", true), await tabbed("smoke-heading", false)];
+  check(names[12], heading.swapped && !heading.error && heading.target === "smoke-heading", JSON.stringify({ client: heading, full: headingFull }));
+  // With no element to scroll to, the Navigation API's focus reset moves focus off the link. The
+  // next Tab is in the detail only: in Chromium and Firefox it goes on from the link, not the top.
+  const [nothing, nothingFull] = [await tabbed("smoke-nothing", true), await tabbed("smoke-nothing", false)];
+  check(names[13], nothing.swapped && !nothing.error && nothing.focus === "body", JSON.stringify({ client: nothing, full: nothingFull }));
+
+  // The reset leaves focus alone when it moved during the navigation: one moved to another header
+  // link while the page loads stays there, though the fragment names nothing on the new page. An
+  // answer that never reaches the route in time fails the check; the gate is opened either way, so
+  // a late one goes through instead of holding the navigation.
+  page = await open();
+  await page.goto(`${base}/news`);
+  held = gate();
+  await page.evaluate(() => {
+    /** @type {any} */ (window).__marker = 1;
+    /** @type {HTMLElement} */ (document.querySelectorAll("header a[href]")[0]).focus();
+  });
+  const going = page.evaluate(() =>
+    /** @type {any} */ (window).navigation.navigate("/news?mine=on&hold=1#smoke-nothing").finished.then(
+      () => "",
+      (/** @type {Error} */ e) => String(e),
+    ),
+  );
+  const asked = await Promise.race([held.reached, new Promise((late) => setTimeout(() => late(false), 5000))]);
+  const during = await page.evaluate(() => {
+    /** @type {HTMLElement} */ (document.querySelectorAll("header a[href]")[1]).focus();
+    return /** @type {any} */ (window).__focus();
+  });
+  held.release();
+  const error = await going;
+  const stayed = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    await w.__drawn();
+    return { url: location.pathname + location.search + location.hash, focus: w.__focus(), swapped: w.__marker === 1 };
+  });
+  await page.close();
+  const gated = asked ? {} : { gate: "the navigation's answer did not reach the route within 5 seconds" };
+  check(names[15], asked && !error && stayed.swapped && stayed.url.endsWith("#smoke-nothing") && stayed.focus === during && during !== "body", JSON.stringify({ ...gated, asked, during, error, ...stayed }));
 }
 
 export async function earlyNavigation(browser) {

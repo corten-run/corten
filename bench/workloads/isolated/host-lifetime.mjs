@@ -6,10 +6,9 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
-import { hostTerminalClock } from "./host-observation.mjs";
+import { hostTerminalClock, processIdentity, processRecordKey, terminalClockPolicy } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { jsonPreparationInvocation, jsonPreparationRound } from "../registry.mjs";
-import { executableReference, participantExecutables } from "./participant-executables.mjs";
+import { executableProofFailure, executableProofFailureMessage, executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
 import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
 
@@ -27,11 +26,19 @@ function observing(operation, action) {
     throw error;
   }
 }
-export function processIdentity(stat) {
-  const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
-  assert.ok(match); const rest = match[4].split(" ");
-  assert.match(rest[18] ?? "", /^\d+$/);
-  return { pid: Number(match[1]), startTicks: rest[18], comm: match[2] };
+export { processIdentity, processRecordKey };
+export function processRole(cmdline, executablePath) {
+  const argv = cmdline.split("\0");
+  const role = argv.find((arg) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(arg));
+  if (role) return role;
+  // Chromium's Linux zygote rewrites its child's argv as one space-joined
+  // title beginning with the exact /proc/self/exe target (then NUL padding).
+  // Recognize only the renderer switch in the first argument position.
+  const title = argv[0];
+  if (argv.length < 2 || argv.slice(1).some(Boolean) || !/ --type=renderer(?: |$)/.test(title)) return null;
+  const path = executablePath();
+  if (!posix.isAbsolute(path) || path.endsWith(" (deleted)") || !title.startsWith(path + " ")) return null;
+  return /^--type=renderer(?: |$)/.test(title.slice(path.length + 1)) ? "--type=renderer" : null;
 }
 function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
@@ -151,7 +158,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
       const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
       observing("process-membership", () => assert.equal(groupPath(cgroup), current));
-      const type = observing("process-cmdline", () => readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null);
+      const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`).toString("utf8"), () => readlinkSync(`${at}/exe`)));
       const closingStat = observing("process-stat-recheck", () => readFileSync(`${at}/stat`, "utf8"));
       const rechecked = observing("process-stat-recheck", () => processIdentity(closingStat));
       if (successor?.parent && identity.pid === successor.identity.pid) observing("executable-recheck-successor", () => {
@@ -274,8 +281,66 @@ export function captureNativeCpuScope(info) {
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
 export function captureBrowserParticipant(id, executables = new Map(), pending) {
-  const capture = () => readBrowserParticipant(id, executables, pending);
-  return pending ? pending.transaction(capture) : capture();
+  // A container's first process renames itself or execs its entrypoint just
+  // after Docker reports it running. Only that identity churn on a container
+  // Docker started within the continuity window is rechecked: the whole capture
+  // is taken again, with no new attempt after a fixed budget. Success must bind the same
+  // container start, PID and kernel start time; anything else stays a gap.
+  const began = performance.now();
+  let bound, failed;
+  for (let attempts = 1; ; attempts++) {
+    // The budget bounds when an attempt may start, so recheck it after each pause.
+    if (failed && performance.now() - began >= startupRetryMs) throw failed;
+    // Bind identity before the executable transaction commits: a rejected
+    // capture must pin no executable.
+    const capture = () => {
+      const record = readBrowserParticipant(id, executables, pending);
+      if (bound) startupRecheck(record, bound, attempts);
+      return record;
+    };
+    try {
+      const record = pending ? pending.transaction(capture) : capture();
+      if (bound) startupRechecks.set(record, { ...bound.diagnostic, attempts });
+      return record;
+    } catch (error) {
+      const churn = error && typeof error === "object" ? startupChurn.get(error) : undefined;
+      if (bound && error && typeof error === "object") startupAttempts.set(error, attempts);
+      if (!churn || performance.now() - began >= startupRetryMs) throw error;
+      if (bound) startupRecheck({ container: { state: { Running: true, Pid: churn.pid, StartedAt: churn.startedAt } },
+        kernel: { stat: churn.stat } }, bound, attempts);
+      else if (!justStarted(churn.startedAt)) throw error;
+      bound ??= churn; failed = error;
+      Atomics.wait(retryPause, 0, 0, 1);
+    }
+  }
+}
+const startupRetryMs = 250, startupWindowMs = maximumSampleGapMs;
+const startupChurn = new WeakMap(), startupAttempts = new WeakMap(), startupRechecks = new WeakMap();
+// A changed name inside the census is already retried by the census itself
+// (`snapshot`, for every participant), so only an executable inode change reaches here.
+const startupCensusOperations = new Set(["executable-recheck-inode"]);
+function justStarted(startedAt) {
+  // Docker's RFC 3339 UTC start time, truncated to milliseconds. Anything else is not corroboration.
+  const match = typeof startedAt === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(startedAt);
+  if (!match) return false;
+  const at = Date.parse(`${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}Z`);
+  // Date.parse normalizes an impossible calendar date (February 29 of a common
+  // year becomes March 1); only a date that round-trips is evidence.
+  if (!Number.isFinite(at) || new Date(at).toISOString().slice(0, 19) !== match[1]) return false;
+  const age = Date.now() - at;
+  return age >= 0 && age <= startupWindowMs;
+}
+function startupRecheck(record, bound, attempts) {
+  try {
+    const { state } = record.container;
+    assert.ok(state.Running && record.kernel);
+    assert.equal(state.Pid, bound.pid); assert.equal(state.StartedAt, bound.startedAt);
+    const identity = processIdentity(record.kernel.stat);
+    assert.equal(identity.pid, bound.pid); assert.equal(identity.startTicks, bound.startTicks);
+  } catch (error) {
+    if (error && typeof error === "object") { dockerParticipantStages.set(error, "startup-recheck"); startupAttempts.set(error, attempts); }
+    throw error;
+  }
 }
 function readBrowserParticipant(id, executables, pending) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
@@ -284,29 +349,71 @@ function readBrowserParticipant(id, executables, pending) {
     const infos = JSON.parse(docker(["container", "inspect", id])); assert.equal(infos.length, 1);
     assert.equal(infos[0].Id, id); return containerState(infos[0]);
   };
-  const container = inspect();
-  if (!container.state.Running) return { startedAt, endedAt: Date.now(), container, kernel: null };
-  const pid = container.state.Pid;
-  assert.ok(Number.isSafeInteger(pid) && pid > 0);
-  const at = `/proc/${pid}`, stat = readFileSync(`${at}/stat`, "utf8"), identity = processIdentity(stat);
-  assert.equal(identity.pid, pid);
-  const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
-  participantGroup(path, id);
-  const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
-  assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
-  assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
-  assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
-  assert.deepEqual(inspect(), container, "Docker participant changed during kernel observation");
-  return { startedAt, endedAt: Date.now(), container,
-    kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
+  let stage = "inspect-open", container, stat, identity;
+  try {
+    container = inspect();
+    if (!container.state.Running) return { startedAt, endedAt: Date.now(), container, kernel: null };
+    stage = "container-pid";
+    const pid = container.state.Pid;
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    stage = "process-identity-open";
+    const at = `/proc/${pid}`;
+    stat = readFileSync(`${at}/stat`, "utf8"); identity = processIdentity(stat);
+    assert.equal(identity.pid, pid);
+    stage = "process-cgroup-open";
+    const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
+    participantGroup(path, id);
+    stage = "kernel-census";
+    const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
+    stage = "process-identity-close";
+    const closing = processIdentity(readFileSync(`${at}/stat`, "utf8"));
+    assert.equal(closing.pid, identity.pid); assert.equal(closing.startTicks, identity.startTicks);
+    stage = "process-name-close";
+    assert.equal(closing.comm, identity.comm);
+    stage = "process-cgroup-close";
+    assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
+    stage = "inspect-close";
+    assert.deepEqual(inspect(), container, "Docker participant changed during kernel observation");
+    stage = "boot-id";
+    return { startedAt, endedAt: Date.now(), container,
+      kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
+  } catch (error) {
+    if (error && typeof error === "object") {
+      dockerParticipantStages.set(error, stage);
+      const operation = observationOperations.get(error);
+      if (identity && error.code === "ERR_ASSERTION" && (stage === "process-name-close"
+        || stage === "kernel-census" && startupCensusOperations.has(operation))) startupChurn.set(error, {
+        pid: identity.pid, startTicks: identity.startTicks, startedAt: container.state.StartedAt, stat,
+        diagnostic: { stage, ...(stage === "kernel-census" ? { operation } : {}), code: "ERR_ASSERTION" } });
+    }
+    throw error;
+  }
 }
-function browserDocker(excluded, executables, pending) {
+const dockerParticipantStages = new WeakMap();
+const dockerGapCodes = new Set(["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ETIMEDOUT",
+  "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"]);
+function dockerGapDiagnostic(error) {
+  // Only a fixed stage and an allowlisted own code, never error text or child output.
+  let code;
+  try { code = Object.getOwnPropertyDescriptor(error, "code")?.value; }
+  catch { /* Diagnostics must not replace a captured gap. */ }
+  const stage = dockerParticipantStages.get(error) ?? "unknown", operation = observationOperations.get(error);
+  const attempts = startupAttempts.get(error);
+  return { stage, ...(stage === "kernel-census" && typeof operation === "string" ? { operation } : {}),
+    code: dockerGapCodes.has(code) ? code : "unknown", ...(attempts ? { attempts } : {}) };
+}
+function browserDocker(excluded, executables, pending, noteGap, noteRecheck) {
   const inventory = docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort();
   assert.equal(new Set(inventory).size, inventory.length); inventory.forEach((id) => assert.match(id, containerId));
   const participants = [], gaps = [];
   for (const id of inventory.filter((id) => !excluded.has(id))) {
-    try { participants.push(captureBrowserParticipant(id, executables, pending)); }
-    catch { gaps.push(id); } // No daemon diagnostics, commands, labels or environment retained.
+    try {
+      const record = captureBrowserParticipant(id, executables, pending);
+      if (startupRechecks.has(record)) noteRecheck(startupRechecks.get(record));
+      participants.push(record);
+    }
+    catch (error) { gaps.push(id); noteGap(error); }
   }
   return { inventory, participants, gaps };
 }
@@ -374,6 +481,12 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   // sampling. Pin them now and seal their bytes after the final sample.
   pending = captureDocker || commandCpus || binding.request.group === "catalog-page" ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
+  let firstDockerGap;
+  function noteDockerGap(error) { firstDockerGap ??= dockerGapDiagnostic(error); }
+  let dockerStartupRechecks;
+  function noteDockerStartupRecheck(diagnostic) {
+    dockerStartupRechecks ??= { count: 0, first: diagnostic }; dockerStartupRechecks.count++;
+  }
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null, previousCatalogProcesses = binding.request.group === "catalog-page" ? [] : null;
   function notifyFault() {
@@ -386,8 +499,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function failure(phase, error, timing) {
     // Retain fixed public codes only, never messages, stacks, paths or arbitrary
     // error properties. First/last plus a count bound disk and memory on failure.
-    const code = ["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown";
-    const entry = { phase, operation: observationOperations.get(error) ?? sampleOperation, code,
+    const proofFailure = phase === "executables" ? error : null;
+    const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
+    const entry = { phase, operation: proofFailure?.operation ?? observationOperations.get(error) ?? sampleOperation, code,
+      ...(proofFailure?.executableRef ? { executableRef: proofFailure.executableRef } : {}),
       at: Date.now(), samples, lastSampleAt, ...(timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
@@ -417,7 +532,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return key;
     });
     sampleOperation = "docker-inventory";
-    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending);
+    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap, noteDockerStartupRecheck);
     if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
       const path = groupPath(kernel.cgroup);
       assert.ok(scopeCpuSetMatches(kernel.groups, path, liveCpus.application)
@@ -468,7 +583,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // Explicitly await appends in controls; enqueue/capture is not storage proof.
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
-    async finish(result, retainTerminalClock = false) {
+    async finish(result, retainTerminalClock = false, onSettled) {
       assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
@@ -477,9 +592,15 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       try { stored = await writer.finish(); assert.equal(stored.samples, samples); }
       catch (error) { pending?.close(); throw error; }
       if (pending) {
-        sampleOperation = "executable-proof";
-        try { durable(join(directory, "executables.json"), serial(pending.finish())); }
-        catch (error) { observerError = "host-executable-proof-incomplete"; failure("executables", error); }
+        sampleOperation = "executable-hash-helper";
+        try {
+          const proof = pending.finish();
+          sampleOperation = "executable-proof-publish";
+          durable(join(directory, "executables.json"), serial(proof));
+        } catch (error) {
+          observerError = "host-executable-proof-incomplete";
+          failure("executables", executableProofFailure(error?.operation ?? sampleOperation, error, error?.executableRef));
+        }
       }
       // An already-cancelled, fully drained command keeps its old nonqualifying
       // evidence contract. A new abort during asynchronous finish cannot seal
@@ -492,6 +613,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       let identity;
       try {
         durable(staged, `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
+          ...(firstDockerGap ? { firstDockerGap } : {}),
+          ...(dockerStartupRechecks ? { dockerStartupRechecks } : {}),
           command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent),
           ...(terminalClock ? { terminalClock } : {}) }, null, 2)}\n`);
         identity = lstatSync(staged);
@@ -507,15 +630,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         throw new Error("host observation terminal storage incomplete");
       }
       if (empty) rmdirSync(join(root, path)); // Own empty child only; never recursive cleanup.
+      if (terminal) onSettled?.(); // Descriptors have settled even if their proof failed.
       return tree(directory);
     },
   });
-}
-
-function processRecordKey(p) {
-  return sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup,
-    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
-      : { executableSha256: p.executableSha256 }), type: p.type }));
 }
 
 export function resolveParticipantExecutables(process, proof) {
@@ -547,6 +665,11 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   assert.equal(context.group, binding.request.group); assert.equal(context.round, binding.request.round); assert.equal(context.commit, binding.request.commit);
   assert.equal(terminal.bootId, context.bootId); assert.equal(terminal.attached, true);
   assert.deepEqual(terminal.command, expected.result);
+  if (terminal.observerError === "host-executable-proof-incomplete") {
+    // Sealing is the final observer operation; a prior census fault remains
+    // independently recorded in first. Only fixed proof diagnostics are printed.
+    throw new Error(executableProofFailureMessage(terminal.observerFailures?.last));
+  }
   const ancestorPaths = [];
   for (let p = context.parent; ; p = posix.dirname(p)) { ancestorPaths.push(p); if (p === "/") break; }
   assert.deepEqual(context.ancestors.map((g) => g.path), ancestorPaths);
@@ -623,9 +746,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     leader: [...identities.values()].some((p) => p.pid === context.leaderPid) };
   const complete = Object.values(checks).every(Boolean);
   if (terminal.terminalClock !== undefined) {
-    const jsonPrepare = context.group === "json-api" && context.round === jsonPreparationRound(round)
-      && isDeepStrictEqual(invocation, jsonPreparationInvocation(round)) && isDeepStrictEqual(invocation, binding.execution?.invocation);
-    assert.ok(context.group === "localized-marketplace" || jsonPrepare, "terminal clock not allowed for this invocation");
+    assert.ok(terminalClockPolicy(binding, invocation, round, expected.phase), "terminal clock not allowed for this invocation");
     assert.equal(terminal.terminalClock.bootId, context.bootId);
   }
   return { status: complete ? "verified" : "blocked", cleanupComplete: complete, context,

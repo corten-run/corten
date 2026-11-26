@@ -74,7 +74,12 @@ captures and validate its complete evidence before publishing comparative number
 
 The localized marketplace group is wired to the existing marketplace runner as an explicit
 `--group localized-marketplace` selection. Its exact-image feature qualification and complete
-browser/content gates remain mandatory. Both the localized and mixed groups check ordinary,
+browser/content gates remain mandatory. Timing has four cases: one page rotating through
+`en-US`, `fr-FR` and `de-DE`, and one locale-neutral JSON case, for each of fixture and API.
+Page throughput is for the mix, not for each locale. Parity still checks each locale separately
+in both sources, on desktop and mobile, with JavaScript on and off. The new group contract
+requires v6 results; the preceding bounded v5 contract retains its eight per-locale/JSON cases.
+Both the localized and mixed groups check ordinary,
 sequential HTTP requests before timing. Connection-flood resistance: not measured.
 Historical qualification does not admit an app to a new run. Candidates missing production parity stay in the
 report with their missing features and are not timed. The existing scheduled `production`
@@ -250,6 +255,16 @@ editor/test-build/disk/core scaling and supported hardware instruction counts. S
 is retained as explicitly not implemented: no save-to-browser-reload harness exists yet.
 Each needs a workload-specific port or an explicit historical/unsupported/not-run label;
 grouping never removes it or invents new measurements. No new cadence is defined here.
+
+A group's published result commits its report, summary and provenance, small enough to diff.
+The collected archive and other raw output stay outside the tree. A maintainer chooses where the
+archive is kept and publishes it there, and the provenance records where it can be fetched and its
+SHA-256 (`archiveSha256`); the digest alone is not a locator
+([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check` fails on a file
+under `bench/` with an archive suffix or over 256 KiB, in any commit of the pull request, unless
+the base's `scripts/bench-size.allow` lists it at that path and blob, or it is a dependency lock
+file at a path `LOCKS` in `scripts/bench-size.mjs` lists, beside its manifest; the
+[contributor guide](../../CONTRIBUTING.md#benchmark-results) has the full rule.
 
 Corten-only rendering/allocation/default-cost and TCP diagnostics remain separate from
 competitive rankings. The distributed listings-feed run and failover test remain separate,

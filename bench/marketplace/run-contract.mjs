@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, phases, sources } from "../catalog/contract.mjs";
 import { allApps } from "../fullstack/inventory.mjs";
 import { spread } from "../fullstack/passes.mjs";
+import { statsInfrastructure } from "../catalog/stats.mjs";
 import { locales } from "./contract.mjs";
 import { groupApps } from "./groups.mjs";
 const labels = {
@@ -9,29 +10,37 @@ const labels = {
   phoenix: "Phoenix 1.8 (Elixir, controller + HEEx)",
   laravel: "Laravel 13 (PHP, Octane on FrankenPHP, Blade)",
 };
+// The longest run.mjs gives one app's image build.
+export const imageBuildTimeoutMs = 60 * 60 * 1000;
 export const inventory = Object.fromEntries(Object.entries(allApps).filter(([, app]) => app.pages !== false)
   .map(([name, app]) => [name, { ...app, label: labels[name] ?? app.label }]));
 export { phases, sources, targets } from "../catalog/contract.mjs";
-// Saved-result schema: each app has exactly these eight runs/aggregate keys.
-// Each publishable key has three passes and fixed/sat64/sat256 phases. JSON has locale:null,
-// never an en-US/fr-FR/de-DE alias. Browser parity still covers all locales.
+// JSON is always locale-neutral. v6 rotates page locales within each load phase;
+// v3-v5 timed one whole phase per locale. Browser parity still covers every locale.
 // v3: a phase records what the app failed to serve (readOutcome) instead of failing the run.
 // v4: an app container that stops during a load phase is that app's recorded outcome
 // (run.stopped, appStop): the profile's later phases and passes do not run, so it can have fewer
 // than three passes, and each stage that lost a pass carries the stop (stageAggregate).
 // v5 adds named candidate cohorts and raw feature qualification before timing.
-export const resultSchema = "marketplace-results/v5";
+export const resultSchema = "marketplace-results/v6";
 // The schemas report.mjs and compare.mjs read. A v3 summary is read as a v4 one with no stop
 // records: under v3 an app that stopped failed the round, so a valid v3 round has none, and its
-// aggregates lack only the stopped field. New rounds are written as v5; groupless v4
+// aggregates lack only the stopped field. New rounds are written as v6; groupless v4
 // evidence retains its original full-inventory interpretation.
 export const v3Schema = "marketplace-results/v3";
 export const v4Schema = "marketplace-results/v4";
-export const readableSchemas = [v3Schema, v4Schema, resultSchema];
-export const timedProfiles = sources.flatMap((source) => [
-  ...locales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
+export const v5Schema = "marketplace-results/v5";
+export const readableSchemas = [v3Schema, v4Schema, v5Schema, resultSchema];
+const profiles = (pageLocales) => sources.flatMap((source) => [
+  ...pageLocales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
   { key: `${source}-neutral-json`, source, locale: null, target: "json" },
 ]);
+export const timedProfiles = profiles(["rotating"]);
+const legacyProfiles = profiles(locales);
+export function timedProfilesFor(schema) {
+  assert.ok(readableSchemas.includes(schema), "unknown marketplace result schema");
+  return schema === resultSchema ? timedProfiles : legacyProfiles;
+}
 export function roundIdentity(round) {
   assert.match(round ?? "", /^[rw][1-9]\d*$/, "round must be rN (N >= 17), or wN for development");
   const number = Number(round.slice(1));
@@ -230,11 +239,35 @@ export function* passPlan(passes, apps, profiles, runsOf) {
   }
 }
 
-// Steps of a load phase whose error the app's stop explains when the error came after the app
-// finished: its docker stats go with its container, and each stats error is stamped when it
-// happened. The stats sampler running past its deadline, the CPU counter read before the phase,
-// k6 failing to start or finish, a missing summary, or anything else does not.
-const explainedSteps = new Set(["stats"]);
+// An app stop does not explain a sampler fault. Stderr, incomplete output and
+// an unexpected client exit cannot establish why the stats stream failed.
+const statsFaultMessage = (kind) => typeof kind === "string" && Object.hasOwn(statsInfrastructure, kind)
+  ? statsInfrastructure[kind]
+  : "docker stats sampler infrastructure failed";
+const statsFaultMessages = new Set(Object.values(statsInfrastructure));
+export function statsPhaseErrors(error) {
+  if (!Array.isArray(error.errors)) return [{ step: "sampler", error: phaseFailure({ step: "sampler", error }), at: new Date().toISOString() }];
+  return error.errors.map(({ kind, message, at }) => kind === "stats"
+    ? { step: "stats", error: phaseFailure({ step: "stats", error: { message } }), at }
+    : { step: "sampler", kind, error: new Error(statsFaultMessage(kind)), at });
+}
+// Earlier receipts flattened Node process errors without their syscall or code. Recognize
+// the exact message shapes Node wrote for kill and spawn("docker"), not arbitrary stderr.
+const legacyErrno = /^(kill|spawn docker) (?:E[A-Z0-9_]+|UNKNOWN|Unknown system error -\d+)(?![\s\S])/;
+function statsDiagnostic({ step, error, kind }) {
+  if (step !== "stats" && step !== "sampler") return null;
+  if (kind !== undefined) return statsFaultMessage(kind);
+  const message = error?.message ?? "";
+  if (statsFaultMessages.has(message)) return message;
+  const syscall = legacyErrno.exec(message)?.[1];
+  if (syscall) return statsInfrastructure[syscall === "kill" ? "shutdown-signal" : "client-process"];
+  if (step === "stats" && /exceeded its deadline/.test(message)) return statsInfrastructure.deadline;
+  return step === "stats" ? "docker stats sample failed" : statsFaultMessage();
+}
+function phaseFailure(entry) {
+  const message = statsDiagnostic(entry);
+  return message === null ? entry.error : new Error(message);
+}
 // Docker actions on the app container that mean something other than the app ended it: the
 // harness itself does none of these to the app during a phase (remove() runs after it).
 const outsideActions = new Set(["kill", "stop", "start", "restart", "pause", "unpause"]);
@@ -247,7 +280,7 @@ const outsideActions = new Set(["kill", "stop", "start", "restart", "pause", "un
  * @param {string} seen.phaseStart when the phase began (before its k6 container was created); the
  *   app must have stopped after it, or the stop belongs to the cold start or the gap between phases
  * @param {object|null} seen.app the app container's Docker State, null when it could not be read
- * @param {{step: string, error: Error, at: string}[]} [seen.errors] what failed during the phase, and when
+ * @param {{step: string, kind?: string, error: Error, at: string}[]} [seen.errors] what failed during the phase, and when
  * @param {{name: string, startedAt: string, state: object|null}[]} [seen.sidecars] containers the
  *   phase depends on (the CPU counter sidecar, and the upstream for an API profile), with the
  *   StartedAt recorded when each was created; read only when the app stopped
@@ -257,7 +290,7 @@ const outsideActions = new Set(["kill", "stop", "start", "restart", "pause", "un
 export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars, events, summary = null }) {
   const stop = app ? appStop(app, pass, phase) : null;
   if (!stop) {
-    if (errors.length) throw errors[0].error;
+    if (errors.length) throw phaseFailure(errors[0]);
     assert.ok(app, "app container state unavailable");
     assert.ok(sidecars === undefined && events === undefined, "healthy phase contains stop-only observations");
     return null;
@@ -275,16 +308,14 @@ export function phaseEnd({ pass, phase, phaseStart, app, errors = [], sidecars, 
   // before warmup, or between two phases, did not stop under this phase's load, and an outside
   // kill then is not in the phase's events. Both clocks are the Docker host's (run.mjs runs there).
   // An exited container says when by FinishedAt; one still running after an OOM kill only by
-  // Docker's oom event, and its time explains no error.
-  let finished = Infinity;
+  // Docker's oom event.
   if (stop.exitCode === null) assert.ok(events.some((e) => e.action === "oom"), `the app container was OOM-killed with no oom event since ${phase} began: not shown to be under its load, so the round fails`);
   else {
-    finished = Date.parse(app.FinishedAt);
+    const finished = Date.parse(app.FinishedAt);
     assert.ok(!Number.isNaN(finished), "a stopped app container has no FinishedAt");
     assert.ok(finished >= start, `the app container stopped at ${app.FinishedAt}, before ${phase} began at ${phaseStart}: not under its load, so the round fails`);
   }
-  const unexplained = errors.find((e) => !(explainedSteps.has(e.step) && !/exceeded its deadline/.test(e.error?.message ?? "") && Date.parse(e.at) >= finished));
-  if (unexplained) throw unexplained.error;
+  if (errors.length) throw phaseFailure(errors[0]);
   // A 200 of the wrong content type before the app stopped is still a parity failure.
   const kind = summary?.root_group?.checks?.["marketplace content type"];
   assert.ok(!kind?.fails, `a 200 had the wrong content type under load before the app stopped (${kind?.fails}): a parity failure, not an outcome`);

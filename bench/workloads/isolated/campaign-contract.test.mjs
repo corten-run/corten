@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { bindExecution } from "./contract.mjs";
-import { catalogFleetPlacement, providerCreateHost } from "../cloud-contract.mjs";
+import { bindExecution, clientComparisonRecipe } from "./contract.mjs";
+import { catalogFleetPlacement, jsonFleetPlacement, providerCreateHost } from "../cloud-contract.mjs";
+import { c16Env, placementCpus } from "../../json-api/placement.mjs";
 import { bindCampaign, campaignRounds, jsonPhase, mixedPhase, productionRecipes, validateCampaign } from "./campaign-contract.mjs";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
@@ -47,13 +48,63 @@ test("the official r24 mixed timing phase supplies the same measured CPU roles a
   assert.throws(() => nativeControlPartition(missing), /native CPU partition absent/);
   t.diagnostic("official r24/mixed-production: measured app=1 api=2-3 load=4-7; no functional-capture CPU proof");
 });
+test("dedicated Mixed binds its Django ASGI deployment and rejects a rehashed WSGI downgrade", () => {
+  const group = "mixed-production", round = "r25", plan = campaigns.bindGroupCampaign({ group, round, commit });
+  const [binding] = plan.bindings;
+  assert.equal(productionRecipes[group], "mixed-production-measure");
+  assert.equal(binding.request.recipe, "mixed-production-django-asgi");
+  assert.equal(plan.recipes[group], binding.request.recipe);
+  assert.deepEqual(binding.execution.invocation.argv, ["bench/mixed-production/run.mjs", "w25", "--build", "--measure", "--profile", "matched",
+    "--django-deployment", "django-granian-asgi"]);
+  const previous = bindExecution({ ...binding.request, recipe: productionRecipes[group], review: null }, binding.campaignMode);
+  assert.deepEqual(previous.resources, binding.resources);
+  const { djangoDeployment, ...remainingOptions } = binding.execution.effectiveOptions;
+  assert.equal(djangoDeployment, "django-granian-asgi");
+  assert.deepEqual(remainingOptions, previous.execution.effectiveOptions);
+  const phase = mixedPhase(plan, "r25-0123456789abcdef");
+  assert.equal(phase.execution.effectiveOptions.djangoDeployment, djangoDeployment);
+  assert.deepEqual(phase.execution.invocation.argv.slice(-2), ["--native-audits", "/bench/campaign/r25-0123456789abcdef/mixed-native-audits.json"]);
+  validateCampaign(plan);
+  const { campaignSha256, ...body } = plan;
+  const downgraded = { ...body, bindings: [previous], recipes: { ...plan.recipes, [group]: productionRecipes[group] } };
+  assert.notEqual(deploymentSha256(downgraded), campaignSha256);
+  assert.throws(() => validateCampaign({ ...downgraded, campaignSha256: deploymentSha256(downgraded) }), /fixed native bindings/);
+});
 test("captured pre-create worker uses the real committed placements including bounded hardening", async () => {
   const check = (group, mode) => inspectCampaign({ action: "actor-role-preflight", round: "r25", commit, group, mode });
   for (const [group, mode, blockers] of [
     ["catalog-page", catalogFleetPlacement.loadLayout, []],
+    ["json-api", jsonFleetPlacement.loadLayout, []],
     ["live-delivery", "dedicated-lon1", []],
     ["hardening", "dedicated", []],
   ]) assert.deepEqual(await check(group, mode), blockers);
+});
+test("the opted-in JSON API c-16 layout widens only k6 and binds only the json-api group", () => {
+  const request = { round: "r25", commit, group: "json-api" };
+  const [d] = campaigns.bindGroupCampaign(request).bindings;
+  const plan = campaigns.bindGroupCampaign(request, jsonFleetPlacement.loadLayout);
+  validateCampaign(plan);
+  const [b] = plan.bindings;
+  assert.equal(b.campaignMode, "json-c16-generator-v1");
+  assert.deepEqual(b.host, { ...d.host, size: "c-16", region: "sfo2" });
+  assert.deepEqual(b.host, { ...providerCreateHost("json-c16-generator-v1"), allocation: "not-created", isolation: "unverified" });
+  for (const key of ["execution", "selection", "validation", "preparation"]) assert.deepEqual(b[key], d[key]);
+  // The binding's requested CPU environment is exactly the runner-side opt-in, and its expected CPUs are the placement's.
+  assert.deepEqual(b.resources.requestedCpuEnv, c16Env);
+  assert.deepEqual(b.resources.expectedCpus, placementCpus(c16Env));
+  assert.deepEqual(b.resources, { ...d.resources, requestedCpuEnv: c16Env, expectedCpus: { ...d.resources.expectedCpus,
+    load: { ...d.resources.expectedCpus.load, quota: 12, cpuset: "4-15", args: ["--cpus", "12", "--cpuset-cpus", "4-15"] } } });
+  assert.deepEqual(d.resources.requestedCpuEnv, { JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: "4-7" });
+  assert.deepEqual(nativeControlPartition(b).cpus, { app: "1", load: "4-15", api: "2-3" });
+  assert.notEqual(b.subjectSha256, d.subjectSha256);
+  for (const change of [(p) => { p.bindings[0].resources = d.resources; }, (p) => { p.bindings[0].host = d.host; },
+    (p) => { delete p.bindings[0].resources.requestedCpuEnv.JSON_API_LOAD_LAYOUT; }]) {
+    const changed = structuredClone(plan); change(changed);
+    assert.throws(() => validateCampaign(changed), /differs from fixed native bindings/);
+  }
+  for (const group of groupNames.filter((name) => name !== "json-api"))
+    assert.throws(() => campaigns.bindGroupCampaign({ ...request, group }, "json-c16-generator-v1"), /unknown group placement/);
+  assert.throws(() => campaigns.bindGroupCampaign(request, catalogFleetPlacement.loadLayout), /unknown group placement/);
 });
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
   const request = { round: "r25", commit, group: "json-api" };
@@ -80,6 +131,21 @@ test("official rounds are one fixed mapping with disjoint preparation and timing
   assert.equal(rounds["mixed-production"], "w17"); assert.equal(rounds["client-heavy"], "w17");
   assert.equal(rounds["live-delivery"], "r17"); assert.equal(rounds["recoverable-live"], "r17");
   for (const bad of ["r16", "r0", "r017", "r1000000001", ["r17"], "r17/escape", 17]) assert.throws(() => campaignRounds(bad));
+});
+
+test("dedicated client-heavy campaign binds the fixed comparison profile and rejects a downgrade", () => {
+  const plan = campaigns.bindGroupCampaign({ round: "r17", commit, group: "client-heavy" });
+  const [binding] = plan.bindings;
+  assert.equal(productionRecipes["client-heavy"], "native-defaults");
+  assert.equal(binding.request.recipe, clientComparisonRecipe);
+  assert.deepEqual(binding.execution.invocation.argv.slice(-2), ["--profile", clientComparisonRecipe]);
+  assert.equal(binding.execution.effectiveOptions.measurementOrder.length, 3);
+  assert.deepEqual(campaigns.campaignRoleBlockers(plan), []);
+  const downgraded = structuredClone(plan);
+  downgraded.recipes["client-heavy"] = downgraded.bindings[0].request.recipe = "native-defaults";
+  const { campaignSha256, ...body } = downgraded;
+  assert.notEqual(campaignSha256, deploymentSha256(body));
+  assert.throws(() => validateCampaign({ ...body, campaignSha256: deploymentSha256(body) }), /fixed native bindings/);
 });
 test("full campaign binds real committed procedures, all groups, exact native defaults and honest unknown gates", () => {
   const plan = bindCampaign({ round: "r17", commit });
@@ -129,6 +195,11 @@ test("full campaign binds real committed procedures, all groups, exact native de
 });
 test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
   const all = bindCampaign({ round: "r17", commit });
+  const dedicatedRecipes = {
+    ...productionRecipes,
+    "client-heavy": clientComparisonRecipe,
+    "mixed-production": "mixed-production-django-asgi",
+  };
   const expected = {
     "catalog-page": { app: "1", api: "2-3", load: "4-7" },
     "json-api": { app: "1", api: "2-3", load: "4-7" },
@@ -149,12 +220,15 @@ test("group campaigns bind the entire exact native group with stable all-group p
     assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
     assert.deepEqual(plan.order, [group]);
     const legacy = all.bindings.find((b) => b.request.group === group);
-    const dedicated = bindExecution({ ...legacy.request, review: null }, "dedicated");
-    assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), "dedicated group binding differs");
+    assert.equal(legacy.request.recipe, productionRecipes[group]);
+    const recipe = dedicatedRecipes[group];
+    const dedicated = bindExecution({ ...legacy.request, recipe, review: null }, "dedicated");
+    assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), `${group}: dedicated group binding differs`);
     assert.equal(dedicated.host.region, providerCreateHost("dedicated").region);
     assert.notEqual(dedicated.subjectSha256, legacy.subjectSha256);
-    for (const field of ["procedures", "recipes", "sourceSha256", "ready", "executionAuthorized"])
+    for (const field of ["procedures", "sourceSha256", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
+    assert.deepEqual(plan.recipes, { ...all.recipes, [group]: recipe });
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
     if (group === "hardening") {
       assert.ok(dedicated.sources.files.some((f) => f.path === hardeningCpuGate));

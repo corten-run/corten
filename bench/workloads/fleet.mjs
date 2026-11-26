@@ -6,16 +6,17 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetCatalogCommand, fleetPlan, fleetRegion, requireStagedFleet, roundName } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetPlan, fleetRegion, jsonFleetPlacement, requireStagedFleet, roundName } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
-import { continuationIndexSha256, continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+import { continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckCollectedGroup, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
+import { acknowledgedBootstrapSeal } from "./cloud-control-runtime.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "group-continuation.mjs"].map((name) => `bench/workloads/${name}`);
@@ -34,10 +35,11 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 export function parseFleetArgs(args) {
   const o = { round: args[0] }, seen = new Set();
   const values = { "--fleet-root": "root", "--continuation-root": "continuationRoot", "--group": "group", "--commit": "commit",
-    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
+    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval",
+    "--load-layout": "loadLayout" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
-    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval"].includes(flag)) o[flag.slice(2)] = true;
+    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval", "--offline-handoff"].includes(flag)) o[flag.slice(2)] = true;
     else {
       assert.ok(Object.hasOwn(values, flag), "fleet-option");
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), "fleet-option"); o[values[flag]] = value;
@@ -51,6 +53,10 @@ export function parseFleetArgs(args) {
     o.root = join(o.continuationRoot, o.group);
   } else assert.equal(o.group, undefined, "group requires a continuation root");
   fleetRoot(o.root);
+  if (o["offline-handoff"]) assert.ok(o.prepare && o.continuationRoot, "offline handoff must be selected at single-group preparation");
+  // The opted-in JSON API c-16 placement is saved in the fleet at preparation; nothing later selects it.
+  if (o.loadLayout !== undefined) assert.ok(o.prepare && o.continuationRoot && o.group === "json-api"
+    && o.loadLayout === jsonFleetPlacement.loadLayout, "fleet-load-layout");
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -69,28 +75,48 @@ async function exactSource(repo, run) {
   return head;
 }
 
-const placementFailures = new WeakSet();
+const placementFailures = new WeakMap();
 async function readPlacement(provider, { repo, interrupted, catalogProvider }, reservedRegion, scope) {
-  const run = catalogProvider({ repo, interrupted }); // No create mode.
-  const read = async (args, allowFail = false) => {
-    await controlCheckpoint(interrupted);
-    return run([...args, "--context", provider.context], 60000, allowFail);
-  };
-  const account = async () => {
-    const result = await read(["account", "get", "--output", "json"]);
-    assert.equal(result.status, 0, "fleet catalog account read failed");
-    assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
-  };
+  let stage = "transport-setup", primary, closeFailed = false;
   try {
-    try {
-      await account();
-      const catalog = fleetCatalogResult(await read(fleetCatalogCommand, true));
-      await account();
+    const run = catalogProvider({ repo, interrupted }); // No create mode.
+    const read = async (args, allowFail = false) => {
       await controlCheckpoint(interrupted);
+      return run([...args, "--context", provider.context], 60000, allowFail);
+    };
+    const account = async (position) => {
+      stage = position === "first" ? "first-account-read-or-worker-start" : "second-account-read";
+      const result = await read(["account", "get", "--output", "json"]);
+      assert.equal(result.status, 0, "fleet catalog account read failed");
+      stage = `${position}-account-identity`;
+      assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
+    };
+    try {
+      await account("first");
+      stage = "catalog-read";
+      const result = await read(fleetCatalogCommand, true);
+      if (result.status === 0 && !result.error || result.status === 1 && providerFailure(result)?.code === "catalog-response")
+        stage = "catalog-validation";
+      const catalog = fleetCatalogResult(result);
+      await account("second");
+      stage = "placement-checkpoint";
+      await controlCheckpoint(interrupted);
+      stage = "region-selection";
       return fleetRegion(catalog, reservedRegion, scope);
-    } finally { await run.close(); }
+    } catch (error) {
+      primary = { stage, refusal: providerFailure(error) };
+      throw error;
+    } finally {
+      try { await run.close(); }
+      catch (error) { stage = "transport-close"; closeFailed = true; throw error; }
+    }
   } catch (error) {
-    if (error && typeof error === "object") placementFailures.add(error);
+    // Preserve the exception from the existing try/finally for lock custody, but do not lose the primary stage.
+    if (error && typeof error === "object") placementFailures.set(error, {
+      ...(primary ?? { stage, refusal: providerFailure(error) }),
+      closeFailed: !!primary && closeFailed,
+      uncertain: !!(error.controlUncertain || error.controlTreeUncertain),
+    });
     throw error;
   }
 }
@@ -214,6 +240,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   if (launching) {
     requireStagedFleet(fleet.manifest);
     if (fleet.manifest.single) assert.ok(continuation && mode === "detach", "use continuation detach for an independent group");
+    if (fleet.manifest.single?.offlineHandoff) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
   }
   let deferred = false;
   if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
@@ -302,26 +329,44 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 export async function fleetMain(args, deps = {}, preIntentFailures) {
   const options = parseFleetArgs(args), repo = realpathSync(deps.repo ?? checkout);
   if (!options.continuationRoot) return runFleet(options, deps);
-  const { continuationLock, inspectContinuation } = await import("./group-continuation.mjs");
+  const { continuationLock, continuationAdmission, requireSetupRetryCommit } = await import("./group-continuation.mjs");
   const root = fleetRoot(options.continuationRoot, repo), lock = join(root, continuationLock);
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
-  if (locked) { physical(root); durable(lock, owner); }
-  let uncertain = false, attemptRoot = options.root, ownsLock = locked, attemptLockOwned = false;
-  let preIntentStage = options.detach ? "continuation-replay" : undefined;
+  let uncertain = false, attemptRoot = options.root, ownsLock = false, attemptLockOwned = false;
+  let preIntentStage = "continuation-admission; lock-check";
   const release = () => {
     assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
   };
   try {
-    if (!locked) assert.ok(!present(lock), "continuation operation busy");
-    const continuation = await inspectContinuation(root, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
-    const row = continuation.report.groups.find(({ group }) => group === options.group);
-    assert.ok(!row.result, "group already verified; never allocate again");
-    assert.ok(!continuation.report.groups.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
+    if (locked) {
+      physical(root);
+      try { durable(lock, owner); }
+      catch (error) {
+        if (error?.code === "EEXIST") preIntentStage = "continuation-admission; lock-busy";
+        throw error;
+      }
+      ownsLock = true;
+    } else {
+      const busy = present(lock);
+      if (busy) preIntentStage = "continuation-admission; lock-busy";
+      assert.ok(!busy, "continuation operation busy");
+    }
+    preIntentStage = "continuation-admission; custody-read";
+    const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect,
+      admissionFailure(error, check) { preIntentFailures?.set(error, `continuation-admission; ${check}`); } });
+    const row = continuation.rows.find(({ group }) => group === options.group);
+    preIntentStage = "continuation-admission; group-selection";
+    assert.ok(!row.knownResult, "group already verified or pinned; never allocate again");
+    preIntentStage = "continuation-admission; custody-unresolved";
+    assert.ok(!continuation.rows.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
+    preIntentStage = "continuation-admission; group-selection";
     const slot = continuation.slots.get(options.group);
     if (options.prepare) {
+      if (options["offline-handoff"]) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
       const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
       assert.ok(row.outcome === "missing" || row.retryable || superseding, "group already reserved; never allocate again");
+      requireSetupRetryCommit(row.attempts, options.commit);
       if (slot) {
         assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
         attemptRoot = join(root, `${options.group}--${options.round}`);
@@ -331,9 +376,11 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
       attemptRoot = slot.root;
     }
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
+    preIntentStage = "continuation-admission; custody-account";
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
+    preIntentStage = "continuation-admission; custody-recheck";
     continuation.recheck();
-    preIntentStage = undefined;
+    preIntentStage = options.prepare ? "prepare-reservation" : undefined;
     return await runFleet({ ...options, root: attemptRoot }, deps, {
       ...continuation, onAttemptLock() { attemptLockOwned = true; },
       onReady() {
@@ -345,7 +392,7 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     }, preIntentFailures);
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
-    if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
+    if (preIntentStage && !preIntentFailures?.has(error)) preIntentFailures?.set(error, preIntentStage);
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
@@ -389,8 +436,10 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
-      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo };
-      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group });
+      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo,
+        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}), ...(options.loadLayout ? { loadLayout: options.loadLayout } : {}) };
+      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group,
+        ...(single?.loadLayout ? { loadLayout: single.loadLayout } : {}) });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
         tokens: Object.fromEntries((single ? [single.group] : groupNames).map((group) => [group, token()])),
@@ -399,8 +448,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       if (single) {
-        assert.equal(continuationIndexSha256(continuation.root), single.indexSha256, "continuation index changed");
-        continuation.recheckUnlaunched(single.group);
+        continuation.recheck(root, true);
       }
       durable(join(root, `fleet-${options.round}.json`), json(manifest));
       assert.deepEqual(readFleet(root, options.round).manifest, manifest);
@@ -422,6 +470,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   let preIntentStage = continuation ? "initial-plan" : undefined;
   try {
     const preview = await fleetOperationPlan(options, deps);
+    continuation?.recheck();
     if (options["print-approval"]) {
       preIntentStage = undefined;
       write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
@@ -440,14 +489,15 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
       await readPlacement(manifest.provider, placement, repeated.subject.remainingRegion ?? manifest.host.region,
-        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group });
+        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group,
+          ...(manifest.single?.loadLayout ? { loadLayout: manifest.single.loadLayout } : {}) });
       assert.equal(readFleet(root, options.round).manifestSha256, repeated.fleet.manifestSha256, "fleet-manifest-changed");
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
       if (repeated.subject.firstGroup) recheckCollectedGroup(repeated.fleet, repeated.subject.firstGroup.snapshot);
-      continuation?.recheck(root);
     }
     await controlCheckpoint(interrupted);
+    continuation?.recheck(root);
     preIntentStage = undefined; // The intent write can partially succeed; do not label it a pre-intent refusal.
     if (options.detach) durable(join(root, "launch-intent.json"), json({ schema: "benchmark-group-fleet-staged-launch-intent/v1",
       approvalSha256: options.approval, subject: preview.subject }));
@@ -470,6 +520,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       write(JSON.stringify(row)); return row;
     };
     const launching = options.detach || options["admit-remaining"];
+    const offline = repeated.fleet.manifest.single?.offlineHandoff === true;
     const admittedIds = new Set(), admittedIps = new Set(), supervised = new Map();
     const claimHost = (group, proof) => {
       if (!proof) return false;
@@ -499,13 +550,17 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       } catch { /* Only validated saved identity is public. */ }
       const diagnostic = providerFailure(failure);
       const stage = controllerFailure(failure);
-      const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
-        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(failure || job.outcome === "planned" && ![0, 1, 3].includes(code) ? { error: "group-operation-failed" } : {}),
+      // The child saved its terminal provider-errored create; the provider sent no host.
+      const createErrored = (failure ? !failure.controlTreeUncertain && !failure.controlUncertain && diagnostic?.code === "create-errored-absent" : !launching && code === 1)
+        && job.outcome === "planned" && saved?.outcome === "available" && saved.state.status === "creating" && !!saved.state.createErrored
+        && !saved.state.createErrored.reappeared;
+      const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : createErrored ? "create-errored" : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
+        ...(saved?.state?.id ? { id: saved.state.id } : {}), ...(!createErrored && (failure || job.outcome === "planned" && ![0, 1, 3].includes(code)) ? { error: "group-operation-failed" } : {}),
         ...(failure ? { uncertain: !!(failure.controlTreeUncertain || failure.controlUncertain) } : {}),
         ...(diagnostic ? { providerDiagnostic: diagnostic } : {}), ...(stage ? { controllerStage: stage } : {}) };
       // Return codes cannot substitute for validated saved host state. In
       // particular, never print completion/deletion from a worker receipt alone.
-      if (!failure && job.outcome === "planned") {
+      if (!failure && job.outcome === "planned" && !createErrored) {
         const state = saved?.state;
         const first = job.group === preview.fleet.manifest.jobs[0].group;
         const bootstrapReady = state?.bootstrapReady;
@@ -515,13 +570,19 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
         const consistent = saved?.outcome === "available" && (launching
           ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
-            && bootstrap && (options["admit-remaining"] ? claimHost(job.group, closed)
+            && bootstrap && (!offline || state.control.sealed.includes("bootstrap") && acknowledgedBootstrapSeal(state.control.ledger))
+            && (options["admit-remaining"] ? claimHost(job.group, closed)
               : !admittedIds.has(state.id) && !admittedIps.has(state.ip))
           : code === 3 ? state.status === "running"
-          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
+          : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt
+            && (state.exitCode === code || offline && code === 1 && state.exitCode === 2 && state.validation?.status === "blocked")
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
         else if (closed) row.collection = "separate-child-approval-required";
+        else if (launching && offline) {
+          row.handoff = "acknowledged"; row.collection = "separate-child-approval-required";
+          admittedIds.add(state.id); admittedIps.add(state.ip);
+        }
         else if (launching) { admittedIds.add(state.id); admittedIps.add(state.ip); }
         else if (retired) row.outcome = `${state.retirement.kind}-retired`;
       }
@@ -561,7 +622,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           const done = operate(job, stopped, watch ? (proof) => {
             if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
             ready.resolve();
-          } : continuation?.onReady,
+          } : offline ? undefined : continuation?.onReady,
           watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
             settled[i] = { status: "fulfilled", value };
             if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";
@@ -579,7 +640,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     await controlCheckpoint(cancelled);
     write(JSON.stringify({ schema: "benchmark-group-fleet-operation/v1", action: preview.subject.action, groups, fullGroupQualified: false }));
     if (groups.some((g) => ["error", "missing", "ambiguous", "busy", "not-admitted"].includes(g.outcome))) return 2;
-    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired"].includes(g.outcome)) ? 1 : 0;
+    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired", "create-errored"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
     if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
@@ -599,9 +660,12 @@ export async function fleetCli(args, { writeError = console.error, ...deps } = {
   const preIntentFailures = new Map();
   try { return await fleetMain(args, { ...deps, interrupted: signals.interrupted }, preIntentFailures); }
   catch (error) {
-    if (placementFailures.has(error)) {
-      const refusal = providerFailure(error);
-      writeError("fleet-placement-preflight-failed" + (refusal ? `: ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
+    const placement = placementFailures.get(error);
+    if (placement) {
+      const { stage, refusal, closeFailed, uncertain } = placement;
+      writeError(`fleet-placement-preflight-failed: ${stage}` +
+        (refusal ? `; ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : "") +
+        (closeFailed ? "; transport-close-failed" : "") + (uncertain ? "; custody-uncertain" : ""));
     } else {
       const stage = preIntentFailures.get(error);
       writeError(stage ? `fleet-operation-failed: ${stage}` : "fleet-operation-failed");

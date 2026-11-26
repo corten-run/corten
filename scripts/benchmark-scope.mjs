@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-const tooling = ["package.json", "package-lock.json", ".dockerignore", ".gitattributes", ".gitignore",
+// Every Catalog and Evidence job sets up Node from .node-version.
+const tooling = [".node-version", "package.json", "package-lock.json", ".dockerignore", ".gitattributes", ".gitignore",
   "scripts/benchmark-scope.mjs", "scripts/benchmark-scope.test.mjs", "scripts/steady.mjs"];
 const rustInputs = ["Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain", "rust-toolchain.toml", "crates"];
+// Exact paths only. Other workloads files can supply shared parity inputs.
+const fleetControllerFiles = new Set(["CLOUD.md", "cloud-production.mjs", "droplet.mjs", "fleet-production.test.mjs",
+  "fleet-provider-test-worker.mjs", "fleet-verify.mjs", "group-continuation.mjs"].map(name => "bench/workloads/" + name));
 const catalogShared = [...tooling, ".github/workflows/catalog.yml", "bench/load-tool.mjs",
   // The classic TypeScript compiler native replay's binding parser loads, and its package.
   "bench/typescript.mjs", "bench/package.json", "bench/package-lock.json",
@@ -26,6 +30,10 @@ export function selectScope(allApps, paths) {
   for (const path of paths) {
     if (matches(path, rustInputs) || matches(path, ["bench/catalog/corten"])) {
       selected.add("corten");
+    } else if (fleetControllerFiles.has(path)) {
+      // Only the Corten Dockerfiles copy the root context. Keep the harness and both JSON jobs.
+      selected.add("corten");
+      json = true;
     } else if (matches(path, catalogShared)) {
       return { apps: allApps, json: true };
     } else if (path.startsWith("bench/fullstack/apps/")) {
@@ -54,29 +62,31 @@ export function selectKernel(paths) {
   return paths === undefined || paths.some(path => matches(path, kernelInputs));
 }
 
-function changedPaths(base, head, cwd) {
+function changedPaths(base, head, cwd, env) {
   // Keep both sides of a move and don't hide gitlinks from source-custody checks.
   return execFileSync("git", ["diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, head, "--"], {
-    cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+    cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env,
   }).split("\0").filter(Boolean);
 }
 
-export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd) {
+// Git runs with `env`, by default this process's environment; a test passes one without the caller's GIT_DIR to
+// read its own repository.
+export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd, env = process.env) {
   const sha = /^[0-9a-f]{40}$/;
   if (GITHUB_EVENT_NAME === "pull_request") {
     assert.match(GITHUB_SHA ?? "", sha);
     // Actions tests the synthetic merge, including any base-side path moves.
-    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd);
+    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd, env);
   }
   if (GITHUB_EVENT_NAME === "push") {
     assert.match(GITHUB_SHA ?? "", sha);
     if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
-      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore" });
+      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore", env });
       if (base.error) throw base.error;
       // A force-push's old tip is not an ancestor; its tree diff can hide changes.
-      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore" });
+      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore", env });
       if (ancestor?.error) throw ancestor.error;
-      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
+      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd, env);
     }
     console.warn("Push base unavailable; selecting every benchmark job.");
   }

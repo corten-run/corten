@@ -1,5 +1,5 @@
 import http from "node:http";
-import { base, shadowing, engine, skip, check } from "./helpers.mjs";
+import { base, shadowing, engine, skip, check, steps, pollFor, cleanUp } from "./helpers.mjs";
 
 /**
  * A named control must not turn a runtime walk into form -> control -> form. The timeout
@@ -108,17 +108,44 @@ export async function generatedFormViews(browser) {
 }
 
 export async function formFailures(page, failWatch, openFeeds) {
-  // A submit the network fails: the form stays, and the page hears about it.
-  const failed = page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        document.addEventListener("corten:error", (e) => resolve([/** @type {CustomEvent} */ (e).detail.status, e.cancelable]), { once: true }),
-      ),
-  );
-  failWatch.value = true;
+  // A submit the network fails: the form stays, and the page hears about it. The press runs in
+  // the page, in the same task that starts listening for the form's own error and its six seconds,
+  // so a press that never submits fails the check in 6 s from the press rather than waiting on the
+  // stall watchdog, and another form's error does not count (#2014). The handler checks the time
+  // itself: an error heard after the six seconds fails the check even if the timer has not run.
   const messageBefore = await page.textContent("#watch-message");
-  await page.click("#watch-form button");
-  check("a submit the network fails dispatches corten:error with status 0, cancelable", JSON.stringify(await failed) === "[0,true]");
+  /** @type {string} */
+  let failedWith;
+  // A press that sent nothing leaves the failure armed for the next post: it is disarmed however
+  // the press ends.
+  failWatch.value = true;
+  try {
+    failedWith = JSON.stringify(
+      await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+            const stop = new AbortController();
+            const from = performance.now();
+            const late = setTimeout(() => (stop.abort(), resolve(null)), 6000);
+            form.addEventListener(
+              "corten:error",
+              (e) => {
+                clearTimeout(late);
+                stop.abort();
+                const after = performance.now() - from;
+                resolve(after <= 6000 ? [/** @type {CustomEvent} */ (e).detail.status, e.cancelable] : `heard after ${Math.round(after)} ms`);
+              },
+              { signal: stop.signal },
+            );
+            /** @type {HTMLButtonElement} */ (form.querySelector("button")).click();
+          }),
+      ),
+    );
+  } finally {
+    failWatch.value = false;
+  }
+  check("a submit the network fails dispatches corten:error with status 0, cancelable", failedWith === "[0,true]", failedWith);
   check(
     "a failed submit leaves the page and the form as they were",
     (await page.textContent("#watch-message")) === messageBefore && (await page.getAttribute("#watch-form", "aria-busy")) === null,
@@ -324,40 +351,116 @@ export async function formFailures(page, failWatch, openFeeds) {
 }
 
 export async function submitKeys(page, holdWatch, failWatch, errors, browser, bug, cut) {
+  /**
+   * Listens for the first `corten:error` the form at `selector` dispatches, from before its press.
+   * `seen` waits at most 6 s from when it is called (once the press has returned, or the held
+   * answer is let go) and gives its status, or null if none came within them, a late one included.
+   * `stop` ends the listening, and goes in the case's `finally`, so a press that throws does not
+   * leave it behind; `seen` stops it too.
+   * @param {string} selector
+   */
+  const formError = async (selector) => {
+    await page.evaluate((selector) => {
+      const w = /** @type {any} */ (window);
+      w.__formError?.stop.abort();
+      const stop = new AbortController();
+      w.__formError = { stop, status: undefined };
+      document.querySelector(selector)?.addEventListener(
+        "corten:error",
+        (e) => {
+          w.__formError.status = /** @type {CustomEvent} */ (e).detail.status;
+          stop.abort();
+        },
+        { signal: stop.signal },
+      );
+    }, selector);
+    const stop = () => page.evaluate(() => /** @type {any} */ (window).__formError?.stop.abort()).catch(() => {});
+    return {
+      stop,
+      /** @returns {Promise<number | null>} */
+      async seen() {
+        try {
+          // Polled on a timer: a loaded browser may not be delivering animation frames.
+          return await pollFor(6000, () => page.evaluate(() => /** @type {number | undefined} */ (/** @type {any} */ (window).__formError.status)));
+        } finally {
+          await stop();
+        }
+      },
+    };
+  };
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again. The failed write is held until the newer press is
   // made, so that press meets it still out (a fixed delay let a loaded browser press after the
   // failure, #1149), and both presses run in the page, so the first is sent before the test
-  // picks another stock.
+  // picks another stock. The form's submits are counted, so the newer press, which sends nothing,
+  // is seen to have been made. The listeners, the hold and the press count go however it ends.
   let afterFailure = 0;
   /** @param {import("@playwright/test").Request} r */
   const isWrite = (r) => r.method() === "POST" && r.url().endsWith("/watch");
   /** @param {import("@playwright/test").Request} r */
   const onRetry = (r) => isWrite(r) && (afterFailure += 1);
-  const failedAgain = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
-  page.on("request", onRetry);
-  let releaseWatch = () => {};
-  holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
-  failWatch.value = true;
-  const watchSent = page.waitForRequest(isWrite, { timeout: 5000 }).then(() => true, () => false);
   const pressWatch = () => page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
-  await pressWatch();
-  const watchWasSent = await watchSent;
-  // Another stock the form still offers, so the newer submit differs from the one it waits for.
-  const other = await page.$eval("select[name=id]", (s) =>
-    [.../** @type {HTMLSelectElement} */ (s).options].map((o) => o.value).find((v) => v && v !== /** @type {HTMLSelectElement} */ (s).value),
+  let watchWasSent = false;
+  let watchPresses = 0;
+  /** @type {number | null} */
+  let watchFailed = null;
+  let posts = 0;
+  const failedAgain = await formError("#watch-form");
+  page.on("request", onRetry);
+  try {
+    let releaseWatch = () => {};
+    holdWatch.value = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
+    failWatch.value = true;
+    try {
+      await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__failedPresses = 0;
+        w.__failedPressCount = new AbortController();
+        // Capturing on the window, so the submit is heard before any listener of the page's.
+        window.addEventListener("submit", (e) => e.target === document.getElementById("watch-form") && (w.__failedPresses += 1), { capture: true, signal: w.__failedPressCount.signal });
+      });
+      // The wait is joined with the press, so neither can fail unheard.
+      [watchWasSent] = await Promise.all([page.waitForRequest(isWrite, { timeout: 5000 }).then(() => true, () => false), pressWatch()]);
+      // Another stock the form still offers, so the newer submit differs from the one it waits for.
+      const other = await page.$eval("select[name=id]", (s) =>
+        [.../** @type {HTMLSelectElement} */ (s).options].map((o) => o.value).find((v) => v && v !== /** @type {HTMLSelectElement} */ (s).value),
+      );
+      check("the form offers another stock to send", other !== undefined);
+      if (other) await page.selectOption("select[name=id]", other);
+      await pressWatch();
+      watchPresses = await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        w.__failedPressCount.abort();
+        return /** @type {number} */ (w.__failedPresses);
+      });
+    } finally {
+      holdWatch.value = null;
+      failWatch.value = false;
+      releaseWatch();
+    }
+    // The failure's 6 s start once it is let go.
+    watchFailed = await failedAgain.seen();
+    // Time in which the waiting submit, which must not go, would be seen; none if the failure did not come.
+    if (watchFailed !== null) await page.waitForTimeout(500);
+    posts = afterFailure;
+  } finally {
+    page.off("request", onRetry);
+    await failedAgain.stop();
+    await page.evaluate(() => /** @type {any} */ (window).__failedPressCount?.abort()).catch(() => {});
+  }
+  check(
+    "a submit that waited for a write the network failed is not sent",
+    watchWasSent && watchPresses === 2 && watchFailed === 0 && posts === 1,
+    `presses: ${watchPresses}; posts: ${posts}${watchWasSent ? "" : ", the first not sent in 5 s"}; error: ${watchFailed ?? "none within 6 s"}`,
   );
-  check("the form offers another stock to send", other !== undefined);
-  if (other) await page.selectOption("select[name=id]", other);
-  await pressWatch();
-  releaseWatch();
-  await failedAgain;
-  await page.waitForTimeout(500);
-  page.off("request", onRetry);
-  check("a submit that waited for a write the network failed is not sent", watchWasSent && afterFailure === 1, `posts: ${afterFailure}${watchWasSent ? "" : ", the first not sent in 5 s"}`);
 
   // A submit key (SubmitKey::field) is sent again until the submission has an answer, then renewed
-  // as another UUID v4.
+  // as another UUID v4. Its presses, and the template copies' below, run in the page: a loaded
+  // Firefox can acknowledge Playwright's click before the page gets it, and in a reproduction the
+  // page had moved the button from under the point clicked by then, so a retry was never sent
+  // (#2014). Each failure waited for is the form's own, for 6 s at most from the press's return; a
+  // case whose failure does not come in them fails and stops, without its retry.
+  const press = (/** @type {string} */ selector) => page.evaluate((selector) => /** @type {HTMLButtonElement} */ (document.querySelector(selector)).click(), selector);
   const zero = "00000000-0000-4000-8000-000000000000";
   await page.evaluate((zero) =>
     document.querySelector("main")?.insertAdjacentHTML(
@@ -368,20 +471,41 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   const keys = [];
   /** @param {import("@playwright/test").Request} r */
   const keyOf = (r) => r.method() === "POST" && r.url().endsWith("/watch") && keys.push(new URLSearchParams(r.postData() ?? "").get("submit"));
+  /** @type {number | null} */
+  let keyedStatus = null;
+  let kept = "";
+  /** The key once the retry is answered, within 5 s, or null. @type {string | null} */
+  let renewed = null;
+  let keysSent = "";
+  const keyedFailed = await formError("#keyed");
   page.on("request", keyOf);
-  const keyedFailed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
-  failWatch.value = true;
-  await page.click("#keyed button");
-  await keyedFailed;
-  const kept = await page.inputValue("#keyed [name=submit]");
-  await page.click("#keyed button");
-  await page.waitForFunction((zero) => /** @type {HTMLInputElement | null} */ (document.querySelector("#keyed [name=submit]"))?.value !== zero, zero, { timeout: 5000 }).catch(() => {});
-  const renewed = await page.inputValue("#keyed [name=submit]");
-  page.off("request", keyOf);
+  try {
+    failWatch.value = true;
+    try {
+      await press("#keyed button");
+      keyedStatus = await keyedFailed.seen();
+    } finally {
+      failWatch.value = false;
+    }
+    if (keyedStatus !== null) {
+      kept = await page.inputValue("#keyed [name=submit]");
+      await press("#keyed button");
+      renewed = await pollFor(5000, () =>
+        page.evaluate((zero) => {
+          const key = /** @type {HTMLInputElement | null} */ (document.querySelector("#keyed [name=submit]"))?.value;
+          return key && key !== zero ? key : undefined;
+        }, zero),
+      );
+    }
+    keysSent = keys.join(", ");
+  } finally {
+    page.off("request", keyOf);
+    await keyedFailed.stop();
+  }
   check(
     "a submit key is sent again after a failed submit and renewed once the submit is answered",
-    kept === zero && keys.length === 2 && keys.every((k) => k === zero) && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(renewed) && renewed !== zero,
-    `${keys.join(", ")} -> ${renewed}`,
+    keyedStatus === 0 && kept === zero && keys.length === 2 && keys.every((k) => k === zero) && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(renewed ?? "") && renewed !== zero,
+    keyedStatus === null ? `no corten:error within 6 s of the press, so no retry was made; sent ${keysSent}` : `${keysSent} -> ${renewed ?? "not renewed within 5 s"}; error: ${keyedStatus}`,
   );
   await page.evaluate(() => document.querySelector("#keyed")?.remove());
 
@@ -407,18 +531,33 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
     });
   });
   const upstreamLogged = errors.length;
-  await page.click("#keyed button");
-  await page.waitForSelector("#upstream-said");
-  const afterUpstream = await page.inputValue("#keyed [name=submit]");
-  await page.click("#keyed button");
-  await page.waitForFunction(() => document.querySelector("#upstream-said")?.textContent === "Watching.", null, { timeout: 5000 }).catch(() => {});
-  const afterAnswer = await page.inputValue("#keyed [name=submit]");
+  /** Each answer's patch drawn within 5 s, and the key then. @type {string | null} */
+  let afterUpstream = null;
+  /** @type {string | null} */
+  let afterAnswer = null;
+  // Each answer is drawn within 5 s of its press; without the first, the retry is not made.
+  const drawnThen = (/** @type {string} */ said) =>
+    pollFor(5000, () =>
+      page.evaluate(
+        (said) => (document.querySelector("#upstream-said")?.textContent === said ? /** @type {HTMLInputElement} */ (document.querySelector("#keyed [name=submit]")).value : undefined),
+        said,
+      ),
+    );
+  try {
+    await press("#keyed button");
+    afterUpstream = await drawnThen("The carrier did not answer.");
+    if (afterUpstream !== null) {
+      await press("#keyed button");
+      afterAnswer = await drawnThen("Watching.");
+    }
+  } finally {
+    await page.unroute("**/watch-upstream");
+  }
   check(
     "a 5xx patch keeps the form's submit key, and the retry sends it",
-    afterUpstream === zero && upstreamKeys.length === 2 && upstreamKeys.every((k) => k === zero) && afterAnswer !== zero && afterAnswer !== "11111111-1111-4111-8111-111111111111",
-    `${upstreamKeys.join(", ")}: after 502 ${afterUpstream}, after 200 ${afterAnswer}`,
+    afterUpstream === zero && upstreamKeys.length === 2 && upstreamKeys.every((k) => k === zero) && afterAnswer !== null && afterAnswer !== zero && afterAnswer !== "11111111-1111-4111-8111-111111111111",
+    `${upstreamKeys.join(", ")}: after 502 ${afterUpstream ?? "not drawn within 5 s, so no retry was made"}, after 200 ${afterAnswer ?? "not drawn within 5 s"}`,
   );
-  await page.unroute("**/watch-upstream");
   await page.evaluate(() => document.querySelector("#keyed")?.remove());
   // The browser logs the 502.
   errors.splice(upstreamLogged, errors.length, ...errors.slice(upstreamLogged).filter((e) => !/502|Bad Gateway/i.test(e)));
@@ -440,31 +579,50 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         res.write(patch ? '<p id="watch-message">' : "<p>Watching", () => res.socket?.destroy());
       });
     });
-    await new Promise((resolve) => cutServer.listen(0, "127.0.0.1", () => resolve(undefined)));
-    const cutPort = /** @type {import("node:net").AddressInfo} */ (cutServer.address()).port;
-    await page.route("**/watch-cut*", (route) => route.continue({ url: `http://127.0.0.1:${cutPort}${new URL(route.request().url()).pathname}` }));
     const cutLogged = errors.length;
     /** @type {string[]} */
     const cutSeen = [];
-    for (const action of ["/watch-cut", "/watch-cut-plain"]) {
-      await page.evaluate(
-        ([zero, action]) =>
-          document.querySelector("main")?.insertAdjacentHTML(
-            "beforeend",
-            __html(`<form id="cut" method="post" action="${action}" data-patch><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`),
-          ),
-        [zero, action],
+    // The server, the route and the form go however the case ends, set up in full or not, and each
+    // goes even when removing another fails.
+    try {
+      await new Promise((resolve, reject) => {
+        cutServer.once("error", reject);
+        cutServer.listen(0, "127.0.0.1", () => resolve(undefined));
+      });
+      const cutPort = /** @type {import("node:net").AddressInfo} */ (cutServer.address()).port;
+      await page.route("**/watch-cut*", (route) => route.continue({ url: `http://127.0.0.1:${cutPort}${new URL(route.request().url()).pathname}` }));
+      // A form whose failure does not come within 6 s of its press stops the case.
+      for (const action of ["/watch-cut", "/watch-cut-plain"]) {
+        await page.evaluate(
+          ([zero, action]) =>
+            document.querySelector("main")?.insertAdjacentHTML(
+              "beforeend",
+              __html(`<form id="cut" method="post" action="${action}" data-patch><input type="hidden" name="submit" data-submit value="${zero}"><button>Watch</button></form>`),
+            ),
+          [zero, action],
+        );
+        const cutFailed = await formError("#cut");
+        /** @type {number | null} */
+        let cutStatus = null;
+        try {
+          await press("#cut button");
+          cutStatus = await cutFailed.seen();
+        } finally {
+          await cutFailed.stop();
+        }
+        const cutKey = await page.inputValue("#cut [name=submit]");
+        cutSeen.push(`${action}: status ${cutStatus ?? "none within 6 s"}, key ${cutKey === zero ? "kept" : cutKey}`);
+        await page.evaluate(() => document.querySelector("#cut")?.remove());
+        if (cutStatus === null) break;
+      }
+    } finally {
+      await cleanUp(
+        () => page.unroute("**/watch-cut*"),
+        () => cutServer.close(),
+        () => page.evaluate(() => document.querySelector("#cut")?.remove()),
       );
-      const cutFailed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true })));
-      await page.click("#cut button");
-      const cutStatus = await cutFailed;
-      const cutKey = await page.inputValue("#cut [name=submit]");
-      cutSeen.push(`${action}: status ${cutStatus}, key ${cutKey === zero ? "kept" : cutKey}`);
-      await page.evaluate(() => document.querySelector("#cut")?.remove());
     }
-    check(cutName, cutSeen.every((seen) => seen.endsWith("status 0, key kept")), cutSeen.join("; "));
-    await page.unroute("**/watch-cut*");
-    cutServer.close();
+    check(cutName, cutSeen.length === 2 && cutSeen.every((seen) => seen.endsWith("status 0, key kept")), cutSeen.join("; "));
     // The browser logs the answer it could not read.
     errors.splice(cutLogged, errors.length, ...errors.slice(cutLogged).filter((e) => !/Failed to load resource|ERR_|NetworkError|network connection was lost/i.test(e)));
   }
@@ -515,8 +673,8 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
       // The handler's module loads when the copies join the page; it runs from then on.
       await p.waitForFunction(() => "readKeyLoaded" in window, null, { timeout: 5000 });
     };
-    await page.route("**/scripts/read-key.js", readKey);
-    await page.route("**/count-row", (route) => {
+    /** @param {import("playwright").Route} route */
+    const countRow = (route) => {
       const body = new URLSearchParams(route.request().postData() ?? "");
       const key = body.get("submit") ?? "";
       const row = body.get("row") ?? "";
@@ -532,57 +690,98 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
         headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
         body: `<p id="count-row-${row}-said">${fresh ? "Counted." : "Already counted."}</p>`,
       });
-    });
+    };
     const logged = errors.length;
-    await copies(page, ["a", "b"]);
+    const names = ["each copy of a template's form gets a submit key of its own when first sent, kept for its retry", "an on:submit handler that reads a template copy's form sees the key it sends"];
+    /** Why the case stopped, if it did: a failure, answer or post that did not come in time. */
+    let stopped = "";
+    /** @type {number | null} */
+    let failedA = null;
+    let kept = "";
+    /** @type {string | null} */
+    let readA = null;
+    /** Each copy's answer, drawn within 5 s of its press, or null. @type {string | null} */
+    let saidA = null;
+    /** @type {string | null} */
+    let saidB = null;
     /** @param {string} row */
     const keyOf = (row) => page.inputValue(`#count-row-${row} [name=submit]`);
     /** @param {string} row */
-    const saidBy = (row) =>
-      page
-        .waitForFunction((row) => document.getElementById(`count-row-${row}-said`)?.textContent || "", row, { timeout: 5000 })
-        .then((said) => said.jsonValue(), () => "(no answer)");
-    const failed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
-    await page.click("#count-row-a button");
-    await failed;
-    const kept = await keyOf("a");
-    const readA = await page.getAttribute("#count-row-a", "data-read");
-    await page.click("#count-row-a button");
-    const saidA = await saidBy("a");
-    await page.click("#count-row-b button");
-    const saidB = await saidBy("b");
-    await page.unroute("**/count-row");
-    await page.unroute("**/scripts/read-key.js");
-    await page.evaluate(() => (document.getElementById("count-rows")?.remove(), document.getElementById("count-row-list")?.remove()));
+    const saidBy = (row) => pollFor(5000, () => page.evaluate((row) => document.getElementById(`count-row-${row}-said`)?.textContent || undefined, row));
+    // The routes, the copies and the failure's listener go however the case ends, set up in full or
+    // not, and each goes even when removing another fails.
+    try {
+      await page.route("**/scripts/read-key.js", readKey);
+      await page.route("**/count-row", countRow);
+      await copies(page, ["a", "b"]);
+      const failed = await formError("#count-row-a");
+      try {
+        await press("#count-row-a button");
+        failedA = await failed.seen();
+      } finally {
+        await failed.stop();
+      }
+      if (failedA === null) stopped = "no corten:error within 6 s of a's first press, so no retry was made";
+      else {
+        kept = await keyOf("a");
+        readA = await page.getAttribute("#count-row-a", "data-read");
+        await press("#count-row-a button");
+        saidA = await saidBy("a");
+        if (saidA === null) stopped = "a's retry not answered within 5 s, so b was not pressed";
+        else {
+          await press("#count-row-b button");
+          saidB = await saidBy("b");
+          if (saidB === null) stopped = "b not answered within 5 s";
+        }
+      }
+    } finally {
+      await cleanUp(
+        () => page.unroute("**/count-row", countRow),
+        () => page.unroute("**/scripts/read-key.js", readKey),
+        () => page.evaluate(() => (document.getElementById("count-rows")?.remove(), document.getElementById("count-row-list")?.remove())),
+      );
+    }
     // The browser logs the 502.
     errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/502|Bad Gateway/i.test(e)));
-    const plainPage = await (await browser.newContext()).newPage();
-    plainPage.on("console", (m) => {
-      const text = m.type() === "error" ? m.text() : "";
-      if (text && !bug(text) && !cut.test(text)) errors.push(`plain post: ${text}`);
-    });
-    plainPage.on("pageerror", (e) => errors.push(`plain post: ${e.message}`));
     /** @type {string[]} */
     const plainSent = [];
-    await plainPage.route("**/scripts/read-key.js", readKey);
-    await plainPage.route("**/count-row", (route) => {
-      plainSent.push(new URLSearchParams(route.request().postData() ?? "").get("submit") || "(empty)");
-      return route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: "<!doctype html><title>Counted</title><p>Counted.</p>" });
-    });
-    await plainPage.goto(base);
-    await copies(plainPage, ["plain"]);
-    await plainPage.click("#count-row-plain button");
-    await plainPage.waitForURL("**/count-row", { timeout: 5000 }).catch(() => {});
+    /** @type {string | null} */
+    let readPlain = null;
+    if (!stopped) {
+      const plainContext = await browser.newContext();
+      // Closed however the case ends, a page that could not be opened included, which takes its
+      // routes with it.
+      try {
+        const plainPage = await plainContext.newPage();
+        plainPage.on("console", (m) => {
+          const text = m.type() === "error" ? m.text() : "";
+          if (text && !bug(text) && !cut.test(text)) errors.push(`plain post: ${text}`);
+        });
+        plainPage.on("pageerror", (e) => errors.push(`plain post: ${e.message}`));
+        await plainPage.route("**/scripts/read-key.js", readKey);
+        await plainPage.route("**/count-row", (route) => {
+          plainSent.push(new URLSearchParams(route.request().postData() ?? "").get("submit") || "(empty)");
+          return route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: "<!doctype html><title>Counted</title><p>Counted.</p>" });
+        });
+        await plainPage.goto(base);
+        await copies(plainPage, ["plain"]);
+        // In the page too: the fresh page's live updates can still be moving the copy when it is pressed.
+        await plainPage.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#count-row-plain button")).click());
+        // The post's page, within 5 s of the press.
+        if (!(await pollFor(5000, async () => plainSent.length > 0 && new URL(plainPage.url()).pathname === "/count-row"))) stopped = "the plain copy's post did not land within 5 s";
+        else readPlain = await plainPage.evaluate(() => sessionStorage.getItem("read-key")).catch(() => null);
+      } finally {
+        await plainContext.close();
+      }
+    }
     const [plainKey = "(none)"] = plainSent;
-    const readPlain = await plainPage.evaluate(() => sessionStorage.getItem("read-key")).catch(() => null);
-    await plainPage.context().close();
     const [a1, a2, b, ...more] = sent.map((s) => s.split(" ")[1]);
     check(
-      "each copy of a template's form gets a submit key of its own when first sent, kept for its retry",
-      !more.length && uuidV4.test(kept) && a1 === kept && a2 === kept && uuidV4.test(b ?? "") && b !== kept && saidA === "Counted." && saidB === "Counted." && plainSent.length === 1 && uuidV4.test(plainKey) && plainKey !== kept && plainKey !== b,
-      `${sent.join(", ")}; plain ${plainSent.join(", ") || "(none)"}; a: ${saidA}, b: ${saidB}`,
+      names[0],
+      !stopped && failedA === 502 && !more.length && uuidV4.test(kept) && a1 === kept && a2 === kept && uuidV4.test(b ?? "") && b !== kept && saidA === "Counted." && saidB === "Counted." && plainSent.length === 1 && uuidV4.test(plainKey) && plainKey !== kept && plainKey !== b,
+      `${stopped ? `${stopped}; ` : ""}${sent.join(", ")}; plain ${plainSent.join(", ") || "(none)"}; a: ${failedA ?? "no error"} then ${saidA ?? "no answer"}, b: ${saidB ?? "no answer"}`,
     );
-    check("an on:submit handler that reads a template copy's form sees the key it sends", readA === kept && readPlain === plainKey, `a: ${readA || "(empty)"}, plain: ${readPlain || "(empty)"}`);
+    check(names[1], !stopped && readA === kept && readPlain === plainKey, `${stopped ? `${stopped}; ` : ""}a: ${readA || "(empty)"}, plain: ${readPlain || "(empty)"}`);
   }
 
   // A submit button's formaction and formmethod win over the form's, as in a plain post.
@@ -595,18 +794,28 @@ export async function submitKeys(page, holdWatch, failWatch, errors, browser, bu
   // The message already says Acme from the keyed form, so the check waits for this post's own
   // answer: otherwise a slow post (Firefox) is still going out during the next check, which
   // counts the posts it sees (#161). It waits 15 s, past the 5 s most of the smoke's waits take,
-  // because a loaded Firefox has taken over 4 s to answer this post (#1149).
-  const viaButton = page
-    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 })
-    .then(async (r) => (await r.finished(), r.status()))
-    .catch(() => 0);
-  await page.click("#via-button button");
-  const viaButtonStatus = await viaButton;
-  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 15_000 }).catch(() => {});
+  // because a loaded Firefox has taken over 4 s to answer this post (#1149). The button is pressed
+  // in the page: a loaded Firefox's click can land beside a button the page has moved (#2014).
+  // The answer and its body share the 15 s from before the press, the body read in a step of its
+  // own, and the message has 15 s from then; anything that comes after its time fails the check.
+  const answered = steps(15_000, "the post was not answered within 15 s");
+  const viaResponse = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 });
+  // Its rejection is the step's, if the step is reached.
+  viaResponse.catch(() => {});
+  await press("#via-button button");
+  let viaButtonStatus = 0;
+  try {
+    const response = await answered.step(() => viaResponse);
+    await answered.step(() => response.finished());
+    viaButtonStatus = response.status();
+  } catch {
+    // Its reason is `answered.over`.
+  }
+  const watching = !!viaButtonStatus && !!(await pollFor(15_000, () => page.evaluate(() => !!document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"))));
   check(
     "a submit button's formaction and formmethod are used",
-    viaButtonStatus === 200 && ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Acme Corp"),
-    String(viaButtonStatus),
+    viaButtonStatus === 200 && watching,
+    `${answered.over || viaButtonStatus}${watching ? "" : "; no Acme Corp message within 15 s of the answer"}`,
   );
 
   // Controls named like the form's properties (`<button name="action">` makes `form.action` that

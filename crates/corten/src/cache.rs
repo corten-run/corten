@@ -38,11 +38,20 @@
 //! [`crate::security::Nonce`]), a page that draws a form's new submit key
 //! ([`crate::SubmitKey::field`]: each visitor needs a key of their own), and an answer to a request
 //! whose handler or middleware read a [`crate::Caller`]. They get `private, no-cache`, and
-//! `corten dev` logs the first three. A page that draws a submit key also loses the caching headers
-//! a CDN reads first, by name ([`CDN_CACHING`]: `CDN-Cache-Control`, `Surrogate-Control`, ...),
-//! and its `no-store` goes out `private, no-store`, for a CDN that ignores a bare one. A
-//! [`crate::live`] stream's fragments are text rendered after its headers went out, so they carry
-//! no such mark.
+//! `corten dev` logs the first three. Such an answer, and a `Public` answer to a request with
+//! credentials, is personal: whatever its `Cache-Control` says (none, `private`, `no-store`), it
+//! also loses the caching headers a CDN reads first, by name ([`CDN_CACHING`]:
+//! `CDN-Cache-Control`, `Surrogate-Control`, ...), and a `no-store` on it goes out
+//! `private, no-store`, for a CDN that ignores a bare one. A `NoStore` answer says
+//! `private, no-store` itself, and goes out so whatever a middleware made of its header since (the
+//! error page that replaces a failure it returns too); it and a `Public` one sent as the browser's
+//! alone (below, `private, no-store` where its header names `no-store`) lose those headers as
+//! well, and so does the error page for a failure no handler answered (a request refused before
+//! the handler ran, a panic, the deadline, the router's own `404`, `405` or `501`), which is
+//! private whatever it said, as is such a refusal in any other form it goes out in (a redirect, a
+//! relayed failure, a sign-in, the failure as it is or as JSON), and a [`crate::Refused`] in every
+//! form, whoever returned it. A [`crate::live`] stream's fragments are text rendered after its
+//! headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages, JSON, text and files: the whole document
 //! or body one made for a request without credentials is kept for its shared lifetime and given
@@ -152,13 +161,20 @@ impl Cache {
     fn header(self) -> HeaderValue {
         let (max_age, shared, stale, if_error) = match self.kind {
             Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
-            Kind::NoStore => return NO_STORE,
+            // `private` too: some CDNs keep an answer that says only `no-store`.
+            Kind::NoStore => return PRIVATE_NO_STORE,
             Kind::Immutable => return crate::assets::IMMUTABLE,
         };
-        let mut text = Vec::with_capacity(96);
+        // Written here and copied into a value of its own length: one allocation, where a vector
+        // with room is two (its bytes, and what shares them), and a kept answer holds the room
+        // for as long as it is kept (docs/design.md#choice-kept-pages).
+        let mut text = [0; LONGEST];
+        let mut at = 0;
         let mut push = |name: &str, n: u64| {
-            text.extend_from_slice(name.as_bytes());
-            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+            for part in [name.as_bytes(), crate::ascii::digits(n, &mut [0; 20])] {
+                text[at..at + part.len()].copy_from_slice(part);
+                at += part.len();
+            }
         };
         push("public, max-age=", max_age);
         if let Some(shared) = shared {
@@ -170,15 +186,23 @@ impl Cache {
         if if_error > 0 {
             push(", stale-if-error=", if_error);
         }
-        HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
+        HeaderValue::from_bytes(&text[..at]).expect("digits are a valid header")
     }
 }
+
+/// The longest `Cache-Control` a [`Cache`] writes: each of its four names with a number of
+/// twenty digits, the most a `u64` has.
+const LONGEST: usize = "public, max-age=, s-maxage=, stale-while-revalidate=, stale-if-error=".len() + 4 * 20;
 
 impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime() });
+        res.extensions_mut().insert(Typed {
+            named: self.kind == Kind::Immutable,
+            no_store: self.kind == Kind::NoStore,
+            lifetime: self.lifetime(),
+        });
     }
 }
 
@@ -187,7 +211,7 @@ impl IntoResponseParts for Cache {
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: false, lifetime: self.lifetime() });
+        res.extensions_mut().insert(Typed { named: false, no_store: self.kind == Kind::NoStore, lifetime: self.lifetime() });
         Ok(res)
     }
 }
@@ -198,6 +222,8 @@ impl IntoResponseParts for Cache {
 pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
+    /// A [`Cache::no_store`] answer: no cache, and so no CDN, may keep it.
+    no_store: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
 }
@@ -210,23 +236,39 @@ impl Typed {
         (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
     }
 
+    /// Whether `res` is a [`crate::NoStore`] answer: the error page that replaces it is marked
+    /// again ([`Cache::apply`]), so [`settle`] still holds it to that.
+    pub(crate) fn is_no_store(res: &Response) -> bool {
+        res.extensions().get::<Typed>().is_some_and(|typed| typed.no_store)
+    }
+
+    /// Whether `res` carries a [`Cache`] mark, its own or a kept answer's: [`settle`] holds it to
+    /// the mark (a `NoStore` one goes out `private, no-store`, a `Public` one to a request with
+    /// credentials is one visitor's) even when a middleware took its header out, so the one pass
+    /// ([`crate::security::Applied::ready`]) leaves it to the stages.
+    pub(crate) fn marked(res: &Response) -> bool {
+        res.extensions().get::<Typed>().is_some() || crate::kept::Kept::typed(res.extensions()).is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        Typed { named: false, lifetime: 60 }
+        Typed { named: false, no_store: false, lifetime: 60 }
     }
 }
 
 /// The default for what the app renders.
 pub(crate) const PRIVATE: HeaderValue = HeaderValue::from_static("private, no-cache");
 
-/// A page that draws a submit key and says `no-store`: some CDNs keep an answer that says only
-/// `no-store` (Fastly), and none keeps one that says `private`.
+/// A personal answer that says `no-store`: some CDNs keep an answer that says only `no-store`
+/// (Fastly), and none keeps one that says `private`.
 pub(crate) const PRIVATE_NO_STORE: HeaderValue = HeaderValue::from_static("private, no-store");
 
 /// The caching headers a CDN or proxy reads before `Cache-Control`, by exact name: RFC 9213's
 /// `CDN-Cache-Control`, Cloudflare's and Vercel's own, `Surrogate-Control`, Akamai's `Edge-Control`
-/// and nginx's `X-Accel-Expires`. [`settle`] removes them from a page that draws a submit key, an
-/// unstaged route's answer that sets a cookie loses them and any other `*cache-control`, and a
+/// and nginx's `X-Accel-Expires`. [`settle`] removes them from a personal answer, a `NoStore` one
+/// and a `Public` one it sends as the browser's alone, a refused write's page and the error page
+/// for a failure no handler answered lose them, an unstaged route's answer that sets a cookie or is
+/// `NoStore` loses them and any other `*cache-control`, and a
 /// [`crate::Public`] answer may not set one. A name a deployment configures for itself (RFC 9213
 /// allows one) is the deployment's.
 pub(crate) const CDN_CACHING: [&str; 6] = [
@@ -318,9 +360,32 @@ pub(crate) fn request_tags(method: &http::Method, headers: &HeaderMap, accepts_c
 /// page is private, by the request's cookie, but not the app's mistake.
 const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 
+/// Whether `headers` set a cookie other than Corten's removal of a redirect's notice. The first
+/// line settles it unless it is that removal: only then are the others read.
+fn sets_cookie(headers: &HeaderMap) -> bool {
+    let set = |cookie: &HeaderValue| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone));
+    match headers.get(header::SET_COOKIE) {
+        None => false,
+        Some(first) if set(first) => true,
+        Some(_) => headers.get_all(header::SET_COOKIE).iter().skip(1).any(set),
+    }
+}
+
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
-/// of a shared one when the response may differ between users.
+/// of a shared one when the response may differ between users. An answer Corten knows is personal
+/// (it sets a cookie, has the nonce, drew a submit key, read a caller, is a [`Cache`] answer to a
+/// request with credentials, or another Corten app marked it [`Personal`]), one
+/// [`crate::NoStore`] keeps out of every cache, and a page route's
+/// [`Cache`] answer asked for as anything but its full document also lose the caching headers a
+/// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
+/// out `private, no-store` whatever a middleware made of its header.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    // An answer marked as no handler's own ([`Unshared`]): never shared, whatever it says and
+    // whatever status it goes out with. The usual answer has no extensions, so this is a null check.
+    if res.extensions().get::<Unshared>().is_some() {
+        settle_unshared(res);
+        return;
+    }
     // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
     // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays,
     // and no tag either.
@@ -328,86 +393,73 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if drew_key {
         drop_keyed_reuse(res.headers_mut());
     }
-    // One lookup for the usual response, which says nothing.
+    // Another Corten app settled it as one visitor's ([`Personal`]) and a middleware here relays
+    // it: it is that visitor's still, as if this request had read the caller.
+    let marked = res.extensions().get::<Personal>().is_some();
+    let caller = seen.caller || marked;
+    // The directives of every line count, as HTTP joins them (a second line is rare: only a header
+    // written by hand has one). Only a plain `private` makes the answer private:
+    // `private="set-cookie"` still lets a shared cache keep the rest. A `no-store` or `private` is
+    // trusted as written only when every reader sees it alike: one line of plain text with no
+    // quoted value. Otherwise a `no-store` goes out as one line of plain text (the lines joined, or
+    // `no-store` alone beside a quoted value or a byte that is not text), and such a `private` is
+    // not trusted (an answer that sets a cookie or read a caller is still made private below).
+    // With `must-understand`, a cache that knows the status may ignore `no-store` (RFC 9111
+    // 5.2.2.3), `must-understand` with or without a value: the header is left as written unless the
+    // answer is personal, and a `private` beside them is not trusted.
+    let (mut no_store, mut is_private, mut must_understand) = (false, false, false);
+    let (mut lines, mut quoted, mut text) = (0, false, true);
+    // A kept answer given again carries its mark with what was kept, not as an extension.
+    let typed = res.extensions().get::<Typed>().copied().or_else(|| crate::kept::Kept::typed(res.extensions()));
+    // For a partial (below), whether any reader could find a `no-store` in its header
+    // (`no-store=1`, beside `must-understand`), read with the rest rather than looked up again.
+    let mut mentioned = false;
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
-            return;
+            // The usual response says nothing and has no [`Cache`] mark: private already, and one
+            // Corten knows is personal loses the CDN's own headers too, for two flags and one
+            // lookup. A marked one whose header a middleware took out is settled below as one that
+            // says `private, no-cache`.
+            if typed.is_none() {
+                // `caller` first: a marked answer needs no look for its cookie.
+                let personal = caller || seen.nonce || sets_cookie(res.headers());
+                if !drew_key && personal {
+                    drop_cdn_caching(res.headers_mut());
+                }
+                if !marked && personal {
+                    res.extensions_mut().insert(Personal);
+                }
+                return;
+            }
+            (is_private, lines) = (true, 1);
         }
-        header::Entry::Occupied(mut entry) => {
-            // The directives of every line count, as HTTP joins them (a second line is rare: only
-            // a header written by hand has one). Only a plain `private` makes the answer private:
-            // `private="set-cookie"` still lets a shared cache keep the rest. A `no-store` or
-            // `private` is trusted as written only when every reader sees it alike: one line of
-            // plain text with no quoted value. Otherwise a `no-store` goes out as one line of
-            // plain text (the lines joined, or `no-store` alone beside a quoted value or a byte
-            // that is not text), and such a `private` is not trusted (an answer that sets a cookie
-            // or read a caller is still made private below). With `must-understand`, a cache that
-            // knows the status may ignore `no-store` (RFC 9111 5.2.2.3), `must-understand` with
-            // or without a value: the header is left as written unless the answer is personal, and a `private`
-            // beside them is not trusted.
-            let (mut no_store, mut private, mut must_understand) = (false, false, false);
-            let (mut lines, mut quoted, mut text) = (0, false, true);
+        // Corten's own default alone on an answer with no [`Cache`] mark, as the error page for a
+        // failure no handler answered already has it: a plain `private`, without reading its
+        // directives.
+        header::Entry::Occupied(entry) if typed.is_none() && entry.get() == PRIVATE && entry.iter().nth(1).is_none() => {
+            (is_private, lines) = (true, 1);
+        }
+        header::Entry::Occupied(entry) => {
             for line in entry.iter() {
                 let says = says(line.as_bytes());
                 no_store |= says.no_store;
-                private |= says.private;
+                is_private |= says.private;
                 must_understand |= says.must_understand;
                 lines += 1;
                 quoted |= line.as_bytes().contains(&b'"');
                 text &= line.to_str().is_ok();
-            }
-            let plain = lines == 1 && !quoted && text;
-            if no_store && !must_understand {
-                // A page that drew a submit key says `private` too, for a CDN that ignores
-                // `no-store`.
-                if drew_key && !(private && plain) {
-                    entry.insert(PRIVATE_NO_STORE);
-                } else if quoted || !text {
-                    entry.insert(NO_STORE);
-                } else if lines > 1 {
-                    let mut joined = Vec::new();
-                    for line in entry.iter() {
-                        if !joined.is_empty() {
-                            joined.extend_from_slice(b", ");
-                        }
-                        joined.extend_from_slice(line.as_bytes());
-                    }
-                    entry.insert(HeaderValue::from_bytes(&joined).unwrap_or(NO_STORE));
+                if seen.partial {
+                    mentioned |= mentions_no_store(line.as_bytes());
                 }
-                return;
-            }
-            // With `must-understand`, a `no-store` any reader could find (`no-store=1` too) is one
-            // a cache that knows the status may ignore: `private` alone does not keep the browser
-            // out.
-            if private && plain && !(must_understand && entry.iter().any(|line| mentions_no_store(line.as_bytes()))) {
-                return;
             }
         }
     }
-    // A personal answer whose header is replaced below gets `no-store` if any reader could find
-    // one in it (`no-store=1`, inside a quoted value, with `must-understand`): stricter than
-    // `private, no-cache` for every reading. Read only when the header is replaced.
-    let personal = |headers: &HeaderMap| {
-        if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
-            if drew_key {
-                PRIVATE_NO_STORE
-            } else {
-                NO_STORE
-            }
-        } else {
-            PRIVATE
-        }
-    };
-    let typed = res.extensions().get::<Typed>().copied();
+    let plain = lines == 1 && !quoted && text;
+    let cookie = !seen.nonce && sets_cookie(res.headers());
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
-    } else if res
-        .headers()
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .any(|cookie| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone)))
-    {
+    } else if cookie {
         Some("it sets a cookie")
     } else if drew_key {
         // The mark that keeps its tag off and the app from keeping it: each visitor needs a key
@@ -416,26 +468,114 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     } else {
         None
     };
+    // The answer is this visitor's, whoever set its header.
+    let asked_by = typed.is_some_and(|typed| seen.credentials && !typed.named);
+    let personal = bug.is_some() || caller || asked_by;
+    // What makes it personal goes on it as a mark, for an app that relays it inline: a middleware
+    // there may take its cookie off and keep the rest (a key it drew is marked already).
+    if !marked && (seen.nonce || cookie || seen.caller || asked_by) {
+        res.extensions_mut().insert(Personal);
+    }
+    // `NoStore`, whatever a middleware made of its header since.
+    let kept_out = typed.is_some_and(|typed| typed.no_store);
+    // A page route's answer asked for as anything but its full document is the browser's alone:
+    // a CDN that read its own header would keep this form at the page's URL.
+    let partial = seen.partial && typed.is_some();
     let headers = res.headers_mut();
+    // A CDN reads its own caching header before `Cache-Control`, so none of those Corten names stays
+    // on any of these, whatever `Cache-Control` says (a page that drew a key lost them above).
+    if !drew_key && (personal || kept_out || partial) {
+        drop_cdn_caching(headers);
+    }
+    if kept_out {
+        // As `NoStore` writes it: `private` too, for a CDN that ignores a bare `no-store`.
+        headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+        return;
+    }
+    if no_store && !must_understand {
+        // A personal answer, and one sent as the browser's alone, says `private` too, for a CDN
+        // that ignores `no-store`.
+        if (personal || partial) && !(is_private && plain) {
+            headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+        } else if quoted || !text {
+            headers.insert(header::CACHE_CONTROL, NO_STORE);
+        } else if lines > 1 {
+            let mut joined = Vec::new();
+            for line in headers.get_all(header::CACHE_CONTROL) {
+                if !joined.is_empty() {
+                    joined.extend_from_slice(b", ");
+                }
+                joined.extend_from_slice(line.as_bytes());
+            }
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_bytes(&joined).unwrap_or(NO_STORE));
+        }
+        return;
+    }
+    // With `must-understand`, a `no-store` any reader could find (`no-store=1` too) is one a cache
+    // that knows the status may ignore, and a partial keeps any such `no-store` (below): `private`
+    // alone does not keep the browser out.
+    if is_private
+        && plain
+        && !(if partial {
+            mentioned
+        } else {
+            must_understand && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()))
+        })
+    {
+        return;
+    }
     if let Some(bug) = bug {
         if seen.dev {
             tracing::warn!("corten: {path} is marked for shared caches, but {bug}, so it was sent private, no-cache (or no-store, if its header names it)");
         }
-        headers.insert(header::CACHE_CONTROL, personal(headers));
-        return;
     }
-    if seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named) {
-        headers.insert(header::CACHE_CONTROL, personal(headers));
+    if personal {
+        // `private, no-store` if any reader could find a `no-store` in it (`no-store=1`, inside a
+        // quoted value, with `must-understand`): stricter than `private, no-cache` for every
+        // reading, and `private` for a CDN that ignores `no-store`.
+        let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
+        headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
         return;
     }
     let Some(typed) = typed else { return };
     if seen.partial {
-        let browser = private(headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).unwrap_or(""));
-        headers.insert(header::CACHE_CONTROL, browser);
+        // A `no-store` any reader could find (`no-store=1`, beside `must-understand`) is kept,
+        // with `private` for a CDN that ignores a bare one; otherwise the same lifetime.
+        if mentioned {
+            headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+            return;
+        }
+        // The first line's lifetime, in place of every line, through one lookup.
+        if let header::Entry::Occupied(mut entry) = headers.entry(header::CACHE_CONTROL) {
+            let browser = private(entry.get().to_str().unwrap_or(""));
+            entry.insert(browser);
+        }
     }
     if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
+}
+
+/// The mark of an answer [`settle`] found to be one visitor's: it sets a cookie, read a caller,
+/// has this request's nonce, or is a [`Cache`] answer to a request with credentials ([`Seen`]); an
+/// unstaged route's answer that sets a cookie (`unstaged_headers` in `route.rs`); or the MCP
+/// endpoint made it for a caller its check found (`personal`). A submit key it drew is
+/// marked already ([`Unrepeatable`]). Put on as the answer is settled, it stays on the answer as
+/// [`Unshared`] does: another Corten app whose staged middleware relays it inline, as it is or
+/// changed in place (its cookie taken off included), settles it as personal too ([`settle`]),
+/// though that app's own request read no caller, so a middleware there cannot give it a CDN's
+/// lifetime. An answer made in its place is its own, and an answer nothing made personal is not
+/// marked. Only in process: an app that relays it over HTTP sees its headers alone.
+#[derive(Clone, Copy)]
+pub(crate) struct Personal;
+
+/// `res`, made for one caller (the MCP endpoint's answer to a caller its check found, or any answer
+/// its endpoint-wide check let through), marked [`Personal`]: settled as one visitor's here and by
+/// an app that relays it inline.
+#[cfg(feature = "agent")]
+pub(crate) fn personal(mut res: Response) -> Response {
+    res.extensions_mut().insert(Personal);
+    res
 }
 
 /// Removes the caching headers a CDN reads before `Cache-Control` ([`CDN_CACHING`]) from an
@@ -459,17 +599,125 @@ pub(crate) fn drop_keyed_reuse(headers: &mut HeaderMap) {
     headers.remove(header::ETAG);
 }
 
-/// The `Cache-Control` for a page that drew a submit key and goes out without [`settle`] (a
-/// refused write's error page), with the CDN caching headers and the tag it had removed
-/// ([`drop_keyed_reuse`]): `private, no-store` where it names `no-store`, as [`settle`] gives
-/// one, and the default otherwise.
-pub(crate) fn drawn_unsettled(headers: &mut HeaderMap) -> HeaderValue {
-    drop_keyed_reuse(headers);
-    if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
-        PRIVATE_NO_STORE
-    } else {
-        PRIVATE
+/// The mark of an answer that is no handler's own: every failure or refusal Corten makes itself,
+/// rather than one a handler chose to answer with, and the page, redirect or plain text Corten draws
+/// in the place of one. It is put on as the answer is made, by one of three constructors:
+/// [`crate::Error::corten`] for a failure made as an error (an extractor's, a protocol's, a debug
+/// build's error about the app's code, a body that cannot be read), [`unshared`] for one made as a
+/// response (the router's `404`, `405`, `501` and named post's `400`, a typed [`crate::Refused`]
+/// whoever returned it, a panic or a passed deadline, a static file the version lacks), and
+/// [`unshared_in_place_of`] for one sent in the place of an answer Corten could not send (a page
+/// it could not fill or keep, a debug build's diagnostic), which keeps that answer's `NoStore`. A
+/// typed rejection ([`crate::extract::BodyRejection`], the form's and the path's) marks itself as
+/// it becomes a response, and every extractor's rejection is marked where the handler or the error
+/// page meets it too. The audit of these places is in #1890; `tests::cache` checks each one and
+/// holds the crate's source to the constructors. Such an answer may be about who is asking (the
+/// error page can read the request's `Cookie` and `Authorization` without reading a caller), so it
+/// is never shared, in whatever form and with whatever status it goes out ([`settle`]). The mark
+/// stays on the answer: a middleware that changes the answer in place (its status, headers or
+/// body) keeps it, another Corten app that relays the answer inline settles it the same way, and
+/// an answer a middleware builds in its place is its own. A handler's own failure (its `404`, an
+/// `Error` it made) is its answer, and the error page in its place takes only its marks
+/// ([`Marks`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Unshared;
+
+/// `res`, a failure or refusal Corten made itself, marked [`Unshared`].
+#[cold]
+pub(crate) fn unshared(mut res: Response) -> Response {
+    res.extensions_mut().insert(Unshared);
+    res
+}
+
+/// `failed`, a failure Corten sends in the place of the answer whose extensions are `answer`, which
+/// it could not send as it was (a page it could not fill or keep, a debug build's diagnostic):
+/// marked [`Unshared`] whatever that answer was, and a `NoStore` one's replacement is `NoStore` too
+/// ([`Marks`]), whatever a middleware then makes of its headers.
+#[cold]
+pub(crate) fn unshared_in_place_of(answer: &http::Extensions, mut failed: Response) -> Response {
+    Marks { unshared: true, ..Marks::of(answer) }.put(&mut failed);
+    failed
+}
+
+/// What an answer's replacement keeps of it, read from the answer it replaces: that it is no
+/// handler's own ([`Unshared`]) and that it is a [`crate::NoStore`] answer. The error page in a
+/// failure's place, the plain text in a failed error page's, and a debug build's diagnostic in an
+/// answer's each read them with [`Marks::of`] and put them on what they send ([`Marks::put`]), so
+/// [`settle`] holds the replacement to what held the answer, whatever a middleware made of its
+/// headers.
+#[derive(Clone, Copy)]
+#[must_use = "put the marks on the answer that replaces the one they were read from"]
+pub(crate) struct Marks {
+    pub(crate) unshared: bool,
+    pub(crate) no_store: bool,
+}
+
+impl Marks {
+    /// The marks of the answer whose extensions are `answer`.
+    #[inline]
+    pub(crate) fn of(answer: &http::Extensions) -> Self {
+        Marks {
+            unshared: answer.get::<Unshared>().is_some(),
+            no_store: answer.get::<Typed>().is_some_and(|typed| typed.no_store),
+        }
     }
+
+    /// Puts the marks on `res`, the answer that replaces the one they were read from: [`Unshared`],
+    /// and a `NoStore` one's `Cache-Control` and its mark ([`Cache::apply`]).
+    #[inline]
+    pub(crate) fn put(self, res: &mut Response) {
+        if self.unshared {
+            res.extensions_mut().insert(Unshared);
+        }
+        if self.no_store {
+            Cache::no_store().apply(res);
+        }
+    }
+}
+
+/// Settles an [`Unshared`] answer: the default, whatever it said, and none of the CDN caching
+/// headers written on it. One that names `no-store`, or is a `NoStore` answer whatever a
+/// middleware made of its header, goes out `private, no-store`, as [`settle`] gives a personal one.
+/// One that drew a submit key ([`Unrepeatable`], an error page with a form) loses a tag it was
+/// given too ([`drop_keyed_reuse`]).
+#[cold]
+fn settle_unshared(res: &mut Response) {
+    let kept_out = Typed::is_no_store(res);
+    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    let headers = res.headers_mut();
+    if drew_key {
+        drop_keyed_reuse(headers);
+    } else {
+        drop_cdn_caching(headers);
+    }
+    let no_store = kept_out || headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
+    headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
+}
+
+/// Marks and settles a refused write's answer, which goes out without [`settle`], as `settle` does
+/// an [`Unshared`] one: an app that relays it inline settles it the same way.
+pub(crate) fn settle_refused(res: &mut Response) {
+    res.extensions_mut().insert(Unshared);
+    settle_unshared(res);
+}
+
+/// The empty answer sent in place of one whose exact-size body failed as it was read after the
+/// cache rules ran ([`settle`]): to be tagged ([`tag`]) or compressed. It is Corten's, not the
+/// handler's, and nothing it says is the answer's: marked [`Unshared`] and settled here, since no
+/// stage after this one settles it, `private, no-store` (an empty answer no cache may keep in place
+/// of the page), with none of the caching headers a CDN reads first, and without the answer's
+/// validators or length, which were about the body it does not have. Its status is the answer's.
+/// It is a [`crate::NoStore`] answer too ([`Marks`]), so an app that relays it inline and rewrites
+/// its `Cache-Control` still sends it `private, no-store`.
+#[cold]
+pub(crate) fn unread(mut parts: http::response::Parts) -> Response {
+    for name in [header::ETAG, header::LAST_MODIFIED, header::CONTENT_LENGTH, header::CONTENT_ENCODING, header::CONTENT_RANGE] {
+        parts.headers.remove(name);
+    }
+    let mut res = Response::from_parts(parts, Body::empty());
+    drop_cdn_caching(res.headers_mut());
+    Marks { unshared: true, no_store: true }.put(&mut res);
+    res
 }
 
 /// In a debug build: whether an answer's headers, as sent, let a shared cache keep it: one of
@@ -548,9 +796,11 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
         || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
+            // The default says neither, and most answers have it: it is compared, not searched.
             // An immutable answer is never asked about again.
-            mentions_no_store(line.as_bytes())
-                || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable"))
+            *line != PRIVATE
+                && (mentions_no_store(line.as_bytes())
+                    || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")))
         })
         || res.extensions().get::<crate::answer::Relayed>().is_some()
         || res.extensions().get::<Unrepeatable>().is_some()
@@ -562,7 +812,7 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
     // value's stored form, which it finds by this pointer).
     let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
-        return Response::from_parts(parts, Body::empty());
+        return unread(parts);
     };
     // A kept answer's body is read once, for its first tag.
     let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers);
@@ -666,10 +916,14 @@ pub(crate) fn names(line: &[u8], opaque: &[u8]) -> bool {
 /// Whether a `Cache-Control` line has `no-store` anywhere in it, as a reader that matches text
 /// would find it (case aside).
 pub(crate) fn mentions_no_store(line: &[u8]) -> bool {
-    line.windows(8).any(|w| w.eq_ignore_ascii_case(b"no-store"))
+    // Only where an `n` is: most lines have few.
+    memchr::memchr2_iter(b'n', b'N', line).any(|at| line.get(at..at + 8).is_some_and(|w| w.eq_ignore_ascii_case(b"no-store")))
 }
 
-/// `Cache-Control: no-store`, as `NoStore` writes it.
+/// A bare `Cache-Control: no-store`: what a hand-written header that names `no-store` goes out as
+/// where a reader could take it another way (a quoted value, a byte that is not text), and what the
+/// error page in place of a handler's own failure that said `no-store` carries. `NoStore` writes
+/// [`PRIVATE_NO_STORE`], as a personal answer that names `no-store` goes out.
 pub(crate) const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
 
 /// Whether a `Cache-Control` line says `no-store` and `private`, each as a directive without a
@@ -757,6 +1011,35 @@ mod tests {
         Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }
     }
 
+    /// [`tag`] compares a `Cache-Control` line with the default before it searches the line for
+    /// what would leave the answer untagged: the default says neither.
+    #[test]
+    fn the_default_cache_control_says_nothing_that_leaves_an_answer_untagged() {
+        let line = PRIVATE;
+        let line = line.as_bytes();
+        assert!(!mentions_no_store(line));
+        assert!(!directives(line).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")));
+    }
+
+    #[test]
+    fn the_quick_no_store_search_agrees_with_the_plain_one() {
+        for line in [
+            "no-store",
+            "No-Store",
+            "private, no-store=1",
+            "private, NO-STOREx",
+            "nnno-store",
+            "private, no-cache",
+            "no-stor",
+            "n",
+            "",
+            "public, max-age=60, no-cache=\"no-store\"",
+        ] {
+            let plain = line.as_bytes().windows(8).any(|w| w.eq_ignore_ascii_case(b"no-store"));
+            assert_eq!(mentions_no_store(line.as_bytes()), plain, "{line}");
+        }
+    }
+
     #[test]
     fn if_none_match_names_a_tag_weakly_in_a_list_that_parses() {
         let ours = br#""0123456789abcdef""#;
@@ -802,7 +1085,7 @@ mod tests {
             res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
         }
         if typed {
-            res.extensions_mut().insert(Typed { named: false, lifetime: 60 });
+            res.extensions_mut().insert(Typed::for_test());
         }
         if cookie {
             res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));
@@ -844,7 +1127,7 @@ mod tests {
             "public, max-age=60, stale-while-revalidate=600"
         );
         assert_eq!(Cache::public(Duration::from_millis(1500)).header(), "public, max-age=1", "whole seconds");
-        assert_eq!(Cache::no_store().stale_while_revalidate(minute).header(), "no-store");
+        assert_eq!(Cache::no_store().stale_while_revalidate(minute).header(), "private, no-store");
         let day = Duration::from_secs(86_400);
         assert_eq!(Cache::public(minute).shared(day).header(), "public, max-age=60, s-maxage=86400");
         assert_eq!(
@@ -852,7 +1135,7 @@ mod tests {
             "public, max-age=60, s-maxage=86400, stale-while-revalidate=3600",
             "in either order"
         );
-        assert_eq!(Cache::no_store().shared(day).header(), "no-store");
+        assert_eq!(Cache::no_store().shared(day).header(), "private, no-store");
         assert_eq!(
             Cache::public(minute).stale_if_error(day).stale_while_revalidate(minute).header(),
             "public, max-age=60, stale-while-revalidate=60, stale-if-error=86400",
@@ -873,8 +1156,14 @@ mod tests {
             "neither stale window drops a shared age set before it"
         );
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
-        assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
+        assert_eq!(Cache::no_store().stale_if_error(day).header(), "private, no-store");
         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
+        // The longest it writes, every number twenty digits, fills what it is written in.
+        let most = Duration::from_secs(u64::MAX);
+        let longest = Cache::public(most).shared(most).stale_while_revalidate(most).stale_if_error(most).header();
+        let n = u64::MAX;
+        let text = format!("public, max-age={n}, s-maxage={n}, stale-while-revalidate={n}, stale-if-error={n}");
+        assert_eq!((longest.to_str().ok(), text.len()), (Some(text.as_str()), LONGEST));
     }
 
     #[test]
@@ -899,7 +1188,7 @@ mod tests {
             assert_eq!(settled(public, typed, seen(), true), "private, no-cache", "it sets a cookie");
         }
         assert_eq!(settled(Some("Private, max-age=60"), true, Seen { nonce: true, ..seen() }, true), "Private, max-age=60");
-        assert_eq!(settled(Some("no-store"), true, Seen { caller: true, ..seen() }, true), "no-store");
+        assert_eq!(settled(Some("no-store"), true, Seen { caller: true, ..seen() }, true), "private, no-store");
     }
 
     /// A page that drew a submit key for this request ([`Unrepeatable`]) is the browser's alone

@@ -833,7 +833,8 @@ pub use corten_macros::UrlValue;
 /// none of the app's stages ([`crate::middleware`]), so no same-origin check, no signal or
 /// deadline, no middleware (the app's, an area's or an API's), no error page, security headers,
 /// `Cache-Control`, tag or compression. The router runs what it keeps around its handler in their
-/// place: the host check every request meets (`421` for a name the app does not answer to), `X-Content-Type-Options:
+/// place: the host check every request meets (`421` for a name the app does not answer to, `400` for a
+/// request HTTP does not allow), `X-Content-Type-Options:
 /// nosniff` and `Content-Security-Policy: sandbox` on its answer, a panic answered `500`, and,
 /// under an API's prefix, the API's JSON for a failure. Its handler's answer is otherwise sent as
 /// it made it, a raw [`crate::response::Response`] too, and every route beside it keeps every
@@ -3895,7 +3896,7 @@ impl ParamsRejection {
         use crate::response::IntoResponse as _;
         tracing::error!("corten: {why}");
         let status = http::StatusCode::INTERNAL_SERVER_ERROR;
-        ParamsRejection(Box::new((status, format!("corten: {why}")).into_response()))
+        ParamsRejection(Box::new(crate::cache::unshared((status, format!("corten: {why}")).into_response())))
     }
 }
 
@@ -4560,15 +4561,17 @@ fn written_checked<R: Route + ?Sized>() {
 /// What a route that says `unstaged` goes through in place of the app's stages, which
 /// `App::router` gives it: the router's own `404` for a segment without the text it writes after
 /// a parameter, its `405`, and its handler's answer all meet it. The host check every request
-/// meets comes first (a name the app does not answer to gets a `421`, and nothing else runs). Every
+/// meets comes first (a name the app does not answer to gets a `421`, a request HTTP does not
+/// allow a `400`, and nothing else runs). Every
 /// answer then gets `X-Content-Type-Options: nosniff`, so a browser takes it only as the type it
 /// says (a page of the app's cannot load it as a script, since `script-src 'self'` trusts every
 /// URL of the app's), and a `Content-Security-Policy: sandbox` of its own beside any policy the
 /// handler set, since a browser enforces each: whatever its type, a document it sends (an uploaded
 /// SVG) runs no script on the app's origin. Neither reads the answer's type or policy, so none fools
 /// them; an unstaged route is for data, and an answer whose script must run is not one. An answer
-/// that sets a cookie is `private, no-cache` (`no-store` when it says one), with no CDN's own
-/// caching header, so no shared cache hands one visitor's cookie to another. A handler that panics
+/// that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), with no CDN's own
+/// caching header, so no shared cache hands one visitor's cookie to another, and is marked as that
+/// visitor's, as a staged one is, for an app that relays it inline. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
 /// the connection. A handler whose answer may be `Public` is watched for a form's new submit key
 /// ([`Watched`]), and an answer whose handler drew one is shared with no cache either. Under an
@@ -4587,8 +4590,7 @@ pub(crate) struct Lane {
 impl crate::router::Stages for Lane {
     #[inline]
     fn run(self: std::sync::Arc<Self>, req: crate::http::Request, route: &crate::router::Route) -> crate::router::Answering {
-        if !self.hosts.answers(&req) {
-            let mut res = crate::security::misdirected();
+        if let Some(mut res) = self.hosts.asked(&req).refusal() {
             res.headers_mut().insert(http::header::CACHE_CONTROL, crate::cache::PRIVATE);
             return Box::pin(std::future::ready(unstaged_headers(res)));
         }
@@ -4615,7 +4617,10 @@ where
     })
     .await;
     let res = polled.unwrap_or_else(|| {
-        crate::response::IntoResponse::into_response((http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
+        crate::cache::unshared(crate::response::IntoResponse::into_response((
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal Server Error",
+        )))
     });
     let res = unstaged_headers(res);
     match &lane.json {
@@ -4627,36 +4632,37 @@ where
     }
 }
 
-/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
+/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie or is a
+/// [`crate::NoStore`] answer (a relayed upstream's caching headers included). One that sets a
+/// cookie is marked [`crate::cache::Personal`] too, as a staged answer that sets one is: a staged
+/// middleware of another Corten app that relays it inline and takes the cookie off still settles it
+/// as one visitor's.
 fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Response {
     use http::header;
     use http::HeaderValue;
+    let kept_out = crate::cache::Typed::is_no_store(&res);
+    let cookie = res.headers().contains_key(header::SET_COOKIE);
     let headers = res.headers_mut();
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
-    if headers.contains_key(header::SET_COOKIE) {
-        unshared(headers, crate::cache::NO_STORE);
+    if kept_out || cookie {
+        unshared(headers, kept_out);
+    }
+    if cookie {
+        res.extensions_mut().insert(crate::cache::Personal);
     }
     res
 }
 
 /// `headers` of an answer no shared cache may keep: `Cache-Control: private, no-cache`, or
-/// `no_store` when it names `no-store` (`private, no-store` when it says a plain `private` too,
-/// as a keyed answer's watch writes it, for a CDN that ignores `no-store`), and none of the
-/// caching headers a CDN reads first.
-fn unshared(headers: &mut http::HeaderMap, no_store: http::HeaderValue) {
+/// `private, no-store` when it names `no-store` or is kept out of every cache (`no_store`, a
+/// [`crate::NoStore`] answer whatever its header says), and none of the caching headers a CDN
+/// reads first.
+fn unshared(headers: &mut http::HeaderMap, no_store: bool) {
     use http::header;
-    let (mut names_no_store, mut private) = (false, false);
-    for line in headers.get_all(header::CACHE_CONTROL) {
-        names_no_store |= crate::cache::mentions_no_store(line.as_bytes());
-        private |= crate::cache::says(line.as_bytes()).private;
-    }
-    let policy = match (names_no_store, private) {
-        (false, _) => crate::cache::PRIVATE,
-        (true, true) => crate::cache::PRIVATE_NO_STORE,
-        (true, false) => no_store,
-    };
-    headers.insert(header::CACHE_CONTROL, policy);
+    let no_store =
+        no_store || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+    headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
     // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a [`crate::Public`]
     // answer may not set, and the others Corten names ([`crate::cache::CDN_CACHING`]).
     let cdn: Vec<header::HeaderName> = headers
@@ -4724,7 +4730,7 @@ impl<F: std::future::Future<Output = crate::response::Response>> std::future::Fu
 #[inline(never)]
 fn drew_key(res: &mut crate::response::Response) {
     let headers = res.headers_mut();
-    unshared(headers, crate::cache::PRIVATE_NO_STORE);
+    unshared(headers, false);
     headers.remove(http::header::ETAG);
 }
 
@@ -5446,11 +5452,39 @@ pub mod __private {
     }
 
     /// A route's path parameters, read for [`super::Params`]: `()` when its path has none.
-    pub trait ReadPath: Sized + Send {
+    ///
+    /// It is given the whole request, so it is sealed: `Params` counts as an input whose reading a
+    /// kept page's key covers (`corten::answer::Anonymous`), which holds only while what reads a
+    /// route's path is Corten's own. An impl written by hand, which could read a header, does not
+    /// compile:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::route::{ParamsRejection, __private::ReadPath};
+    ///
+    /// struct Agent;
+    ///
+    /// impl ReadPath for Agent {
+    ///     fn read(
+    ///         parts: &mut corten::http::request::Parts,
+    ///     ) -> impl std::future::Future<Output = Result<Self, ParamsRejection>> + Send {
+    ///         let _ = parts.headers.get("user-agent");
+    ///         std::future::ready(Ok(Agent))
+    ///     }
+    /// }
+    /// ```
+    pub trait ReadPath: Sized + Send + read_path::Sealed {
         fn read(
             parts: &mut http::request::Parts,
         ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send;
     }
+
+    mod read_path {
+        /// Keeps [`super::ReadPath`] to the readers Corten writes.
+        pub trait Sealed {}
+    }
+
+    impl read_path::Sealed for () {}
+    impl<T> read_path::Sealed for InPath<T> {}
 
     impl ReadPath for () {
         #[inline]

@@ -103,7 +103,7 @@ pub trait Answer: IntoResponse + Sized {
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
     /// The answer is one whole body that only the handler's inputs decide (JSON, text, a file): what the
-    /// app keeps for a [`Public`] route where it compresses the body, as it keeps a page
+    /// app keeps for a [`Public`] route from 1,024 bytes, as it keeps a page
     /// ([`crate::kept`]). Not a public API:
     /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
     /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
@@ -1375,7 +1375,7 @@ impl JsonError {
             std::panic::Location::caller()
         );
         assert!(!strict, "corten: {message}");
-        JsonError::Error(Error::new(message))
+        JsonError::Error(Error::corten(message))
     }
 }
 
@@ -1565,14 +1565,16 @@ impl Answer for Relay {
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
-/// as any `Public` handler cannot. A [`Public::new`] one the app compresses (1,024 bytes or
-/// more of a type such as CSV or SVG, in a build with the `compress` feature) is kept by the app
+/// as any `Public` handler cannot. A [`Public::new`] one of 1,024 bytes or more, whatever its
+/// type (a CSV, an SVG, a PNG, a PDF), is kept by the app
 /// as `Public` text is, with its headers, and given again in the handler's place to a request
 /// that shows nothing about who asks, until its lifetime ends
-/// ([`App::kept_answers`](crate::App::kept_answers)); any other from such a route is the
-/// handler's for every request: a smaller one, a picture of a type the app does not compress, a
-/// stream, an immutable one, and any from an unstaged route. One a page route answers in its
-/// page's place ([`PageOr`]) is kept as that page would be, whatever its type.
+/// ([`App::kept_answers`](crate::App::kept_answers)): the app then holds a second copy of its
+/// bytes while it is kept, and makes its `ETag` once and not for each such request. Any other from such
+/// a route is the handler's for every request: a smaller one, a stream, an immutable one, one
+/// larger than an eighth of what the app keeps, and any from an unstaged route. One a page
+/// route answers in its page's place ([`PageOr`]) is kept as that page would be, also under
+/// 1,024 bytes.
 ///
 /// ```
 /// use corten::{prelude::*, Media};
@@ -1603,6 +1605,8 @@ impl Media {
         use http::header;
         use http::HeaderValue;
         let mut res = Response::new(crate::body::Body::from(bytes.into()));
+        // Room for the headers `App` adds too, so the map is allocated once.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         Media(res)
     }
@@ -1709,6 +1713,8 @@ impl Media {
             }
         });
         let mut res = Response::new(crate::body::Body::from_stream(checked));
+        // Room for the headers `App` adds too, as `Media::new` leaves.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         res.extensions_mut().insert(Streamed);
         Media(res)
@@ -2421,12 +2427,14 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
-/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
-/// statement, a one-time code. `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's
-/// back/forward cache may not restore the page either. It applies to a failure the handler returns
-/// too: the error page that replaces it is `no-store`. A request refused before the handler runs
-/// (a path that does not parse), a handler that panics and one past its deadline never reach it,
-/// and get the default. In a routes module the route can say it instead,
+/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: private, no-store`,
+/// `private` for a CDN that ignores a bare `no-store`): a statement, a one-time code.
+/// `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's back/forward cache may not
+/// restore the page either. It applies to a failure the handler returns too: the error page that
+/// replaces it is `private, no-store`. A request refused before the handler runs
+/// (a path that does not parse), a handler that panics and one past its deadline never reach it:
+/// their error page is never shared either, but is `private, no-cache` unless a middleware's
+/// header named `no-store`. In a routes module the route can say it instead,
 /// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its
 /// `?`, and a request its extractors refuse is `no-store` too; `no_store(post)` covers only the
 /// methods it names (see [`crate::routes`]).
@@ -2559,15 +2567,42 @@ pub trait Anonymous {
     ///     const KEYED: corten::answer::sealed::Keyed = corten::answer::sealed::Keyed(true);
     /// }
     /// ```
+    ///
+    /// Corten's own inputs are keyed only as Corten fills them: a `Form` of a type its extractor
+    /// cannot read, which only an extractor of the app's own could fill, is not one at all.
+    ///
+    /// ```
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// input::<corten::Form<String>>();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// struct Raw;
+    /// input::<corten::Form<Raw>>();
+    /// ```
     #[doc(hidden)]
     const KEYED: sealed::Keyed = sealed::Keyed(false);
+
+    /// Whether it is keyed in a place before the handler's last, where Corten fills only what
+    /// reads the request's head (`FromRequestParts`): a `Form` there is the app's own.
+    #[doc(hidden)]
+    const KEYED_BEFORE_LAST: sealed::Keyed = Self::KEYED;
 }
 
-impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {
+// Each is keyed only with the bounds Corten's own extractor for it has, so a type that falls
+// outside them, which the app could fill with an extractor of its own for Corten's type, is not.
+impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R>
+where
+    R::Path: crate::route::__private::ReadPath,
+    R::Params: Send,
+{
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T> Anonymous for crate::Form<T> {
+impl<T: serde::de::DeserializeOwned> Anonymous for crate::Form<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
+    // Corten reads a form only as the last argument, from the body.
+    const KEYED_BEFORE_LAST: sealed::Keyed = sealed::Keyed(false);
 }
 impl<T> Anonymous for State<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
@@ -2584,9 +2619,9 @@ impl Anonymous for Method {
 impl Anonymous for Uri {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T: Anonymous> Anonymous for Option<T> {
-    const KEYED: sealed::Keyed = T::KEYED;
-}
+// Corten fills an `Option` only through `OptionalFromRequestParts`, which none of its keyed
+// inputs implement, so an `Option` of one is filled by the app's own code: not keyed.
+impl<T: Anonymous> Anonymous for Option<T> {}
 // What these read is not in the key (a body, where a stream stopped): a page whose handler takes
 // one is not kept.
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -2674,6 +2709,13 @@ macro_rules! holds {
     };
 }
 
+/// Each argument keyed in its place: the last as Corten fills it there, the others as it fills
+/// one before the last.
+macro_rules! keyed {
+    ($last:ident) => { $last::KEYED.0 };
+    ($first:ident, $($rest:ident),+) => { $first::KEYED_BEFORE_LAST.0 && keyed!($($rest),+) };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -2686,7 +2728,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
-            const KEYED: bool = true $(&& $ty::KEYED.0)*;
+            const KEYED: bool = keyed!($($ty),*);
         }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
@@ -2837,15 +2879,23 @@ where
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
-        if !(self.shared && self.keyed) {
+        self.public()?.ok()
+    }
+
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        use crate::kept::{Shape, Verdict};
+        if !self.shared {
             return None;
         }
-        if O::PAGE {
-            Some(crate::kept::Shape::Page)
+        Some(if !self.keyed {
+            Err(Verdict::Unkeyed)
+        } else if O::PAGE {
+            Ok(Shape::Page)
+        } else if O::WHOLE.0 {
+            Ok(Shape::Body)
         } else {
-            // A whole body is kept where the app compresses it: none in a build that does not.
-            (O::WHOLE.0 && cfg!(feature = "compress")).then_some(crate::kept::Shape::Body)
-        }
+            Err(Verdict::NotWhole)
+        })
     }
 
     #[inline]

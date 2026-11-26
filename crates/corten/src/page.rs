@@ -66,9 +66,9 @@ pub(crate) const PLAIN_NOTICE_COOKIE: &str = "corten-notice";
 const NOTICE_MAX: usize = 500;
 
 /// Responses depend on the mode header and, for [`Mode::Data`], on `Accept`.
-const VARY: &str = "corten, accept";
+pub(crate) const VARY: &str = "corten, accept";
 /// The same, for an answer whose locale follows `Accept-Language`.
-const VARY_LANGUAGE: &str = "corten, accept, accept-language";
+pub(crate) const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 
 /// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
 /// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
@@ -185,8 +185,10 @@ impl Mode {
     /// mode. With them, that `Accept` as text, empty where it was not asked for, not sent or not
     /// text. The rule is written here and nowhere else in the request's path: [`Mode::asked`]
     /// looks the two up and `crate::kept` gives them from its pass over a request's headers, so
-    /// a header this function is made to read is an argument each of them has to give. Browsers
-    /// never put JSON first for a navigation.
+    /// a header this function is made to read is an argument each of them has to give. A request
+    /// under an API is the one the stages do not pass here: they ask nothing of its mode
+    /// ([`RequestPage::read`]), and a handler's [`Req`] there still does. Browsers never put JSON
+    /// first for a navigation.
     pub(crate) fn said<'a>(
         runtime: Option<&HeaderValue>,
         accept: impl FnOnce() -> Option<&'a HeaderValue>,
@@ -214,7 +216,10 @@ impl Mode {
     /// whether a kept page can answer without this function.
     fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
         let (asked, accept) = Mode::said(headers.get(MODE_HEADER), || headers.get(header::ACCEPT));
-        (asked, check_html && asked.0 == Mode::Document && accept.contains("text/html"))
+        // A browser's navigation names HTML first, so the start is looked at before the line is
+        // searched: `str::contains` prepares a search made for long text before it looks.
+        let html = || accept.starts_with("text/html") || accept.contains("text/html");
+        (asked, check_html && asked.0 == Mode::Document && html())
     }
 }
 
@@ -708,7 +713,9 @@ impl std::error::Error for Unserved {}
 #[cold]
 pub(crate) fn unserved(dev: bool, message: String) -> Error {
     print_unserved(dev, &message);
-    Error::new(Unserved(message))
+    // Corten's, not the handler's, wherever it is answered: inside the handler, behind the app's
+    // middleware, or in an answer's place.
+    Error::corten(Unserved(message))
 }
 
 /// Prints a debug build's error about the app's code to stderr outside `corten dev`, where a router
@@ -787,7 +794,8 @@ pub(crate) type ErrorPage = dyn Fn(Failure, Parts) -> Pin<Box<dyn Future<Output 
 ///
 /// It is sent with the failure's status (or as it answers, when it redirects). The extractors see
 /// the request's URL, `Cookie` and `Authorization` (so a caller is found as for the handler),
-/// `Accept-Language` and its mode; not its other headers or its body:
+/// `Accept-Language` and its mode; not its other headers or its body. An extractor's rejection
+/// is sent in the page's place, and is never shared, as a handler's extractor's is not:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -828,7 +836,8 @@ macro_rules! error_page_fn {
                 $(
                     let $t = match $t::from_request_parts(&mut parts, &state).await {
                         Ok(value) => value,
-                        Err(rejection) => return rejection.into_response(),
+                        // About who is asking, as a handler's extractor's rejection may be.
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                 )*
                 match self(failure, $($t,)*).await {
@@ -873,12 +882,14 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
         // The error page itself failed (in a debug build, a component the app does not list):
-        // plain text, so a broken error page cannot fail again.
+        // plain text, so a broken error page cannot fail again, kept from a CDN as the failed page
+        // was (an extractor's rejection is).
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
-        res = match detail {
+        let plain = match detail {
             Some(detail) => (status, format!("The page could not be shown.\n\n{detail}")).into_response(),
             None => (status, "The page could not be shown.").into_response(),
         };
+        res = crate::cache::unshared_in_place_of(res.extensions(), plain);
     }
     // Search engines skip it, whatever the layout says: the offline page is a 200.
     res.headers_mut().insert(HeaderName::from_static("x-robots-tag"), HeaderValue::from_static("noindex"));
@@ -896,6 +907,9 @@ pub(crate) struct Credentials {
 /// What the stages know about the page before dispatch. A handler or its extractors see the
 /// actual, possibly changed request, not this snapshot.
 pub(crate) struct RequestPage {
+    /// The request's mode where it is under no API. Under one it is `(Mode::Data, false)` and
+    /// `accepts_html` is `false` whatever the request said ([`RequestPage::read`]), so a stage
+    /// that reads either for a request under an API reads the request's headers instead.
     pub mode: (Mode, bool),
     pub accepts_html: bool,
     pub credentials: Credentials,
@@ -904,8 +918,12 @@ pub(crate) struct RequestPage {
 }
 
 impl RequestPage {
+    /// `is_page`: the request is under no API. Under one, the stages ask nothing of the mode
+    /// (every failure there is JSON, no answer a document the runtime swaps in, and a handler's
+    /// `Req` reads the request itself), so neither header is looked up and the mode is set to a
+    /// data client's, whatever the request said.
     pub(crate) fn read(headers: &HeaderMap, is_page: bool) -> Self {
-        let (mode, accepts_html) = Mode::read(headers, is_page);
+        let (mode, accepts_html) = if is_page { Mode::read(headers, true) } else { ((Mode::Data, false), false) };
         RequestPage {
             mode,
             accepts_html,
@@ -1073,8 +1091,9 @@ pub(crate) struct Shared {
     /// The values only the layout shows ([`crate::App::layout_read`]), started for each request
     /// for a whole document.
     pub layout_reads: Box<[Arc<dyn crate::layout::Erased>]>,
-    /// The `Public` pages, JSON, text and files the app keeps to give again ([`crate::App::kept_answers`]); none under
-    /// `corten dev`, or with a bound of 0.
+    /// The `Public` pages, JSON, text and files the app keeps to give again ([`crate::App::kept_answers`]); none with
+    /// a bound of 0, or without a `Public` route it keeps. Under `corten dev` it keeps and gives none
+    /// (`crate::kept::Verdict`).
     pub kept: Option<crate::kept::Answers>,
 }
 
@@ -1817,7 +1836,7 @@ impl Req {
             (modules?, vars, crate::layout::Places::default())
         };
         let Some(at) = HEAD_AT.take() else {
-            return Err(Error::new("corten: the document's <head> has no <Corten />"));
+            return Err(Error::corten("corten: the document's <head> has no <Corten />"));
         };
         #[cfg(debug_assertions)]
         if self.shared.dev && !swap {
@@ -3016,7 +3035,7 @@ impl Req {
     /// `corten::http::Uri` to leave the app. Works with and without
     /// JavaScript.
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)))
     }
 
@@ -3080,15 +3099,15 @@ impl Req {
     /// ```
     pub fn resend_to<For>(&self, to: &(impl crate::route::OnSite + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         if !self.write {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::resend_to sends a write's form on, and this request is a GET or HEAD, which a redirect repeats as it is: use req.redirect",
             ));
         }
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         // A derived route always writes a path on this site; a hand-written `write_href` might not:
         // never send a form's body elsewhere.
         if !on_site(&value) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
@@ -3149,10 +3168,10 @@ impl Req {
     /// }
     /// ```
     pub fn redirect_with_notice(&self, to: &(impl crate::route::OnSite + ?Sized), notice: impl std::fmt::Display) -> HtmlResult {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         // A derived route always writes a path on this site; a hand-written `write_href` might not.
         if !on_site(&value) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::redirect_with_notice sends the browser only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
@@ -3238,7 +3257,7 @@ impl Req {
     /// [`Req::redirect`]. Parameters the old URL had are the route's to carry
     /// (`#[route(prefix = ..)]` for ones named by data), so only the ones it knows move with it.
     pub fn moved<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         if self.mode == Mode::Action || (self.fetched && (has_fragment(&value) || elsewhere(&value))) {
             return Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)));
         }
@@ -3277,11 +3296,12 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
     if !(res.headers().contains_key(SHELL_HEADER) && res.headers().contains_key("refresh")) {
         return res;
     }
-    unserved(
+    let error = unserved(
         dev,
         "this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead".to_owned(),
     )
-    .into_response()
+    .into_response();
+    crate::cache::unshared_in_place_of(res.extensions(), error)
 }
 
 /// A page answering a browser's post, with a success status, at a path whose route has no `GET`
@@ -3384,7 +3404,7 @@ fn in_place_of(res: Response, dev: bool, message: String) -> Response {
             error.headers_mut().append(name.clone(), value.clone());
         }
     }
-    error
+    crate::cache::unshared_in_place_of(&parts.extensions, error)
 }
 
 /// A write's redirect to an origin the form's page does not allow in `form-action`: Chromium
@@ -3414,7 +3434,7 @@ fn redirect_outside_form_action(res: Response, check: Option<&crate::security::F
             error.headers_mut().append(name, value.clone());
         }
     }
-    error
+    crate::cache::unshared_in_place_of(&parts.extensions, error)
 }
 
 /// What a debug build says of a write redirected to `to`, when the form's page does not allow it.
@@ -3662,6 +3682,9 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let mut res = res;
     let status = res.status();
     let error = status.is_client_error() || status.is_server_error();
+    // A refusal goes out as it was made (a `200` an extractor's rejection chose, a redirect, a
+    // relayed failure): its mark is on it, and the app's cache rule reads it as it goes out
+    // ([`crate::cache::Unshared`]).
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
         return res;
     }
@@ -3671,7 +3694,12 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         drop(asked);
         return crate::api::json_failure(res, shared.dev, None).await;
     }
+    // A `NoStore` answer: the page that replaces it is one too; and one that is no handler's own (a
+    // refusal, the router's own failure, a panic, the deadline), which the page in its place is too.
+    let marks = crate::cache::Marks::of(res.extensions());
     if let Some(crate::caller::SignIn(to)) = res.extensions().get::<crate::caller::SignIn>().cloned() {
+        // A refusal, whoever made it: the redirect or page in its place is never shared either.
+        let marks = crate::cache::Marks { unshared: true, ..marks };
         let kept = std::mem::take(res.headers_mut());
         let Some(message) = sign_in_loops(asked.path(), &to) else {
             #[cfg(debug_assertions)]
@@ -3680,14 +3708,14 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
                 tracing::error!("corten: {message}");
                 print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                return carried(kept, error_page(shared, asked, failure).await);
+                return carried(kept, marks, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(asked.mode, asked.fetched, to));
+            return carried(kept, marks, redirect(asked.mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
         let failure = if shared.dev { failure } else { failure.without_detail() };
-        return carried(kept, error_page(shared, asked, failure).await);
+        return carried(kept, marks, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
     // Read here, before the answer's body is taken; not in a release build, where it would be one
@@ -3709,20 +3737,25 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // under it in dev mode; any other client (probes, webhooks) still gets the text.
     let rejection = failed.is_none() && cause.is_none() && browser && crate::api::is_plain_text(res.headers());
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
+        // A failure sent as it is: to a client that does not ask for HTML, or with a body that is
+        // not plain text. Its marks go out with it.
         return res;
     }
     // What the handler and the app's middleware said besides the body (a request id,
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
     if rejection {
-        let text = crate::body::to_bytes(res.into_body(), 16 * 1024).await.unwrap_or_default();
+        // The body alone: the answer's extensions are read again once the page is drawn.
+        let text = crate::body::to_bytes(std::mem::take(res.body_mut()), 16 * 1024).await.unwrap_or_default();
         let text = String::from_utf8_lossy(&text);
         tracing::debug!(status = status.as_u16(), "corten: request rejected: {text}");
         failed = Some(crate::Failed(Arc::from(text.trim())));
     }
     if offline && status == StatusCode::NOT_FOUND {
-        // The PWA's offline page, which the service worker keeps: a 200.
-        return carried(kept, error_page(shared, asked, Failure::Offline).await);
+        // The PWA's offline page, which the service worker keeps: a 200. It is the app's error page
+        // in place of the router's `404`, so it is settled as one too; the worker's own cache keeps
+        // it whatever its `Cache-Control` says.
+        return carried_from(kept, marks, error_page(shared, asked, Failure::Offline).await, res.extensions_mut());
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {
@@ -3746,7 +3779,20 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    carried(kept, error_page(shared, asked, failure).await)
+    carried_from(kept, marks, error_page(shared, asked, failure).await, res.extensions_mut())
+}
+
+/// [`carried`], for the error page drawn in the place of the failed answer whose extensions are
+/// `answer`: when they hold its `Unshared` mark alone and the page has none (the router's `404`
+/// with the error page), the page takes that map, rather than a new one made for the same mark.
+/// Nothing else of the failed answer's is carried. `answer` is borrowed after the page is drawn,
+/// so the request's future holds nothing more across that await.
+fn carried_from(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response, answer: &mut http::Extensions) -> Response {
+    if marks.unshared && !marks.no_store && answer.len() == 1 && res.extensions().is_empty() {
+        *res.extensions_mut() = std::mem::take(answer);
+        return carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
+    }
+    carried(kept, marks, res)
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
@@ -3767,14 +3813,22 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 /// on still decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written
 /// by hand, on any of its lines, however a reader could find it) makes `res` `no-store` too:
 /// whoever set it said nothing may keep the answer, a failure included. Its other directives
-/// described the failed answer, so they are not carried.
-fn carried(kept: HeaderMap, mut res: Response) -> Response {
+/// described the failed answer, so they are not carried. `res` gets the failed answer's `marks`
+/// ([`crate::cache::Marks`]): the page that replaces a `NoStore` answer is `NoStore` too, whatever
+/// a middleware made of the answer's header, and the page in place of an answer that is no
+/// handler's own (a refusal, a failure no handler answered) is never shared, by the app's cache
+/// rule or another app's that relays it inline. A plain-text failure a browser gets the error page
+/// for (an extractor's rejection is marked where it was made) is only that: a handler's own is
+/// its answer.
+fn carried(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response) -> Response {
+    marks.put(&mut res);
     if kept.is_empty() {
         return res;
     }
     use http::header::Entry;
     let headers = res.headers_mut();
-    if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
+    if !marks.no_store && kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()))
+    {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
     }
     // Allocates only for a failure that varied on something.
@@ -3882,7 +3936,7 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "a panic with no message".to_string());
             tracing::error!("corten: {method} {} panicked: {message}", uri.path());
-            let mut res = Error::new(format!("the handler panicked: {message}")).into_response();
+            let mut res = Error::corten(format!("the handler panicked: {message}")).into_response();
             res.extensions_mut().insert(Cause::Panicked);
             res
         }
@@ -3904,11 +3958,12 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
-            Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
+            Error::corten("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
         }
         // A body over its limit, read past so the client reads the 413: still the 413.
         Waited::PastLimit(over) => {
             signal.abort(crate::Abort::Deadline);
+            // Corten's own errors ([`Error::corten`]).
             match over {
                 Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
                 Over::Upload(limit) => Error::from(crate::form::UploadError::TooLarge { limit }),
@@ -3919,7 +3974,7 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
-            let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
+            let mut res = crate::cache::unshared(StatusCode::SERVICE_UNAVAILABLE.into_response());
             res.extensions_mut().insert(Cause::TimedOut);
             res
         }
@@ -4425,7 +4480,7 @@ fn unruled_vars(page: &str, rules: &str) -> Result<()> {
             }
             let Some(value) = tag.attr("data-vars") else { continue };
             if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
-                return Err(Error::new(format!(
+                return Err(Error::corten(format!(
                     "the page has data-vars=\"{value}\" and no rule for it, so that size paints at its initial value: markup placed with raw() keeps no values; render the view into a corten::Rendered and place that"
                 )));
             }
@@ -4508,7 +4563,7 @@ mod carried_tests {
         kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         let mut res = Response::new(Body::empty());
         res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
-        let res = carried(kept, res);
+        let res = carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
     }
@@ -4562,7 +4617,7 @@ mod carried_tests {
         };
         // The mode, whether the runtime sent the request, and whether a document was asked for by
         // an `Accept` that names HTML.
-        let cases: [(Lines, Lines, Mode, bool, bool); 21] = [
+        let cases: [(Lines, Lines, Mode, bool, bool); 24] = [
             // No `corten`: the first item of the first `Accept` line, JSON or anything else.
             (&[], &[], Mode::Document, false, false),
             (&[], &[b"text/html,application/xhtml+xml,*/*;q=0.8"], Mode::Document, false, true),
@@ -4574,6 +4629,11 @@ mod carried_tests {
             (&[], &[b"application/problem+json"], Mode::Document, false, false),
             (&[], &[b"text/html", b"application/json"], Mode::Document, false, true),
             (&[], &[b"application/json", b"text/html"], Mode::Data, false, false),
+            // HTML is named or it is not, wherever in the line: another `text/` type at the start
+            // is not HTML, and HTML after it is.
+            (&[], &[b"text/plain"], Mode::Document, false, false),
+            (&[], &[b"text/event-stream"], Mode::Document, false, false),
+            (&[], &[b"text/plain, text/html;q=0.9"], Mode::Document, false, true),
             // One that is not text is read as none.
             (&[], &[b"application/json\xff"], Mode::Document, false, false),
             (&[], &[b"text/html\xff"], Mode::Document, false, false),

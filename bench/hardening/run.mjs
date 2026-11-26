@@ -26,6 +26,27 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const json = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
 
+export async function prepareToolImages(docker, version) {
+  assert.match(version, /^\d+\.\d+\.\d+$/, "Playwright must have a pinned image-compatible version");
+  const refs = { node: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
+    checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
+  const tools = {};
+  for (const [key, ref] of Object.entries(refs)) {
+    const inspect = ["image", "inspect", ref];
+    let output;
+    try { output = await docker(inspect); }
+    catch {
+      await docker(["pull", ref], { timeout: 5 * 60_000, settleOnInterrupt: true });
+      output = await docker(inspect);
+    }
+    const images = JSON.parse(output);
+    assert.ok(Array.isArray(images) && images.length === 1 && /^sha256:[a-f0-9]{64}$/.test(images[0]?.Id),
+      `invalid hardening tool image: ${key}`);
+    tools[key] = images[0];
+  }
+  return tools;
+}
+
 export function finalizeCell(out, cell, isolated, ownedReceipts, input) {
   if (isolated) verifyHardeningCpuRoles(JSON.parse(readFileSync(join(out, "cpu-roles.json"), "utf8")),
     cell, ownedReceipts.filter((r) => r.intent.cell === cell.key), input.raw);
@@ -382,7 +403,6 @@ export async function run(args) {
     rootContext = await nativeBuildContext({ command }, folder, summary.commit, "corten", inputFiles.map(({ path, sha256 }) => ({ path, sha256 })));
     sourceRoot = join(folder, "corten-build-context");
     const version = JSON.parse(readFileSync(join(sourceRoot, "package.json"))).devDependencies["@playwright/test"];
-    const toolRefs = { node: "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1", checker: `mcr.microsoft.com/playwright:v${version}-noble`, edge: edgeImage, cert: edgeCertImage };
     assert.ok(existsSync(join(installedDependencies, "@playwright/test/package.json")), "--node-modules must name an installed pinned dependency tree");
     assert.equal(JSON.parse(readFileSync(join(installedDependencies, "@playwright/test/package.json"))).version, version, "installed browser driver version mismatch");
     mounted = ["-v", `${sourceRoot}:/repo:ro`];
@@ -390,7 +410,7 @@ export async function run(args) {
       "-v", `${join(sourceRoot, "package.json")}:/repo/package.json:ro`];
     const dependencyFiles = snapshotDependencies(installedDependencies, dependencies);
     json(join(folder, "inputs.json"), { schema: "native-hardening-inputs/v1", commit: summary.commit, files: inputFiles, dependencies: dependencyFiles });
-    for (const [key, ref] of Object.entries(toolRefs)) tools[key] = JSON.parse(await docker(["image", "inspect", ref]))[0];
+    Object.assign(tools, await prepareToolImages(docker, version));
     summary.tools = tools; save();
     await trackedNetworkCreate(summary, network, save, () => docker(["network", "create", ...labels, network],
       { settleOnInterrupt: true, timeout: budget.cleanup.timeoutMs }));

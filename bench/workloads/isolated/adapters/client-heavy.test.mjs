@@ -1,5 +1,6 @@
 // Synthetic adapter apparatus only. No native build, timing or admission claim.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
@@ -9,6 +10,7 @@ import { mock, test } from "node:test";
 import { definition, selectedApps } from "../../registry.mjs";
 import { createClientWorkload } from "../../client.mjs";
 import { evaluateLatestStable, latestStableSources } from "../../latest-stable.mjs";
+import { comparisonProfile, options } from "../../../client-heavy/contract.mjs";
 
 // The native owner lands separately. Resolve only the exact missing static seam in
 // this test process; never create/copy a verifier or add a production injection API.
@@ -57,7 +59,7 @@ function fixture(t) {
     report.sources.files = entries.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }));
   }
   source("bench/client-heavy/run.mjs"); source("Cargo.toml", "# Synthetic Cargo input\n");
-  const save = () => { put("result.json", output); put("plan.json", plan); put("native/build.json", output.builds); put("native/workload.json", settings);
+  const save = () => { put("result.json", output); put("plan.json", plan); put("native/build.json", output.builds); put("native/workload.json", plan.workload);
     put("evidence/source-before.json", { entries }); put("evidence/source-after.json", { entries }); };
   save(); return { folder, binding, output, plan, put, save, source, entries };
 }
@@ -65,7 +67,8 @@ function fixture(t) {
 function candidateFixture(t, convert = (text) => text, committedText = (text) => text) {
   const f = fixture(t), inputs = {}, checkout = {};
   for (const [key, path] of Object.entries(latestStableSources)) {
-    inputs[key] = committedText(readFileSync(new URL(`../../../../${path}`, import.meta.url)).toString().replaceAll("\r\n", "\n"));
+    const historical = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2";
+    inputs[key] = committedText(execFileSync("git", ["show", `${historical}:${path}`], { cwd: new URL("../../../../", import.meta.url) }).toString());
     checkout[key] = convert(inputs[key]); f.source(path, inputs[key], checkout[key]);
   }
   const committed = evaluateLatestStable({ group: "client-heavy", ...inputs }), captured = evaluateLatestStable({ group: "client-heavy", ...checkout });
@@ -95,6 +98,46 @@ test("synthetic v3 adapter binds the recomputed policy and preserves unsupported
   assert.equal(value.rankingEligible, false); assert.deepEqual(value.comparisonEligibleApps, []);
   assert.deepEqual(value.outcomes.map((r) => r.outcome), ["passed", "passed", "passed", "unsupported", "passed", "passed"]);
   f.binding.latestStable.schema = "benchmark-latest-stable-evaluation/v1";
+  assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
+});
+
+test("v4 adapter accepts only the fixed binding and never claims OS proof", async (t) => {
+  const f = candidateFixture(t);
+  f.binding.request.recipe = comparisonProfile;
+  const args = [...f.plan.invocation.argv, "--profile", comparisonProfile];
+  const { invocation, workload, measurementOrder } = options(args, f.plan.root, f.plan.platform);
+  Object.assign(f.binding.execution, { settings: workload, invocation: { executable: "node", argv: ["bench/client-heavy/run.mjs", ...args] } });
+  const { rows, large, append, cards } = invocation.effective;
+  Object.assign(f.binding.execution.effectiveOptions, { rows, large, append, cards, profile: comparisonProfile, measurementOrder });
+  Object.assign(f.plan, { invocation, workload, measurementOrder });
+  Object.assign(f.output, { schema: "client-heavy-native/v4", effectiveWorkload: workload });
+  Object.assign(report, { schema: "client-heavy-saved-verification/v4", effectiveWorkload: workload, invocation });
+  for (const cells of [f.output.cells, report.cells]) for (const cell of Object.values(cells)) {
+    cell.measurements = cell.measurement ? measurementOrder.map(() => structuredClone(cell.measurement)) : [];
+    delete cell.measurement;
+  }
+  report.cells.react.comparison = { samples: measurementOrder.length, actions: [] };
+  f.save();
+  const native = await inspectSaved(f.binding, f.folder);
+  assert.equal(native.status, "failed"); assert.equal(native.attemptComplete, true);
+  assert.equal(native.resources, "blocked"); assert.deepEqual(native.comparisonEligibleApps, ["react"]);
+  // A timeout with a replayed close disqualifies only that cell; an unproven
+  // close still blocks all comparison admission.
+  report.cells.corten.comparison = report.cells.react.comparison;
+  delete report.cells.react.comparison;
+  Object.assign(f.output.cells.react, { outcome: "failed" });
+  f.output.cells.react.measurements[0].lifecycle.deadline = { firedAt: 100 };
+  Object.assign(report.cells.react, { outcome: "failed", replayPassed: false });
+  Object.assign(report.cells.react.measurements[0], { passed: false, closurePassed: true });
+  f.save();
+  const timedOut = await inspectSaved(f.binding, f.folder);
+  assert.equal(timedOut.attemptComplete, true); assert.equal(timedOut.cleanupComplete, true);
+  assert.deepEqual(timedOut.comparisonEligibleApps, ["corten"]);
+  report.cells.react.measurements[0].closurePassed = false;
+  const missingClose = await inspectSaved(f.binding, f.folder);
+  assert.equal(missingClose.cleanupComplete, false); assert.deepEqual(missingClose.comparisonEligibleApps, []);
+  f.plan.measurementOrder = [...measurementOrder].reverse();
+  f.save();
   assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
 });
 

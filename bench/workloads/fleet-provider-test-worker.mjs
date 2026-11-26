@@ -8,15 +8,16 @@ import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 const [mode, trace, hostsPath, stateDir, group, userId] = process.argv.slice(2);
 assert.equal(process.argv.length, 8);
 assert.ok(["success", "overlap", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create",
-  "catalog-denial", "catalog-count", "catalog-shape", "catalog-pagination", "catalog-disconnect"].includes(mode));
+  "startup-refusal", "catalog-denial", "catalog-count", "catalog-shape", "catalog-pagination", "catalog-disconnect"].includes(mode));
 assert.ok(getHeapStatistics().heap_size_limit <= 128 * 1024 ** 2);
 delete process.env.NODE_OPTIONS;
 process.stdin.resume(); // Drain the transport's actual captured bootstrap bytes.
 const record = (event) => appendFileSync(trace, `${JSON.stringify({ group, ...event })}\n`);
+if (mode === "startup-refusal") { record({ boundary: "before-provider-boot" }); process.exit(2); }
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
 const later = mode === "overlap" && group !== "catalog-page";
-let clock = 0;
+let clock = 0, accountsAfterRegions, firstInventoryPage = true;
 serveProviderWorker({
   now: () => clock,
   spawn(binary, argv) {
@@ -28,6 +29,9 @@ serveProviderWorker({
   request({ method, path, body, credential }) {
     assert.equal(credential, "SYNTHETIC_FLEET_CREDENTIAL");
     record({ boundary: "provider", method, path, body });
+    if (path === "/v2/regions?page=1&per_page=200") accountsAfterRegions = 0;
+    if (path === "/v2/account" && accountsAfterRegions !== undefined && ++accountsAfterRegions === 2 && existsSync(hostsPath + ".late-lock"))
+      writeFileSync(readFileSync(hostsPath + ".late-lock", "utf8"), "sibling started during the create account check", { flag: "wx" });
     if (path === "/v2/account") return mode === "provider-failure" ? { status: 403, value: null }
       : { status: 200, value: { account: { uuid: userId,
         droplet_limit: existsSync(hostsPath + ".limit") ? Number(readFileSync(hostsPath + ".limit", "utf8")) : 20 } } };
@@ -54,6 +58,24 @@ serveProviderWorker({
       return { status: 200, value: { regions, meta: { total: regions.length } } };
     }
     if (method === "GET" && path.startsWith("/v2/droplets?")) {
+      if (existsSync(hostsPath + ".census-next")) {
+        const match = JSON.parse(readFileSync(hostsPath + ".census-next", "utf8"));
+        if (path === "/v2/droplets?page=2&per_page=200") return { status: 200, value: { droplets: [], meta: { total: 1 } } };
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: { droplets: [match], meta: { total: 2 },
+            links: { pages: { next: "https://api.digitalocean.com/v2/droplets?page=2&per_page=200" } } } };
+        }
+        return { status: 200, value: { droplets: [{ ...match, name: "renamed", tags: [] }], meta: { total: 1 } } };
+      }
+      if (existsSync(hostsPath + ".census-first")) {
+        const rows = JSON.parse(readFileSync(hostsPath + ".census-first", "utf8"));
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: rows };
+        }
+        return { status: 200, value: { droplets: [], meta: { total: 0 } } };
+      }
       const droplets = hosts(); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
     }
     if (method === "POST" && path === "/v2/droplets") {

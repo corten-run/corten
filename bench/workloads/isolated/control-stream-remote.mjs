@@ -154,18 +154,29 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       // Only the independently owned campaign process may observe the SSH tree
       // disappear. Local EOF is not an input to this proof.
       const deadline = now() + 10000000000n;
+      let stage = "campaign drain";
       try {
-        for (let attempts = 0; attempts < 100 && now() < deadline; attempts++) {
+        for (let attempts = 0; ; attempts++) {
+          stage = "campaign drain control invalid";
           assert.ok(!abort.signal.aborted && !existsSync(join(root, "stream-invalid.json")));
+          stage = "campaign drain deadline";
+          assert.ok(attempts < 100 && now() < deadline);
+          stage = "campaign drain probe start";
           const result = probe();
-          assert.ok(!result.error && !result.signal && [0, 3].includes(result.status), "apparatus drain uncertain");
+          if (result.error || result.signal || ![0, 3].includes(result.status)) {
+            if (result.error?.code === "ETIMEDOUT") stage = "campaign drain probe deadline";
+            else if (result.error?.code === "ENOBUFS") stage = "campaign drain probe output limit";
+            else if (!result.error) stage = "campaign drain probe exit";
+            assert.fail("apparatus drain uncertain");
+          }
           if (result.status === 0) {
+            stage = "campaign drain invalid proof";
             const proof = JSON.parse(result.stdout); verifyStreamDrain(binding, registration, proof); ended = true; return proof;
           }
+          stage = "campaign drain";
           await sleep(100);
         }
-        assert.fail("apparatus disappearance deadline expired");
-      } catch (error) { invalidate("campaign drain"); throw error; }
+      } catch { invalidate(stage); throw new Error(stage); }
     },
     async dispose() { if (!ended && !revoked) invalidate("campaign disposed before drain"); await stopWatchdog(); },
   };

@@ -148,12 +148,129 @@ async function independentDetach(t) {
   return { p, root, index, approved, errors, cli, notDispatched };
 }
 
-test("independent detach names invalid replay without leaking the exception", async (t) => {
+test("independent detach names invalid admission without leaking the exception", async (t) => {
   const f = await independentDetach(t);
   writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
   assert.equal(await f.cli(), 2);
-  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-replay"]);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission; custody-read"]);
   f.notDispatched();
+});
+
+test("independent detach distinguishes busy, unresolved and wrong-round admission without dispatch", async (t) => {
+  const f = await independentDetach(t);
+  const preview = [...f.approved.slice(0, -2), "--print-approval"];
+  const lock = join(f.p.h.base, ".continuation-operation.lock");
+  const owner = "SYNTHETIC_PRIVATE_OWNER";
+  const catalogCalls = f.p.catalogCalls.length, outputs = f.p.output.length;
+  writeFileSync(lock, owner);
+  assert.equal(await f.cli(preview), 2);
+  assert.equal(await f.cli(), 2);
+  assert.equal(readFileSync(lock, "utf8"), owner);
+  unlinkSync(lock);
+  assert.equal(await f.cli(["r22", ...preview.slice(1)]), 2);
+  f.notDispatched();
+  const incomplete = join(f.root, "mixed-production");
+  mkdirSync(incomplete);
+  assert.equal(await f.cli(preview), 2);
+  assert.deepEqual(f.errors, [
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; lock-busy",
+    "fleet-operation-failed: continuation-admission; group-selection",
+    "fleet-operation-failed: continuation-admission; custody-unresolved",
+  ]);
+  assert.deepEqual(readdirSync(incomplete), []);
+  assert.deepEqual(readdirSync(f.root).sort(), ["fleet-r21.json", "mixed-production"]);
+  assert.equal(existsSync(lock), false);
+  assert.deepEqual(f.p.children, []);
+  assert.equal(f.p.catalogCalls.length, catalogCalls);
+  assert.equal(f.p.output.length, outputs);
+});
+
+test("independent prepare names its admission or reservation stage without exposing inputs", async (t) => {
+  const p = continuationFixture(t), errors = [];
+  const args = ["r21", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit",
+    commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  const cli = () => fleetCli(args, { ...p.deps, writeError: (line) => errors.push(line) });
+  writeFileSync(p.index, "SYNTHETIC_PRIVATE_INDEX");
+  assert.equal(await cli(), 2);
+  writeFileSync(p.index, "[]"); p.flags.head = "b".repeat(40);
+  assert.equal(await cli(), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-read", "fleet-operation-failed: prepare-reservation"]);
+  assert.equal(existsSync(p.old), false);
+  assert.deepEqual(p.children, []);
+});
+
+test("independent prepare reports only a fixed placement stage and safe provider diagnostics", async (t) => {
+  for (const [fault, diagnostic] of [
+    ["transport-setup", "transport-setup"],
+    ["first-account-read", "first-account-read-or-worker-start"],
+    ["first-account-identity", "first-account-identity"],
+    ["catalog-denied", "catalog-read; catalog-http (HTTP 403)"],
+    ["catalog-validation", "catalog-validation"],
+    ["second-account-read", "second-account-read"],
+    ["second-account-identity", "second-account-identity"],
+    ["region-selection", "region-selection"],
+    ["transport-close", "transport-close; custody-uncertain"],
+    ["region-and-close", "region-selection; transport-close-failed; custody-uncertain"],
+  ]) await t.test(fault, async (t) => {
+    const p = fixture(t), group = "live-delivery", root = join(p.h.base, group), errors = [];
+    const args = ["r42", "--continuation-root", p.h.base, "--group", group, "--prepare", "--commit",
+      commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+    const writeError = (line) => errors.push(line), normalCatalog = p.deps.catalogProvider;
+    const privateFailure = () => new Error("SYNTHETIC_PRIVATE_PROVIDER_DETAIL");
+    writeFileSync(join(p.h.base, "index.json"), "[]");
+    p.deps.catalogProvider = (options) => {
+      if (fault === "transport-setup") throw privateFailure();
+      const run = normalCatalog(options);
+      let accounts = 0;
+      return Object.assign(async (args) => {
+        if (args[0] === "account") {
+          const name = ++accounts === 1 ? "first" : "second";
+          if (fault === `${name}-account-read`) throw privateFailure();
+          if (fault === `${name}-account-identity`) return { status: 0, stdout: '{"uuid":"SYNTHETIC-PRIVATE-IDENTITY"}' };
+        } else {
+          if (fault === "catalog-denied") return { status: 1, stderr: "SYNTHETIC_PRIVATE_PROVIDER_BODY",
+            providerDiagnostic: { code: "catalog-http", httpStatus: 403 } };
+          if (fault === "catalog-validation") return { status: 0, stdout: "SYNTHETIC_PRIVATE_PROVIDER_BODY" };
+          if (["region-selection", "region-and-close"].includes(fault))
+            return { status: 0, stdout: JSON.stringify(syntheticPlacement([])) };
+        }
+        return run(args);
+      }, { close: async () => {
+        await run.close();
+        if (["transport-close", "region-and-close"].includes(fault))
+          throw Object.assign(privateFailure(), { controlUncertain: true });
+      } });
+    };
+    assert.equal(await fleetCli(args, { ...p.deps, writeError }), 2);
+    assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
+    const retained = ["transport-close", "region-and-close"].includes(fault);
+    assert.deepEqual(readdirSync(root), retained ? [".fleet-operation.lock"] : []);
+    assert.equal(existsSync(join(p.h.base, ".continuation-operation.lock")), retained);
+    assert.deepEqual(p.children, []);
+    if (fault === "region-selection") {
+      p.deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement(["sfo3"]));
+      assert.equal(await fleetCli(args, { ...p.deps, writeError }), 3);
+      assert.deepEqual(readdirSync(root), ["fleet-r42.json"]);
+      const { manifest } = readFleet(root, "r42");
+      assert.deepEqual(manifest.jobs.map((job) => job.group), [group]);
+      assert.deepEqual(manifest.selection.groups[0].apps, ["corten", "aspnet", "express", "phoenix", "rails", "gin", "drogon", "leptos"]);
+      assert.equal(manifest.host.region, "sfo3");
+      assert.deepEqual(p.children, []);
+    }
+  });
+});
+
+test("placement diagnostics keep the controlling exception and lock custody when close also fails", async (t) => {
+  const p = fixture(t);
+  const readError = Object.freeze(new Error("SYNTHETIC_PRIVATE_READ_FAILURE"));
+  const closeError = Object.freeze(Object.assign(new Error("SYNTHETIC_PRIVATE_CLOSE_FAILURE"), { controlTreeUncertain: true }));
+  p.deps.catalogProvider = () => Object.assign(async () => { throw readError; }, {
+    close: async () => { throw closeError; },
+  });
+  await assert.rejects(fleetMain(p.prepare(), p.deps), (error) => error === closeError);
+  assert.deepEqual(readdirSync(p.h.base), [".fleet-operation.lock"]);
+  assert.deepEqual(p.children, []);
 });
 
 test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {
@@ -161,7 +278,7 @@ test("independent detach names the pre-intent stage and preserves placement diag
     ["initial", "fleet-operation-failed: initial-plan"],
     ["locked", "fleet-operation-failed: locked-plan"],
     ["recheck", "fleet-operation-failed: final-pre-intent-recheck"],
-    ["placement", "fleet-placement-preflight-failed: catalog-http (HTTP 403)"],
+    ["placement", "fleet-placement-preflight-failed: catalog-read; catalog-http (HTTP 403)"],
   ]) await t.test(kind, async (t) => {
     const f = await independentDetach(t);
     let argv = f.approved;
@@ -249,6 +366,153 @@ function continuationFixture(t) {
   writeFileSync(index, "[]");
   return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
 }
+
+test("offline handoff is selected only at fresh single-group prepare and bound in detach preview", async (t) => {
+  const p = continuationFixture(t);
+  const configure = ["--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context, "--offline-handoff"];
+  const prepare = ["r21", "--continuation-root", p.h.base, "--group", p.group, ...configure];
+  assert.throws(() => parseFleetArgs(["r21", "--fleet-root", p.h.base, ...configure]), /single-group preparation/);
+  assert.throws(() => parseFleetArgs(["r21", "--continuation-root", p.h.base, "--group", p.group, "--detach", "--offline-handoff"]),
+    /single-group preparation/);
+  assert.equal(await fleetMain(prepare, p.deps), 3);
+  const saved = readFleet(p.old, "r21");
+  assert.equal(saved.manifest.single.offlineHandoff, true);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.ok(await p.preview("r21"));
+  assert.deepEqual(p.output.at(-1).subject.fleet.single, saved.manifest.single);
+  assert.deepEqual(p.children, []);
+});
+
+test("approved continuation dispatch selects the monitor callback from the locked handoff mode", async (t) => {
+  for (const offline of [false, true]) await t.test(offline ? "offline" : "supervised", async (t) => {
+    const p = continuationFixture(t), callbacks = [];
+    const args = ["r21", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit", commit,
+      "--ssh-key", "42", "--account-id", accountId, "--context", context];
+    assert.equal(await fleetMain(offline ? [...args, "--offline-handoff"] : args, p.deps), 3);
+    const approval = await p.preview("r21");
+    p.deps.main = async (_args, { onReady }) => { callbacks.push(typeof onReady); return 3; };
+    // Dispatch occurred, but the synthetic child produced no saved host state.
+    assert.equal(await p.detach("r21", approval), 2);
+    assert.deepEqual(callbacks, [offline ? "undefined" : "function"]);
+    assert.equal(p.output.at(-1).groups[0].error, "group-state-invalid");
+  });
+});
+
+test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
+  const p = continuationFixture(t), staged = fixture(t);
+  const remaining = await staged.remaining(), lock = join(staged.h.base, ".fleet-operation.lock");
+  const launch = JSON.parse(readFileSync(join(staged.h.base, "launch-intent.json")));
+  writeFileSync(p.index, JSON.stringify([{ root: staged.h.base, checkout: staged.h.repo, round: "r21", commit,
+    archives: { [groupNames[0]]: staged.first.state.archiveSha256 } }]));
+  assert.equal(await p.prepare("r21"), 3);
+  const approval = await p.preview("r21");
+  // Same live PID, different actions. The first-only action really is spent:
+  // its only planned child was deleted and every other child was deferred.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: launch.approvalSha256 }));
+  assert.notEqual(await p.preview("r21"), approval);
+  // Barrier: the remaining action holds the lock but has not written its intent.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: remaining.at(-1) }));
+  assert.ok(!existsSync(join(staged.h.base, "remaining-intent.json")));
+  await assert.rejects(p.detach("r21", approval), /active batch/);
+  const errors = [], owner = readFileSync(lock, "utf8");
+  assert.equal(await fleetCli(["r21", "--continuation-root", p.h.base, "--group", p.group, "--detach", "--print-approval"],
+    { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; batch-owner"]);
+  assert.equal(readFileSync(lock, "utf8"), owner);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+
+  // Now consume the remaining intent through the synthetic runner. Simulate a
+  // retained lock with one bound sibling and other planned siblings missing.
+  unlinkSync(lock);
+  staged.flags.child = async () => 2;
+  assert.equal(await fleetMain(remaining, staged.deps), 2);
+  const sibling = staged.seed(groupNames[1]), pid = 123;
+  writeFileSync(lock, JSON.stringify({ pid, approvalSha256: remaining.at(-1) }));
+  let ownerGone = false;
+  const kill = process.kill;
+  t.mock.method(process, "kill", (target, signal) => {
+    if (target !== pid || signal !== 0) return kill(target, signal);
+    if (ownerGone) throw Object.assign(new Error("synthetic original owner gone"), { code: "ESRCH" });
+    return true;
+  });
+  await assert.rejects(p.preview("r21"), /active batch/);
+  ownerGone = true;
+  const updated = await p.preview("r21");
+  assert.notEqual(updated, approval);
+  assert.equal(p.output.at(-1).subject.continuation.unconfirmed[0].id, sibling.id);
+  p.flags.placement = () => { ownerGone = false; return syntheticPlacement(); };
+  await assert.rejects(p.detach("r21", updated), /source lock changed/);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+});
+
+test("continuation distinguishes a failed selected-group replay without exposing its error", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), errors = [];
+  retained.seedLegacy();
+  const result = retained.finishGroup(p.group), archivePath = join(result.local, "results.tgz");
+  Object.assign(result.state, { evidenceOutcome: "failed", exitCode: 1 });
+  result.state.validation.status = "failed";
+  writeFileSync(join(result.evidence, "exit-code"), "1\n");
+  writeFileSync(join(result.evidence, "run.log"), "synthetic failed run\n");
+  const files = ["run.log", "exit-code", "host.txt", "campaign/.host-attempt.json", `campaign/${result.report.campaign}/plan.json`];
+  writeFileSync(archivePath, archive(files.map((name) => ({ name, body: readFileSync(join(result.evidence, name)) }))));
+  result.state.archiveSha256 = fileHash(archivePath); result.rehash();
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
+  const saved = treeHash(retained.h.base);
+  let inspected = 0;
+  p.deps.inspect = async () => { inspected++; throw new Error("SYNTHETIC_PRIVATE_REPLAY_FAILURE"); };
+  const prepare = ["r22", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  assert.equal(await fleetCli(prepare, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+  assert.equal(inspected, 1);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission; custody-replay"]);
+  assert.deepEqual(readdirSync(p.h.base), ["index.json"]);
+  assert.equal(treeHash(retained.h.base), saved);
+  assert.deepEqual(p.catalogCalls, []);
+  assert.deepEqual(p.children, []);
+});
+
+test("continuation archive pins cannot establish missing or in-flight historical custody", async (t) => {
+  for (const status of ["missing", "reserved", "creating", "preparing", "starting"]) await t.test(status, async (t) => {
+    const p = continuationFixture(t), retained = fixture(t), [catalog] = groupNames;
+    retained.seedLegacy();
+    if (status !== "missing") retained.seed(catalog, (state) => {
+      Object.assign(state, { status, bootstrapReady: undefined });
+      if (status === "reserved" || status === "creating") { delete state.id; delete state.ip; }
+      if (status === "reserved") delete state.createIntentAt;
+    });
+    writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit,
+      archives: { [catalog]: "a".repeat(64) } }]));
+    await assert.rejects(p.prepare("r21"), /unresolved custody/);
+    assert.deepEqual(p.catalogCalls, []);
+    assert.deepEqual(p.children, []);
+    assert.ok(!existsSync(p.old));
+  });
+});
+
+test("continuation refuses an ID-less create outside the current group roster", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), former = "json-api", removed = "former-json";
+  retained.seedLegacy();
+  const state = retained.seed(former, (s) => {
+    s.status = "creating"; delete s.id; delete s.ip;
+  });
+  const { fleetSha256, ...body } = state.fleet;
+  body.jobs.find(({ group }) => group === former).group = removed;
+  body.selection.groups.find(({ group }) => group === former).group = removed;
+  state.fleet = { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  state.group = removed; state.selection.groups[0].group = removed;
+  renameSync(join(retained.h.base, former), join(retained.h.base, removed));
+  writeFileSync(join(retained.h.base, removed, "groups-r21", "state.json"), JSON.stringify(state));
+  writeFileSync(join(retained.h.base, "fleet-r21.json"), JSON.stringify(state.fleet));
+  const historical = readFleet(retained.h.base, "r21", { priorSelection: true });
+  assert.ok(!groupNames.includes(removed));
+  assert.equal(readGroup(historical, removed).state.status, "creating");
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
+  await assert.rejects(p.prepare("r21"), /unresolved custody for a historical group/);
+  assert.deepEqual(p.catalogCalls, []);
+  assert.ok(!existsSync(p.old));
+});
 
 test("a pristine continuation prepare appends a different measured commit without dispatch or changing the verified catalog", async (t) => {
   const p = continuationFixture(t), retained = fixture(t), catalog = "catalog-page";
@@ -1524,6 +1788,40 @@ test("fleet receipts retain all closed census predicates without replay", async 
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE_PROVIDER_TOKEN")); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
   await assert.rejects(fleetMain(approved, p.deps), /fleet-exact-approval-required/);
   await assert.rejects(fleetMain(await p.approve("--collect"), p.deps), /EEXIST/);
+});
+
+test("fleet receipts name a provider-errored create only when its child saved that terminal state", async (t) => {
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
+  const approved = await p.approve("--collect");
+  const errored = (state) => {
+    state.status = "creating"; delete state.id; delete state.ip; delete state.bootstrapReady;
+    state.createErrored = { dropletId: "9", actionId: "8", evidenceSha256: "e".repeat(64) };
+  };
+  const stop = (fields, code = "create-errored-absent") => Object.assign(new Error("PRIVATE_MESSAGE"), { providerDiagnostic: { code } }, fields);
+  flags.child = ({ group }) => {
+    const i = groupNames.indexOf(group);
+    if (i === 3) throw stop(); // No saved terminal record.
+    if (i === 4) return 1; // Terminal code without a record.
+    p.seed(group, errored);
+    if (i === 0) return 1;
+    if (i === 1) throw stop();
+    if (i === 2) throw stop({ controlUncertain: true });
+    throw stop({}, "create-action-errored");
+  };
+  assert.equal(await fleetMain(approved, p.deps), 2);
+  const rows = p.output.at(-1).groups;
+  for (const [i, row] of rows.entries()) {
+    if (i < 2) {
+      assert.equal(row.outcome, "create-errored"); assert.equal(row.error, undefined); assert.equal(row.id, undefined);
+      if (i === 1) { assert.equal(row.uncertain, false); assert.deepEqual(row.providerDiagnostic, { code: "create-errored-absent" }); }
+    } else {
+      assert.equal(row.outcome, "error");
+      assert.equal(row.error, i === 4 ? "group-state-invalid" : "group-operation-failed");
+    }
+    const name = readdirSync(join(p.h.base, "receipts")).find((name) => name.endsWith(`-${row.group}.json`));
+    assert.ok(isDeepStrictEqual(JSON.parse(readFileSync(join(p.h.base, "receipts", name), "utf8")), row));
+  }
+  assert.ok(rows.length > 5); assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
 });
 
 test("fleet receipt sanitizer rejects raw fields and accessors without changing failure outcomes", async (t) => {

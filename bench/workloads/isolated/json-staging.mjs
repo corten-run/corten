@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { auditBundleSchemas, descriptor, identity, imageCommandEvidence, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
-import { inspectJson } from "../../json-api/report.mjs";
+import { inspectBoundJson } from "../../json-api/report.mjs";
 import { timedCaseProjection } from "../../json-api/timed-outcomes.mjs";
 import { contained, reader } from "../../json-api/artifacts.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -15,13 +15,14 @@ import { dockerRead } from "./host-observation.mjs";
 export function inspectPreparation(binding, root) {
   const summary = JSON.parse(readRegular(join(root, "summary.json")));
   assert.equal(summary.round, binding.request.round); assert.equal(summary.commit, binding.request.commit);
-  verifyJsonProducer(binding, summary);
   assert.deepEqual(summary.options, binding.execution.effectiveOptions);
   assert.deepEqual(summary.measurement?.cpus, binding.resources.expectedCpus);
+  assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT, "JSON API load layout differs from binding");
   assert.equal(summary.options.build, true); assert.equal(summary.options.checkOnly, true);
   assert.equal(summary.checksPassed, false); assert.equal(summary.complete, false); assert.equal(summary.attemptComplete, false);
   assert.deepEqual(summary.cleanupFailures, []);
-  const report = inspectJson(summary, { load: reader(root), commit: binding.request.commit });
+  const report = inspectBoundJson(summary, { load: reader(root), commit: binding.request.commit,
+    verifyBoundProducer: (value) => verifyJsonProducer(binding, value) });
   assert.equal(report.baseline, false);
   assert.equal(report.functionalAttemptComplete, true, "functional raw matrix/configuration incomplete");
   const group = descriptor(), rows = Object.values(report.apps).flatMap(Object.values);

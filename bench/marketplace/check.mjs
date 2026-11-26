@@ -333,12 +333,21 @@ export async function submitAlert(page, form, javaScriptEnabled) {
       page.waitForResponse((r) => alertResponse(r, action, fields)),
       form.locator('[type="submit"]').click(),
     ]);
-    await page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0);
+    // The original predicate, re-evaluated by Playwright from outside the page. A page without JavaScript
+    // runs no animation-frame or timer callbacks, so page.waitForFunction's in-page polling never re-checked
+    // a POST document first observed before the parser reached its message, and waited out the deadline:
+    // the symptom in #1251. The locator re-resolves :root, so a new document is re-checked too.
+    await page.locator(":root").waitForFunction((root) => root.ownerDocument.querySelector(".marketplace__message")?.textContent.trim().length > 0);
     // LiveView keeps polling after its correlated save reply; that is not pending navigation.
     if (!liveView) await page.waitForLoadState("networkidle");
   } catch (error) {
     throw await alertFailure(page, { action, fields, javaScriptEnabled, response, liveViewAcknowledged }, error);
   }
+}
+// The three native alert-form cases every browser profile submits, each with its exact message.
+export function alertCases(locale, record) {
+  return [["invalid", "1", labels[locale].invalid_email], ["todd@example.test", "0", labels[locale].invalid_price],
+    ["todd@example.test", locale === "en-US" ? "1234.50" : "1234,50", labels[locale].alert_set.replace("{email}", "todd@example.test").replace("{title}", record.title).replace("{price}", new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(1234.5))]];
 }
 async function control(upstream, value) {
   const response = await fetch(`${upstream}/__marketplace/control`, { method: "POST", body: JSON.stringify(value), signal: AbortSignal.timeout(5000) });
@@ -409,8 +418,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
       await navigationFinished(page);
       comparePage(await page.evaluate(snapshotPage), catalog.item_2, locale); result.pages++;
       // Submit native forms so each framework keeps its normal CSRF protection.
-      for (const [email, price, message] of [["invalid", "1", labels[locale].invalid_email], ["todd@example.test", "0", labels[locale].invalid_price],
-        ["todd@example.test", locale === "en-US" ? "1234.50" : "1234,50", labels[locale].alert_set.replace("{email}", "todd@example.test").replace("{title}", catalog.item_1.title).replace("{price}", new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(1234.5))]]) {
+      for (const [email, price, message] of alertCases(locale, catalog.item_1)) {
         await visit("item_1");
         const form = page.locator(".marketplace__alert form");
         await alertReady(page, form, javaScriptEnabled, { email, target_price: price });

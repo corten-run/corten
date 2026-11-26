@@ -89,6 +89,14 @@ async fn served<M: crate::Middleware>(
 /// numbers of requests gives the difference per request: `cargo test --release -p corten-run --lib
 /// --no-run`, then `TCP_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact
 /// tests::server::what_a_request_over_tcp_costs` and again at 200.
+///
+/// With glibc's allocator the keep-alive count has two levels about 370 instructions apart, set
+/// by how the one heap the client and the server share here is laid out and not by what a
+/// request does: at `8d5160be2` (glibc 2.41) one allocation of 25 to 40 bytes held for the
+/// connection moved it from 20,662 to 21,032 or more, and one of any other size tried, from 1 to
+/// 4,096 bytes, did not move it. With jemalloc preloaded (`LD_PRELOAD=libjemalloc.so.2`) each of
+/// those sizes counted within 9.1 of none. So a difference between two builds read here with
+/// glibc's allocator is counted again with jemalloc preloaded before it is believed.
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
 async fn what_a_request_over_tcp_costs() {
@@ -796,6 +804,195 @@ async fn a_server_dropped_without_a_shutdown_closes_its_connections() {
     tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut rest)).await.expect("closed at once").ok();
 }
 
+/// What `client` is sent until its connection closes, which it must within five seconds: well
+/// inside the grace the tests below give, so a connection held for the grace fails them.
+async fn sent_until_closed(client: &mut tokio::net::TcpStream, who: &str) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut rest)).await;
+    // A connection the server reset is closed too.
+    let _ = closed.unwrap_or_else(|_| panic!("{who}: not closed, after {:?}", String::from_utf8_lossy(&rest)));
+    String::from_utf8(rest).unwrap()
+}
+
+/// Shutdown reaches a connection whose task has woken many times since it began to wait for it
+/// (the task polls its wait again only when the wait's own waker has fired, and asks at each
+/// wake only whether it has): one idle after its requests closes at once, one that never sent a
+/// byte closes at once, and one whose handler is still at work answers, says that it closes, and
+/// closes, and only then is the server done. A server that is gone without a shutdown closes all
+/// three at once.
+#[tokio::test]
+async fn shutdown_reaches_a_connection_long_after_its_task_began_to_wait_for_it() {
+    long_waiting_connections_hear_of_shutdown(1).await;
+}
+
+/// The same where `serve` runs, on a runtime of several threads: the word of shutdown is sent
+/// from one thread while the connections' tasks are polled on others.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_reaches_such_a_connection_whose_task_runs_on_another_thread() {
+    long_waiting_connections_hear_of_shutdown(8).await;
+}
+
+/// `rounds` servers stopped and as many dropped, each with three connections as the two tests
+/// above say.
+async fn long_waiting_connections_hear_of_shutdown(rounds: usize) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const GET: &[u8] = b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    for gone in [false, true].repeat(rounds) {
+        let (started, mut running) = tokio::sync::mpsc::channel::<()>(1);
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let slow = get({
+            let release = release.clone();
+            move || {
+                let (started, release) = (started.clone(), release.clone());
+                async move {
+                    let _ = started.send(()).await;
+                    release.notified().await;
+                    "late"
+                }
+            }
+        });
+        let routes = Table::new().route("/", get(|| async { "hi" })).route("/slow", slow);
+        // A grace no connection here may be held for: each closes because of what it is doing.
+        let app = App::new(Routes::from(routes)).shutdown_grace(Duration::from_secs(60));
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let mut server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+            let _ = stopped.await;
+        }));
+        let mut idle = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut busy = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut piece = [0u8; 1024];
+        for _ in 0..40 {
+            for client in [&mut idle, &mut busy] {
+                client.write_all(GET).await.unwrap();
+                let mut answer = Vec::new();
+                while !answer.ends_with(b"hi") {
+                    let read = client.read(&mut piece).await.unwrap();
+                    assert!(read > 0, "closed after {:?}", String::from_utf8_lossy(&answer));
+                    answer.extend_from_slice(&piece[..read]);
+                }
+                assert!(answer.starts_with(b"HTTP/1.1 200"), "{:?}", String::from_utf8_lossy(&answer));
+            }
+        }
+        busy.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        running.recv().await.expect("the slow handler runs");
+        if gone {
+            // The server's future is dropped where it waits, and the word of shutdown with it.
+            server.abort();
+            for (client, who) in [(&mut idle, "idle"), (&mut silent, "silent"), (&mut busy, "busy")] {
+                assert_eq!(sent_until_closed(client, who).await, "", "{who}: closed with nothing more, the server gone");
+            }
+            continue;
+        }
+        stop.send(()).unwrap();
+        for (client, who) in [(&mut idle, "idle"), (&mut silent, "silent")] {
+            assert_eq!(sent_until_closed(client, who).await, "", "{who}: closed with nothing more");
+        }
+        let waited = tokio::time::timeout(Duration::from_millis(200), &mut server).await;
+        assert!(waited.is_err(), "the server waits for the request still being answered");
+        release.notify_one();
+        let answer = sent_until_closed(&mut busy, "busy").await;
+        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("late"), "the request in progress is answered: {answer}");
+        assert!(answer.contains("\r\nconnection: close\r\n"), "and says its connection closes: {answer}");
+        tokio::time::timeout(Duration::from_secs(5), server).await.expect("shutdown ends").unwrap().unwrap();
+    }
+}
+
+/// A connection hears of shutdown when its task had spent tokio's cooperative budget by the time
+/// it first waited for it. A wait the budget puts off leaves its waker with no one: it wakes
+/// that waker itself, to be polled again, so the task must poll the wait again when the wait's
+/// own waker fires, and not only when the channel has something to say. The step before HTTP
+/// spends the budget here, in the poll that ends it.
+#[tokio::test]
+async fn a_connection_whose_task_had_spent_its_budget_still_hears_of_shutdown() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stepped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let step = {
+        let stepped = stepped.clone();
+        move |tcp: tokio::net::TcpStream| {
+            let stepped = stepped.clone();
+            async move {
+                // Never pending: asked before each unit is taken.
+                while tokio::task::coop::has_budget_remaining() {
+                    tokio::task::coop::consume_budget().await;
+                }
+                stepped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, std::convert::Infallible>((tcp, ()))
+            }
+        }
+    };
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/", get(|| async { "hi" })))).shutdown_grace(Duration::from_secs(60));
+    let server = tokio::spawn(crate::app::run(vec![listener], step, app, async {
+        let _ = stopped.await;
+    }));
+    let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    while stepped.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    // Its task has been polled again since, with a budget to read with, and waits for a request.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send(()).unwrap();
+    assert_eq!(sent_until_closed(&mut silent, "silent").await, "");
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
+/// A connection whose step before HTTP ends in the poll shutdown begins in (one accepted as the
+/// server stops) is closed at once, whether or not shutdown had begun before its task first
+/// waited for it: one that sent nothing gets nothing, and one whose request had arrived is either
+/// closed unread or answered in full, never held or cut. Which of the two is not promised, and
+/// this test holds neither.
+#[tokio::test]
+async fn a_connection_whose_step_ends_as_shutdown_begins_is_closed() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stepping = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let step = {
+        let (stepping, release) = (stepping.clone(), release.clone());
+        move |tcp: tokio::net::TcpStream| {
+            let (stepping, release) = (stepping.clone(), release.clone());
+            async move {
+                stepping.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                release.notified().await;
+                Ok::<_, std::convert::Infallible>((tcp, ()))
+            }
+        }
+    };
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/", get(|| async { "hi" })))).shutdown_grace(Duration::from_secs(60));
+    let server = tokio::spawn(crate::app::run(vec![listener], step, app, {
+        let release = release.clone();
+        async move {
+            let _ = stopped.await;
+            // In the poll that begins shutdown, before it does: both steps end, and each task is
+            // polled next with shutdown begun (the test's runtime has one thread).
+            release.notify_waiters();
+        }
+    }));
+    let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut asked = tokio::net::TcpStream::connect(addr).await.unwrap();
+    asked.write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    while stepping.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    // Both steps have been polled, and wait.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    stop.send(()).unwrap();
+    assert_eq!(sent_until_closed(&mut silent, "silent").await, "");
+    let answer = sent_until_closed(&mut asked, "asked").await;
+    assert!(
+        answer.is_empty() || (answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi")),
+        "closed unread or answered in full: {answer}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
 /// `App::send_timeout` holds on a switched connection too: a socket whose client stops reading
 /// has its route's write fail with `TimedOut`.
 #[tokio::test]
@@ -1132,6 +1329,76 @@ async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does
     // Closed by the header timeout, not at once after the answer. Half the timeout leaves room for
     // a clock thread that ticked late, which dates the idle connection earlier.
     assert!(lasted >= timeout / 2, "closed {lasted:?} after the refused CONNECT, before the header timeout");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// A `2xx` to `CONNECT` whose handler says `Content-Length` (as one that writes `0` itself,
+/// `Media::stream_sized` or a `Relay` of an upstream's `2xx` may) is sent without it, as RFC 9110
+/// 9.3.6 asks, and opens its tunnel: hyper refuses to send a head that has it, which left the
+/// client a closed connection and no answer (#1915).
+#[tokio::test]
+async fn a_connect_answered_with_a_length_is_sent_without_it() {
+    a_tunnel_answered_with(header::CONTENT_LENGTH, "0").await;
+}
+
+/// As `a_connect_answered_with_a_length_is_sent_without_it`, for `Transfer-Encoding`.
+#[tokio::test]
+async fn a_connect_answered_chunked_is_sent_without_transfer_encoding() {
+    a_tunnel_answered_with(header::TRANSFER_ENCODING, "chunked").await;
+}
+
+/// Asks over a socket for a tunnel whose route answers `200` with `name: value`, and checks that
+/// the head arrives with neither `Content-Length` nor `Transfer-Encoding` and the tunnel echoes.
+async fn a_tunnel_answered_with(name: http::HeaderName, value: &'static str) {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let said = name.clone();
+    let tunnel = crate::router::any(move |mut req: Request<Body>| {
+        let name = said.clone();
+        async move {
+            let on = hyper::upgrade::on(&mut req);
+            tokio::spawn(async move {
+                let Ok(upgraded) = on.await else { return };
+                let mut io = hyper_util::rt::TokioIo::new(upgraded);
+                let mut buf = [0u8; 64];
+                loop {
+                    match io.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) if io.write_all(&buf[..n]).await.is_err() => return,
+                        Ok(_) => {}
+                    }
+                }
+            });
+            (StatusCode::OK, [(name, value)])
+        }
+    });
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/", tunnel)));
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    // The head, a byte at a time so nothing after it is taken.
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let byte = tokio::time::timeout(Duration::from_secs(3), stream.read_u8()).await.expect("an answer in time");
+        let byte = byte
+            .unwrap_or_else(|error| panic!("{name}: the connection closed ({error}) after {:?}", String::from_utf8_lossy(&head)));
+        head.push(byte);
+    }
+    let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 200"), "{name}: {head}");
+    assert!(!head.contains("\r\ncontent-length:") && !head.contains("\r\ntransfer-encoding:"), "{name}: {head}");
+    stream.write_all(b"through the tunnel\n").await.unwrap();
+    let mut echo = [0u8; 19];
+    tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut echo)).await.expect("an echo").unwrap();
+    assert_eq!(&echo, b"through the tunnel\n", "{name}");
+    drop(stream);
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
@@ -1860,20 +2127,35 @@ async fn a_panic_in_finished_work_is_the_handlers() {
 }
 
 /// A `2xx` to `CONNECT` is a tunnel, so the router sends it with no body, whatever the handler
-/// wrote; a refusal keeps its body.
+/// wrote, and without any `Content-Length` or `Transfer-Encoding` it said (RFC 9110 9.3.6,
+/// #1915); a refusal keeps its body and its length.
 #[tokio::test]
 async fn a_connect_answered_with_success_has_no_body() {
     let routes = Table::new().route(
         "/",
         crate::router::any(|req: Request<Body>| async move {
-            let status = if req.headers().contains_key("x-refuse") { StatusCode::FORBIDDEN } else { StatusCode::OK };
-            (status, "tunnel")
+            use crate::response::IntoResponse;
+            if req.headers().contains_key("x-refuse") {
+                return (StatusCode::FORBIDDEN, [(header::CONTENT_LENGTH, "6")], "tunnel").into_response();
+            }
+            if req.headers().contains_key("x-unframed") {
+                return (StatusCode::OK, "tunnel").into_response();
+            }
+            (StatusCode::OK, [(header::CONTENT_LENGTH, "6"), (header::TRANSFER_ENCODING, "chunked")], "tunnel").into_response()
         }),
     );
-    let (status, _, body) = call(routes.clone(), "CONNECT", None).await;
+    let (status, headers, body) = call(routes.clone(), "CONNECT", None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
+    assert!(!headers.contains_key(header::CONTENT_LENGTH) && !headers.contains_key(header::TRANSFER_ENCODING), "{headers:?}");
+    // A body with neither framing header is emptied for its size alone.
+    let req = Request::builder().method("CONNECT").uri("/").header("x-unframed", "1").body(Body::empty()).unwrap();
+    let res = Router::from(routes.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!res.headers().contains_key(header::CONTENT_LENGTH) && !res.headers().contains_key(header::TRANSFER_ENCODING));
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "");
     let req = Request::builder().method("CONNECT").uri("/").header("x-refuse", "1").body(Body::empty()).unwrap();
     let res = Router::from(routes).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.headers()[header::CONTENT_LENGTH], "6");
     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
 }

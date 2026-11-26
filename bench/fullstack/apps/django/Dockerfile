@@ -19,4 +19,9 @@ RUN pip install --no-cache-dir -r requirements-matched.txt
 ENV PROFILE=matched
 CMD ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"]
 
+FROM matched AS matched-asgi
+RUN pip install --no-cache-dir -r requirements-matched-asgi.txt
+ENV DJANGO_SETTINGS_MODULE=itempage.mixed_asgi_settings
+CMD ["sh", "-c", "python -m django migrate --noinput && exec python start_mixed_asgi.py"]
+
 FROM ${PROFILE} AS runtime
