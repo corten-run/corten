@@ -2184,8 +2184,9 @@ const holdsNav = (el) => matchesOf(el, NAV) || !!queryOne(el, NAV);
  * Sets `aria-current="page"` on `<a data-nav>` links to this page (`data-nav="section"`: to this
  * page or any page under it) and removes it from the rest, after a navigation and after a patch
  * that puts one on the page or removes one. Of the links of one `data-nav-group` (`Req::nav_of`),
- * only the deepest that holds the page is current; a link holds it at its own URL or at one of the
- * paths in its `data-nav-also` (`NavTo::also`). The shell is not re-rendered by client
+ * only the deepest that holds the page is current; a link holds it at its own URL or, in a group the
+ * server named with a trailing `+`, at one of the paths in its `data-nav-also` (`NavTo::also`). The
+ * shell is not re-rendered by client
  * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
  * or current when first seen (the server's mark on a full load, or in a row a write's page or a
  * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
@@ -2205,9 +2206,10 @@ function markCurrent(kept = []) {
     const path = new URL(/** @type {HTMLAnchorElement} */ (link).href).pathname;
     const base = path.replace(/\/+$/, "");
     const holds = here === path || (link.getAttribute("data-nav") === "section" && here.startsWith(`${base}/`));
-    const also = link.getAttribute("data-nav-also");
-    const depth = also ? alsoDepth(link, also, here, holds ? base.length : -1) : holds ? base.length : -1;
-    const group = link.getAttribute("data-nav-group") ?? link;
+    const named = link.getAttribute("data-nav-group");
+    const group = named ?? link;
+    let depth = holds ? base.length : -1;
+    if (named?.endsWith("+")) depth = alsoDepth(link, here, depth);
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
   }
@@ -2228,18 +2230,19 @@ function markCurrent(kept = []) {
 
 /**
  * How deep `link` is when it holds the page `here` at its own URL (`depth`, -1 when it does not)
- * or at one of the paths of its `data-nav-also` (`also`, `NavTo::also`), by the same rule.
+ * or at one of the paths of its `data-nav-also` (`NavTo::also`), by the same rule. The server wrote
+ * each as `location.pathname` shows it, with `|` as `%7C` (Chromium's spelling), and compared it
+ * with the request's path read the same way, so it is compared here as text, not parsed again.
  * @param {Element} link
- * @param {string} also
  * @param {string} here
  * @param {number} depth
  */
-function alsoDepth(link, also, here, depth) {
+function alsoDepth(link, here, depth) {
   const section = link.getAttribute("data-nav") === "section";
-  for (const other of also.split(" ")) {
-    const path = new URL(other, location.href).pathname;
+  const page = here.replaceAll("|", "%7C");
+  for (const path of link.getAttribute("data-nav-also")?.split(" ") ?? []) {
     const base = path.replace(/\/+$/, "");
-    if (here === path || (section && here.startsWith(`${base}/`))) depth = Math.max(depth, base.length);
+    if (page === path || (section && page.startsWith(`${base}/`))) depth = Math.max(depth, base.length);
   }
   return depth;
 }

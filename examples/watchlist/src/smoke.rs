@@ -97,32 +97,39 @@ pub mod url {
         pub instance: u32,
     }
 
-    /// A nav whose entry, `/smoke/nav/here`, is current at an older address of its page too
-    /// (`NavTo::also`, #2119), `/smoke/nav/café`, which this route serves as well.
+    /// A nav whose entry, `/smoke/nav/here`, is current at older addresses of its page too
+    /// (`NavTo::also`, #2119), each of which this route serves as well.
     #[route("/smoke/nav/{name}", get = nav_page)]
     pub struct NavPage<'a> {
         pub name: &'a str,
     }
 }
 
-/// The nav page's older address, written by hand with a character beyond ASCII in it as an app's
-/// own route might write it: the browser asks for it percent-encoded.
-struct OlderNav;
+/// An older address of the nav page, written by hand as an app's own route might write it, in a
+/// form the browser does not show as written: a character beyond ASCII (asked for
+/// percent-encoded), a `..` segment written `%2e%2E` (resolved away) and a trailing space (trimmed).
+struct OlderNav(&'static str);
 
 impl corten::Route for OlderNav {
     type Data = corten::route::NoData;
     const PATH: &'static str = "/smoke/nav/{name}";
     fn write_href(&self, out: &mut String, _: bool) {
-        out.push_str("/smoke/nav/caf\u{e9}");
+        out.push_str(self.0);
     }
 }
 
-/// The nav: the section `/smoke/nav`, which holds both addresses less deeply, and the entry.
+/// The nav: the section `/smoke/nav`, which holds every address less deeply, and the entry, also
+/// current at `/smoke/nav/café`, `/smoke/nav/settings`, `/smoke/nav/a|b` (a `Local`, whose `|`
+/// Firefox and WebKit keep and Chromium encodes) and `/smoke/nav/older`.
 async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
     let section = corten::Local::parse("/smoke/nav").expect("a local path");
+    let piped = corten::Local::parse("/smoke/nav/a|b").expect("a local path");
+    let (cafe, dotted, spaced) =
+        (OlderNav("/smoke/nav/caf\u{e9}"), OlderNav("/smoke/old/%2e%2E/nav/settings"), OlderNav("/smoke/nav/older "));
+    let here = url::NavPage { name: "here" };
     let nav = req.nav_of([
         (corten::NavTo::section(&section), "Nav"),
-        (corten::NavTo::page(&url::NavPage { name: "here" }).also(&OlderNav), "Here"),
+        (corten::NavTo::page(&here).also(&cafe).also(&dotted).also(&piped).also(&spaced), "Here"),
     ]);
     req.page(html! {
         <Layout req={&req} title="Nav" viewer={None} head="">

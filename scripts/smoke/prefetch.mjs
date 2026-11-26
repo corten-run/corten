@@ -6,8 +6,9 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
     // data-nav="section": current on its page and every page under it. Of the links of one
     // data-nav-group (Req::nav_of), only the deepest that holds the page is current, wherever
     // they are: group "a" is split between a <nav> and an <aside>; group "b" is another nav. Group
-    // "c"'s second link goes to /latest and holds the page at the other paths of its data-nav-also
-    // (NavTo::also) too, ranked by the same rule: deeper than the section above it at /news.
+    // "c+" (the "+" says a link of it has other addresses) has a second link that goes to /latest and
+    // holds the page at the other paths of its data-nav-also (NavTo::also) too, ranked by the same
+    // rule: deeper than the section above it at /news.
     await page.evaluate(() => {
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="section-link" href="/" data-nav="section">All</a>'));
       document.querySelector("header")?.insertAdjacentHTML(
@@ -15,8 +16,8 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
         __html('<nav><a id="group-all" href="/" data-nav="section" data-nav-group="a">All</a></nav>' +
           '<aside><a id="group-news" href="/news" data-nav data-nav-group="a">News</a></aside>' +
           '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="b">All</a></nav>' +
-          '<nav><a id="also-all" href="/" data-nav="section" data-nav-group="c">All</a>' +
-          '<a id="also-latest" href="/latest" data-nav data-nav-group="c" data-nav-also="/old-news /news">Latest</a></nav>'),
+          '<nav><a id="also-all" href="/" data-nav="section" data-nav-group="c+">All</a>' +
+          '<a id="also-latest" href="/latest" data-nav data-nav-group="c+" data-nav-also="/old-news /news">Latest</a></nav>'),
       );
     });
     /** The aria-current of group "c"'s two links. */
@@ -347,51 +348,74 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
 }
 
 /**
- * `NavTo::also` at an address with a character beyond ASCII: the server marks the entry at the
- * request for it by the `data-nav-also` text it writes, and the runtime, ranking copies of the same
- * links it never saw marked, marks the same one at that address after a client navigation.
+ * `NavTo::also` at older addresses written in forms the browser does not show as written: a character
+ * beyond ASCII, a `%2e%2E` segment, a `|` (raw in Firefox's and WebKit's request and pathname,
+ * `%7C` in Chromium's) and a trailing space. For each, the server marks the entry at the request for
+ * that address, and the runtime, ranking copies of the same links it never saw marked, marks the
+ * same one at that address after a client navigation.
  */
 export async function navAlso(browser, swaps) {
-  const name = "a nav entry is current at its page's older address, by the server and the runtime alike";
+  const name = "a nav entry is current at its page's older addresses, by the server and the runtime alike";
   const context = await browser.newContext();
   const page = await context.newPage();
-  const served = await (await page.request.get(`${base}/smoke/nav/caf%C3%A9`)).text();
-  const entry = /<a href="\/smoke\/nav\/here" data-nav data-nav-group="[0-9a-f]{8}" data-nav-also="\/smoke\/nav\/caf%C3%A9" aria-current="page">Here<\/a>/.test(served);
-  const section = /<a href="\/smoke\/nav" data-nav="section" data-nav-group="[0-9a-f]{8}">Nav<\/a>/.test(served);
+  // Each older address as a stored link carries it, with the path the server writes for it.
+  const cases = [
+    ["/smoke/nav/caf\u00e9", "/smoke/nav/caf%C3%A9"],
+    ["/smoke/old/%2e%2E/nav/settings", "/smoke/nav/settings"],
+    ["/smoke/nav/a|b", "/smoke/nav/a%7Cb"],
+    ["/smoke/nav/older", "/smoke/nav/older"],
+  ];
+  const also = cases.map(([, path]) => path).join(" ");
+  /** Whether the server draws the entry marked and the section not, for one request. */
+  const served = async (/** @type {string} */ href) => {
+    const html = await (await page.request.get(new URL(href, base).href)).text();
+    const entry = /<a href="\/smoke\/nav\/here" [^>]*aria-current="page"[^>]*>Here<\/a>/.test(html);
+    const section = /<a href="\/smoke\/nav" data-nav="section" [^>]*>Nav<\/a>/.test(html) && !/<a href="\/smoke\/nav" [^>]*aria-current/.test(html);
+    return entry && section;
+  };
+  /** @type {string[]} */
+  const seen = [];
+  const drawn = await (await page.request.get(`${base}/smoke/nav/here`)).text();
+  const written = drawn.match(/<a href="\/smoke\/nav\/here" data-nav data-nav-group="[0-9a-f]{8}(\+?)" data-nav-also="([^"]*)"/);
+  if (written?.[1] !== "+" || written[2] !== also) seen.push(`server wrote group mark "${written?.[1]}" and paths "${written?.[2]}"`);
+  for (const [href] of cases) {
+    // Node asks for a raw `|` as Firefox and WebKit do; Chromium's `%7C` is a request of its own.
+    for (const asked of href.includes("|") ? [href, href.replace("|", "%7C")] : [href]) {
+      if (!(await served(asked))) seen.push(`server at ${asked}: unmarked`);
+    }
+  }
   if (!swaps) {
-    check(name, entry && section, "server only: without swaps a client navigation loads the page in full");
+    check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
     skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
     await context.close();
     return;
   }
-  await page.goto(`${base}/smoke/nav/here`);
-  // Copies of the nav's links in the shell, which a client navigation keeps, unmarked: only the
-  // runtime marks them. Beside them a plain link to the older address, as a stored link carries it.
-  await page.evaluate(() => {
-    const nav = document.createElement("nav");
-    nav.id = "also-copy";
-    for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
-      const copy = /** @type {Element} */ (link.cloneNode(true));
-      copy.removeAttribute("aria-current");
-      nav.append(copy);
-    }
-    const older = document.createElement("a");
-    older.id = "also-older";
-    older.href = "/smoke/nav/caf\u00e9";
-    older.textContent = "Older";
-    document.querySelector("header")?.append(nav, older);
-  });
-  await page.click("#also-older");
-  await page.waitForURL((url) => url.pathname === "/smoke/nav/caf%C3%A9");
-  await page.waitForFunction(() => document.querySelector("#also-copy a[data-nav-also]")?.getAttribute("aria-current") === "page", null, { timeout: 5000 }).catch(() => {});
-  const seen = await page.evaluate(() => {
-    const copies = Array.from(document.querySelectorAll("#also-copy a"));
-    const also = copies[1]?.getAttribute("data-nav-also") ?? "";
-    return {
-      marks: copies.map((link) => link.getAttribute("aria-current") ?? "-").join(" "),
-      same: location.pathname === new URL(also, location.href).pathname,
-    };
-  });
-  check(name, entry && section && seen.marks === "- page" && seen.same, `served marked: ${entry}, section unmarked: ${section}; runtime: ${seen.marks}, same pathname: ${seen.same}`);
+  for (const [href] of cases) {
+    await page.goto(`${base}/smoke/nav/here`);
+    // Copies of the nav's links in the shell, which a client navigation keeps, unmarked: only the
+    // runtime marks them. Beside them a plain link to the older address, as a stored link carries it.
+    await page.evaluate((href) => {
+      const nav = document.createElement("nav");
+      nav.id = "also-copy";
+      for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
+        const copy = /** @type {Element} */ (link.cloneNode(true));
+        copy.removeAttribute("aria-current");
+        nav.append(copy);
+      }
+      const older = document.createElement("a");
+      older.id = "also-older";
+      older.setAttribute("href", href);
+      older.textContent = "Older";
+      document.querySelector("header")?.append(nav, older);
+    }, href);
+    const before = await page.evaluate(() => location.pathname);
+    await page.click("#also-older");
+    await page.waitForFunction((before) => location.pathname !== before && document.title.startsWith("Nav"), before);
+    await page.waitForFunction(() => document.querySelector("#also-copy a[data-nav-also]")?.getAttribute("aria-current") === "page", null, { timeout: 5000 }).catch(() => {});
+    const marks = await page.evaluate(() => Array.from(document.querySelectorAll("#also-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
+    const at = await page.evaluate(() => location.pathname);
+    if (marks !== "- page") seen.push(`runtime at ${at}: ${marks}`);
+  }
+  check(name, seen.length === 0, seen.join("; ") || "server and runtime marked the entry at every older address");
   await context.close();
 }
