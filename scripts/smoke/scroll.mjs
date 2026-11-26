@@ -335,31 +335,32 @@ export async function scroll(swaps, page, errors, browser, noSwaps) {
         const onStocks = (/** @type {import("@playwright/test").Request} */ r) => stocks(r) && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         /**
          * Presses with `press` and waits for the request it sends, both within 5 s: the request, or
-         * why the case stops (a press that threw says so, whether or not its request went).
+         * why the case stops (a press that threw in time says so, whether or not its request went).
+         * The bounded wait decides: a press or request that settles after the 5 s, though before its
+         * timer ran, is no result, and the case stops naming that wait.
          * @param {string} what @param {(r: import("@playwright/test").Request) => boolean} sent @param {() => Promise<unknown>} press
          */
         const pressFor = async (what, sent, press) => {
-          /** @type {import("@playwright/test").Request | null} */
-          let got = null;
-          /** How the press ended: null while it runs, "" once it returned, or why it threw. @type {string | null} */
-          let pressed = null;
-          await within(
-            5000,
-            `the press that asked for ${what} and its request not done within 5 s`,
-            Promise.all([
-              page.waitForRequest(sent, { timeout: 5000 }).then((r) => (got = r)),
-              press().then(
-                () => (pressed = ""),
-                (error) => {
-                  pressed = `the press that asked for ${what} threw: ${(error instanceof Error ? error.message.split("\n")[0] : String(error)) || "no message"}`;
+          const late = `the press that asked for ${what} and its request not done within 5 s`;
+          /** Why the press threw, once it has. */
+          let threw = "";
+          try {
+            const [got] = await within(
+              5000,
+              late,
+              Promise.all([
+                page.waitForRequest(sent, { timeout: 5000 }),
+                press().catch((error) => {
+                  threw = `the press that asked for ${what} threw: ${(error instanceof Error ? error.message.split("\n")[0] : String(error)) || "no message"}`;
                   throw error;
-                },
-              ),
-            ]),
-          ).catch(() => {});
-          if (pressed) return pressed;
-          if (!got) return `no request for ${what} within 5 s`;
-          return pressed === "" ? got : `the press that asked for ${what} did not return within 5 s`;
+                }),
+              ]),
+            );
+            return got;
+          } catch (error) {
+            if (error instanceof Error && error.message === late) return late;
+            return threw || `no request for ${what} within 5 s`;
+          }
         };
         let release = () => {};
         /** Where the case stopped, if it did. */

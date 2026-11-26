@@ -226,11 +226,14 @@ export async function pageWrites(page, browser) {
   };
   /**
    * Notes, from now on, each mark a case's stand-in put in an answer (`data-smoke-at`, the answer's
-   * place in `seen.asked`) the moment the page draws it, so a draw that the next one replaces is
-   * seen too: the time of that draw (`Date.now()` in the page), what the header said had failed at
-   * that moment (its `data-failed`, or null), and the mark of the failure event that said it (its
-   * `data-failed-mark`, or null, where a case marks its failures). `drawnBy` reads them. Set up
-   * within 5 s.
+   * place in `seen.asked`) as the page draws it, so a draw that the next one replaces is seen too:
+   * the time the page's observer saw that draw (`Date.now()` in the page), what the header said had
+   * failed at the moment of the draw itself (its `data-failed`, or null), and the mark of the failure
+   * event that said it (its `data-failed-mark`, or null, where a case marks its failures). The one
+   * observer sees the marks and the header's changes in the order they were made: a failure shown
+   * after the draw, though before the observer ran (a promise reaction queued before the draw), is
+   * undone for that draw by its record's old value, so it is not taken as shown at the draw. A header
+   * put in after the draw said nothing then. `drawnBy` reads them. Set up within 5 s.
    * @param {import("@playwright/test").Page} own
    */
   const watchMarks = (own) =>
@@ -238,19 +241,52 @@ export async function pageWrites(page, browser) {
       5000,
       "the page did not start noting its draws within 5 s",
       own.evaluate(() => {
-        /** @type {Record<string, { time: number, failed: string | null, mark: string | null }>} */
+        /** @typedef {{ time: number, failed: string | null, mark: string | null }} Drawn */
+        /** @type {Record<string, Drawn>} */
         const marks = Object.create(null);
         (/** @type {any} */ (window)).__marks = marks;
-        const note = () => {
+        /** Each marked element in or at `node`. @param {Node} node @returns {Element[]} */
+        const marked = (node) =>
+          node instanceof Element ? [...(node.hasAttribute("data-smoke-at") ? [node] : []), ...Array.from(node.querySelectorAll("[data-smoke-at]"))] : [];
+        /** @param {MutationRecord[]} records */
+        const note = (records) => {
           const time = Date.now();
-          for (const el of Array.from(document.querySelectorAll("[data-smoke-at]"))) {
-            const at = /** @type {string} */ (el.getAttribute("data-smoke-at"));
-            const header = document.querySelector("header");
-            marks[at] ??= { time, failed: header?.getAttribute("data-failed") ?? null, mark: header?.getAttribute("data-failed-mark") ?? null };
+          const header = document.querySelector("header");
+          // The header's state now, taken back record by record, last first, to each draw's moment.
+          let failed = header?.getAttribute("data-failed") ?? null;
+          let mark = header?.getAttribute("data-failed-mark") ?? null;
+          /** This batch's draws, the earliest kept. @type {Record<string, Drawn>} */
+          const batch = Object.create(null);
+          for (let i = records.length - 1; i >= 0; i--) {
+            const r = records[i];
+            if (r.type === "attributes" && r.attributeName !== "data-smoke-at") {
+              if (r.target !== header) continue;
+              if (r.attributeName === "data-failed") failed = r.oldValue;
+              else if (r.attributeName === "data-failed-mark") mark = r.oldValue;
+              continue;
+            }
+            const drawn = r.type === "attributes" ? marked(r.target) : Array.from(r.addedNodes).flatMap(marked);
+            for (const el of drawn) batch[/** @type {string} */ (el.getAttribute("data-smoke-at"))] = { time, failed, mark };
+            // Before the header now in the page was put in, it said nothing.
+            if (header && r.type === "childList" && Array.from(r.addedNodes).some((n) => n === header || n.contains(header))) failed = mark = null;
           }
+          for (const at in batch) marks[at] ??= batch[at];
         };
-        note();
-        new MutationObserver(note).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-smoke-at"] });
+        for (const el of Array.from(document.querySelectorAll("[data-smoke-at]"))) {
+          const header = document.querySelector("header");
+          marks[/** @type {string} */ (el.getAttribute("data-smoke-at"))] ??= {
+            time: Date.now(),
+            failed: header?.getAttribute("data-failed") ?? null,
+            mark: header?.getAttribute("data-failed-mark") ?? null,
+          };
+        }
+        new MutationObserver(note).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeOldValue: true,
+          attributeFilter: ["data-smoke-at", "data-failed", "data-failed-mark"],
+        });
       }),
     );
   /**

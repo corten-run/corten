@@ -1,4 +1,4 @@
-import { base, skip, check, steps, cleanUp, within } from "./helpers.mjs";
+import { base, skip, check, steps, cleanUp, within, opened } from "./helpers.mjs";
 
 /** A section stylesheet the abandoned navigation links, held until the case ends. */
 const HELD_SHEET = "/smoke/write-failure-held.css";
@@ -161,7 +161,7 @@ export async function writeFailures(browser) {
     /** @type {() => void} */
     let endCase = () => {};
     const caseEnded = new Promise((resolve) => (endCase = () => resolve(undefined)));
-    const context = await within(10_000, "the case's browser context did not open within 10 s", browser.newContext());
+    const context = await opened("the case's browser context", browser.newContext(), 10_000);
     /** @type {import("@playwright/test").Page | undefined} */
     let page;
     // Every gate opens and the context closes however the case ends, each even when another step of
@@ -480,7 +480,7 @@ async function readAgainAfterReplace(browser) {
   /** @type {() => void} */
   let failPost = () => {};
   const postLetGo = new Promise((resolve) => (failPost = () => resolve(undefined)));
-  const context = await within(10_000, "the case's browser context did not open within 10 s", browser.newContext());
+  const context = await opened("the case's browser context", browser.newContext(), 10_000);
   /** @type {import("@playwright/test").Page | undefined} */
   let page;
   try {

@@ -223,14 +223,15 @@ const cleanUp = async (...undo) => {
 };
 
 /**
- * `opening` (a context or page being made), within 30 s, Playwright's own timeout for an action: a
- * loaded browser can take seconds to start a process for one. One made only after them (by the
- * monotonic clock, as `within` counts, though before its timer ran) is closed as it comes, so a
- * case that gave up on it does not leave it open.
- * @template {{ close: () => Promise<unknown> }} T @param {string} what @param {Promise<T>} opening @returns {Promise<T>}
+ * `opening` (a context or page being made), within `ms` (by default 30 s, Playwright's own timeout
+ * for an action: a loaded browser can take seconds to start a process for one). One made only after
+ * them (by the monotonic clock, as `within` counts, though before its timer ran) is closed as it
+ * comes, so a case that gave up on it does not leave it open.
+ * @template {{ close: () => Promise<unknown> }} T @param {string} what @param {Promise<T>} opening @param {number} [ms]
+ * @returns {Promise<T>}
  */
-const opened = (what, opening) =>
-  within(30_000, `${what} was not made within 30 s`, opening).catch((error) => {
+const opened = (what, opening, ms = 30_000) =>
+  within(ms, `${what} was not made within ${ms / 1000} s`, opening).catch((error) => {
     opening.then(
       (made) => made.close().catch(() => {}),
       () => {},
