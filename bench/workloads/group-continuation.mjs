@@ -88,8 +88,15 @@ const known = ({ state }) => state?.id && state.status === "collected" && state.
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": failedSetupRetirementFile, unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
+function verifySetupRetry({ local, state, stateRoot, outcome }) {
+  assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
+  assert.ok(outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
+  verifyFailedSetupRetirement(local, state);
+}
+
 function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
+  if (kind === "setup-failed") return verifySetupRetry(saved);
   assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
   if (kind === "native-failed") {
     if (exitOne) {
@@ -109,7 +116,6 @@ function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
     }
   } else {
     assert.ok(saved.outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
-    if (kind === "setup-failed") return verifyFailedSetupRetirement(local, state);
     const bytes = regular(join(local, retirementFile(kind)), 4096);
     assert.equal(digest(bytes), evidenceSha256, "unresolved custody: retirement receipt changed");
     verifyUnusedEvidence(JSON.parse(bytes), state);
@@ -452,10 +458,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         "no-create custody changed");
       // The same custody predicates as the scan: a lock that appeared since refuses.
       if (retirementFile === createErroredReceipt) assert.ok(createErrored(current), "continuation create failure custody changed");
-      if (retirementFile === failedSetupRetirementFile) {
-        assert.ok(current.outcome === "available" && !present(join(current.stateRoot, ".groups-launch.lock")), "continuation setup custody changed");
-        verifyFailedSetupRetirement(current.local, current.state);
-      } else if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
+      if (retirementFile === failedSetupRetirementFile) verifySetupRetry(current);
+      else if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
         retirementFile === "failed-native-host.json" ? undefined : retirementFile === createErroredReceipt ? 64 * 1024 : 4096)),
         receiptSha256(current.state, retirementFile), "continuation retirement changed");
     }

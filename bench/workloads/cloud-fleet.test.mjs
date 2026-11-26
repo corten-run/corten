@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
@@ -11,10 +11,12 @@ import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, campaign, commit, context, harness, metadata, subject, syntheticDelivery, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { digest } from "./cloud-local.mjs";
+import { digest, treeHash } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { verifyFleet } from "./fleet-verify.mjs";
+import { continuationAdmission } from "./group-continuation.mjs";
+import { verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -393,8 +395,30 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   let report = await verify();
   assert.equal(report.groups.find(({ group }) => group === s.group)?.outcome, "setup-failed-retired");
   assert.equal(report.publishableBaseline, false);
-  const custody = join(local, s.evidence, "control");
-  writeFileSync(join(custody, readdirSync(custody)[0]), "tampered custody");
+  const continuation = join(h.temp, "continuation");
+  mkdirSync(continuation);
+  writeFileSync(join(continuation, "index.json"), JSON.stringify([
+    { archives: {}, checkout: root, commit, root, round: "r21" },
+  ]));
+  const admission = await continuationAdmission(continuation, s.group);
+  admission.recheck();
+  const lateLock = join(local, "stream-recovery.lock");
+  writeFileSync(lateLock, "{}", { flag: "wx" });
+  assert.throws(() => admission.recheck(), /group recovery remains active/);
+  unlinkSync(lateLock);
+  admission.recheck();
+  const extracted = join(local, s.evidence), custody = join(extracted, "control");
+  const entry = join(custody, readdirSync(custody)[0]), changed = readFileSync(entry);
+  changed[0] ^= 1;
+  writeFileSync(entry, changed);
+  report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.error, "group-evidence-invalid");
+  const receipt = join(local, "failed-setup-host.json"), record = JSON.parse(readFileSync(receipt));
+  const evidenceSha256 = treeHash(extracted), bytes = JSON.stringify({ ...record, evidenceSha256 });
+  const rebound = { ...s, evidenceSha256, retirement: { ...s.retirement, evidenceSha256: digest(bytes) } };
+  writeFileSync(receipt, bytes);
+  writeFileSync(join(local, "state.json"), JSON.stringify(rebound));
+  assert.throws(() => verifyFailedSetupRetirement(local, rebound), /original control custody bytes differ/);
   report = await verify();
   assert.equal(report.groups.find(({ group }) => group === s.group)?.error, "group-evidence-invalid");
 
