@@ -154,8 +154,9 @@ test("the way is declared by exactly one line that is the declaration and nothin
   assert.deepEqual(declared("An example:\n\n```\nRequest path: measured\n```\n"), { way: "measured", lines: [4] });
   assert.deepEqual(declared("<!--\nRequest path: measured\n-->\n"), { way: "measured", lines: [2] });
   assert.deepEqual(declared("> The job says:\nRequest path: counted\n"), { way: "counted", lines: [2] });
-  // As a browser's form sends a description, and with spaces left at the line's end.
+  // As a browser's form sends a description, with spaces left at the line's end and without.
   assert.deepEqual(declared("What changed.\r\nRequest path: measured  \r\n\r\n## Checks\r\n"), { way: "measured", lines: [2] });
+  assert.deepEqual(declared("Request path: counted\r\n"), { way: "counted", lines: [1] });
   // None; and more than one, the same or not.
   assert.deepEqual(declared(""), { way: null, lines: [] });
   assert.deepEqual(declared("Request path: counted\n\nRequest path: counted\n"), { way: null, lines: [1, 3] });
@@ -165,6 +166,10 @@ test("the way is declared by exactly one line that is the declaration and nothin
     "Request path: counted, as the job says",
     "Request path: counted <!-- the kit's page says why -->",
     "Request path: counted\t",
+    // A carriage return that is not the one before the line feed: before a space, or with another.
+    "Request path: counted\r ",
+    "Request path: counted\r \r",
+    "Request path: counted\r\r",
     " Request path: counted",
     "> Request path: measured",
     "- Request path: measured",

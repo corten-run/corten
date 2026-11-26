@@ -24,7 +24,8 @@
 // sends the change to the measured way as a rise does.
 //
 // `--description` is the pull request's description, read for the way the change is decided: its
-// one line that is `Request path: counted` or `Request path: measured` and nothing else
+// one line that is `Request path: counted` or `Request path: measured` with nothing after it
+// but spaces and then the carriage return of a line that ends in one and a line feed
 // (`declared`); with no such line, or more than one, it declares nothing. Exit status
 // 1 when the rule does not hold and the description does not say `measured`, and when the probe
 // did not build against head: a change declared measured is reported and never failed on its
@@ -98,14 +99,15 @@ export function figure(text, expect) {
  * The way a description says its change is decided, and the numbers of its declaration lines. A
  * declaration line is a line of the description's text, as written, that is
  * `Request path: counted` or `Request path: measured` from its first character with nothing
- * after it but spaces or a carriage return, wherever it stands: no Markdown is read, so a line
- * in an example, a quote or a comment is one as well. The description declares a way only when
- * it has exactly one: with none, or more than one whether or not they agree, `way` is null.
+ * after it but spaces, and then the one carriage return of a line that ends in a carriage
+ * return and a line feed, wherever it stands: no Markdown is read, so a line in an example, a
+ * quote or a comment is one as well. The description declares a way only when it has exactly
+ * one: with none, or more than one whether or not they agree, `way` is null.
  * @param {string} description @returns {{ way: "counted" | "measured" | null, lines: number[] }}
  */
 export function declared(description) {
   const found = description.split("\n").flatMap((line, at) => {
-    const way = /^Request path: (counted|measured)[ \r]*$/.exec(line)?.[1];
+    const way = /^Request path: (counted|measured) *\r?$/.exec(line)?.[1];
     return way ? [{ way: /** @type {"counted" | "measured"} */ (way), line: at + 1 }] : [];
   });
   return { way: found.length === 1 ? /** @type {typeof found[number]} */ (found[0]).way : null, lines: found.map(({ line }) => line) };

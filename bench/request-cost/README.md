@@ -348,15 +348,16 @@ The description's line says what a miss does:
 
 A declaration line is a line of the description's text, as it is written, that is
 `Request path: counted` or `Request path: measured` from its first character with nothing
-after it but spaces. The description declares a way when it holds exactly one. The job reads
-no Markdown, so such a line counts wherever it stands, in an example's block, a quote or a
-comment as in the text, and a description that says the line and also quotes it whole in an
-example holds two: more than one is read as none, whether or not they agree. So write the
-line once, on a line of its own, and where the description speaks of the line, write it
-inside a sentence. The verdict says what was read: the way and its line's number, that there
-is no declaration line, or how many there are and at which lines. Builds that answer
-differently are named above the table and fail nothing: a change may be meant to change an
-answer, and the review weighs a count of two different jobs.
+after it but spaces, whether the line ends in a line feed or in a carriage return and a line
+feed. The description declares a way when it holds exactly one. The job reads no Markdown,
+so such a line counts wherever it stands, in an example's block, a quote or a comment as in
+the text, and a description that says the line and also quotes it whole in an example holds
+two: more than one is read as none, whether or not they agree. So write the line once, on a
+line of its own, and where the description speaks of the line, write it inside a sentence.
+The verdict says what was read: the way and its line's number, that there is no declaration
+line, or how many there are and at which lines. Builds that answer differently are named
+above the table and fail nothing: a change may be meant to change an answer, and the review
+weighs a count of two different jobs.
 
 The description is the one the event carried when the run started. A line added afterwards is
 read by the next run a push starts, not by a rerun, and an edit starts no run, since it would
