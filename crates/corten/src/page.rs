@@ -2840,6 +2840,18 @@ impl Req {
     /// let _ = html! { <form id={ScopeFormId} method="post" data-patch data-address {..extra}><button>"Apply"</button></form> };
     /// # }
     /// ```
+    ///
+    /// So is an `id` there: an empty one before every spread is refused, as a spread cannot write
+    /// over it.
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// # fn main() {
+    /// let extra: [(&str, &str); 1] = [("class", "scope")];
+    /// let _ = html! { <form id="" method="get" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// # }
+    /// ```
     pub fn patch_or<For, Kind: crate::answer::PatchingKind, F, Fut>(
         &self,
         view: impl crate::view::Patch,

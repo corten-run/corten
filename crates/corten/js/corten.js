@@ -2658,6 +2658,20 @@ navigation ? navigation.addEventListener("currententrychange", look) : addEventL
  * again) and a navigation that is cancelled leave it.
  */
 const entry = () => (look(), moves);
+/**
+ * The entry on screen exactly: its id where the Navigation API is, another after any replace of it
+ * (a script's `replaceState`, a navigation that replaces, each keeping the key), else its address
+ * and state, all a page has of it without.
+ */
+const exact = () => (navigation ? [navigation.currentEntry?.id] : [location.href, history.state]);
+let exactSeen = exact();
+let replaced = 0;
+/**
+ * How many times the entry on screen was seen to change exactly ({@link exact}) other than by a
+ * marked answer's own replace, which a marked answer's address goes by ({@link send}): read as a
+ * press is made and as its answer would replace.
+ */
+const replaces = () => (exact().some((v, i) => v !== exactSeen[i]) && ((exactSeen = exact()), (replaced += 1)), replaced);
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -3268,10 +3282,10 @@ const presses = new Map();
 
 /**
  * A press of a form: its id and count ({@link presses}), and for a `data-address` form with an id
- * the entry it was made on ({@link entry}), null while a visit of the runtime's was on its way. A
- * marked form without an id cannot tell its latest press from an older one, and is pressed as an
- * unmarked form is: its answer leaves the address.
- * @typedef {{ id: string | null, n: number, at?: number | null }} Press
+ * the entry it was made on ({@link entry}), null while a visit of the runtime's was on its way, and
+ * how often it had been replaced ({@link replaces}). A marked form without an id cannot tell its
+ * latest press from an older one, and is pressed as an unmarked form is: its answer leaves the address.
+ * @typedef {{ id: string | null, n: number, at?: number | null, on?: number }} Press
  */
 
 /**
@@ -3286,7 +3300,8 @@ function pressed(form) {
   const id = idOf(form);
   const n = (presses.get(id) ?? 0) + 1;
   presses.set(id, n);
-  return { id, n, at: id && hasAttr(form, "data-address") ? (reading.size ? null : entry()) : undefined };
+  const marked = id && hasAttr(form, "data-address");
+  return { id, n, at: marked ? (reading.size ? null : entry()) : undefined, on: marked ? replaces() : undefined };
 }
 
 /**
@@ -3422,7 +3437,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // an HTTP preference (RFC 7240): a runtime from before gets `<main>`, and a server from before
   // ignores a preference it does not know.
   const init = { method, headers: { corten: "action", prefer: DRAWS_WHOLE }, signal };
-  if (method === "GET") url.search = fields.toString();
+  // The query as the browser's own GET writes it, `?` kept for none (Chromium's `search` setter drops it).
+  if (method === "GET") url.href = `${url.href.replace(/[?#].*/, "")}?${fields}${url.href.replace(/^[^#]*/, "")}`;
   else if (sends.enctype === "multipart/form-data") init.body = data;
   else {
     // The browser's content types, which name no charset (fetch adds one to a URLSearchParams).
@@ -3515,14 +3531,15 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       renew();
       signal.throwIfAborted();
       // A marked form's answer drawn whole, a patch or a page, is the page at the address it asked
-      // for (the redirect's, with the `#id` of its action, which fetch leaves out), in place of the
-      // entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is no such page.
+      // for (the redirect's, with the `#id` of its action, which fetch leaves out, a bare `#` too), in
+      // place of the entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is
+      // no such page.
       // Only for a press made on a marked form, which knows its entry: one sent again from a form an
       // answer marked draws as an unmarked form's does, and leaves the address.
       const done =
         pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500
           ? () => {
-              const to = res.url + url.hash;
+              const to = res.url + url.href.replace(/^[^#]*/, "");
               const path = location.pathname;
               // Not if what it drew began a visit or moved to another entry (a script that navigates
               // as it connects): the replace would cancel that navigation, or write over that entry.
@@ -3530,8 +3547,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               // navigation the runtime did not begin is on its way (`transition`: one a page's
               // `navigate` listener took, its address changed or not), which the replace would
               // cancel too; the page reading itself again is the runtime's, and reads again later.
+              // Nor once something has replaced the entry since the press, keeping its key (a script's
+              // `replaceState`, a navigation of the page's that replaced it and is over): the answer
+              // is drawn under the address put in then, as an unmarked form's is.
               const transition = navigation?.transition;
-              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition)) return;
+              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || replaces() !== pending.here?.on) return;
               try {
                 history.replaceState(history.state, "", to);
               } catch {
@@ -3542,8 +3562,9 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               // address stays as it was, the answer drawn under it, as an unmarked form's is: the
               // runtime neither guesses which nor reads the page again over what it cannot see.
               if (location.href !== to) return;
-              // The entry the answer was drawn on, at its new address.
+              // The entry the answer was drawn on, at its new address, by this replace.
               entrySeen = where();
+              exactSeen = exact();
               // Read again at the new address, which without the Navigation API goes by the path.
               if (location.pathname !== path) readAgainLater();
             }

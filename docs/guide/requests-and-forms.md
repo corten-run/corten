@@ -2233,8 +2233,9 @@ be a GET `data-patch` form too, so a change reads only what that part shows, not
 screen. Mark it `data-address` as well, and its answer is the page at the address it asked for:
 as the patch is drawn, that address takes the place of the current history entry's, a
 `#fragment` of the form's `action` or `formaction` included, and the address of a redirect the
-request followed. No entry is added: Back goes to the page before the screen, not to the scope
-before this one, as after `history.replaceState`. A reload, a bookmark and a shared link then
+request followed, each as the browser's own GET writes it (`/scope?#` for a submit that sends no
+field to an action ending in `#`). No entry is added: Back goes to the page before the screen,
+not to the scope before this one, as after `history.replaceState`. A reload, a bookmark and a shared link then
 reach what the screen shows, and a form that posts without an `action` sends to it. Only an
 answer that draws whole moves the address: a 204, an empty patch, a patch with an element that
 finds no place and a 5xx (which may still draw) leave it, while removing an element the page no
@@ -2260,7 +2261,12 @@ One that comes while the page reads itself again (`ReadAgain`), or after another
 drawn in place, draws as usual, and the read starts again later at the new address. Where the
 runtime cannot tell that the screen is still the page and entry the press was made on, with no
 newer press of the form between and nothing it did not start under way, it leaves the address as it was, as the form without the mark
-does; it never reads the page again to repair it. So a replace the browser refuses, with an
+does. So does an answer to a press made before a script of the page replaced the entry
+(`history.replaceState`, or a navigation of its own with `history: "replace"` that is over by the
+time the answer draws): it is drawn under the address the script put in, which an older answer
+does not take back (without the Navigation API, a `replaceState` to another address is a move to
+another entry, and the answer draws nothing). The runtime never reads the page again to repair
+the address. So a replace the browser refuses, with an
 exception (WebKit past its limit of history updates) or without a word (Chromium past its limit),
 leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
 cancels: that script has taken the address over, so it puts the address it means in itself, or

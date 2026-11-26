@@ -408,6 +408,32 @@ export async function dataAddress(browser) {
     await Promise.all([bare.waitForNavigation({ timeout: 5000 }).catch(() => {}), bare.getByRole("button", { name: "Week", exact: true }).click()]);
     const sent = await bare.evaluate(() => ({ at: location.pathname + location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
     check("without JavaScript a data-address form loads the page at its address", sent.at === "/smoke/address?scope=week" && sent.shown === "week", JSON.stringify(sent));
+    // A submit that sends no field, to an action with a bare `#`: the browser's own GET keeps the
+    // query's `?`, empty, and the `#`, and so does the address the runtime puts in.
+    const unnamed = async (/** @type {import("@playwright/test").Page} */ page, /** @type {boolean} */ script) => {
+      await page.goto(`${home}?scope=week`);
+      await page.evaluate(() => {
+        const day = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+        day.removeAttribute("name");
+        day.setAttribute("formaction", "/smoke/address#");
+      });
+      const day = page.getByRole("button", { name: "Day", exact: true });
+      if (script) await day.click();
+      else await Promise.all([page.waitForNavigation({ timeout: 5000 }).catch(() => {}), day.click()]);
+      await page.waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "all", undefined, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(script ? 300 : 0);
+      return page.evaluate(() => ({ at: location.href.slice(location.origin.length), shown: document.querySelector("#smoke-address output")?.textContent }));
+    };
+    const browserGet = await unnamed(bare, false);
+    const scripted = await browser.newPage();
+    scripted.on("pageerror", (e) => errors.push(`unnamed: ${e.message}`));
+    const runtimeGet = await unnamed(scripted, true);
+    await scripted.close();
+    check(
+      "a data-address form's submit with no field to an action with a bare # puts in the address the browser's own GET goes to, with its empty query and #",
+      browserGet.at === "/smoke/address?#" && browserGet.shown === "all" && runtimeGet.at === browserGet.at && runtimeGet.shown === "all",
+      JSON.stringify({ browserGet, runtimeGet }),
+    );
     await noScript.close();
   }
   // Without the Navigation API the runtime still sends the form and draws its patch, and the
@@ -481,6 +507,19 @@ export async function dataAddress(browser) {
       retried.saveSent && retried.done && retried.starts === 0 && retried.at === "#smoke-address" && retried.shown === "all",
       JSON.stringify(retried),
     );
+    // A script's `replaceState` while a marked answer is on its way: to another address, the entry
+    // the press was on is gone and the answer draws nothing; to the same address with another state,
+    // it is drawn. Either way the address is the one the script put in, as without the mark.
+    for (const how of /** @type {const} */ (["replaceState", "state"])) {
+      const marked = await replacedWhileOut(plain, how, true);
+      const unmarked = await replacedWhileOut(plain, how, false);
+      check(
+        `without the Navigation API a marked patch whose entry a script replaced (${how}) while it was on its way leaves the address the script put in, as without the mark`,
+        [marked, unmarked].every((r) => r.sent && r.replaced && r.done && r.at === r.put && r.state === (how === "state")) && unmarked.shown === "week" &&
+          marked.shown === (how === "state" ? "week" : "all"),
+        JSON.stringify({ marked, unmarked }),
+      );
+    }
     // A replacement the browser refuses without a word leaves the address as it was.
     const silent = await silentRefusal(plain);
     check(
@@ -1524,6 +1563,24 @@ async function markedPatchVisits(browser, errors) {
     );
   }
 
+  // Something of the page's replaced the entry while a marked answer was on its way, keeping its key,
+  // and is over: a navigation of its own that replaces (to an `#id` of the page, which the runtime
+  // leaves to it), a script's `replaceState` to another address, and one to the same address with
+  // another state. The answer is drawn under the address the page put in, as an unmarked form's is.
+  // So it is when that navigation is still on its way as the answer comes (`held`: committed, its
+  // `navigate` listener's handler held), and the navigation finishes.
+  for (const how of /** @type {const} */ (["navigate", "held", "replaceState", "state"])) {
+    const marked = await replacedWhileOut(page, how, true);
+    const unmarked = await replacedWhileOut(page, how, false);
+    check(
+      `a marked patch whose entry the page replaced (${how}) while it was on its way is drawn and leaves the address the page put in, as without the mark`,
+      [marked, unmarked].every(
+        (r) => r.sent && r.replaced && r.done && r.at === r.put && r.shown === "week" && r.state === (how === "state") && (how !== "held" || (r.heldDuring && r.heldEnd === "finished")),
+      ),
+      JSON.stringify({ marked, unmarked }),
+    );
+  }
+
   // A load of another document on its way (a link marked `data-reload`, held by the server) as a
   // marked answer comes: the platform shows no navigation on its way for it. A patch's replace
   // lets it go on and take the screen's place; Corten's redirect (`corten-location`) and a layout
@@ -1536,11 +1593,19 @@ async function markedPatchVisits(browser, errors) {
     const unmarked = await heldLoad(page, kind, false);
     loads[kind] = { marked, unmarked };
   }
-  const endsAlike = (/** @type {any} */ a, /** @type {any} */ b) => a.sent && a.loading && b.sent && b.loading && a.final === b.final && a.aborted === b.aborted;
+  const endsAlike = (/** @type {any} */ a, /** @type {any} */ b) =>
+    a.sent && a.loading && b.sent && b.loading && a.cutOff === b.cutOff && a.final === b.final && a.aborted === b.aborted && [...a.asked].sort().join() === [...b.asked].sort().join();
+  // Where the load did not cut the answer off (Chromium), the redirect and the reload are begun
+  // while it is held, as without the mark; where it did (Firefox and WebKit), nothing is.
+  const begun = (/** @type {"patch" | "location" | "shell"} */ kind, /** @type {string} */ navigation) => {
+    const { marked } = /** @type {any} */ (loads[kind]);
+    return marked.cutOff ? marked.asked.length === 0 : navigation ? marked.asked.includes(navigation) : marked.asked.length === 0;
+  };
   const patched = /** @type {any} */ (loads.patch).marked;
   check(
     "a load of another document on its way as a marked answer comes goes on through its patch's replace, and its redirect and reload end as the same press's without the mark",
-    Object.values(loads).every((/** @type {any} */ l) => endsAlike(l.marked, l.unmarked)) && !patched.aborted && patched.final === "/smoke/address-elsewhere?held=1",
+    Object.values(loads).every((/** @type {any} */ l) => endsAlike(l.marked, l.unmarked)) && !patched.aborted && patched.final === "/smoke/address-elsewhere?held=1" &&
+      begun("patch", "") && begun("location", "navigate push /smoke/address?scope=month") && begun("shell", "navigate reload /smoke/address"),
     JSON.stringify(loads),
   );
 
@@ -1889,9 +1954,22 @@ async function heldLoad(page, kind, marked) {
     await otherHeld;
     await route.continue().catch(() => (aborted = true));
   });
-  const failed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url() === other && (aborted = true));
+  // Firefox and WebKit abort the page's requests, Week's among them, as the load begins.
+  let weekAborted = false;
+  const failed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url() === other ? (aborted = true) : r.url() === week && (weekAborted = true));
   page.on("requestfailed", failed);
   if (!marked) await page.evaluate(() => document.getElementById("smoke-address-form")?.removeAttribute("data-address"));
+  // Each navigation to another document the page begins, kept in the tab's session storage, which
+  // outlasts the document (put on now: the page cannot be reached while the held load is on its way).
+  await page.evaluate(() => {
+    sessionStorage.removeItem("smoke-navigations");
+    /** @type {any} */ (window).navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (event.destination.sameDocument) return;
+      const to = new URL(event.destination.url);
+      const seen = JSON.parse(sessionStorage.getItem("smoke-navigations") ?? "[]");
+      sessionStorage.setItem("smoke-navigations", JSON.stringify([...seen, `navigate ${event.navigationType} ${to.pathname}${to.search}`]));
+    });
+  });
   const weekSent = page.waitForRequest((r) => r.url() === week, { timeout: 5000 }).then(() => true, () => false);
   await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click());
   const sent = await weekSent;
@@ -1904,15 +1982,105 @@ async function heldLoad(page, kind, marked) {
     link.click();
   }, other);
   const loading = await otherSent;
+  await page.waitForTimeout(100);
+  const cutOff = weekAborted;
+  // What the answer begins while the load is held: Corten's redirect, a reload, or nothing, each a
+  // navigation (`navigate` fires whether or not the browser sends its request), and the requests
+  // the browser sends for it then.
+  /** @type {string[]} */
+  const requested = [];
+  let asking = true;
+  const ask = (/** @type {import("@playwright/test").Request} */ r) => {
+    const url = new URL(r.url());
+    if (asking && r.url() !== other && r.url() !== week) requested.push(`${r.headers()["corten"] ?? r.resourceType()} ${url.pathname}${url.search}`);
+  };
+  page.on("request", ask);
   releaseWeek();
   await page.waitForTimeout(1000);
+  asking = false;
+  page.off("request", ask);
   releaseOther();
   await page.waitForTimeout(1500);
   page.off("requestfailed", failed);
   await page.unroute(week);
   await page.unroute(other);
   const final = new URL(page.url());
-  return { sent, loading, aborted, final: final.pathname + final.search };
+  /** @type {string[]} */
+  const begun = await page.evaluate(() => JSON.parse(sessionStorage.getItem("smoke-navigations") ?? "[]"));
+  const asked = [...begun.filter((n) => !n.endsWith(" /smoke/address-elsewhere?held=1")), ...requested];
+  return { sent, loading, cutOff, aborted, asked, final: final.pathname + final.search };
+}
+
+/**
+ * Presses Week, marked or not, and while its answer is held replaces the entry as `how` says, the
+ * page's own doing, which keeps the entry's key and is over before the answer comes: a navigation
+ * to an `#id` of the page that replaces (the Navigation API's), `replaceState` to another address,
+ * or to the same address with another state. `held` is that navigation still on its way as the
+ * answer comes: committed, with the handler a `navigate` listener gave it held until Week's submit
+ * has ended. Says where the page is then.
+ * @param {import("@playwright/test").Page} page @param {"navigate" | "held" | "replaceState" | "state"} how @param {boolean} marked
+ */
+async function replacedWhileOut(page, how, marked) {
+  const home = `${base}/smoke/address`;
+  const week = `${home}?scope=week`;
+  await page.goto(home);
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    await held;
+    await route.continue().catch(() => {});
+  });
+  const weekSent = page.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate((marked) => {
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    if (!marked) form.removeAttribute("data-address");
+    Object.assign(window, { __form: form });
+  }, marked);
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const sent = await weekSent;
+  const put = await page.evaluate(async (how) => {
+    const nav = /** @type {any} */ (window).navigation;
+    if (how === "navigate") await nav.navigate("#smoke-address", { history: "replace" }).finished;
+    else if (how === "held") {
+      /** @type {(value?: unknown) => void} */
+      let release = () => {};
+      const handlerHeld = new Promise((resolve) => (release = resolve));
+      nav.addEventListener(
+        "navigate",
+        (/** @type {any} */ event) => void (new URL(event.destination.url).hash === "#smoke-address" && event.intercept({ handler: () => handlerHeld })),
+        { once: true },
+      );
+      const { committed, finished } = nav.navigate("#smoke-address", { history: "replace" });
+      Object.assign(window, { __releaseHeld: release, __heldEnd: finished.then(() => "finished", (/** @type {Error} */ e) => e.name) });
+      await committed;
+    } else if (how === "replaceState") history.replaceState(null, "", "?sort=name");
+    else history.replaceState({ smoke: "state" }, "", location.href);
+    return location.href;
+  }, how);
+  // Still on its way as the page replaced the entry.
+  const replaced = await page.evaluate(() => /** @type {any} */ (window).__form.hasAttribute("aria-busy"));
+  release();
+  const done = await page
+    .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200))));
+  await page.unroute(week);
+  const end = await page.evaluate(() => ({
+    at: location.href,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+    state: history.state?.smoke === "state",
+  }));
+  if (how !== "held") return { sent, replaced, done, put, ...end };
+  // The page's navigation was still on its way as the answer was drawn, and finishes once let go.
+  const heldDuring = await page.evaluate(() => !!(/** @type {any} */ (window).navigation.transition));
+  /** @type {string} */
+  const heldEnd = await page.evaluate(() => {
+    /** @type {any} */ (window).__releaseHeld();
+    return /** @type {any} */ (window).__heldEnd;
+  });
+  return { sent, replaced, done, put, ...end, heldDuring, heldEnd };
 }
 
 /**

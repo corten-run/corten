@@ -168,8 +168,9 @@ division: end statements with `;` and keep a division on the line it continues.
    the runtime's is on its way (a link or Back it fetches, one a `navigate` listener begins too)
    is not sent; an empty or incomplete patch or a drawn 5xx leaves the address, and a page answer
    drawn in place moves it as a patch does. Where the runtime cannot tell the screen is still the
-   press's page and entry, with nothing it did not start under way, it leaves the address: so an
-   answer drawn while a navigation the page's own `navigate` listener took is on its way
+   press's page and entry, with nothing it did not start under way and nothing of the page's
+   having replaced the entry since the press (`replaceState`, a finished `history: "replace"`
+   navigation), it leaves the address: so an answer drawn while a navigation the page's own `navigate` listener took is on its way
    (`navigation.transition`, a `data-reload` link held before or after it commits) leaves it, and
    that navigation finishes. The browser shows no navigation for a load of another document on its
    way (the replace lets it go on) or one begun in `navigatesuccess` as another ends (the replace
