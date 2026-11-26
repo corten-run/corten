@@ -7,9 +7,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 Pending entries are in [changelog.d/](changelog.d/).
 
-## 0.3.0 (2026-11-25)
+## 0.3.0 (2026-11-26)
 
-Upgrading from 0.2.0: each of the 57 entries under
+Upgrading from 0.2.0: each of the 59 entries under
 [Breaking changes](https://github.com/corten-run/corten/blob/v0.3.0/CHANGELOG.md#breaking-changes)
 says what to change; those marked "debug builds only" fail an app's debug builds and its own tests,
 not its release build. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
@@ -22,6 +22,8 @@ while values a script reads move from `data-` attributes to typed refs (copied `
 update with `corten ui add --merge <name>`, or `--all`). `corten check` refuses a missing or stale `Cargo.lock`,
 `data-on` is written single-quoted, and under `Policy::hsts` a plain-http page can no longer
 write to the app.
+Answers that are one visitor's alone, `NoStore` answers and Corten's failures no longer carry a
+middleware's CDN caching headers, and `NoStore` sends `private, no-store`.
 `corten build --profile-from <command>` makes a profile-guided release build, which the image `corten new`
 writes can use. Apps need Rust 1.89 or later and, with scripts, TypeScript 6.0 or later;
 `corten-cluster` apps move to async-nats 0.53. Entries about `bench/` and CI change nothing an app
@@ -752,6 +754,11 @@ builds against.
   with no `Host` line (a health check written by hand must send one), any request with two, a `Host` that is no host, or
   a target whose host is none (`http://shop.example:abc/`, routed before)
   ([#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)).
+- **Breaking:** `NoStore` and personal `no-store` answers send `private, no-store`; match the directives.
+  Personal answers, `NoStore` (the `/health/ready` 503 too), `Public` partials, refusals and Corten's failures drop CDN caching headers (unstaged: new only for `NoStore`)
+  ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
+- **Breaking:** `FormRejection::Invalid` has a third field, whether `Form` or `Params` made it, which only they set; make one with `FormRejection::new(status, text)` (the handler's own answer) and match it by field: `Invalid { 0: status, 1: text, .. }`.
+  ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
 
 ### Other changes
 
@@ -2631,6 +2638,9 @@ builds against.
   without backticks in `docs/`, `bench/browser/README.md` and `bench/fullstack/README.md` now
   have them, so they are checked
   ([#1219 Twelve commits design.md cites as evidence for Choices 25, 26 and 38 and Limit 21 are not on GitHub, so their numbers cannot be taken again](https://github.com/corten-run/corten/issues/1219)).
+
+- An MCP tool's answer to a caller `Tools::auth` found (any answer, with `Tools::authorization`) has no CDN caching headers, nor does one private for a cookie, caller, nonce or credentials, relayed inline. A handler's own `BodyError` or `UploadError` is a refusal.
+  ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
 
 ## Release archive
 
