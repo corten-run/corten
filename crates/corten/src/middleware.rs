@@ -259,9 +259,7 @@ fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Outp
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
-        None => {
-            Either::Right(std::future::ready(crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND))))
-        }
+        None => Either::Right(async { crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND)) }),
     };
     match here {
         None => Either::Left(answer),
