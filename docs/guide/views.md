@@ -592,15 +592,18 @@ html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</
 A page that also answers at another address, such as an older one that stored links still carry,
 names it with `also`, a route or a `Local` as the entry is: `NavTo::page(&Settings).also(&Governance)`
 is current at `/governance` as at `/settings`, by the same rule and depth, and its link still goes to
-`/settings`. The other paths are written in `data-nav-also` as `location.pathname` shows them at those
-addresses, by the URL Standard: the query and fragment left out, the ends trimmed, `.` and `..`
-segments resolved, and a space or a character beyond ASCII percent-encoded (`/old/./café ` as
-`/old/caf%C3%A9`). A `|` is written `%7C`, as Chromium shows it; Firefox and WebKit keep it. The
-server compares that text with the request's path and the runtime with `location.pathname`, both as
-plain text once any `|` in the page's path is read as `%7C`, so they mark the same entry in every
-engine, at first render and after a client navigation. The nav's group name ends in `+` when an entry
-has other addresses, so the runtime reads `data-nav-also` only in such a nav. Like `data-nav`, it does
-not compile written by hand.
+`/settings`. The other paths are written in `data-nav-also` as comparison keys, not as any one
+engine spells them: the path `location.pathname` shows at that address, by the URL Standard (the
+query and fragment left out, the ends trimmed, `.` and `..` segments resolved, and a space or a
+character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the two spellings
+engines differ on made one. A `|` is written `%7C`, as Chromium shows it where Firefox and WebKit keep
+it, and an escape's hex digits are uppercase, as WebKit sends `/old%7chome` as `/old%7Chome` while its
+`location.pathname` keeps `%7c`; no escape is decoded. The server makes the request's path the same
+key and the runtime `location.pathname`, and each compares the keys as plain text, so they mark the
+same entry in every engine, at first render and after a client navigation. The nav's group name ends
+in `+` when an entry has other addresses, so the runtime reads `data-nav-also` only in such a nav.
+Like `data-nav`, `html!` refuses it written as an attribute by hand; a spread of pairs passes it
+through, as it does `data-nav` and `data-nav-group`.
 
 Structured data for search engines is a head tag too: `head={JsonLd { value: &product }}`
 (feature `json`) writes a `ToJson` value in `<script type="application/ld+json">` with `<` as

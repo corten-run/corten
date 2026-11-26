@@ -411,17 +411,21 @@ impl NavTarget for crate::Local {
     }
 }
 
-/// Writes the path of `url`, a URL on this site, as the browser's `location.pathname` shows it at
-/// that URL, by the URL Standard's parser (<https://url.spec.whatwg.org/#concept-basic-url-parser>)
-/// for a path that starts with `/`: leading and trailing spaces and control characters trimmed,
-/// every tab and line break dropped, the query and fragment left out, `\` read as `/`, the `.` and
-/// `..` segments resolved (`%2e` for a dot too, in either case), and a control character, a space,
-/// `` "<>^`{} `` and each byte of a character beyond ASCII percent-encoded; an escape already written
-/// is kept as it is. One character more is encoded, `|`, which Chromium encodes and Firefox and WebKit
-/// keep, as Corten writes it in every [`crate::Local`] link; [`spelled`] reads a page's `|` the same
-/// way before comparing. The result has no space in it.
+/// Writes the comparison key of `url`, a URL on this site: its path as the browser's
+/// `location.pathname` shows it at that URL, by the URL Standard's parser
+/// (<https://url.spec.whatwg.org/#concept-basic-url-parser>) for a path that starts with `/`:
+/// leading and trailing spaces and control characters trimmed, every tab and line break dropped,
+/// the query and fragment left out, `\` read as `/`, the `.` and `..` segments resolved (`%2e` for a
+/// dot too, in either case), and a control character, a space, `` "<>^`{} `` and each byte of a
+/// character beyond ASCII percent-encoded. Two spellings are then made one, which engines differ
+/// on: `|` is encoded, which Chromium encodes and Firefox and WebKit keep, as Corten writes it in
+/// every [`crate::Local`] link, and the hex digits of an escape already written are uppercased
+/// without decoding it ([`upper_escapes`]), as WebKit asks for `%7c` while its `location.pathname`
+/// keeps it. [`spelled`] makes the page's path the same key before comparing. The result has no
+/// space in it.
 fn pathname(url: &str, out: &mut String) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let from = out.len();
     let url = url.trim_matches(|c: char| c <= ' ');
     let path = url.split(['?', '#']).next().unwrap_or("");
     let path = path.strip_prefix(['/', '\\']).unwrap_or(path);
@@ -467,8 +471,24 @@ fn pathname(url: &str, out: &mut String) {
             kept.push(start);
         }
         if end {
-            return;
+            break;
         }
+    }
+    upper_escapes(&mut out[from..]);
+}
+
+/// Uppercases the two hex digits of each percent escape in `text` (`%7c` as `%7C`), and nothing
+/// else: a `%` without two hex digits after it is left, and no escape is decoded.
+fn upper_escapes(text: &mut str) {
+    let mut at = 0;
+    while let Some(found) = text[at..].find('%') {
+        let i = at + found;
+        let hex = |i: usize| text.as_bytes().get(i).is_some_and(u8::is_ascii_hexdigit);
+        if hex(i + 1) && hex(i + 2) {
+            // Both are ASCII, so `i + 1..i + 3` is whole characters.
+            text[i + 1..i + 3].make_ascii_uppercase();
+        }
+        at = i + 1;
     }
 }
 
@@ -498,13 +518,15 @@ impl<'a> NavTo<'a> {
 
     /// The entry is current at `other` too, another address that serves its page (an older one
     /// that stored links still carry), by the same rule and depth as at its own URL. The link
-    /// still goes to its own URL. `other`'s path is written in `data-nav-also` once, as the
-    /// browser's `location.pathname` shows it at that address (`/old/./a/../b ` as `/old/b`,
-    /// `/old/café` as `/old/caf%C3%A9`), with a `|` as `%7C`, which Chromium shows and Firefox and
-    /// WebKit do not. The server compares that text with the request's path and the runtime with
-    /// `location.pathname`, each as plain text once its `|` is read as `%7C`, so they mark the same
-    /// link at first render and after a client navigation, in every engine. A typed route or a
-    /// [`crate::Local`], as the entry's own:
+    /// still goes to its own URL. `other`'s path is written in `data-nav-also` once, as a
+    /// comparison key: the path the browser's `location.pathname` shows at that address
+    /// (`/old/./a/../b ` as `/old/b`, `/old/café` as `/old/caf%C3%A9`), with the two spellings
+    /// engines differ on made one, a `|` as `%7C` (which Chromium shows and Firefox and WebKit do
+    /// not) and an escape's hex digits uppercase (`%7c` as `%7C`, which WebKit sends for a
+    /// `location.pathname` that keeps `%7c`), no escape decoded. The server compares it with the
+    /// request path's key and the runtime with `location.pathname`'s, each made the same way and
+    /// compared as plain text, so they mark the same link at first render and after a client
+    /// navigation, in every engine. A typed route or a [`crate::Local`], as the entry's own:
     ///
     /// ```
     /// use corten::prelude::*;
@@ -675,9 +697,9 @@ fn holds(path: &str, url: &str, section: bool) -> Option<usize> {
 
 /// Writes the other addresses ([`NavTo::also`]) of the entry whose URL ends at `url_end` to
 /// `also`, separated by spaces, and gives how deep the deepest that holds `path` is. Each is its
-/// path as the browser's `location.pathname` shows it ([`pathname`]), compared as plain text with
-/// the request's path, its `|` read as `%7C` ([`spelled`]), as the runtime compares it with
-/// `location.pathname`. Out of line, so a nav without them is drawn as it was before they existed.
+/// comparison key ([`pathname`]), compared as plain text with the request path's ([`spelled`]), as
+/// the runtime compares it with `location.pathname`'s. Out of line, so a nav without them is drawn
+/// as it was before they existed.
 #[cold]
 #[inline(never)]
 fn other_addresses(
@@ -704,15 +726,19 @@ fn other_addresses(
     depth
 }
 
-/// `path` with each `|` as `%7C`: the page's path in the spelling [`pathname`] writes, Chromium's,
-/// where Firefox and WebKit keep `|` in a request and in `location.pathname`. The runtime reads
-/// `location.pathname` the same way before comparing it with `data-nav-also`.
+/// The comparison key of the page's path, in the spelling [`pathname`] writes: each `|` as `%7C`,
+/// Chromium's, where Firefox and WebKit keep `|` in a request and in `location.pathname`, and the
+/// hex digits of each escape uppercased, as WebKit asks for an escape its `location.pathname` keeps
+/// lowercase. The runtime reads `location.pathname` the same way before comparing it with
+/// `data-nav-also`.
 fn spelled(path: &str) -> std::borrow::Cow<'_, str> {
-    if path.contains('|') {
-        path.replace('|', "%7C").into()
-    } else {
-        path.into()
+    let lower = |w: &[u8]| w[0] == b'%' && w[1..].iter().all(u8::is_ascii_hexdigit) && w[1..].iter().any(u8::is_ascii_lowercase);
+    if !path.contains('|') && !path.as_bytes().windows(3).any(lower) {
+        return path.into();
     }
+    let mut key = path.replace('|', "%7C");
+    upper_escapes(&mut key);
+    key.into()
 }
 
 /// [`Req::nav_of`] at `path`.
@@ -732,17 +758,23 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
         .collect();
     let deepest = entries.iter().filter_map(|entry| entry.2).max();
     // The URLs, which are sections and any other addresses name the group; its 32 low bits, as
-    // hex. A nav with no other addresses hashes as it did before they existed; one with them hashes
-    // which entry each belongs to (where its URL ends) and where its paths end too, so no two layouts
-    // of the same text share a group.
-    let hash = entries.iter().fold(crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes()), |hash, entry| {
-        crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])
-    });
+    // hex. A nav with no other addresses hashes as it did before they existed, with the low 16 bits
+    // of where each URL ends. One with them hashes where each URL ends in full, which entry each
+    // other address belongs to (where its URL ends) and where its paths end, so no two layouts of
+    // the same text share a group: the runtime would clear the mark of one of them.
+    let text = crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes());
     let hash = match &also {
-        None => hash,
-        Some(also) => also.ends.iter().fold(crate::fnv::extend(hash, also.paths.as_bytes()), |hash, &(url_end, end)| {
-            crate::fnv::extend(crate::fnv::extend(hash, &(url_end as u64).to_le_bytes()), &(end as u64).to_le_bytes())
+        None => entries.iter().fold(text, |hash, entry| {
+            crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])
         }),
+        Some(also) => {
+            let hash = entries.iter().fold(text, |hash, entry| {
+                crate::fnv::extend(crate::fnv::extend(hash, &[entry.1 as u8]), &(entry.0 as u64).to_le_bytes())
+            });
+            also.ends.iter().fold(crate::fnv::extend(hash, also.paths.as_bytes()), |hash, &(url_end, end)| {
+                crate::fnv::extend(crate::fnv::extend(hash, &(url_end as u64).to_le_bytes()), &(end as u64).to_le_bytes())
+            })
+        }
     };
     let mut group = [b'+'; 9];
     for (i, digit) in group[..8].iter_mut().enumerate() {

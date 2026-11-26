@@ -120,16 +120,18 @@ impl corten::Route for OlderNav {
 
 /// The nav: the section `/smoke/nav`, which holds every address less deeply, and the entry, also
 /// current at `/smoke/nav/café`, `/smoke/nav/settings`, `/smoke/nav/a|b` (a `Local`, whose `|`
-/// Firefox and WebKit keep and Chromium encodes) and `/smoke/nav/older`.
+/// Firefox and WebKit keep and Chromium encodes), `/smoke/nav/old%7chome` (a `Local` with a
+/// lowercase escape, which WebKit shows as written and asks for as `%7C`) and `/smoke/nav/older`.
 async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
     let section = corten::Local::parse("/smoke/nav").expect("a local path");
     let piped = corten::Local::parse("/smoke/nav/a|b").expect("a local path");
+    let lower = corten::Local::parse("/smoke/nav/old%7chome").expect("a local path");
     let (cafe, dotted, spaced) =
         (OlderNav("/smoke/nav/caf\u{e9}"), OlderNav("/smoke/old/%2e%2E/nav/settings"), OlderNav("/smoke/nav/older "));
     let here = url::NavPage { name: "here" };
     let nav = req.nav_of([
         (corten::NavTo::section(&section), "Nav"),
-        (corten::NavTo::page(&here).also(&cafe).also(&dotted).also(&piped).also(&spaced), "Here"),
+        (corten::NavTo::page(&here).also(&cafe).also(&dotted).also(&piped).also(&lower).also(&spaced), "Here"),
     ]);
     req.page(html! {
         <Layout req={&req} title="Nav" viewer={None} head="">

@@ -2231,15 +2231,16 @@ function markCurrent(kept = []) {
 /**
  * How deep `link` is when it holds the page `here` at its own URL (`depth`, -1 when it does not)
  * or at one of the paths of its `data-nav-also` (`NavTo::also`), by the same rule. The server wrote
- * each as `location.pathname` shows it, with `|` as `%7C` (Chromium's spelling), and compared it
- * with the request's path read the same way, so it is compared here as text, not parsed again.
+ * each as a comparison key: as `location.pathname` shows it, with `|` as `%7C` (Chromium's spelling)
+ * and an escape's hex digits uppercase (WebKit keeps `%7c` here and sends `%7C`), and compared it
+ * with the request path's key, so `here` is made the same key and compared as text, not parsed again.
  * @param {Element} link
  * @param {string} here
  * @param {number} depth
  */
 function alsoDepth(link, here, depth) {
   const section = link.getAttribute("data-nav") === "section";
-  const page = here.replaceAll("|", "%7C");
+  const page = here.replaceAll("|", "%7C").replace(/%[\da-f]{2}/gi, (escape) => escape.toUpperCase());
   for (const path of link.getAttribute("data-nav-also")?.split(" ") ?? []) {
     const base = path.replace(/\/+$/, "");
     if (page === path || (section && page.startsWith(`${base}/`))) depth = Math.max(depth, base.length);

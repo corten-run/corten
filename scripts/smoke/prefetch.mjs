@@ -350,9 +350,11 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
 /**
  * `NavTo::also` at older addresses written in forms the browser does not show as written: a character
  * beyond ASCII, a `%2e%2E` segment, a `|` (raw in Firefox's and WebKit's request and pathname,
- * `%7C` in Chromium's) and a trailing space. For each, the server marks the entry at the request for
- * that address, and the runtime, ranking copies of the same links it never saw marked, marks the
- * same one at that address after a client navigation.
+ * `%7C` in Chromium's), a lowercase escape (`%7c`, which WebKit keeps in `location.pathname` but
+ * sends as `%7C`) and a trailing space. For each, the server marks the entry at the browser's own
+ * request for that address (a navigation, so each engine's network path), and the runtime, ranking
+ * copies of the same links it never saw marked, marks the same one at that address after a client
+ * navigation.
  */
 export async function navAlso(browser, swaps) {
   const name = "a nav entry is current at its page's older addresses, by the server and the runtime alike";
@@ -363,16 +365,18 @@ export async function navAlso(browser, swaps) {
     ["/smoke/nav/caf\u00e9", "/smoke/nav/caf%C3%A9"],
     ["/smoke/old/%2e%2E/nav/settings", "/smoke/nav/settings"],
     ["/smoke/nav/a|b", "/smoke/nav/a%7Cb"],
+    ["/smoke/nav/old%7chome", "/smoke/nav/old%7Chome"],
     ["/smoke/nav/older", "/smoke/nav/older"],
   ];
   const also = cases.map(([, path]) => path).join(" ");
-  /** Whether the server draws the entry marked and the section not, for one request. */
-  const served = async (/** @type {string} */ href) => {
-    const html = await (await page.request.get(new URL(href, base).href)).text();
+  /** Whether the server draws the entry marked and the section not, in one answer. */
+  const marked = (/** @type {string} */ html) => {
     const entry = /<a href="\/smoke\/nav\/here" [^>]*aria-current="page"[^>]*>Here<\/a>/.test(html);
     const section = /<a href="\/smoke\/nav" data-nav="section" [^>]*>Nav<\/a>/.test(html) && !/<a href="\/smoke\/nav" [^>]*aria-current/.test(html);
     return entry && section;
   };
+  /** The same, for a request sent outside the browser. */
+  const served = async (/** @type {string} */ href) => marked(await (await page.request.get(new URL(href, base).href)).text());
   /** @type {string[]} */
   const seen = [];
   const drawn = await (await page.request.get(`${base}/smoke/nav/here`)).text();
@@ -383,6 +387,10 @@ export async function navAlso(browser, swaps) {
     for (const asked of href.includes("|") ? [href, href.replace("|", "%7C")] : [href]) {
       if (!(await served(asked))) seen.push(`server at ${asked}: unmarked`);
     }
+    // The browser's own request for it, as a stored link's full load sends it: WebKit asks for
+    // `%7c` as `%7C`, Chromium for `|` as `%7C`.
+    const response = await page.goto(new URL(href, base).href);
+    if (!response || !marked(await response.text())) seen.push(`server at the browser's request for ${href} (${response?.url()}): unmarked`);
   }
   if (!swaps) {
     check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");

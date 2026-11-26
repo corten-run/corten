@@ -335,7 +335,8 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
 
 /// The other addresses name the group by each entry's whole boundaries: two navs of the same text
 /// whose entries split it 65,536 bytes apart are two groups, so ranked in one page neither can make
-/// the other's current link lose its mark.
+/// the other's current link lose its mark. That holds for where each entry's own URL ends too, not
+/// only where its other addresses do.
 #[test]
 fn nav_entries_with_other_addresses_name_their_group_by_whole_boundaries() {
     use crate::{
@@ -363,6 +364,13 @@ fn nav_entries_with_other_addresses_name_their_group_by_whole_boundaries() {
     assert_ne!(
         group([NavTo::page(&X).also(&a), NavTo::page(&Y).also(&bc)]),
         group([NavTo::page(&X).also(&ab), NavTo::page(&Y).also(&c)])
+    );
+    // The entries' own URLs split the same text 65,536 bytes apart, and only the second has an
+    // other address, the same one in both, which ends where the whole text does.
+    assert_ne!(
+        group([NavTo::page(&a), NavTo::page(&bc).also(&X)]),
+        group([NavTo::page(&ab), NavTo::page(&c).also(&X)]),
+        "the URLs end at 2 and 65,538, the same in their low 16 bits"
     );
 }
 
@@ -406,7 +414,7 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         ("/..", "/"),
         ("/a/../..", "/"),
         ("/a/...", "/a/..."),
-        ("/a/%2e%2ex", "/a/%2e%2ex"),
+        ("/a/%2e%2ex", "/a/%2E%2Ex"),
         ("/old ", "/old"),
         (" \t/old\u{1} ", "/old"),
         ("/old ?x", "/old%20"),
@@ -415,6 +423,8 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         ("\\old\\x", "/old/x"),
         ("/old|x", "/old%7Cx"),
         ("/old%7Cx", "/old%7Cx"),
+        ("/old%7cx", "/old%7Cx"),
+        ("/caf%c3%a9/%zz/%7", "/caf%C3%A9/%zz/%7"),
         ("/old^`{}\"<>", "/old%5E%60%7B%7D%22%3C%3E"),
         ("/old/caf\u{e9}", "/old/caf%C3%A9"),
     ] {
@@ -426,7 +436,21 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
     // only there: under a section as well.
     let piped = Written("/old|x");
     assert!(link("/old|x", &piped).1 && link("/old%7Cx", &piped).1);
-    assert!(!link("/old", &piped).1 && !link("/old%7cx", &piped).1);
+    assert!(!link("/old", &piped).1 && !link("/old%7Cy", &piped).1);
+    // A lowercase escape is one key with its uppercase form, never decoded: WebKit keeps `%7c` in
+    // `location.pathname` but asks for `%7C`, where Chromium and Firefox ask for `%7c` as written.
+    assert!(link("/old%7cx", &piped).1);
+    let lower = Local::parse("/old%7chome").unwrap();
+    let at = |path: &str| {
+        let nav = nav_links(path, [(NavTo::page(&Settings).also(&lower), ())]);
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out
+    };
+    assert!(at("/old%7Chome").ends_with(r#" data-nav-also="/old%7Chome" aria-current="page""#), "{}", at("/old%7Chome"));
+    assert!(at("/old%7chome").contains("aria-current") && at("/old|home").contains("aria-current"));
+    assert!(!at("/old%7Chomes").contains("aria-current") && !at("/old%257chome").contains("aria-current"));
     let local = Local::parse("/old|x").unwrap();
     let section = |path: &str| {
         let nav = nav_links(path, [(NavTo::section(&Settings).also(&local), ())]);
