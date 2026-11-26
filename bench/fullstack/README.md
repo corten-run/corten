@@ -2116,7 +2116,11 @@ host and network the run has to itself and a private checkout no one changes. Th
 are made at their checkpoints and no more: the lock keeps out another `count-pairs.mjs`, not
 other tools; the network check sees a container answering to `fsw-corten` only while it is there
 at a check; and the kit's hashes detect a change to a file that is still present when the next
-check reads it, not one made and undone between two checks.
+check reads it, not one made and undone between two checks. A run's records (`run.json`,
+`invocations.jsonl`, `inv/` and `report.json`) and each invocation's `results/<round>/` are
+kept together, as one run's: the seals tie each invocation's files to the ledger's lines, and
+nothing ties a ledger to its run, so another run's ledger and outputs put in their place pass
+them.
 
 Until a run's own A/A resolves, the count neither holds nor clears. The A/A resolves when both of
 its bounds, less +1%, are inside the default band (-2.98% to +3.33%, as
@@ -2130,8 +2134,8 @@ does not pass until the maintainer decides. The A/A doubles a run's time: 808 in
 both targets where the change alone is 404, about 7.8 hours at the 34.8 s an invocation took on
 the host of
 [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
-(measured per invocation there; the total is estimated). It answers whether this run told a
-change from nothing; it does not say why when it did not.
+(measured per invocation there; the total is estimated). It shows only whether this run's two
+base-against-base bounds landed inside the band; it does not say why when they did not.
 
 Why: on that host (8 CPUs of a Xeon Platinum 8168 as `lscpu` prints them, one thread a core, the
 app on CPU 1 and k6 on CPUs 4 to 7) the count of the base's image against itself read `json`'s
