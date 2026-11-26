@@ -11,7 +11,8 @@ async fn health_reports_liveness_and_readiness() {
     assert_eq!(get("/health/live").await.unwrap().status(), StatusCode::OK);
     let ready = get("/health/ready").await.unwrap();
     assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(ready.headers()["cache-control"], "no-store");
+    // Corten's own failure: never shared, and still kept out of every cache.
+    assert_eq!(ready.headers()["cache-control"], "private, no-store");
 }
 
 #[tokio::test(start_paused = true)]

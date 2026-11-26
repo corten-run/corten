@@ -1,2 +1,0 @@
-- New benchmark builds take the security fixes in Ruby 4.0.10, Rack 3.2.9, Phoenix 1.8.17, LiveView 1.2.15, Plug 1.20.4, Temurin 27.0.1.1 and the live Gin app's Go modules; earlier rounds keep their versions.
-  [#1376 bench/fullstack runs Rails, Phoenix, Gin and Nuxt on releases with published security fixes, so its production comparison is not each framework's supported configuration](https://github.com/corten-run/corten/issues/1376)

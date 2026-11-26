@@ -596,9 +596,11 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        // Never shared in any form, whoever returned it and whatever status a middleware gives it
+        // later: the mark is on the answer ([`crate::cache::Unshared`]).
         match self.0 {
             Why::SignIn(to, message) => {
-                let mut res = StatusCode::UNAUTHORIZED.into_response();
+                let mut res = crate::cache::unshared(StatusCode::UNAUTHORIZED.into_response());
                 res.extensions_mut().insert(SignIn(to));
                 if let Some(message) = message {
                     res.extensions_mut().insert(crate::Failed(message));
@@ -615,7 +617,7 @@ impl IntoResponse for Refused {
 /// `Refused::unavailable`: the error page's [`crate::Failure::Unidentified`], not a plain
 /// `Error::status(SERVICE_UNAVAILABLE)`.
 fn unidentified(message: &str) -> Response {
-    let mut res = Error::new(format!("who is asking cannot be known: {message}"))
+    let mut res = Error::corten(format!("who is asking cannot be known: {message}"))
         .with_status(StatusCode::SERVICE_UNAVAILABLE)
         .into_response();
     res.extensions_mut().insert(crate::page::Cause::Unidentified);
@@ -625,7 +627,7 @@ fn unidentified(message: &str) -> Response {
 /// A 401, 403 or 429 for a request without the caller its handler reads, with what the client is
 /// told and the header its status needs (`WWW-Authenticate`, `Retry-After`).
 fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, header: Option<RefusalHeader>) -> Response {
-    let mut res = status.into_response();
+    let mut res = crate::cache::unshared(status.into_response());
     res.extensions_mut().insert(crate::page::Cause::Refused);
     if let Some(message) = message {
         res.extensions_mut().insert(crate::Failed(message));
