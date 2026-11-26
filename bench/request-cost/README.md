@@ -86,9 +86,10 @@ The probe's source is this checkout's, the same for every commit: only Corten an
 crates differ. Use one checkout of the kit and one directory for every commit of a comparison
 (the first point under [What a count is not](#what-a-count-is-not)).
 
-No check builds the probe: Corten is at `../work/crates/corten` only after `build.sh` has put a
-commit there. `corten fmt --check`, which CI runs over `bench`, reads its markup; a change to
-Corten that stops it compiling shows the next time the kit is run.
+None of CI's own checks builds the probe: Corten is at `../work/crates/corten` only after
+`build.sh` has put a commit there. `corten fmt --check`, which CI runs over `bench`, reads its
+markup; a change to Corten that stops it compiling shows the next time the kit is run, which
+for a pull request [the hosted job](#the-hosted-job) counts is in that job.
 
 Then, with `<probe>` for one of those binaries and `<cpu>` for a CPU the server is held to:
 
@@ -118,7 +119,11 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
 `--cases` takes a list of cases, and `--port` (8080 by default) the port the probe listens on,
-for two runs side by side on CPUs of their own. `--depth` takes at most 240.
+for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--json`, on a
+count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
+with what was measured, unrounded: each window's instructions, seconds and other threads, the
+allocator's calls and the requests they are over, a run's bytes and connections. It is what
+[`compare.mjs`](compare.mjs) reads; the text is for people.
 
 ## How a number is read
 
@@ -277,35 +282,50 @@ be where the code was placed and not the change.
 A pull request that changes what a request is built from is counted against its base by the
 `Request Cost` workflow
 ([`.github/workflows/request-cost.yml`](../../.github/workflows/request-cost.yml)), so its
-author prepares no host. Its `request-cost` job runs when the pull request changes
-`crates/corten`, `crates/corten-macros`, `crates/corten-feed`, `crates/corten-protocol`, the
-root `Cargo.toml` or `Cargo.lock`, this kit, the workflow, the script that scopes it or
-`.node-version`, and is skipped otherwise (`scripts/benchmark-scope.mjs`, by the diff of the
-pull request's merge against the base). The probe is built from the first two crates alone; the
-feed's are there because a request for a feed runs them, though no case here does, so a change
-to them alone reads the same on both builds.
+author prepares no host. Its one job counts when the pull request changes `crates/corten`,
+`crates/corten-macros`, `crates/corten-feed`, `crates/corten-protocol`, the root `Cargo.toml`
+or `Cargo.lock`, this kit, the workflow, the script that scopes it, `.node-version` or
+`.gitattributes` (which says what the archive `build.sh` builds from holds), and otherwise
+says in its summary that it counted nothing, and passes (`scripts/benchmark-scope.mjs`, by the
+diff of the pull request's merge against the base). The probe is built from the first two
+crates alone; the feed's are there because a request for a feed runs them, though no case here
+does, so a change to them alone reads the same on both builds. The probe is a workspace of its
+own with its own release profile, so a profile, a `[patch]` or a cargo configuration changed
+at the root selects the job and is not what either probe is built with: such a change is
+measured, by the fourth kind of item 2.1's list.
 
-On one runner, in one job, it does what [Running it](#running-it) says:
+On one runner it does what [Running it](#running-it) says:
 
 1. Builds the probe against the merge base and then against the head, in one directory, with
-   the kit of the pull request's merge, so the probe's source is the same for both.
-2. Writes both builds' answers (`count.mjs --answers`) and compares them.
-3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) on base and
-   then on head, a case a run: the nine cases' instructions, three counts each, the four at a
-   depth of 16, the nine cases' allocations, and the three idle readings three times a build.
-   A run the kit refuses gave no figure and is taken again, once, with what the kit said kept;
-   no run is taken again for its figure.
+   the kit of the pull request's merge, so the probe's source is the same for both. The head
+   is counted against the commit where it left the base's branch, not as merged: what the
+   base gained since is in neither build. A build that fails or does not end in 7 minutes
+   leaves what it said, and the table is written without that build's figures.
+2. Writes both builds' answers (`count.mjs --answers`).
+3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
+   `--json`, on base and then on head, a case a run: the nine cases' instructions, three counts
+   each, the four at a depth of 16, the nine cases' allocations, and the three idle readings
+   three times a build. A run ends in 120 seconds or is stopped, and none starts once 20
+   minutes have gone since the builds began, so that the table is written inside the job's 30.
+   A run the kit refuses, or that does not end, gave no figure and is taken again, once, with
+   why kept for each attempt; no run is taken again for its figure.
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
-   the percent, every count of every run, the refusals, and one line of verdict. Its exit
-   status is the job's.
+   the percent, every count of every run with its longest window and the most that other
+   threads ran in one, the allocator's calls, each attempt that gave no figure, and one line of
+   verdict. Its exit status is the job's.
 
 `compare.mjs` holds the figures to the rule of
 [CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests) (Pull requests, item 2.1, Counted): no
 case's instructions a request more than +0.5% over base's by the kit's medians, no case's
-allocations a request up, and no idle reading whose median of three on head is above base's by
-more than base's three span. A reading with no figure on either build, after the second try,
-is a case that cannot be counted. The description's line says what a miss does:
+allocations up (by the allocator's calls over the same requests, so 16,004 against 16,000 in
+1,000 requests is a rise, though both print as 16.00), and no idle reading whose median of
+three on head is above base's by more than base's three span. A figure is read only from the
+whole JSON of the run asked for: its case, depth, requests and 5,000 connections, three counts
+whose median is the one stated. Anything else is no figure, and a reading with none on either
+build, a case either build gave no whole answer to, and a base that did not build are each a
+case that cannot be counted. The job fails when the head does not build, whatever is declared.
+The description's line says what a miss does:
 
 | The description says | The rule holds | It does not |
 | --- | --- | --- |
@@ -313,14 +333,26 @@ is a case that cannot be counted. The description's line says what a miss does:
 | `Request path: measured` | Passes: the counts are reported and decide nothing | The same |
 | Neither, or both | Passes, and names the line to add | Fails, and names the line to add |
 
-Builds that answer differently are named above the table and fail nothing: a change may be
-meant to change an answer, and the review weighs a count of two different jobs. The description
-is the one the event carried when the run started, since a pull request from a fork gives the
-job a token that only reads: a line added afterwards is read by the next run a push starts, not
-by a rerun.
+The line counts when a reader of the description sees it standing alone: `Request path: counted`
+or `Request path: measured` from the line's first character, with nothing after it but spaces
+or tabs. One in a fenced or indented code block, in an HTML comment, in a block quote or with
+other words on its line is not a declaration. Builds that answer differently are named above
+the table and fail nothing: a change may be meant to change an answer, and the review weighs a
+count of two different jobs.
 
-The same comparison of two builds counted on a host of one's own, each run's output in a file
-named as `--readings` names it:
+The description is the one the event carried when the run started. A line added afterwards is
+read by the next run a push starts, not by a rerun, and an edit starts no run, since it would
+count the same commits again and so draw them again. So a red check on a pull request that
+has since declared `measured` stands, with its reason in its summary, until the next push: a
+maintainer reads the summary and the description as it now is, and the check's color only for
+the commit and description it ran with.
+
+A green check is evidence for a reviewer to read, not an attestation: the counts are of the
+pull request's own tree, by its own workflow, scope, kit and comparison. A pull request that
+changes any of those has that change reviewed for what it does to the verdict.
+
+The same comparison of two builds counted on a host of one's own, each run's `--json` output in
+a file named as `--readings` names it:
 
 ```sh
 node bench/request-cost/compare.mjs --readings
@@ -341,8 +373,8 @@ with valgrind 3.26.0 and rustc 1.100.0:
    the kit took 193, 212 and 212. The second restored the first's compiled crates from a cache
    (66 MB), as the workflows' other Rust jobs do: 32 and 26 seconds to build, and 154 for the
    runs, on another runner. Installing valgrind, jemalloc and libzstd's headers took 8 to 13
-   seconds. A cache saves at most what a first build takes over a second, 12 to 25 seconds
-   here, and a pull request's cache serves only its own later runs, so the job keeps none.
+   seconds. That is one run with a cache beside three without, on runners that differ, so
+   what a cache saves was not measured; the job ends in about five minutes and keeps none.
 2. No run was refused, of 248. The runners allow 65,536 open files, each idle run's 5,000
    connections opened in 0.2 to 2.2 seconds, and 13,215 to 13,979 sockets were in
    `TIME_WAIT` when a job's last run ended.
@@ -355,16 +387,18 @@ with valgrind 3.26.0 and rustc 1.100.0:
    every allocation count was the same.
 4. An idle reading's six runs spanned 0 to 4 bytes a connection in a job (over the four:
    8,430 to 8,433 after one request, 12,521 to 12,525 after three of a browser's, 2,655 to
-   2,661 before any byte).
+   2,661 before any byte). In a fifth run, of `bd7506d60`, the six before any byte spanned 5,
+   2,657 to 2,662.
 
 The idle rule can read a rise between two builds that are the same, since it compares two
 medians of three by a span of three: base's 12,523 12,524 12,523 and a head of 12,524 12,525
-12,525 would be one. With every run drawn from one distribution it does so in about one
-comparison in twelve, so in about one job in five over the three readings (simulated, 2,000,000
-jobs: 8.7% of comparisons and 23.8% of jobs for a normal distribution, 5.6% and 15.7% for
-whole bytes spread as closely as the runs above). None of the four runs read one. A job that fails on
-idle memory alone, by a byte or two, is to be read with that in mind; by the rule its runs are
-still not taken again for their result.
+12,525 would be one. A model says how often, not the runners: with every run drawn
+independently from one distribution it does so in 8.7% of comparisons and 23.8% of jobs, a
+job being three readings, when the draws are normal, and in 5.5% and 15.7% when they are
+normal with a standard deviation of 1.5 bytes and rounded to whole bytes (simulated, 1,000,000
+jobs). None of the five runs read one. A job that fails on idle memory alone, by a byte or
+two, is to be read with that in mind; by the rule its runs are still not taken again for
+their result.
 
 ## Tests
 
@@ -380,9 +414,11 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints: inside the budget, over it on one case, an allocation more, idle memory above base's span and inside it, a run refused on one build, a refusal taken again, a missing figure, and what each declaration does with the verdict |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory above base's span and inside it, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty or cut short, which lines declare, and what each declaration does with the verdict |
 
 `run.test.mjs` (but its refusals of an option) and `build.test.mjs` need Linux with `sh` and
-`git`, and are skipped elsewhere: on Windows 46 of the 63 tests run. The hosted check runs on
+`git`, and are skipped elsewhere: on Windows 47 of the 64 tests run. The hosted check runs on
 Linux. What no test covers is checked by running the kit: the probe itself, callgrind's own
-dumps, and a real build.
+dumps, and a real build. Nor does a test run the hosted job's own steps, its time limits, its
+second attempts and what it does with a build that fails: they were run with stand-ins when
+they were written, and a test of them would need a harness for the workflow's shell.

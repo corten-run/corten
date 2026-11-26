@@ -11050,14 +11050,16 @@ rules something out.
     [#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
     asked for now reads it: the `Request Cost` workflow counts a pull request that changes what
     a request is built from against its merge base, on one runner, and holds the figures to
-    the rule ([the kit's page](../bench/request-cost/README.md#the-hosted-job)). So the line is
-    checked, and it stays. The job counts; it cannot tell from a diff a lock, a wake or a
-    structure's layout, the kinds a count cannot judge, so the way is still the author's to
+    the rule ([the kit's page](../bench/request-cost/README.md#the-hosted-job)). So the line now
+    decides what the job does with a miss, and it stays; the job does not require it, and does
+    not confirm what a change declared measured then gives. The job counts; it cannot tell
+    from a diff a lock, a wake or a structure's layout, the kinds a count cannot judge, so the way is still the author's to
     say and the review's to accept, and the line is what tells the job whether a miss fails
     the change or is only reported: with `counted` a miss fails, with `measured` the counts
     are reported and decide nothing, and with neither the job fails only on a miss and names
-    the line. The job reads the description from the event it was started by, since a fork's
-    pull request gives it a token that only reads. A change goes from
+    the line. The job reads the description from the event it was started by, and its green
+    check is counts of the pull request's own tree by its own kit, for a reviewer to read, not
+    an attestation by anything apart from the change. A change goes from
     counted to measured when a count sends it there. A pull request that declares a plan does
     not go from measured to counted, by item 2's rule that a declaration is never added or
     changed after a run to clear its result. A reading published under the rule as it stood
@@ -11137,11 +11139,14 @@ rules something out.
     no test sizes is found to have grown under a counted change; repeats of one binary differ
     by more than a quarter of the budget in a case, so a count no longer resolves it; a placement
     run is read on the kit's probe, which its page says none has been, and shows what a few tens
-    of instructions between two commits are worth; the hosted job, on two builds with the
-    same crates, counts a case more than a quarter of the budget apart or reads idle memory to
-    rise, so it fails a change for what the runner did (three runs a build drawn from one
-    distribution read a rise in about one comparison in twelve, simulated, which the rule's
-    idle statistic was not chosen against); a job comes to tell the kinds a count cannot judge
+    of instructions between two commits are worth; the hosted job counts one binary more than
+    a quarter of the budget apart in a case, which fails no job and means its count no longer
+    resolves the budget there (two binaries of the same crates that differ so are where the
+    code was placed, which a count cannot tell from a change); the hosted job reads idle
+    memory to rise between two builds of the same crates, so it fails a change for what the
+    runner did (three runs a build drawn from one distribution read a rise in about one
+    comparison in twelve, simulated, not a rate seen on runners, which the rule's idle
+    statistic was not chosen against); a job comes to tell the kinds a count cannot judge
     from a diff, so the line says nothing the job does not know and can be dropped; or a reading
     across placements comes to cost what a count does, so cycles can be asked of every change.
 
