@@ -335,12 +335,14 @@ function justStarted(startedAt) {
   const age = Date.now() - Date.parse(time);
   return age >= 0 && age <= startupWindowMs;
 }
-function stoppedDockerState(state, endedAt, earliest) {
+function stoppedDockerState(state, endedAt, earliest = -Infinity) {
   if ((state.Status !== "exited" && state.Status !== "removing") || state.Pid !== 0
     || ["Running", "Paused", "Restarting", "Dead"].some((key) => state[key] !== false)
     || typeof state.OOMKilled !== "boolean" || !Number.isSafeInteger(state.ExitCode) || state.ExitCode < 0) return false;
   const start = dockerUtcTime(state.StartedAt), finish = dockerUtcTime(state.FinishedAt);
   if (!start || !finish || start <= dockerZeroTime || finish < start) return false;
+  // Docker's timestamps have nanoseconds, but the observation bounds have
+  // milliseconds. A finish in the bound's last millisecond is still in it.
   const at = Date.parse(finish);
   return at >= earliest && at <= endedAt;
 }
@@ -807,7 +809,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
 
 export function inspectBrowserParticipants(subject, observation, cpus) {
   assert.equal(subject.schema, "native-browser-host-subject/v2");
-  return inspectContainerParticipants(subject, observation, cpus, browserContainers);
+  return inspectContainerParticipants(subject, observation, cpus, browserContainers, { terminalClockAfterInspect: true });
 }
 
 export function inspectLiveActors(binding, observation, tools, participants, windows) {
@@ -857,7 +859,7 @@ export function inspectLiveActors(binding, observation, tools, participants, win
   return byApp.size === observed.size;
 }
 
-function inspectContainerParticipants(subject, observation, cpus, containerBudgets) {
+function inspectContainerParticipants(subject, observation, cpus, containerBudgets, { terminalClockAfterInspect = false } = {}) {
   assert.ok(Array.isArray(subject.participants));
   const ids = new Set(), { samples } = observation;
   const baseline = new Set(observation.context.dockerBaseline);
@@ -1020,6 +1022,10 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       if (cpus && !participantCpuSetsWithin(k, path, cpus[p.role])) return false;
       live.push(r);
     }
+    // Browser ends its window at the recorded terminal receipt. Live
+    // Delivery sets this boundary before it inspects the container.
+    if (terminalClockAfterInspect && !p.terminal.state.Running)
+      assert.ok(stoppedDockerState(p.terminal.state, endedAt), "invalid Browser Docker terminal receipt");
     if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
       || live[0].startedAt > startedAt + maximumSampleGapMs
       || live.at(-1).endedAt < endedAt - maximumSampleGapMs) return false;

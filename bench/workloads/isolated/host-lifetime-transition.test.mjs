@@ -100,7 +100,7 @@ test("r95 exit: a +60 ms finish replays in the original sample after one bounded
   }] });
   assert.deepEqual(removing.docker.participants[0].container, exit.docker.participants[0].container);
   assert.deepEqual(absent.docker, { inventory: [], participants: [], gaps: [] });
-  const sampleWindow = { startedAt: live.at, endedAt: exit.at };
+  const sampleWindow = { startedAt: live.at, endedAt: exit.docker.participants[0].endedAt };
   const subject = { schema: "native-browser-host-subject/v2", executionWindow: sampleWindow, participants: [{
     id, imageId: image, role: "application", window: sampleWindow, terminal: {
       ...exit.docker.participants[0].container, state: { ...stopped.State, Status: "exited" },

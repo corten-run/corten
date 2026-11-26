@@ -341,7 +341,8 @@ for (const [role, id, allowed, escaped] of [
   if (role === "browser") assert.equal(replayBrowser(f).checks.accounting, false);
 });
 
-function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true, workload = "fullstack-browser" } = {}) {
+function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true, workload = "fullstack-browser",
+  finishedAt = new Date(3650).toISOString() } = {}) {
   const live = workload === "live-delivery";
   const f = browserFixture(t, "corten", live, workload), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
   f.observation.samples = Array.from({ length: 41 }, (_, i) => {
@@ -360,7 +361,7 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
   const running = structuredClone(p.terminal.state), neverStarted = { ...running, Status: "created", Running: false, Pid: 0,
     StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
   const terminal = exited ? { ...running, Status: "exited", Running: false, Pid: 0, ExitCode: 1,
-    FinishedAt: new Date(3650).toISOString() } : running;
+    FinishedAt: finishedAt } : running;
   const task = "browser-abcdef", caseKey = definition("fullstack-browser").cases[0].key;
   const image = { Id: p.imageId, Config: { Entrypoint: ["node"], Cmd: ["server.mjs"] } };
   const info = { Id: p.id, Name: "/native-case", Image: p.imageId,
@@ -412,6 +413,20 @@ for (const workload of ["fullstack-browser", "live-delivery"]) {
       : inspectLiveActors(f.bound, observation, { node, browser }, participants,
         [{ app: "corten", startedAt: 900, endedAt: 1100, renderer: null }]);
   };
+  for (const [label, finishedAt, valid] of [
+    ["finish during the receipt's last millisecond", new Date(3800).toISOString().replace("Z", "999999Z"), true],
+    ["finish 35 ms after the receipt boundary", new Date(3835).toISOString(), workload === "live-delivery"],
+  ]) test(`r95 replay: ${workload} ${label}`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { exited: true, workload, finishedAt });
+    const later = f.observation.samples.find((s) => s.at === 3800);
+    f.observation.samples = f.observation.samples.filter((s) => s.at !== 3700);
+    later.at = 3820;
+    const [r] = later.docker.participants;
+    Object.assign(r, { startedAt: 3820, endedAt: 3840 });
+    r.container.state.Status = "removing";
+    if (valid) assert.equal(proof(f), true);
+    else assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "invalid Browser Docker terminal receipt" });
+  });
   for (const status of ["exited", "removing"]) test(`r95 replay: ${workload} validates the finish on every ${status} row`, (t) => {
     const f = lifecycleBoundaryFixture(t, { exited: true, workload });
     setStoppedRows(f, status, new Date(3650).toISOString());
