@@ -11854,8 +11854,12 @@ rules something out.
        kept-alive rows, on levels about 50 apart, and up to 648 apart on a connection for
        each request. Its control is as far from what the same code counted before (5 and 3
        more; 117 and 119 fewer; 131 and 105 more; 223 and 188 more, multi-threaded) as the
-       merged pair is from the control, so it shows no row that moved and could not show one
-       that moved by less than about 100. `main` itself counts about 700 fewer than at the
+       merged pair is from the control, so it shows no row that moved, and it could not show
+       one that moved by less than about 100 on the kept-alive rows or by several hundred on
+       a connection for each request on the multi-threaded runtime, where the control's two
+       rounds are 741 apart. The row nearest to a move is the kept-alive request that waits
+       on the single-threaded runtime, whose gain read 80 and 63 less than the control's.
+       `main` itself counts about 700 fewer than at the
        earlier base on the staged request that does not wait (673 to 731) and 937 to 999
        fewer on the one that waits.
     4. Two other counts read the change on this base to an instruction, and neither is of
