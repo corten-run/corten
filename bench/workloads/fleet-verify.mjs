@@ -247,6 +247,7 @@ export function readGroup(fleet, group) {
 
 const createQuarantineFile = "create-quarantine.json";
 const quarantineWitnessFile = "create-quarantine-witness.json";
+const externalFailedHostFile = "external-failed-host.json";
 const quarantineWitnessed = "quarantined create witnessed in provider inventory; reconcile before allocating";
 const quarantineJson = (bytes) => {
   try { return JSON.parse(bytes); } catch { throw new Error("invalid create quarantine evidence"); }
@@ -255,15 +256,23 @@ const quarantineJson = (bytes) => {
 // Read-only candidate for an operator who has accounted for the entire local
 // controller tree. Dead lock owners alone do not prove that tree has settled.
 export function unacknowledgedCreateBinding(fleet) {
-  return quarantineBinding(fleet, false);
+  return unboundCreateBinding(fleet);
 }
 
-function quarantineBinding(fleet, report) {
+function unboundCreateBinding(fleet, { report = false, removed = false } = {}) {
   const { root, manifest, manifestSha256 } = fleet, { round, single } = manifest;
   assert.ok(single, "create quarantine requires an independent attempt");
   const { group } = single, { state, stateRoot, local, stateSha256 } = readGroup(fleet, group);
-  assert.ok(state?.status === "creating" && !state.id && !state.createPending && !state.createErrored && !state.createContradicted,
-    "create quarantine requires an unbound create without a posted ID");
+  assert.ok(state?.status === "creating" && !state.id && !state.createErrored && !state.createContradicted
+    && (removed ? state.createPending : !state.createPending),
+  removed ? "external failure requires an unbound posted create" : "create quarantine requires an unbound create without a posted ID");
+  if (removed) {
+    assert.ok(Object.keys(state).every((k) => [
+      "schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "group", "fleet", "createdAt",
+      "status", "provider", "fullGroupQualified", "benchPackage", "gitSource", "trixieUpstream", "quietBootstrap",
+      "control", "createIntentAt", "createPending",
+    ].includes(k)), "external posted create cannot claim setup or collection");
+  }
   assert.ok(!state.control || state.control.ledger.length === 0 && state.control.sealed.length === 0
     && (!state.control.monitor || state.control.monitor.phase === "pending" && !state.control.monitor.registrationSha256),
     "create quarantine cannot hide guest control");
@@ -282,12 +291,14 @@ function quarantineBinding(fleet, report) {
     && Date.parse(owner.at) <= Date.parse(state.createIntentAt), "create quarantine requires original operation custody");
   const dir = join(root, "receipts"); physical(dir);
   if (!report) assert.ok(!present(join(dir, quarantineWitnessFile)), quarantineWitnessed);
-  const entries = readdirSync(dir).filter((file) => file !== createQuarantineFile && !(report && file === quarantineWitnessFile));
+  const entries = readdirSync(dir).filter((file) => removed ? file !== externalFailedHostFile
+    : file !== createQuarantineFile && !(report && file === quarantineWitnessFile));
   assert.equal(entries.length, 1, "create quarantine requires exactly one original detach outcome");
   assert.ok(new RegExp(`^detach-[a-f0-9]{16}-${group}\\.json$`).test(entries[0]), "create quarantine detach outcome name differs");
   const failureBytes = regular(join(dir, entries[0]), 4096), failure = quarantineJson(failureBytes);
   const diagnostic = providerDiagnostic(failure?.providerDiagnostic);
-  assert.equal(diagnostic?.code, "create-request", "create quarantine requires an unacknowledged POST diagnostic");
+  assert.equal(diagnostic?.code, removed ? "create-action-request" : "create-request",
+    removed ? "external failure requires a lost create-action read" : "create quarantine requires an unacknowledged POST diagnostic");
   assert.ok(isDeepStrictEqual(failure, { group, outcome: "error", error: "group-operation-failed", uncertain: true,
     providerDiagnostic: diagnostic, controllerStage: "provider-settlement" }), "create quarantine detach outcome differs");
   assert.ok(sameReportBatch(batch, reportBatch(fleet)) && sameChildLocks(local,
@@ -307,7 +318,7 @@ export function readCreateQuarantine(fleet, { report = false } = {}) {
     assert.ok(!present(witness), "create quarantine witness has no quarantine record");
     return;
   }
-  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = quarantineBinding(fleet, report);
+  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = unboundCreateBinding(fleet, { report });
   assert.ok(typeof record?.localCustodyProofSha256 === "string" && /^[a-f0-9]{64}$/.test(record.localCustodyProofSha256),
     "operator tree-custody proof digest required");
   assert.ok(isDeepStrictEqual(record, { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: record.localCustodyProofSha256 }),
@@ -461,6 +472,12 @@ export function externalFailedHostBinding(fleet) {
   const { root, manifest, manifestSha256 } = fleet, { round, provider, single } = manifest;
   assert.ok(single && !single.offlineHandoff, "external failure requires a monitored independent attempt");
   const { group, local, state, stateSha256, outcome } = readGroup(fleet, single.group);
+  if (state?.status === "creating" && state.createPending) {
+    const { launchSha256: launch, ...proof } = unboundCreateBinding(fleet, { removed: true });
+    assert.equal(proof.stateSha256, stateSha256, "external failure state changed");
+    const { dropletId: id, actionId } = state.createPending;
+    return { ...proof, launch, id, actionId, nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+  }
   assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === "invalid"
     && !state.archiveSha256 && !state.evidence && !state.validation && !state.collectedAt && !state.deletionIntentAt && !state.destroyedAt,
     "external failure requires an uncollected invalid attempt");
@@ -495,7 +512,7 @@ export function externalFailedHostBinding(fleet) {
 }
 
 export function readExternalFailedHost(fleet) {
-  const dir = join(fleet.root, "receipts"), path = join(dir, "external-failed-host.json");
+  const dir = join(fleet.root, "receipts"), path = join(dir, externalFailedHostFile);
   if (!present(path)) return;
   physical(dir);
   const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = externalFailedHostBinding(fleet);

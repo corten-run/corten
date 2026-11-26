@@ -679,6 +679,19 @@ receipt and custody before a successor can allocate, using the complete account
 census to refuse the old ID, original name, or run tag. The receipt authorizes
 no SSH, delete, or publication; a retry needs a higher round and a new commit.
 
+The same receipt can record external cleanup of a monitored attempt that stopped
+after an accepted create but before binding the droplet. The original reservation
+must have the posted droplet and action IDs, the exact uncertain create-action
+request refusal, and no setup files, guest control, or collection evidence. For
+this case review the saved launch and stopped process tree, the exact completed
+create action and prior ownership of that ID, and the subsequent exact-ID 404 and
+complete same-account inventory. Bind that review in `operatorProofSha256`.
+Do not alter the saved reservation, its child locks or the fleet lock. If the
+outer continuation lock is still held, stop dispatch to that root and separately
+verify and archive that lock and its original owner's closed process tree before
+releasing only the outer lock. Keep dispatch stopped until the receipt is in place.
+The next launch still checks the old ID, name and tag in its pre-create census.
+
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
 retirement evidence and rechecks the unchanged locks; it never removes them or
