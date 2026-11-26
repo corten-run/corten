@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full, providerDiagnostic } from "./cloud-options.mjs";
-import { livePeerLease, requireUnfinishedJournal, settledMonitor, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { livePeerLease, requireOrphanedAuditMonitor, requireUnfinishedJournal, settledMonitor, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 import { digest, durable, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -515,11 +515,11 @@ export function recheckSetupAttempt(root, row, successor) {
 
 // An operator-reviewed external cleanup never changes the old launch's state
 // or grants result or deletion authority. The next create must prove absence.
-export function externalFailedHostBinding(fleet) {
+export function externalFailedHostBinding(fleet, { orphaned = false } = {}) {
   const { root, manifest, manifestSha256 } = fleet, { round, provider, single } = manifest;
   assert.ok(single && !single.offlineHandoff, "external failure requires a monitored independent attempt");
   const { group, local, state, stateSha256, outcome } = readGroup(fleet, single.group);
-  if (state?.status === "creating" && state.createPending) {
+  if (!orphaned && state?.status === "creating" && state.createPending) {
     const monitor = state.control?.monitor;
     assert.ok(monitor?.phase === "pending" && monitor.registrationSha256 === undefined,
       "external posted create requires a pending unregistered monitor");
@@ -528,20 +528,36 @@ export function externalFailedHostBinding(fleet) {
     const { dropletId: id, actionId } = state.createPending;
     return { ...proof, launch, id, actionId, nameSha256: digest(state.name), tagSha256: digest(state.tag) };
   }
-  assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === "invalid"
+  assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === (orphaned ? "live" : "invalid")
     && !state.archiveSha256 && !state.evidence && !state.validation && !state.collectedAt && !state.deletionIntentAt && !state.destroyedAt,
-    "external failure requires an uncollected invalid attempt");
-  const hasConflict = () => ["results.tgz", "monitor-terminal.json", "audit-delivery.lock", "state.json.tmp"].some((name) => present(join(local, name)))
-    || readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz\.|monitor-audit-)/i.test(name))
+    orphaned ? "external failure requires an uncollected live attempt" : "external failure requires an uncollected invalid attempt");
+  const auditDir = `monitor-audit-${group}`, ready = `${auditDir}-ready.json`, delivery = `monitor-delivery-${group}.json`;
+  const conflicts = ["results.tgz", "monitor-terminal.json", "audit-delivery.lock", "state.json.tmp"];
+  if (orphaned) {
+    assert.ok(["json-api", "mixed-production"].includes(group) && state.id, "orphaned failure requires a bound audit group");
+    conflicts.push("monitor-invalid.json", "monitor-local-closed.json", "stream-recovery.lock");
+  }
+  const hasConflict = () => conflicts.some((name) => present(join(local, name)))
+    || readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz\.)/i.test(name)
+      || (/^monitor-audit-/i.test(name) || orphaned && /^monitor-delivery-/i.test(name))
+        && !(orphaned && [auditDir, ready, delivery].includes(name)))
     || [createQuarantineFile, quarantineWitnessFile].some((name) => present(join(root, "receipts", name)));
   assert.ok(!hasConflict(), "external failure cannot supersede other evidence or custody");
   const capture = (name, max) => digest(regular(join(local, name), max));
   const journal = join(local, "monitor-journal.jsonl");
-  const monitor = () => [capture("monitor-invalid.json", 8192), capture("monitor-local-closed.json", 8192),
+  const monitor = () => {
+    if (orphaned) physical(join(local, auditDir));
+    const subject = join(auditDir, (group === "json-api" ? "json" : "mixed") + "-audit-subject.json");
+    return [...(orphaned ? [capture(ready, 8192), fileHash(join(local, delivery), streamLimits.deliveryBytes), capture(subject, streamLimits.deliveryBytes)]
+      : [capture("monitor-invalid.json", 8192), capture("monitor-local-closed.json", 8192)]),
     capture("monitor-registration.json", 131072), fileHash(journal, streamLimits.journalBytes)];
+  };
   const monitorFiles = monitor();
-  settledMonitor(local, state);
-  requireUnfinishedJournal(journal, state.control.monitor.id);
+  if (orphaned) requireOrphanedAuditMonitor(local, state);
+  else {
+    settledMonitor(local, state);
+    requireUnfinishedJournal(journal, state.control.monitor.id);
+  }
   const intent = readLaunchIntent(fleet), batch = reportBatch(fleet, () => undefined);
   assert.ok(batch && batch !== "busy", "external failure requires the original stopped batch owner");
   const { pid, approvalSha256 } = batchLock(batch.bytes);
@@ -565,10 +581,16 @@ export function readExternalFailedHost(fleet) {
   const dir = join(fleet.root, "receipts"), path = join(dir, externalFailedHostFile);
   if (!present(path)) return;
   physical(dir);
-  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = externalFailedHostBinding(fleet);
+  const bytes = regular(path, 8192), record = quarantineJson(bytes);
+  const orphaned = record?.schema === "benchmark-external-failed-host/v2";
+  const schema = orphaned ? "benchmark-external-failed-host/v2" : "benchmark-external-failed-host/v1";
+  assert.ok(record?.schema === schema, "external failure schema differs");
+  const binding = externalFailedHostBinding(fleet, { orphaned });
   const operatorProofSha256 = record?.operatorProofSha256;
   assert.ok(typeof operatorProofSha256 === "string" && /^[a-f0-9]{64}$/.test(operatorProofSha256), "external failure operator proof required");
-  assert.ok(isDeepStrictEqual(record, { schema: "benchmark-external-failed-host/v1", binding, operatorProofSha256 }),
+  const archiveSha256 = record.archiveSha256;
+  if (orphaned) assert.ok(typeof archiveSha256 === "string" && /^[a-f0-9]{64}$/.test(archiveSha256), "external failure archive hash required");
+  assert.ok(isDeepStrictEqual(record, { schema, binding, operatorProofSha256, ...(orphaned ? { archiveSha256 } : {}) }),
     "external failure binding differs");
   const { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256 } = binding;
   return { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256,

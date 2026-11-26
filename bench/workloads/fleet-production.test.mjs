@@ -10,7 +10,7 @@ import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticDelivery, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, durable, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
@@ -18,7 +18,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, tags, verifySshIngress } from "./cloud-contract.mjs";
-import { checkQuarantineCensus, externalFailedHostBinding, readFleet, readLaunchIntent, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { checkQuarantineCensus, externalFailedHostBinding, readExternalFailedHost, readFleet, readLaunchIntent, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { createErroredReceipt, createErroredRecord, offlineNeverStarted, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -28,6 +28,7 @@ import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 import { controller, publicError } from "./droplet.mjs";
+import { deploymentSha256 } from "./deployments.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
@@ -647,7 +648,7 @@ function externalFailureFixture(p) {
     assert.equal(await fleetMain([...args(r, g), "--detach", "--print-approval"], p.deps), 3);
     return [...args(r, g), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
   };
-  async function seed(group = "json-api", round = "r20", posted = false) {
+  async function seed(group = "json-api", round = "r20", posted = false, orphaned = false) {
     assert.equal(await prepare(round, group), 3);
     assert.equal(await fleetMain(await approve(round, group), { ...p.deps, main: async () => {
       if (!posted) return 2;
@@ -658,7 +659,8 @@ function externalFailureFixture(p) {
     fs.mkdirSync(local, { recursive: true });
     const fleet = readFleet(old, round), manifest = fleet.manifest, token = manifest.jobs[0].token;
     const at = "2026-11-23T00:00:00.000Z", monitorId = "a".repeat(32), monitorBinding = { round, commit, token, helperSha256: guardianSha256 };
-    const app = { ...registration, id: monitorId, binding: monitorBinding }, closedAtMs = Date.parse(at);
+    const app = { ...registration, id: monitorId, binding: monitorBinding,
+      ...(orphaned ? { host: { ...registration.host, hostname: manifest.jobs[0].name } } : {}) }, closedAtMs = Date.parse(at);
     const initial = { ...reservation({ round, commit, group, token, fleet: manifest }, at),
       createIntentAt: at, provider: manifest.provider, fullGroupQualified: false };
     const monitor = { schema: "benchmark-supervised-control/v1", id: monitorId };
@@ -667,15 +669,34 @@ function externalFailureFixture(p) {
         monitor: { ...monitor, phase: "pending" } } } : { ...initial, status: "running",
       id: "701", ip: "192.0.2.1",
       control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"],
-        monitor: { ...monitor, phase: "invalid", registrationSha256: digest(JSON.stringify(app)) } } };
+        monitor: { ...monitor, phase: orphaned ? "live" : "invalid", registrationSha256: digest(JSON.stringify(app)) } } };
     if (!posted) {
       state.control.ledger.push({ request: controlRequest(state, "ssh", [`systemctl start ${state.unit}`], 60000, "bootstrap", []), localTerminal: true, code: 0 });
-      for (const [name, value] of Object.entries({ "monitor-registration.json": app,
+      for (const [name, value] of Object.entries(orphaned ? { "monitor-registration.json": app } : { "monitor-registration.json": app,
         "monitor-invalid.json": { id: monitorId, binding: monitorBinding, publicationRevoked: true },
         "monitor-local-closed.json": { id: monitorId, binding: monitorBinding, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs } }))
         fs.writeFileSync(path.join(local, name), JSON.stringify(value));
       fs.writeFileSync(path.join(local, "monitor-journal.jsonl"), JSON.stringify({ schema: "benchmark-control-frame/v1", id: monitorId,
         kind: "registered", sequence: 1, payload: app }) + "\n");
+      if (orphaned) {
+        const journal = path.join(local, "monitor-journal.jsonl");
+        const frame = (kind, sequence, payload) => ({ schema: "benchmark-control-frame/v1", id: monitorId, kind, sequence, payload });
+        const audit = syntheticDelivery(group), identities = audit.bundle.receipts.map((r) => r.identity);
+        const prefix = group === "json-api" ? "json" : "mixed";
+        const subject = { schema: `benchmark-${prefix}-audit-subject/v1`, commit, campaignSha256: "f".repeat(64),
+          ...(group === "json-api" ? { identities } : { requests: identities.map((identity) => ({ identity })) }) };
+        const ready = { campaign: `${round}-0123456789abcdef`, group, subjectSha256: deploymentSha256(subject) };
+        audit.subjectSha256 = audit.review.subjectSha256 = ready.subjectSha256;
+        const queued = JSON.stringify(audit);
+        const frames = [frame("progress", 4, { round, state: "active" }), frame("audit-begin", 8, ready),
+          frame("audit-end", 9, { group, subjectSha256: ready.subjectSha256 }),
+          frame("delivery-sealed", 10, { ...ready, bytes: Buffer.byteLength(queued), sha256: digest(queued) })];
+        fs.appendFileSync(journal, [...frames, { kind: "peer-lease", id: monitorId, atMs: closedAtMs }].map((row) => JSON.stringify(row)).join("\n") + "\n");
+        fs.mkdirSync(path.join(local, "monitor-audit-" + group));
+        fs.writeFileSync(path.join(local, `monitor-audit-${group}`, `${prefix}-audit-subject.json`), JSON.stringify({ ...subject, subjectSha256: ready.subjectSha256 }));
+        fs.writeFileSync(path.join(local, "monitor-audit-" + group + "-ready.json"), JSON.stringify(ready));
+        fs.writeFileSync(path.join(local, "monitor-delivery-" + group + ".json"), queued);
+      }
     }
     fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
     const owner = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
@@ -691,7 +712,48 @@ function externalFailureFixture(p) {
       fs.unlinkSync(outer); // Synthetic operator, after independent process-tree review.
       await assert.rejects(prepare("r21", "hardening"), /unresolved custody|ESRCH/);
     }
-    const binding = externalFailedHostBinding(fleet);
+    const binding = externalFailedHostBinding(fleet, { orphaned });
+    if (orphaned) {
+      assert.throws(() => externalFailedHostBinding(fleet), /invalid attempt/);
+      const journal = path.join(local, "monitor-journal.jsonl"), original = fs.readFileSync(journal);
+      for (const [suffix, refusal] of [
+        [JSON.stringify({ kind: "peer-lease", id: monitorId, atMs: Date.now() }) + "\n", /expired peer lease/],
+        [JSON.stringify({ schema: "benchmark-control-frame/v1", id: monitorId, kind: "terminal", sequence: 11, payload: {} }) + "\n", /journal requires reconciliation/],
+        ["{", /incomplete monitor journal/],
+      ]) {
+        fs.appendFileSync(journal, suffix);
+        assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), refusal);
+        fs.writeFileSync(journal, original);
+      }
+      const delivered = path.join(local, `monitor-delivery-${group}.json`);
+      const delivery = fs.readFileSync(delivered);
+      fs.writeFileSync(delivered, "{ }");
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /saved audit delivery differs/);
+      fs.writeFileSync(delivered, delivery);
+      const rows = original.toString("utf8").trimEnd().split("\n").map((row) => JSON.parse(row));
+      const writeJournal = (entries) => fs.writeFileSync(journal, entries.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      for (const bad of ["", "{", "{}"]) {
+        fs.writeFileSync(delivered, bad);
+        writeJournal(rows.map((row) => row.kind === "delivery-sealed"
+          ? { ...row, payload: { ...row.payload, bytes: Buffer.byteLength(bad), sha256: digest(bad) } } : row));
+        assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /saved audit delivery differs/);
+      }
+      fs.writeFileSync(delivered, delivery);
+      const subject = path.join(local, `monitor-audit-${group}`, "json-audit-subject.json"), subjectBytes = fs.readFileSync(subject);
+      fs.writeFileSync(journal, original);
+      fs.unlinkSync(subject);
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }));
+      fs.writeFileSync(subject, subjectBytes);
+      writeJournal([rows[0], rows.at(-1), ...rows.slice(1, -1)]);
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /monitor journal requires reconciliation/);
+      writeJournal(rows.map((row) => row.kind === "progress" ? { ...row, extra: "x".repeat(streamLimits.frameBytes) } : row));
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /oversized monitor journal record/);
+      fs.writeFileSync(journal, original);
+      const conflicting = path.join(local, "results.tgz");
+      fs.writeFileSync(conflicting, "not a replay candidate");
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /cannot supersede other evidence/);
+      fs.unlinkSync(conflicting);
+    }
     if (posted) {
       assert.equal(binding.id, state.createPending.dropletId);
       assert.equal(binding.actionId, state.createPending.actionId);
@@ -711,20 +773,27 @@ function externalFailureFixture(p) {
       assert.throws(() => externalFailedHostBinding(fleet), /lost create-action read/);
       fs.writeFileSync(detach, original);
     }
-    fs.writeFileSync(path.join(old, "receipts", "external-failed-host.json"), JSON.stringify({ schema: "benchmark-external-failed-host/v1",
-      binding, operatorProofSha256: "c".repeat(64) }));
+    const receiptFile = path.join(old, "receipts", "external-failed-host.json"), receipt = {
+      schema: orphaned ? "benchmark-external-failed-host/v2" : "benchmark-external-failed-host/v1",
+      binding, operatorProofSha256: "c".repeat(64), ...(orphaned ? { archiveSha256: "d".repeat(64) } : {}) };
+    if (orphaned) {
+      fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, archiveSha256: undefined }));
+      assert.throws(() => readExternalFailedHost(fleet), /archive hash required/);
+    }
+    fs.writeFileSync(receiptFile, JSON.stringify(receipt));
     return { old, local, state };
   }
   return { prepare, approve, seed };
 }
 
-for (const posted of [false, true])
+for (const kind of ["attempt", "posted create", "orphaned supervisor"])
 for (const scenario of ["absent", "renamed old ID", "old tag on a different ID", "incomplete census", "late recovery"]) {
-  test(`external failed ${posted ? "posted create" : "attempt"} before create: ${scenario}`, { timeout: 60000 }, async (t) => {
+  test(`external failed ${kind} before create: ${scenario}`, { timeout: 60000 }, async (t) => {
     const target = "hardening", next = "r21", p = fixture(t, "ssh-late", target), root = p.h.base;
     p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
     fs.writeFileSync(path.join(root, "index.json"), "[]");
-    const { prepare, approve, seed } = externalFailureFixture(p), { old, local, state } = await seed("json-api", "r20", posted);
+    const { prepare, approve, seed } = externalFailureFixture(p);
+    const { old, local, state } = await seed("json-api", "r20", kind === "posted create", kind === "orphaned supervisor");
     const custody = treeHash(old);
     assert.equal(await prepare(next, target), 3);
     const approved = await approve(next, target), recovery = path.join(local, "stream-recovery.lock");
