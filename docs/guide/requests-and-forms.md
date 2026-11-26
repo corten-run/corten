@@ -2241,36 +2241,37 @@ finds no place and a 5xx (which may still draw) leave it, while removing an elem
 longer has counts as done. A 4xx patch that draws (a 422) moves it, and so does a page answer
 (`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
-draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and so does
-one sent while a navigation is on its way (by a script's `navigate` listener too); a navigation
+draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and one
+pressed while a navigation is on its way (by a script's `navigate` listener too) is not sent; a navigation
 a script cancels leaves nothing, so an answer drawn as one is cancelled still moves the address.
 A press a script makes as it hears the page move (in a `currententrychange` or `popstate`
 listener) is on the entry the page moved to, and draws there.
 One that comes while the page reads itself again (`ReadAgain`), or after another form's answer was
-drawn in place, draws as usual, and the read starts again later at the new address. A browser
-that refuses the replace, with an exception (WebKit past its limit of history updates) or without
-a word (Chromium past its limit), has the runtime load the page at the entry's address again
-rather than leave the answer under it: an address not in the entry after the replace that no
-`navigate` listener of the page cancelled is the browser's refusal. The runtime has to hear the
-replace's `navigate` event to know a script cancelled it: a listener put on before the runtime's
-that cancels it and stops it there (`stopImmediatePropagation`) gets the same reload. A script
-of the page whose `navigate` listener cancels the replace, and lets the runtime hear it, has
-taken the address over: the answer stays
-drawn and the entry keeps the address the script leaves in it, so a script that cancels it puts
-the address it means in itself, or begins the navigation it means. A GET pressed
+drawn in place, draws as usual, and the read starts again later at the new address. Where the
+runtime cannot tell that the screen is still the page and entry the press was made on, with no
+newer press of the form between, it leaves the address as it was, as the form without the mark
+does; it never reads the page again to repair it. So a replace the browser refuses, with an
+exception (WebKit past its limit of history updates) or without a word (Chromium past its limit),
+leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
+cancels: that script has taken the address over, so it puts the address it means in itself, or
+begins the navigation it means, which the runtime leaves to finish. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page; if the Save's
 answer draws the form with `method="post"`, the GET is sent from it as a post, a write, which no
 newer press drops; and a post that waited, sent from a form the answer draws with
 `method="get"`, is a GET, sent and drawn, with its address, only on the page and entry it was
-pressed on, as any press of the marked form. A newer press
+pressed on, as any press of the marked form; one pressed on a form without the mark draws but never moves the
+address. A newer press
 of the form, or of the one a patch drew in its place (found by the form's id), drops an older
 GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
-drawn. Presses count as they are made, before a `formdata` listener of the page runs; once an
-answer is drawing, a press its draw makes (an element's `connectedCallback`) does not stop its
-address going in; and pressing for the same scope again while its GET is on its way takes that
-GET over, whose answer then draws even if the page moved to another `#id` meanwhile (one a
-navigation aborted is over, and the press sends it again). Give the form a
+drawn, and a GET a `formdata` listener made stale is not sent at all. Presses count as the
+runtime takes them, after the page's `submit` listeners and before its `formdata` listeners, so
+a press a `submit` listener makes as it hears another counts first, and the press it heard is
+drawn with its address; once an answer is drawing, a press its draw makes (an element's
+`connectedCallback`) does not stop its address going in; and pressing for the same scope again
+while its GET is on its way, before its answer has come, takes that GET over, whose answer then
+draws even if the page moved to another `#id` meanwhile (once the answer has come, or a
+navigation aborted the GET, the press sends its own). Give the form a
 `#[derive(Id)]` id, as below. Two marked forms are not ordered against each other: their answers are drawn
 as they come.
 

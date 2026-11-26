@@ -2804,16 +2804,10 @@ function fragmentOf(fragment) {
   return find(fragment) ?? find(new TextDecoder(undefined, { ignoreBOM: true }).decode(Uint8Array.from(bytes, (c) => c.charCodeAt(0))));
 }
 
-/** The address a marked answer is putting in the entry ({@link send}), and the `navigate` event of that replace. */
-let replacing = "";
-/** @type {NavigateEvent | undefined} */
-let replaced;
 // Only this module has these symbol keys; another script's info has none of them.
 navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
   // One another script dispatches is no navigation.
   if (!event.isTrusted) return;
-  // Heard before a page's listeners heard later, which may cancel it.
-  if (event.destination.url === replacing) replaced = /** @type {NavigateEvent} */ (event);
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -3266,23 +3260,16 @@ const sentFrom = new WeakSet();
 const presses = new Map();
 
 /**
- * Whether a read is still to be drawn ({@link pressed}): drawing now, whatever was pressed since;
- * being sent, wherever it is to draw.
- * @typedef {(drawing?: boolean, sending?: boolean) => boolean} Press
+ * A press of a form: its id and count ({@link presses}), and for a `data-address` form's the entry
+ * it was made on ({@link entry}), null while a visit of the runtime's was on its way.
+ * @typedef {{ id: string | null, n: number, at?: number | null }} Press
  */
 
 /**
- * Counts a press of `form` by its id, which the form a patch draws in its place keeps, as it is
- * made: before anything of the page runs for it (a `formdata` listener), so the presses are in the
- * order they were made. Whatever it sends, a press is a read's fence only when it is sent as a read
- * (a write is never dropped), and it keeps where it was made for when it is sent again as one (an
- * answer drew its form with another method). As a read's, whether it is still to be drawn: until it
- * draws, only while it is the latest press of a form with that id (a newer one, of this form or the
- * one drawn in its place, drops it wherever it is: on its way, waiting for a write, about to be sent
- * again), not once it is drawing, which a press its draw makes (a `connectedCallback`) does not
- * stop. A `data-address` form's draws, and puts its address in, only on the entry and page it was
- * pressed on ({@link entry}) and while no visit of the runtime's is on its way, whose navigation the
- * replace would cancel: never one pressed while a visit is on its way, for the page it leaves.
+ * Counts a press of `form` by its id, which the form a patch draws in its place keeps, as the
+ * runtime takes the submit: after the page's own `submit` listeners, before its `formdata` ones.
+ * Whatever it sends, a press fences only a read ({@link standing}), and keeps where it was made for when
+ * it is sent again as one (an answer drew its form with another method).
  * @param {HTMLFormElement} form
  * @returns {Press}
  */
@@ -3290,9 +3277,19 @@ function pressed(form) {
   const id = idOf(form);
   const n = (presses.get(id) ?? 0) + 1;
   presses.set(id, n);
-  const at = hasAttr(form, "data-address") ? (reading.size ? null : entry()) : undefined;
-  return (drawing, sending) => (drawing || !id || presses.get(id) === n) && (sending || at === undefined || (!reading.size && at === entry()));
+  return { id, n, at: hasAttr(form, "data-address") ? (reading.size ? null : entry()) : undefined };
 }
+
+/**
+ * Whether a read of `press` is still to be sent or drawn: until it draws, only while it is the
+ * latest press of a form with its id (a newer one, of this form or the one drawn in its place,
+ * drops it wherever it is), not once it is `drawing`, which a press its draw makes (a
+ * `connectedCallback`) does not stop. A `data-address` form's only on the entry and page it was
+ * pressed on and while no visit of the runtime's is on its way, whose navigation its replace would
+ * cancel: never one pressed while a visit is on its way, for the page it leaves.
+ * @param {Press} press @param {boolean} [drawing]
+ */
+const standing = (press, drawing) => (drawing || !press.id || presses.get(press.id) === press.n) && (press.at === undefined || (!reading.size && press.at === entry()));
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
 const DRAWS_WHOLE = "corten-draws=whole";
@@ -3362,8 +3359,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   const data = new FormData(form, submitter);
   // The press fences only a read: a write is never dropped.
   const read = sends.method === "get" ? press : null;
-  // Dropped already: a `formdata` listener pressed the form again.
-  if (read && !read(false, true)) return;
+  // The one place a read is let go before it is sent, whether new or sent again after a write:
+  // what runs of the page from here to the fetch is the runtime's, so a read that could not draw
+  // (a `formdata` listener pressed the form again or moved the page, or a visit is on its way) is
+  // not sent.
+  if (read && !standing(read)) return;
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
   const entries = sentEntries(data);
@@ -3385,9 +3385,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
   }
-  // The same read as one on its way is that one, which this press takes over: its answer is drawn
-  // as this press's, on the entry this press is on.
-  if (previous?.key === key) return void (previous.here = read ?? undefined);
+  // The same read as one on its way is that one, which this press takes over while no answer has
+  // come: it is drawn as this press's, on the entry this press is on. Once one has come, what may be
+  // drawing keeps its own press, and this one is sent anew.
+  if (previous?.key === key && !previous.answered) return void (previous.here = read ?? undefined);
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;
@@ -3404,7 +3405,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
-  /** @type {Press} */ const here = (drawing) => !pending.here || pending.here(drawing);
+  const here = (/** @type {boolean} */ drawing = false) => !pending.here || standing(pending.here, drawing);
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3507,8 +3508,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // A marked form's answer drawn whole, a patch or a page, is the page at the address it asked
       // for (the redirect's, with the `#id` of its action, which fetch leaves out), in place of the
       // entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is no such page.
+      // Only for a press made on a marked form, which knows its entry: one sent again from a form an
+      // answer marked draws as an unmarked form's does, and leaves the address.
       const done =
-        pending.here && hasAttr(form, "data-address") && res.status < 500
+        pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500
           ? () => {
               const to = res.url + url.hash;
               const path = location.pathname;
@@ -3516,23 +3519,16 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               // as it connects): the replace would cancel that navigation, or write over that entry.
               // A press it made does not stop it, as it has drawn.
               if (!here(true) || to === location.href) return;
-              replaced = undefined;
-              replacing = to;
               try {
                 history.replaceState(history.state, "", to);
               } catch {
-                // Refused by the browser (WebKit throws past its limit of history updates): the page at
-                // the entry's address is read, whole.
-                return reload();
-              } finally {
-                replacing = "";
+                // Refused (WebKit throws past its limit of history updates): as below.
               }
-              // Not in the entry. A page's `navigate` listener that cancelled the replace, or began a
-              // navigation in its place (either aborts the event the runtime heard), has taken the
-              // address over, which it keeps. Any other is the browser's refusal without a word
-              // (Chromium past its limit returns before a `navigate` event; without the Navigation API
-              // nothing else can stop it): the page is read, as above.
-              if (location.href !== to) return /** @type {NavigateEvent | undefined} */ (replaced)?.signal.aborted ? undefined : reload();
+              // Not in the entry: the browser refused it (Chromium past its limit says nothing), or a
+              // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
+              // address stays as it was, the answer drawn under it, as an unmarked form's is: the
+              // runtime neither guesses which nor reads the page again over what it cannot see.
+              if (location.href !== to) return;
               // The entry the answer was drawn on, at its new address.
               entrySeen = where();
               // Read again at the new address, which without the Navigation API goes by the path.
@@ -3690,8 +3686,8 @@ function sendAgain(form, submitter, within, press) {
   const sends = sendsAs(now, by);
   // Fenced as what the form sends now: a press the answer drew its form to send as a write (with
   // `method="post"`) is one, which no newer press drops; one it drew to send as a read is a read,
-  // on the entry it was pressed on.
-  if (sends.method !== "get" || press?.()) send(now, by, sends, within, press ?? null);
+  // on the entry it was pressed on, so one that cannot draw does not read the form again.
+  if (sends.method !== "get" || (press && standing(press))) send(now, by, sends, within, press ?? null);
 }
 
 /**

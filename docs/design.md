@@ -11473,19 +11473,19 @@ rules something out.
     would have put it in. Putting focus back only after the replace would cover the first of these, not the
     others, and would put focus back for every patch only once all its elements are in. A page's
     own `navigate` listener can cancel that `replaceState`, which then changes nothing and throws
-    nothing: the page's script has taken the address over, and the answer stays drawn under the
-    address the script leaves in the entry, which the runtime does not touch again (Not chosen,
-    below). A browser can refuse it, which no script of the page asked for: with an exception
-    (WebKit past its limit of history updates), or without a word (Chromium past its limit
-    returns before it fires a `navigate` event, and throws nothing). The runtime reads the address
-    back after the call, and one not in the entry is a page's choice only when the runtime's own
-    `navigate` listener heard the replace and that event's signal was then aborted (a page's
-    listener cancelled it, or began a navigation in its place); any other is the
-    browser's refusal, and so is taken a cancel by a listener heard before the runtime's that stops
-    the event there (`stopImmediatePropagation`), which the runtime never hears; without the
-    Navigation API nothing of the page can cancel it, so there it always is. On a refusal the
-    runtime loads the entry's own page again, so the screen shows the page at the address the
-    entry has.
+    nothing, perhaps for a navigation of its own; and a browser can refuse it, with an exception
+    (WebKit past its limit of history updates) or without a word (Chromium past its limit returns
+    before it fires a `navigate` event, and throws nothing). The runtime reads the address back
+    after the call, and one not in the entry, for whichever reason, stays as it was, the answer
+    drawn under it, as an unmarked form's answer is: the runtime does not guess which it was, and
+    never reads the page again, so it never loads over a navigation it did not begin (Not chosen,
+    below).
+
+    The guarantee is narrow on purpose: the address moves only when the runtime can tell, in the
+    task the answer draws, that the screen is still the entry and page the press was made on and
+    that no newer press of the form and no visit of its own came between; where it cannot tell, it
+    leaves the address as it was, which is what the same form without the mark does, and never
+    repairs what a page's script or the browser did to the entry.
 
     A marked answer draws only on the history entry it was pressed on, and the page on it. The
     runtime knows the entry on screen by its Navigation API key (another after a link, a move to an
@@ -11497,7 +11497,9 @@ rules something out.
     and back is counted twice. The key and the address have changed before the browser says so to
     any page's listener (`currententrychange` comes before `popstate`), so a press made in a
     listener of either heard before the runtime's, or in the task that moved to an `#id`, is on the
-    entry it moved to. Its press takes the count as it is made. Where the answer would
+    entry it moved to. A press of a marked form takes the count as it is made; a press of a form
+    without the mark takes none, so an answer to it never moves the address, even when it is sent
+    again (after a write) from a marked form that write's answer drew. Where the answer would
     draw, and again in the same task once it has drawn, before it replaces the address, it goes on
     only while the count is the one it was pressed with and no visit of the runtime's is on
     its way, whose navigation the replace would cancel; one pressed while a visit is on its way is
@@ -11523,7 +11525,8 @@ rules something out.
     for it nor is answered by it. A press waiting for a write of its form keeps its count and its
     entry whatever it was pressed as, and is sent as the form the write's answer drew sends it,
     fenced as that: a read only while its press still holds, on the entry it was pressed on, a
-    post the form now sends by GET included, whose answer then puts its address in; a write when
+    post the form now sends by GET included, whose answer then puts its address in if it was
+    pressed on a marked form; a write when
     the form now sends it by POST (a `method="post"` its button does not override), which no newer
     press drops and whose answer is drawn and counted as any write's. The address moves only after
     the answer draws every element: a dropped answer, a 204, an empty patch or an element with no
@@ -11535,15 +11538,25 @@ rules something out.
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
     navigation, its submits are ordered as any form's are, and each press of a form counts against
-    its id, which the form a patch draws in its place keeps (a patch requires one), as the press is
-    made, before anything of the page runs for it (a `formdata` listener), so presses count in the
-    order they were made. Until it draws, a read draws, or is sent once the write it waited for is
+    its id, which the form a patch draws in its place keeps (a patch requires one), as the runtime
+    takes the submit: after the page's own `submit` listeners, which may cancel it, and before its
+    `formdata` listeners. Presses count in the order the runtime takes them, which is the order they
+    were made except for one a page's `submit` listener makes as it hears another: that one is
+    taken first, so the press the listener heard is the later one, and its answer is drawn with its
+    address. Either way the press drawn is the one whose address goes in, so the screen and the
+    address agree. Until it draws, a read is sent, drawn, or sent once the write it waited for is
     answered, only while it is the latest press of that id, so a newer press of the form, or of the
     one drawn in its place, drops it wherever it is (on its way, waiting for a write, about to be
-    sent again); once it draws, a press its draw makes does not stop it. A press that asks for what
-    a read of the form on its way asks for (the same method, address and values) takes that read
-    over, as the runtime sends the same request once for any form: its answer is drawn as this
-    press's, on this press's entry. Two marked
+    sent again); once it draws, a press its draw makes does not stop it. Every read is checked
+    against its press as the runtime reads the form for it, after the page's `formdata` listeners,
+    and nothing of the page runs between that and its fetch, so one a listener there made stale (a
+    newer press, a move to an `#id`) is not fetched, and nor is one pressed while a visit is on its
+    way. A press that asks for what a read of the form on
+    its way asks for (the same method, address and values) takes that read over while no answer to
+    it has come, as the runtime sends the same request once for any form: its answer is drawn as
+    this press's, on this press's entry. Once an answer has come it may be drawing (it waits for
+    its modules and stylesheets) under its own press, which no press changes, so a press then sends
+    a read of its own. Two marked
     forms' answers are drawn as they come, the address that of the last one that moved it. The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
@@ -11604,8 +11617,7 @@ rules something out.
       state of a screen belongs to the client showing it, README Value 8); repairing after it took a
       record of the last navigation heard, a reload and the cases around them, in the runtime every
       page loads (README Value 6). The guide asks a page that cancels it to keep the address true
-      itself. A browser's exception is not a script's choice, and the runtime is told of it, so it
-      still loads the entry's page.
+      itself.
     - Finding an older submit by the form element alone, as an earlier build did: a form a read
       drew in place of the pressed one was another form, so a press of it did not drop the older
       read, whose answer, coming last, drew over the newer one's and took the address. Nor keeping
@@ -11639,10 +11651,31 @@ rules something out.
       script can put its listener on before the runtime loads, and Chromium runs `window`'s
       listeners in the order they were put on, a capture one too, where Firefox and WebKit run
       capture ones first.
-    - Taking every replace not in the entry for a page's choice, as the build before this one did:
-      Chromium past its limit of history updates refuses one without an exception or a `navigate`
-      event, which left the answer drawn under the old address with no script having taken it
-      over. Only the event the runtime's listener heard, then cancelled, is a script's.
+    - Reading the entry's page again when the browser refuses the replace, as the last builds did:
+      on an exception, and when the address was not in the entry and no `navigate` event of the
+      replace's address that the runtime heard was cancelled. A page's listener that cancelled the
+      replace and began its own navigation to the same address, held before it commits, made an
+      event of that address the runtime took for the replace's, and the reload went over that
+      navigation; a listener put on before the runtime's that cancels the replace and stops the
+      event there (`stopImmediatePropagation`) got the same reload; a load of another document on
+      its way is not seen at all; and a reload loses what the user typed elsewhere on the screen.
+      Only a script that updates history hundreds of times in seconds reaches a browser's limit,
+      and the answer drawn under the old address is what the form without the mark leaves, so the
+      runtime leaves it too, and keeps no record of `navigate` events for it.
+    - Handing a read whose answer has come to a newer press of the same request, as the build
+      before this one did for any read on its way: an answer waiting for a stylesheet it links, or
+      drawing, then drew, and put its address in, by the newer press's entry, though it had begun to
+      draw for the press it came for, one a move to an `#id` had since left.
+    - Counting a press in the window's capture listener for `submit`, so that a press a page's
+      `submit` listener makes as it hears another comes after it: the runtime does not know there
+      whether a page's listener will cancel the submit, so a cancelled one would drop a read on its
+      way, and keeping both a count at capture and one for the submits it takes is more of the
+      tracking this Choice has cut, for an order whose outcome, the screen and the address agreeing,
+      is the same.
+    - Sending a read again after a write with no entry when it was pressed on a form without the
+      mark, as the build before this one did: the write's answer drew the form marked, and the
+      read's answer put its address in an entry the page had moved to since the press, an entry
+      no press of a marked form was made on.
     - Sending a read waiting for a write with its press when the form the write's answer drew
       sends it by POST, as the build before this one did: a newer press then dropped the answer of
       a write the server had taken, after it was counted as on its way and before it was counted as
@@ -11660,11 +11693,10 @@ rules something out.
       the new navigation is on its way, in all three engines (the smoke's chained case caught it),
       so a marked answer drew and aborted that navigation.
 
-    What it costs: the runtime every page loads is 1,281 bytes larger raw (46,502 to 47,783), 526
-    with gzip (16,718 to 17,244) and 462 with brotli (15,106 to 15,568), paid once a release by
-    every user (15 and 5 bytes smaller raw and with gzip, 5 larger with brotli, than the build
-    before this one, which kept a press only for a read; of the whole, reading the address back and
-    telling a browser's refusal from a page's cancel are 130, 50 and 40). A `data-patch` submit
+    What it costs: the runtime every page loads is 1,213 bytes larger raw (46,502 to 47,715), 513
+    with gzip (16,718 to 17,231) and 444 with brotli (15,106 to 15,550), paid once a release by
+    every user (68, 13 and 18 smaller than the build before this one, which read the page again
+    on a refusal and kept the `navigate` event of the replace). A `data-patch` submit
     reads one attribute and its form's id, and adds one to that id's count in a map that keeps a
     number for each id pressed; a press keeps the count it was made at, and a read compares it
     where it could draw or be sent again. Only a marked form's press looks at its entry (one key,
@@ -11672,9 +11704,8 @@ rules something out.
     could draw, reads the size of the set of visits on their way the runtime keeps already, and
     builds an address and reads it back. A patch tracks whether it placed every
     element as it walks them, without a separate scan; each `currententrychange` (`popstate`
-    without the Navigation API) compares the key (the address) with the last seen, a visit the
-    runtime begins adds one to a counter, and each `navigate` compares its address with the one
-    being put in the entry, if any.
+    without the Navigation API) compares the key (the address) with the last seen, and a visit the
+    runtime begins adds one to a counter.
     On the server nothing runs that did not: `html!` writes the mark as
     an attribute and refuses a misplaced one when the markup compiles.
 
@@ -11693,8 +11724,7 @@ rules something out.
     `popstate` listeners in the order they were put on, capture or not, where Firefox and WebKit run
     capture ones first, measured once in each engine; a navigation begun as a `navigate` is dispatched aborts that one
     first, whose signal the runtime's listener then sees aborted, a `NavigateEvent` a script
-    dispatches is not trusted, a `navigate` of a `replaceState` that a listener cancels, or in
-    which it begins another navigation, has its signal aborted once it is dispatched, measured once
+    dispatches is not trusted, measured once
     in each engine, a `navigate` a listener cancels runs none of the handlers it was
     intercepted with, and the entry changes only when a navigation whose address waits for its page
     commits; `new FormData` fires `formdata` before it returns, and a custom element a patch puts
@@ -11719,13 +11749,14 @@ rules something out.
     of such a filter to be an entry Back steps through; a route's type can say that its patch
     draws the part for its address, when `html!` could refuse marking a form whose route
     appends, which the guide only asks today; an app needs the runtime to keep the address true
-    when its own `navigate` listener cancels the replace; or `replaceState` stops keeping the
+    when its own `navigate` listener cancels the replace, or a browser refuses a replace short of a
+    script's flood of history updates; or `replaceState` stops keeping the
     entry's key or stops aborting a navigation under way in one of the engines, or a move to an
     `#id` or a traversal between `#id` entries stops firing `popstate` before the script that made
     it goes on in one, or the key stops changing before `currententrychange` fires in one.
 
-    Last checked: 2026-11-26, the runtime's size with this change against main `8b4e863b1`, whose
-    runtime main `73b8d26fd` has unchanged, and the page's and the patch's bodies on `6ca02c26e`;
+    Last checked: 2026-11-26, the runtime's size with this change against main `28d5743f6`, whose
+    runtime is unchanged since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
     2026-11-25 and 2026-11-26, `popstate` and the key on a move to an `#id`, `currententrychange`
     before `popstate`, the order of `window`'s `popstate` listeners and the signal of a
     cancelled replace, and the watchlist smoke on the same

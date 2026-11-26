@@ -468,11 +468,24 @@ export async function dataAddress(browser) {
       leftRead.saveSent && leftRead.moved === "#smoke-address" && leftRead.drawn && leftRead.sent.join() === "POST scope=saved" && leftRead.at === "#smoke-address" && leftRead.shown === "saved",
       JSON.stringify(leftRead),
     );
-    // Nothing of the page can cancel a replacement without the API: one not in the entry is refused.
+    const unmarkedRead = await postThenRead(plain, true, true);
+    check(
+      "without the Navigation API a POST pressed on an unmarked form, sent again as a read from the marked form a write's answer drew, draws and leaves the address",
+      unmarkedRead.saveSent && unmarkedRead.moved === "#smoke-address" && unmarkedRead.drawn && unmarkedRead.sent.join() === "POST scope=saved,?scope=week" &&
+        unmarkedRead.at === "#smoke-address" && unmarkedRead.shown === "week",
+      JSON.stringify(unmarkedRead),
+    );
+    const retried = await retryMoved(plain);
+    check(
+      "without the Navigation API a marked GET sent again after a write is not fetched once a formdata listener moves the page to an #id of it",
+      retried.saveSent && retried.done && retried.starts === 0 && retried.at === "#smoke-address" && retried.shown === "all",
+      JSON.stringify(retried),
+    );
+    // A replacement the browser refuses without a word leaves the address as it was.
     const silent = await silentRefusal(plain);
     check(
-      "without the Navigation API a marked patch whose replacement the browser refuses without a word reads the entry's own page again",
-      silent.read && silent.loaded && silent.at === "" && silent.shown === "all",
+      "without the Navigation API a marked patch whose replacement the browser refuses without a word stays drawn under the entry's address, and nothing reads the page again",
+      silent.drawn && !silent.read && silent.at === "" && silent.shown === "week",
       JSON.stringify(silent),
     );
     // The page reading itself again (`ReadAgain`, a tag put in the screen's head) goes by the
@@ -545,7 +558,7 @@ async function markedPatchVisits(browser, errors) {
     page.evaluate(() => {
       Object.assign(window, { __form: document.getElementById("smoke-address-form") });
     });
-  const finished = () => wait(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")));
+  const finished = () => wait(() => !(/** @type {any} */ (window).__form?.hasAttribute("aria-busy") ?? true));
   const week = `${home}?scope=week`;
   const month = `${home}?scope=month`;
   const startMonth = () =>
@@ -569,17 +582,17 @@ async function markedPatchVisits(browser, errors) {
     return { sent, release, clear: () => page.unroute(url) };
   };
 
-  // Submit from the still-visible page after a visit starts, before its page can draw: the answer,
-  // which comes while the navigation waits, neither draws nor replaces the entry the navigation is
-  // making, nor cancels the navigation.
+  // Submit from the still-visible page after a visit starts, before its page can draw: the press is
+  // for the page the visit leaves, so its read is not sent, and nothing draws, replaces the entry the
+  // navigation is making or cancels the navigation.
   const pending = await hold(month, "nav");
   const before = await state();
   await startMonth();
   const navSent = await pending.sent;
   await trackForm();
-  const weekAnswer = page.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  const weekAsked = page.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 2000 }).then(() => true, () => false);
   await press("Week");
-  const actionAnswered = await weekAnswer;
+  const actionSent = await weekAsked;
   const actionDone = await finished();
   const still = await state();
   pending.release();
@@ -587,10 +600,10 @@ async function markedPatchVisits(browser, errors) {
   await pending.clear();
   const after = await state();
   check(
-    "a marked patch from the visible page cannot draw or cancel a pending visit",
-    navSent && actionAnswered && actionDone && still.shown === "all" && still.index <= before.index + 1 && still.at !== "?scope=week" && navDone === "finished" &&
+    "a marked GET pressed on the visible page while a visit is on its way is not sent, and cannot draw or cancel that visit",
+    navSent && !actionSent && actionDone && still.shown === "all" && still.index <= before.index + 1 && still.at !== "?scope=week" && navDone === "finished" &&
       after.shown === "month" && after.at === "?scope=month" && after.index === before.index + 1,
-    JSON.stringify({ navSent, actionAnswered, actionDone, still, navDone, after, before }),
+    JSON.stringify({ navSent, actionSent, actionDone, still, navDone, after, before }),
   );
 
   // Another form's answer, a page, drawn in place while a marked answer is on its way, twice and
@@ -936,7 +949,7 @@ async function markedPatchVisits(browser, errors) {
 
   // A page's own `navigatesuccess` listener, put on before the runtime's, that begins a navigation to
   // another page as one ends: the runtime hears the one that ended end after the next began, which
-  // is then on its way all the same. Week, pressed while it waits for its page, draws nothing and
+  // is then on its way all the same. Week, pressed while it waits for its page, is not sent, and
   // lets it finish.
   const chained = await browser.newPage();
   chained.on("pageerror", (e) => errors.push(`chained: ${e.message}`));
@@ -965,9 +978,9 @@ async function markedPatchVisits(browser, errors) {
     chained.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent ?? null }));
   const chainedStill0 = await chainedState();
   await chained.evaluate(() => Object.assign(window, { __form: document.getElementById("smoke-address-form") }));
-  const chainedAnswer = chained.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  const chainedAsked = chained.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 2000 }).then(() => true, () => false);
   await chained.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-  const chainedAnswered = await chainedAnswer;
+  const chainedSentWeek = await chainedAsked;
   const chainedDone = await chained
     .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
     .then(() => true, () => false);
@@ -979,16 +992,16 @@ async function markedPatchVisits(browser, errors) {
   const chainedAfter = await chainedState();
   await chained.close();
   check(
-    "a marked patch pressed while a navigation another one's navigatesuccess began is on its way draws nothing and lets it finish",
-    chainedNav && chainedStill0.shown === "day" && chainedAnswered && chainedDone && chainedStill.shown === "day" && chainedStill.at !== "?scope=week" &&
+    "a marked GET pressed while a navigation another one's navigatesuccess began is on its way is not sent, and lets it finish",
+    chainedNav && chainedStill0.shown === "day" && !chainedSentWeek && chainedDone && chainedStill.shown === "day" && chainedStill.at !== "?scope=week" &&
       chainedFinished === "finished" && chainedAfter.at === "?scope=month" && chainedAfter.shown === "month",
-    JSON.stringify({ chainedNav, chainedStill0, chainedAnswered, chainedDone, chainedStill, chainedFinished, chainedAfter }),
+    JSON.stringify({ chainedNav, chainedStill0, chainedSentWeek, chainedDone, chainedStill, chainedFinished, chainedAfter }),
   );
 
   // A page's own `navigate` listener, put on before the runtime's, that begins a navigation to the
   // page elsewhere as it hears one to Month: the browser aborts Month, whose `navigate` the runtime
-  // hears only after the one that took its place. Week, pressed while that one waits for its page,
-  // draws nothing and lets it finish.
+  // hears only after the one that took its place. Week, pressed while that one waits for its page, is
+  // not sent, and lets it finish.
   const elsewhere = `${base}/smoke/address-elsewhere`;
   const nested = await browser.newPage();
   nested.on("pageerror", (e) => errors.push(`nested: ${e.message}`));
@@ -1019,9 +1032,9 @@ async function markedPatchVisits(browser, errors) {
   const nestedNav = await nestedSent;
   const nestedState = () => nested.evaluate(() => ({ path: location.pathname, at: location.search, shown: document.querySelector("#smoke-address output")?.textContent ?? null }));
   await nested.evaluate(() => Object.assign(window, { __form: document.getElementById("smoke-address-form") }));
-  const nestedAnswer = nested.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  const nestedAsked = nested.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 2000 }).then(() => true, () => false);
   await nested.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-  const nestedAnswered = await nestedAnswer;
+  const nestedSentWeek = await nestedAsked;
   const nestedDone = await nested
     .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
     .then(() => true, () => false);
@@ -1033,10 +1046,10 @@ async function markedPatchVisits(browser, errors) {
   const nestedAfter = await nestedState().catch(() => null);
   await nested.close();
   check(
-    "a marked patch pressed while a navigation a navigate listener began in place of another is on its way draws nothing and lets it finish",
-    monthAborted === "AbortError" && nestedNav && nestedAnswered && nestedDone && nestedStill.shown === "all" && nestedStill.at !== "?scope=week" &&
+    "a marked GET pressed while a navigation a navigate listener began in place of another is on its way is not sent, and lets it finish",
+    monthAborted === "AbortError" && nestedNav && !nestedSentWeek && nestedDone && nestedStill.shown === "all" && nestedStill.at !== "?scope=week" &&
       nestedFinished === "finished" && nestedAfter?.path === "/smoke/address-elsewhere" && nestedAfter.shown === "all",
-    JSON.stringify({ monthAborted, nestedNav, nestedAnswered, nestedDone, nestedStill, nestedFinished, nestedAfter }),
+    JSON.stringify({ monthAborted, nestedNav, nestedSentWeek, nestedDone, nestedStill, nestedFinished, nestedAfter }),
   );
 
   // A `navigate` event another script dispatches, one it says can be intercepted, with a signal of
@@ -1146,8 +1159,41 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ insteadFinished, reloadedOver, instead }),
   );
 
+  // The same, with the page's own navigation to the very address the replacement was for, whose
+  // page is held before it commits: the runtime does not take that navigation's event for its
+  // replacement's, nor read the entry's page again over the navigation.
+  await page.goto(home);
+  const sameHeld = await hold(week, "nav");
+  await page.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week" || /** @type {any} */ (window).__same) return;
+      event.preventDefault();
+      const next = nav.navigate(url);
+      next.committed.catch(() => {});
+      Object.assign(window, { __same: next.finished.then(() => "finished", (/** @type {Error} */ error) => error.name) });
+    });
+  }, week);
+  const sameReload = page.waitForRequest((r) => r.resourceType() === "document", { timeout: 3000 }).then(() => true, () => false);
+  await press("Week");
+  const sameSent = await sameHeld.sent;
+  const sameReloaded = await sameReload;
+  sameHeld.release();
+  const sameFinished = await page
+    .waitForFunction(() => /** @type {any} */ (window).__same, undefined, { timeout: 5000 })
+    .then(() => page.evaluate(() => /** @type {any} */ (window).__same))
+    .catch((/** @type {Error} */ e) => e.message);
+  await sameHeld.clear();
+  const sameEnd = await state().catch(() => null);
+  check(
+    "a marked patch whose replacement a navigate listener cancels for its own navigation to the same address, held before it commits, leaves that navigation to finish and reads nothing again",
+    sameSent && !sameReloaded && sameFinished === "finished" && sameEnd?.at === "?scope=week" && sameEnd.shown === "week",
+    JSON.stringify({ sameSent, sameReloaded, sameFinished, sameEnd }),
+  );
+
   // A replacement the browser refuses with an exception (WebKit's SecurityError at its limit of
-  // history updates) is refused all the same: the entry's own page is read again, whole.
+  // history updates) leaves the address as it was, the answer drawn under it: nothing reads the
+  // page again.
   await page.goto(home);
   await page.evaluate(() => {
     const replace = history.replaceState;
@@ -1157,13 +1203,16 @@ async function markedPatchVisits(browser, errors) {
       throw new DOMException("history.replaceState() called too often", "SecurityError");
     };
   });
-  const thrownRead = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
-  const thrownLoaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  const thrownRead = page.waitForRequest((r) => r.resourceType() === "document", { timeout: 3000 }).then(() => true, () => false);
+  // A runtime that reads the page again is let finish loading before the next case.
+  const thrownLoaded = page.waitForEvent("load", { timeout: 3000 }).then(() => true, () => false);
+  await trackForm();
   await press("Week");
-  const thrown = { read: await thrownRead, loaded: await thrownLoaded, ...(await state()) };
+  const thrownDone = await finished();
+  const thrown = { done: thrownDone, read: await thrownRead, loaded: await thrownLoaded, ...(await state()) };
   check(
-    "a marked patch whose replacement throws reads the entry's own page again",
-    thrown.read && thrown.loaded && thrown.at === "" && thrown.shown === "all",
+    "a marked patch whose replacement throws stays drawn under the entry's address, and nothing reads the page again",
+    thrown.done && !thrown.read && !thrown.loaded && thrown.at === "" && thrown.shown === "week",
     JSON.stringify(thrown),
   );
   const patch = async (/** @type {number} */ status, /** @type {string} */ body) => {
@@ -1266,6 +1315,52 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ twinSent, twinHash, twinDrawn, twinStarts, twinEnd }),
   );
 
+  // Week's answer is in and waits for a stylesheet it links (held here) before it draws when the page
+  // moves to an #id of it and Week is pressed again: that answer, already drawing for the press it
+  // came for, is not handed to the newer press on the entry it moved to, which sends its own read,
+  // whose answer is drawn and puts its address in the entry.
+  await page.goto(home);
+  const heldStyle = `${base}/smoke/address-held.css`;
+  /** @type {() => void} */
+  let releaseStyle = () => {};
+  const styleHeld = new Promise((resolve) => (releaseStyle = () => resolve(undefined)));
+  let drawingAnswers = 0;
+  await page.route(heldStyle, async (route) => {
+    await styleHeld;
+    await route.fulfill({ headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+  });
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    drawingAnswers += 1;
+    await route.fulfill({
+      headers: { "corten-patch": "1", "content-type": "text/html" },
+      body: `<link rel="stylesheet" data-corten-style href="${heldStyle}"><section id="smoke-address"><output>week ${drawingAnswers}</output></section>`,
+    });
+  });
+  const styleAsked = page.waitForRequest(heldStyle, { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const styleWaits = await styleAsked;
+  const drawingHash = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        addEventListener("hashchange", () => resolve(location.hash), { once: true });
+        location.hash = "smoke-address";
+      }),
+  );
+  await press("Week");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  releaseStyle();
+  const drawingDrawn = await wait(() => document.querySelector("#smoke-address output")?.textContent === "week 2" && location.search === "?scope=week");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(week);
+  await page.unroute(heldStyle);
+  const drawingEnd = { answers: drawingAnswers, ...(await state()) };
+  check(
+    "a press of a marked form the same as a read whose answer is already drawing sends its own read, and that answer is drawn and puts its address in the entry",
+    styleWaits && drawingHash === "#smoke-address" && drawingDrawn && drawingEnd.answers === 2 && drawingEnd.at === "?scope=week" && drawingEnd.shown === "week 2",
+    JSON.stringify({ styleWaits, drawingHash, drawingDrawn, drawingEnd }),
+  );
+
   // A `formdata` listener of the page that, as Week's press reads the form, draws the form again
   // and presses Day on the one it drew: Day was pressed after Week, so Day's answer is the one drawn,
   // whichever comes first.
@@ -1292,6 +1387,35 @@ async function markedPatchVisits(browser, errors) {
     "a marked GET pressed by a formdata listener as another press of the form reads it is the newer press, and its answer is drawn",
     reentrantDrawn && reentrant.at === "?scope=day" && reentrant.shown === "day",
     JSON.stringify({ reentrantDrawn, reentrant }),
+  );
+
+  // A `submit` listener of the page that, as Week is pressed, draws the form again and presses Day
+  // on the one it drew: the runtime takes Day's submit first, as it hears it first, and Week's after
+  // it, so Week is the later press. Its answer is the one drawn, and its address is the entry's:
+  // what the screen shows and the address agree.
+  await page.goto(home);
+  await page.evaluate(() => {
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    form.addEventListener(
+      "submit",
+      () => {
+        const again = /** @type {HTMLFormElement} */ (form.cloneNode(true));
+        form.replaceWith(again);
+        again.requestSubmit(/** @type {HTMLButtonElement} */ (again.querySelector('button[value="day"]')));
+      },
+      { once: true },
+    );
+  });
+  await press("Week");
+  const listenedDrawn = await wait(
+    () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+  );
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300))));
+  const listened = await state();
+  check(
+    "a marked GET pressed by a submit listener as the form is pressed is taken first, and the press taken last draws and puts its address in the entry",
+    listenedDrawn && listened.at === "?scope=week" && listened.shown === "week",
+    JSON.stringify({ listenedDrawn, listened }),
   );
 
   // Week's patch draws an element whose `connectedCallback` presses Day, which the server answers
@@ -1441,12 +1565,12 @@ async function markedPatchVisits(browser, errors) {
   );
 
   // A replacement the browser refuses without a word (Chromium past its limit of history updates
-  // returns before any `navigate` event, and throws nothing) is refused all the same: the entry's own
-  // page is read again, whole, as for one that throws. A page's listener that cancels it is not.
+  // returns before any `navigate` event, and throws nothing) leaves the address as it was, as one
+  // that throws does: the runtime cannot tell it from a page's listener that cancelled it.
   const silent = await silentRefusal(page);
   check(
-    "a marked patch whose replacement the browser refuses without a word reads the entry's own page again",
-    silent.read && silent.loaded && silent.at === "" && silent.shown === "all",
+    "a marked patch whose replacement the browser refuses without a word stays drawn under the entry's address, and nothing reads the page again",
+    silent.drawn && !silent.read && silent.at === "" && silent.shown === "week",
     JSON.stringify(silent),
   );
 
@@ -1516,6 +1640,22 @@ async function markedPatchVisits(browser, errors) {
     leftRead.saveSent && leftRead.moved === "#smoke-address" && leftRead.drawn && leftRead.sent.join() === "POST scope=saved" && leftRead.at === "#smoke-address" && leftRead.shown === "saved",
     JSON.stringify(leftRead),
   );
+  // Pressed on a form without the mark, the press knows no entry: sent again as a read from the
+  // marked form the write's answer drew, it draws as an unmarked form's read does, and leaves the
+  // address, here the entry the page moved to.
+  const unmarkedRead = await postThenRead(page, true, true);
+  check(
+    "a POST pressed on an unmarked form, sent again as a read from the marked form a write's answer drew, draws and leaves the address",
+    unmarkedRead.saveSent && unmarkedRead.moved === "#smoke-address" && unmarkedRead.drawn && unmarkedRead.sent.join() === "POST scope=saved,?scope=week" &&
+      unmarkedRead.at === "#smoke-address" && unmarkedRead.shown === "week",
+    JSON.stringify(unmarkedRead),
+  );
+  const retriedMoved = await retryMoved(page);
+  check(
+    "a marked GET sent again after a write is not fetched once a formdata listener moves the page to an #id of it",
+    retriedMoved.saveSent && retriedMoved.done && retriedMoved.starts === 0 && retriedMoved.at === "#smoke-address" && retriedMoved.shown === "all",
+    JSON.stringify(retriedMoved),
+  );
   await page.close();
 }
 
@@ -1523,11 +1663,12 @@ async function markedPatchVisits(browser, errors) {
  * Presses Save, then Week on the form drawn with `method="post"` while Save is on its way: a write
  * then, which waits for Save's answer. That answer draws the form as the server writes it, with
  * `method="get"`, so Week is sent again from it as a read, fenced as one. With `move`, the page
- * moves to an `#id` of it before Save's answer: Week was pressed on the entry the page left. Says
+ * moves to an `#id` of it before Save's answer: Week was pressed on the entry the page left. With
+ * `unmarked`, the form is pressed without `data-address`, which the answer draws it with. Says
  * what the runtime sent and where the page is once Save's answer, and any read after it, is drawn.
- * @param {import("@playwright/test").Page} page @param {boolean} move
+ * @param {import("@playwright/test").Page} page @param {boolean} move @param {boolean} [unmarked]
  */
-async function postThenRead(page, move) {
+async function postThenRead(page, move, unmarked = false) {
   const home = `${base}/smoke/address`;
   await page.goto(home);
   /** @type {() => void} */
@@ -1540,7 +1681,7 @@ async function postThenRead(page, move) {
     await route.continue().catch(() => {});
   });
   const posted = page.waitForRequest((r) => r.url() === home && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
-  await page.evaluate(() => {
+  await page.evaluate((unmarked) => {
     /** @type {string[]} */
     const sent = [];
     Object.assign(window, { __sent: sent });
@@ -1551,8 +1692,10 @@ async function postThenRead(page, move) {
         sent.push((init?.method ?? "GET").toUpperCase() === "GET" ? url.search : `POST ${init?.body}`);
       return fetch_.call(this, input, init);
     };
-    /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form")).setAttribute("method", "post");
-  });
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    form.setAttribute("method", "post");
+    if (unmarked) form.removeAttribute("data-address");
+  }, unmarked);
   const click = (/** @type {string} */ name) => page.getByRole("button", { name, exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
   await click("Save");
   const saveSent = await posted;
@@ -1569,7 +1712,9 @@ async function postThenRead(page, move) {
   release();
   const settled = () => page.waitForFunction(() => !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).then(() => true, () => false);
   const drawn = move
-    ? await page.waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "saved", undefined, { timeout: 5000 }).then(() => true, () => false)
+    ? await page
+        .waitForFunction((shown) => document.querySelector("#smoke-address output")?.textContent === shown, unmarked ? "week" : "saved", { timeout: 5000 })
+        .then(() => true, () => false)
     : await page.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week", undefined, { timeout: 5000 }).then(() => true, () => false);
   // Long enough for a read sent after Save's answer (in a task of its own) to be on its way, then
   // drawn.
@@ -1625,7 +1770,8 @@ async function pressOnMove(page, type) {
 
 /**
  * Presses Week with `history.replaceState` made to do nothing for its address, and throw nothing,
- * as a browser that refuses it without a word does, and says whether the page was read again.
+ * as a browser that refuses it without a word does, and says whether its answer drew, whether the
+ * page was read again and where the page is.
  * @param {import("@playwright/test").Page} page
  */
 async function silentRefusal(page) {
@@ -1638,12 +1784,63 @@ async function silentRefusal(page) {
       history.replaceState = replace;
     };
   });
-  const read = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
-  const loaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  const read = page.waitForRequest((r) => r.resourceType() === "document", { timeout: 3000 }).then(() => true, () => false);
+  // A runtime that reads the page again is let finish loading before the next case.
+  const loaded = page.waitForEvent("load", { timeout: 3000 }).then(() => true, () => false);
   await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
-  const result = { read: await read, loaded: await loaded };
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  const [asked, reloaded] = [await read, await loaded];
+  const result = { drawn, read: asked || reloaded };
   const end = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
   return { ...result, ...end };
+}
+
+/**
+ * Presses Save, held, and Week, which waits for it; Save is answered with a 204, and as Week, sent
+ * again after it, reads the form, a `formdata` listener of the page moves it to an `#id` of it.
+ * Says how often Week was fetched and where the page is once the retry has had its turn.
+ * @param {import("@playwright/test").Page} page
+ */
+async function retryMoved(page) {
+  const home = `${base}/smoke/address`;
+  await page.goto(home);
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  await page.route(home, async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST" || request.headers()["corten"] !== "action") return route.continue();
+    await held;
+    await route.fulfill({ status: 204 }).catch(() => {});
+  });
+  const posted = page.waitForRequest((r) => r.url() === home && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => {
+    let starts = 0;
+    Object.assign(window, { __weekStarts: () => starts, __form: document.getElementById("smoke-address-form") });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && url.search === "?scope=week" && new Headers(init?.headers).get("corten") === "action") starts += 1;
+      return fetch_.call(this, input, init);
+    };
+  });
+  const click = (/** @type {string} */ name) => page.getByRole("button", { name, exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await click("Save");
+  const saveSent = await posted;
+  await click("Week");
+  await page.evaluate(() => document.addEventListener("formdata", () => (location.hash = "smoke-address"), { once: true }));
+  release();
+  const done = await page.waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300))));
+  await page.unroute(home);
+  const end = await page.evaluate(() => ({
+    starts: /** @type {any} */ (window).__weekStarts(),
+    at: location.search + location.hash,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+  }));
+  return { saveSent, done, ...end };
 }
 
 /**

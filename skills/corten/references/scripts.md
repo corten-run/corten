@@ -165,12 +165,11 @@ division: end statements with `;` and keep a division on the line it continues.
    the address it asked for replaces the current history entry's (no entry is added, so Back
    goes to the page before the screen). An answer that comes after the user left the page (a
    link, Back or Forward, to another `#id` too) does not draw; an empty or incomplete patch or a
-   drawn 5xx leaves the address, and a page answer drawn in place moves it as a patch does. A
-   browser that refuses the replace (it throws, or the address stays as it was and no `navigate`
-   listener the runtime heard cancelled it) makes the runtime reload the entry's page, so a
-   listener put on before the runtime's that cancels it must not stop it there
-   (`stopImmediatePropagation`); a `navigate` listener that cancels it has taken the address over, so it sets the address it means itself
-   (or begins its own navigation): the runtime leaves the answer drawn. Pick `data-keep-place`
+   drawn 5xx leaves the address, and a page answer drawn in place moves it as a patch does. Where
+   the runtime cannot tell the screen is still the press's page and entry it leaves the address,
+   and it never reloads to repair one: a replace the browser refuses, or a `navigate` listener
+   cancels, leaves the answer drawn under the entry's address, so a listener that cancels it sets
+   the address it means itself (or begins its own navigation). Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
    one part of a screen whose rest is costly to read. The patch draws everything the address
    changes, the form included, and any link or form that carries the scope (a `keep_query`
@@ -178,10 +177,11 @@ division: end statements with `;` and keep a division on the line it continues.
    (Load more), and never call `history.replaceState` or `pushState` for it yourself. Its
    submits queue as any `data-patch` form's: a GET pressed while a Save (`formmethod="post"`)
    is on its way goes once the Save's answer is drawn, if the visit has not changed and no newer
-   press of the form, or of the one drawn in its place, came since (a press counts as it is made,
-   before a `formdata` listener runs; an answer already drawing keeps its address); if that
-   answer draws the form with `method="post"`, it goes as a post, which nothing drops, and a post
-   that waited goes as a GET, fenced like any, if it draws the form with `method="get"`. Give the form a
+   press of the form, or of the one drawn in its place, came since (a press counts as the runtime
+   takes it, after a page's `submit` listeners and before its `formdata` ones; an answer already
+   drawing keeps its address); if that answer draws the form with `method="post"`, it goes as a
+   post, which nothing drops, and a post that waited goes as a GET, fenced like any, if it draws
+   the form with `method="get"`, moving the address only if it was pressed marked. Give the form a
    `#[derive(Id)]` id: presses are counted by it, so a press of the form a patch drew drops the
    older one's reads.
 
