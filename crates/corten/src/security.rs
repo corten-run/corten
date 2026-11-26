@@ -1895,7 +1895,9 @@ impl Asked {
     pub(crate) fn refusal(self) -> Option<Response> {
         match self {
             Asked::Here => None,
-            Asked::Elsewhere => Some(crate::cache::unshared((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response())),
+            Asked::Elsewhere => {
+                Some(crate::cache::unshared((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()))
+            }
             Asked::Malformed => Some(crate::cache::unshared((StatusCode::BAD_REQUEST, "Bad request.").into_response())),
         }
     }
