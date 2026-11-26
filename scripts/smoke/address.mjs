@@ -450,6 +450,19 @@ export async function dataAddress(browser) {
       hashed.moved === "#smoke-address" && hashed.drawn && hashed.at === "?scope=week" && hashed.shown === "week",
       JSON.stringify(hashed),
     );
+    const popped = await pressOnMove(plain, "popstate");
+    check(
+      "without the Navigation API a marked patch pressed by a popstate listener put on before the runtime's as the page moves to an #id of it draws and puts its address in that entry",
+      popped.moved === "#smoke-address" && popped.drawn && popped.at === "?scope=week" && popped.shown === "week",
+      JSON.stringify(popped),
+    );
+    // Nothing of the page can cancel a replacement without the API: one not in the entry is refused.
+    const silent = await silentRefusal(plain);
+    check(
+      "without the Navigation API a marked patch whose replacement the browser refuses without a word reads the entry's own page again",
+      silent.read && silent.loaded && silent.at === "" && silent.shown === "all",
+      JSON.stringify(silent),
+    );
     // The page reading itself again (`ReadAgain`, a tag put in the screen's head) goes by the
     // page's path without the API: an answer whose address is on another path starts it there.
     const other = `${base}/smoke/address-other?scope=week`;
@@ -1201,9 +1214,13 @@ async function markedPatchVisits(browser, errors) {
 
   // Week, held on its way, then a link to an #id of the page (another entry), then Week again: the
   // same request as the one on its way, which can no longer draw on the entry it was pressed on. The
-  // newer press is not dropped as a repeat of it: its answer draws and puts its address in the entry.
+  // newer press is not dropped as a repeat of it: it takes the read on its way over, which is sent
+  // once, and its answer draws and puts its address in the entry.
   await page.goto(home);
   const twin = await hold(week, "action");
+  let twinStarts = 0;
+  const countTwin = (/** @type {import("@playwright/test").Request} */ r) => void (r.url() === week && r.headers()["corten"] === "action" && (twinStarts += 1));
+  page.on("request", countTwin);
   await trackForm();
   await press("Week");
   const twinSent = await twin.sent;
@@ -1220,12 +1237,14 @@ async function markedPatchVisits(browser, errors) {
   const twinDrawn = await wait(
     () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
   );
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  page.off("request", countTwin);
   await twin.clear();
   const twinEnd = await state();
   check(
-    "a press of a marked form the same as one on its way that can no longer draw draws its answer and puts its address in the entry",
-    twinSent && twinHash === "#smoke-address" && twinDrawn && twinEnd.at === "?scope=week" && twinEnd.shown === "week",
-    JSON.stringify({ twinSent, twinHash, twinDrawn, twinEnd }),
+    "a press of a marked form the same as one on its way that can no longer draw takes that read over, sent once, and draws its answer and puts its address in the entry",
+    twinSent && twinHash === "#smoke-address" && twinDrawn && twinStarts === 1 && twinEnd.at === "?scope=week" && twinEnd.shown === "week",
+    JSON.stringify({ twinSent, twinHash, twinDrawn, twinStarts, twinEnd }),
   );
 
   // A `formdata` listener of the page that, as Week's press reads the form, draws the form again
@@ -1385,7 +1404,148 @@ async function markedPatchVisits(browser, errors) {
     hashed.moved === "#smoke-address" && hashed.drawn && hashed.at === "?scope=week" && hashed.shown === "week",
     JSON.stringify(hashed),
   );
+
+  // Pressed by a listener of the page that hears the move to an #id: `currententrychange`, which
+  // comes before `popstate`, and a `popstate` listener put on before the runtime's. The entry has
+  // moved before either is heard, so the press is on the entry it moved to.
+  const changed = await pressOnMove(page, "currententrychange");
+  check(
+    "a marked patch pressed by a currententrychange listener as the page moves to an #id of it draws and puts its address in that entry",
+    changed.moved === "#smoke-address" && changed.drawn && changed.at === "?scope=week" && changed.shown === "week",
+    JSON.stringify(changed),
+  );
+  const popped = await pressOnMove(page, "popstate");
+  check(
+    "a marked patch pressed by a popstate listener put on before the runtime's as the page moves to an #id of it draws and puts its address in that entry",
+    popped.moved === "#smoke-address" && popped.drawn && popped.at === "?scope=week" && popped.shown === "week",
+    JSON.stringify(popped),
+  );
+
+  // A replacement the browser refuses without a word (Chromium past its limit of history updates
+  // returns before any `navigate` event, and throws nothing) is refused all the same: the entry's own
+  // page is read again, whole, as for one that throws. A page's listener that cancels it is not.
+  const silent = await silentRefusal(page);
+  check(
+    "a marked patch whose replacement the browser refuses without a word reads the entry's own page again",
+    silent.read && silent.loaded && silent.at === "" && silent.shown === "all",
+    JSON.stringify(silent),
+  );
+
+  // Save's answer draws the form again with `method="post"`: Week, pressed as a read while Save was
+  // on its way, is sent from that form, by POST, a write now. Day, pressed while it is on its way,
+  // waits for it and does not drop it: its answer is drawn, as a write's is.
+  await page.goto(home);
+  /** @type {string[]} */
+  const posted = [];
+  /** @type {Record<string, () => void>} */
+  const letGo = {};
+  const held = Object.fromEntries(["saved", "week"].map((name) => [name, new Promise((resolve) => (letGo[name] = () => resolve(undefined)))]));
+  const postForm = (/** @type {string} */ shown) =>
+    `<section id="smoke-address"><form id="smoke-address-form" method="post" action="/smoke/address" data-patch data-address><button name="scope" value="day">Day</button><button name="scope" value="week">Week</button></form><p>Scope: <output>${shown}</output></p></section>`;
+  await page.route(home, async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST" || request.headers()["corten"] !== "action") return route.continue();
+    const scope = new URLSearchParams(request.postData() ?? "").get("scope") ?? "";
+    posted.push(scope);
+    await held[scope];
+    await route.fulfill({ headers: { "corten-patch": "1", "content-type": "text/html" }, body: postForm(`${scope} posted`) }).catch(() => {});
+  });
+  await page.evaluate(() => {
+    /** @type {string[]} */
+    const shown = [];
+    Object.assign(window, { __shown: shown });
+    new MutationObserver(() => {
+      const now = document.querySelector("#smoke-address output")?.textContent ?? "";
+      if (shown.at(-1) !== now) shown.push(now);
+    }).observe(/** @type {Element} */ (document.querySelector("main")), { childList: true, subtree: true, characterData: true });
+  });
+  const postedOf = async (/** @type {string} */ scope) => {
+    for (let i = 0; i < 50 && !posted.includes(scope); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    return posted.includes(scope);
+  };
+  await press("Save");
+  const savePosted = await postedOf("saved");
+  await press("Week");
+  letGo.saved();
+  const weekPosted = await postedOf("week");
+  const dayOnPost = await page.evaluate(() => {
+    const day = /** @type {HTMLButtonElement | null} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+    day?.click();
+    return day?.form?.method ?? null;
+  });
+  letGo.week();
+  const dayPosted = await wait(() => document.querySelector("#smoke-address output")?.textContent === "day posted");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(home);
+  const becameWrite = { posted, outputs: await page.evaluate(() => /** @type {any} */ (window).__shown), ...(await state()) };
+  check(
+    "a marked GET waiting for a write is sent as a write when the write's answer draws its form with method post, and a newer press does not drop its answer",
+    savePosted && weekPosted && dayOnPost === "post" && dayPosted && becameWrite.posted.join() === "saved,week,day" &&
+      becameWrite.outputs.join() === "saved posted,week posted,day posted" && becameWrite.at === "",
+    JSON.stringify({ savePosted, weekPosted, dayOnPost, dayPosted, becameWrite }),
+  );
   await page.close();
+}
+
+/**
+ * Moves the page to an `#id` of it, and presses Week from a listener of the page that hears the move:
+ * `currententrychange`, or a `popstate` listener put on before the runtime's (as a script in the
+ * page before it does). Says where the page is once Week's answer is drawn.
+ * @param {import("@playwright/test").Page} page @param {"currententrychange" | "popstate"} type
+ */
+async function pressOnMove(page, type) {
+  if (type === "popstate")
+    await page.addInitScript(() =>
+      addEventListener("popstate", () => {
+        const press = /** @type {any} */ (window).__pressOnPop;
+        Object.assign(window, { __pressOnPop: undefined });
+        press?.();
+      }),
+    );
+  await page.goto(`${base}/smoke/address`);
+  const moved = await page.evaluate(
+    (type) =>
+      new Promise((resolve) => {
+        // Where the page is as the listener presses: the answer may replace the address before the
+        // move's `hashchange` comes.
+        const press = () => {
+          const moved = location.hash;
+          /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click();
+          resolve(moved);
+        };
+        if (type === "popstate") Object.assign(window, { __pressOnPop: press });
+        else /** @type {any} */ (window).navigation.addEventListener(type, press, { once: true });
+        location.hash = "smoke-address";
+      }),
+    type,
+  );
+  const drawn = await page.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { moved, drawn, ...end };
+}
+
+/**
+ * Presses Week with `history.replaceState` made to do nothing for its address, and throw nothing,
+ * as a browser that refuses it without a word does, and says whether the page was read again.
+ * @param {import("@playwright/test").Page} page
+ */
+async function silentRefusal(page) {
+  const home = `${base}/smoke/address`;
+  await page.goto(home);
+  await page.evaluate(() => {
+    const replace = history.replaceState;
+    history.replaceState = function (...args) {
+      if (!String(args[2]).endsWith("?scope=week")) return replace.apply(this, args);
+      history.replaceState = replace;
+    };
+  });
+  const read = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
+  const loaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const result = { read: await read, loaded: await loaded };
+  const end = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { ...result, ...end };
 }
 
 /**

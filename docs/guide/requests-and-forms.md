@@ -2244,15 +2244,21 @@ from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and so does
 one sent while a navigation is on its way (by a script's `navigate` listener too); a navigation
 a script cancels leaves nothing, so an answer drawn as one is cancelled still moves the address.
+A press a script makes as it hears the page move (in a `currententrychange` or `popstate`
+listener) is on the entry the page moved to, and draws there.
 One that comes while the page reads itself again (`ReadAgain`), or after another form's answer was
 drawn in place, draws as usual, and the read starts again later at the new address. A browser
-that throws for the replace (WebKit past its limit of history updates) has the runtime load the
-page at the entry's address again rather than leave the answer under it. A script of the page
+that refuses the replace, with an exception (WebKit past its limit of history updates) or without
+a word (Chromium past its limit), has the runtime load the page at the entry's address again
+rather than leave the answer under it: an address not in the entry after the replace that no
+`navigate` listener of the page cancelled is the browser's refusal. A script of the page
 whose `navigate` listener cancels the replace has taken the address over: the answer stays
 drawn and the entry keeps the address the script leaves in it, so a script that cancels it puts
 the address it means in itself, or begins the navigation it means. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
-any submit of the form does, and is sent only if the user is still on that page. A newer press
+any submit of the form does, and is sent only if the user is still on that page; if the Save's
+answer draws the form with `method="post"`, the GET is sent from it as a post, a write, which no
+newer press drops. A newer press
 of the form, or of the one a patch drew in its place (found by the form's id), drops an older
 GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
 drawn. Presses count as they are made, before a `formdata` listener of the page runs; once an
@@ -2301,7 +2307,9 @@ they were drawn with, a form that keeps the address's query (`keep_query`) inclu
 inputs are the query of the route it was drawn with, and do not follow the address. A link or
 form that should carry the scope is drawn by the same patch, `keep_query` too, so it sends the
 scope on screen. Without the Navigation API ([Limit 1](../design.md#limit-navigation-api)) the
-form works the same way. `html!` refuses `data-address` on anything but a `<form>`, on a form
+form works the same way, but the runtime knows the history entry by its address alone: a
+script's `replaceState` to another address counts as leaving the entry, so an answer pressed
+before it draws nothing, and Back or Forward between two entries of one address is not seen. `html!` refuses `data-address` on anything but a `<form>`, on a form
 without `data-patch`, and on one whose `method` is `post` or `dialog`; a `formmethod="post"`
 button in a marked form posts as it would in any other, and leaves the address. A filter whose
 every change should be an entry of its own, which Back steps through, is a navigation for now

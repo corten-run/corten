@@ -2626,19 +2626,31 @@ function readLater(seconds, wanted, read) {
 // The Navigation API, where the browser has it.
 const navigation = /** @type {Navigation | undefined} */ (window.navigation);
 /**
- * How many times the browser moved between history entries (`popstate`, which a move to an `#id`
- * of the page fires as it is made, and Back or Forward fire even when they come back to the entry
- * they left) or the runtime began a visit, a count that only goes up ({@link entry}).
+ * The history entry on screen as the runtime knows it: its key where the Navigation API is (another
+ * after a link, an `#id` or a script's `pushState`; the same after a `replaceState`), else its
+ * address, which is all a page has of its entry without the API.
+ */
+const where = () => (navigation ? navigation.currentEntry?.key : location.href);
+let entrySeen = where();
+/**
+ * How many times the entry on screen was seen to change, or the runtime began a visit: a count
+ * that only goes up ({@link entry}).
  */
 let moves = 0;
-addEventListener("popstate", () => (moves += 1));
 /**
- * The history entry on screen and the page on it: the entry's key where the Navigation API is
- * (another after a link, an `#id` or a script's `pushState`; the same after a `replaceState`),
- * with the moves since the page loaded ({@link moves}). A page drawn in place on the entry (a
- * form's answer, the page reading itself again) and a navigation that is cancelled leave it.
+ * Looks at the entry on screen: as a press reads it, as its answer draws, and on every move the
+ * browser says it made (`currententrychange`, else `popstate`), so a move there and back is counted
+ * twice. The entry has changed before the browser says so to any page's listener, so a press made
+ * in a listener heard before the runtime's is counted on the entry it is made on.
  */
-const entry = () => `${moves} ${navigation?.currentEntry?.key}`;
+const look = () => void (where() !== entrySeen && ((entrySeen = where()), (moves += 1)));
+navigation ? navigation.addEventListener("currententrychange", look) : addEventListener("popstate", look);
+/**
+ * The history entry on screen and the page on it, by the moves since the page loaded
+ * ({@link moves}). A page drawn in place on the entry (a form's answer, the page reading itself
+ * again) and a navigation that is cancelled leave it.
+ */
+const entry = () => (look(), moves);
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2792,10 +2804,16 @@ function fragmentOf(fragment) {
   return find(fragment) ?? find(new TextDecoder(undefined, { ignoreBOM: true }).decode(Uint8Array.from(bytes, (c) => c.charCodeAt(0))));
 }
 
+/** The address a marked answer is putting in the entry ({@link send}), and the `navigate` event of that replace. */
+let replacing = "";
+/** @type {NavigateEvent | undefined} */
+let replaced;
 // Only this module has these symbol keys; another script's info has none of them.
 navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
   // One another script dispatches is no navigation.
   if (!event.isTrusted) return;
+  // Heard before a page's listeners heard later, which may cancel it.
+  if (event.destination.url === replacing) replaced = /** @type {NavigateEvent} */ (event);
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -3496,14 +3514,25 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               // as it connects): the replace would cancel that navigation, or write over that entry.
               // A press it made does not stop it, as it has drawn.
               if (!here(true) || to === location.href) return;
+              replaced = undefined;
+              replacing = to;
               try {
                 history.replaceState(history.state, "", to);
               } catch {
                 // Refused by the browser (WebKit throws past its limit of history updates): the page at
-                // the entry's address is read, whole. A page's `navigate` listener that cancels the
-                // replace throws nothing: the page has taken the address over, which it keeps.
+                // the entry's address is read, whole.
                 return reload();
+              } finally {
+                replacing = "";
               }
+              // Not in the entry. A page's `navigate` listener that cancelled the replace, or began a
+              // navigation in its place (either aborts the event the runtime heard), has taken the
+              // address over, which it keeps. Any other is the browser's refusal without a word
+              // (Chromium past its limit returns before a `navigate` event; without the Navigation API
+              // nothing else can stop it): the page is read, as above.
+              if (location.href !== to) return /** @type {NavigateEvent | undefined} */ (replaced)?.signal.aborted ? undefined : reload();
+              // The entry the answer was drawn on, at its new address.
+              entrySeen = where();
               // Read again at the new address, which without the Navigation API goes by the path.
               if (location.pathname !== path) readAgainLater();
             }
@@ -3644,7 +3673,6 @@ function sayFailed(form, detail, turn) {
  * @param {Press | null} [press]
  */
 function sendAgain(form, submitter, within, press) {
-  if (press && !press()) return;
   const now = inPlaceOf(form);
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
@@ -3656,7 +3684,12 @@ function sendAgain(form, submitter, within, press) {
             localNameOf(el) === localNameOf(submitter) &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  if (by !== undefined) send(now, by, sendsAs(now, by), within, press ?? null);
+  if (by === undefined) return;
+  const sends = sendsAs(now, by);
+  // A read the form now sends as a write (an answer drew it with `method="post"`) is a write, which
+  // no newer press drops and whose answer is drawn and counted as a write's.
+  const read = sends.method === "get" ? press : null;
+  if (!read || read()) send(now, by, sends, within, read ?? null);
 }
 
 /**

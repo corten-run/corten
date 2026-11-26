@@ -11157,20 +11157,29 @@ rules something out.
     own `navigate` listener can cancel that `replaceState`, which then changes nothing and throws
     nothing: the page's script has taken the address over, and the answer stays drawn under the
     address the script leaves in the entry, which the runtime does not touch again (Not chosen,
-    below). A browser can refuse it with an exception (WebKit past its limit of history updates),
-    which no script of the page asked for: the runtime then loads the entry's own page again, so
-    the screen shows the page at the address the entry has.
+    below). A browser can refuse it, which no script of the page asked for: with an exception
+    (WebKit past its limit of history updates), or without a word (Chromium past its limit
+    returns before it fires a `navigate` event, and throws nothing). The runtime reads the address
+    back after the call, and one not in the entry is a page's choice only when the runtime's own
+    `navigate` listener heard the replace and that event's signal was then aborted (a page's
+    listener cancelled it, or began a navigation in its place); any other is the
+    browser's refusal, and without the Navigation API nothing of the page can cancel it, so there
+    it always is. On a refusal the runtime loads the entry's own page again, so the screen shows
+    the page at the address the entry has.
 
-    A marked answer draws only on the history entry it was pressed on, and the page on it. Its
-    press, as it is made, takes the entry's Navigation API key (another after a link, a move to an
-    `#id` or a script's `pushState`; the same after a `replaceState`) and a count that only goes
-    up, by one at each `popstate` and at each visit of the runtime's as it begins. A move to an
-    `#id` of the page fires `popstate` as it is made, before the next line of the script that made
-    it runs, in all three engines, with and without the Navigation API, so a press in the same task
-    is on the new entry; Back and Forward fire it even when they come back to the entry they left;
-    and a visit that follows a redirect replaces the entry, keeping its key. Where the answer would
+    A marked answer draws only on the history entry it was pressed on, and the page on it. The
+    runtime knows the entry on screen by its Navigation API key (another after a link, a move to an
+    `#id` or a script's `pushState`; the same after a `replaceState`), and without the API by its
+    address, and keeps a count that only goes up: by one each time it sees that change, and at each
+    visit of the runtime's as it begins (a visit that follows a redirect replaces the entry,
+    keeping its key). It looks as a press reads the entry, as the answer draws, and at each move
+    the browser says it made (`currententrychange`, else `popstate`), so a move to another entry
+    and back is counted twice. The key and the address have changed before the browser says so to
+    any page's listener (`currententrychange` comes before `popstate`), so a press made in a
+    listener of either heard before the runtime's, or in the task that moved to an `#id`, is on the
+    entry it moved to. Its press takes the count as it is made. Where the answer would
     draw, and again in the same task once it has drawn, before it replaces the address, it goes on
-    only while key and count are the ones it was pressed with and no visit of the runtime's is on
+    only while the count is the one it was pressed with and no visit of the runtime's is on
     its way, whose navigation the replace would cancel; one pressed while a visit is on its way is
     for the page that visit leaves, and never draws. Nothing else counts. A load of another
     document, a reload included, goes on through the replace and takes the screen's place, so an
@@ -11181,14 +11190,18 @@ rules something out.
     (`ReadAgain`) leave the press its entry; the read again, whose navigation the answer's
     `replaceState` cancels as a script's does, reads later at the new address, and an address on
     another path starts the read over there, since without the Navigation API the read follows the
-    path. Without the Navigation API the count is all there is, so a script's `pushState` is not
-    seen. An answer whose entry was left draws nothing and says nothing (`corten:error` is not
+    path. Without the Navigation API the address is all a page has of its entry: a script's
+    `replaceState` to another address is seen as a move (the runtime's own is not), and a script's
+    `pushState` to the same address, or Back and Forward between two entries of one address, are
+    not seen. An answer whose entry was left draws nothing and says nothing (`corten:error` is not
     fired), as for a submit a navigation cuts off, which the runtime aborts as it takes the
     navigation: the user has left the page it was for, and the form it would be said on with it. A
     submit a navigation aborted is over from that moment, though its own code has not yet run to
     say so: a press of its form made then (a later listener cancelled that navigation) neither waits
     for it nor is answered by it. A marked GET waiting for a write of its form is sent only while
-    its press still holds. The address moves only after the
+    its press still holds, and as a read: one the form the write's answer drew sends by POST (a
+    `method="post"` its button does not override) is a write now, which no newer press drops and
+    whose answer is drawn and counted as any write's. The address moves only after the
     answer draws every element: a dropped answer, a 204, an empty patch or an element with no
     place leaves it, while a removal of an element the page no longer has is done, as the runtime
     treats it for any patch. A drawn 4xx (a 422) moves it, being the destination's error view; a
@@ -11254,7 +11267,7 @@ rules something out.
     - Fencing to the entry's key alone: Back to an `#id` of the page and Forward again before the
       answer came leave the key as it was, so the answer drew and put its address in an entry the
       user had left and come back to; without the Navigation API even one such Back was unseen.
-      The count of `popstate`s sees both.
+      The count of changes the runtime sees, at each move the browser says it made, sees both.
     - Reading the entry's own page again when a page's `navigate` listener cancels the replace,
       as this Choice's last builds did, unless the listener had begun a navigation of its own that
       was still going. That needed the runtime to guess what the page's script meant from what
@@ -11289,12 +11302,29 @@ rules something out.
       had drawn whole as its draw began one (in a `connectedCallback`) kept the old address; and a
       move to an `#id` counted again at its `hashchange`, which comes in a later task, so a press
       made in the task that moved was dropped for a move already made. The press is now tied to the
-      entry it is on, which only a `popstate`, a new key or a visit the runtime begins changes. Nor
+      entry it is on, which only a change of entry the runtime sees or a visit it begins changes. Nor
       dropping an older read as a newer press was sent, or when the form had a submit on its way,
       as builds before did: a press of the form the write's answer drew, whose answer came before
       the read that waited was sent again, was no longer on its way, so that read was sent and drew
       over it. A count of presses by id answers wherever the read is.
-    - Taking over a read on its way that a navigation had aborted, as the build before this one
+    - Counting each `popstate` as the runtime's listener heard it, as the build before this one
+      did: `currententrychange` comes before `popstate`, and a page's `popstate` listener put on
+      before the runtime's comes before it too, so a press made in either was counted on the entry
+      it had left and its answer dropped. Looking at the entry as the press reads it counts the move
+      it came after, whichever listener heard it first. Listening first is no answer: a page's
+      script can put its listener on before the runtime loads, and Chromium runs `window`'s
+      listeners in the order they were put on, a capture one too, where Firefox and WebKit run
+      capture ones first.
+    - Taking every replace not in the entry for a page's choice, as the build before this one did:
+      Chromium past its limit of history updates refuses one without an exception or a `navigate`
+      event, which left the answer drawn under the old address with no script having taken it
+      over. Only the event the runtime's listener heard, then cancelled, is a script's.
+    - Sending a read waiting for a write with its press when the form the write's answer drew
+      sends it by POST, as the build before this one did: a newer press then dropped the answer of
+      a write the server had taken, after it was counted as on its way and before it was counted as
+      drawn. Dropping it instead would drop a write the user pressed, which the runtime does
+      nowhere else.
+    - Taking over a read on its way that a navigation had aborted, as an earlier build
       did for any read with the same request: a press made as a later listener cancelled that
       navigation found the aborted read by its request and sent nothing. A read on its way is
       taken over only while it can still answer.
@@ -11303,16 +11333,19 @@ rules something out.
       the new navigation is on its way, in all three engines (the smoke's chained case caught it),
       so a marked answer drew and aborted that navigation.
 
-    What it costs: the runtime every page loads is 1,015 bytes larger raw (46,502 to 47,517), 425
-    with gzip (16,718 to 17,143) and 369 with brotli (15,106 to 15,475), paid once a release by
-    every user (206, 54 and 53 bytes less than the build before this one, which repaired a refused
-    replace and counted navigations as they were heard). A `data-patch` submit reads one attribute and its form's id, and adds one to that
+    What it costs: the runtime every page loads is 1,296 bytes larger raw (46,502 to 47,798), 531
+    with gzip (16,718 to 17,249) and 457 with brotli (15,106 to 15,563), paid once a release by
+    every user (281, 106 and 88 bytes more than the build before this one, of which reading the
+    address back and telling a browser's refusal from a page's cancel are 130, 50 and 40). A `data-patch` submit reads one attribute and its form's id, and adds one to that
     id's count in a map that keeps a number for each id pressed; a read keeps the count it was
-    pressed at and compares it where it could draw or be sent again. Only a marked GET builds the
-    key and count of its entry as a string, compares it where it could draw, reads the size of the
-    set of visits on their way the runtime keeps already, and builds an address. A patch tracks
-    whether it placed every element as it walks them, without a separate scan; a `popstate` and a
-    visit the runtime begins each add one to a counter.
+    pressed at and compares it where it could draw or be sent again. Only a marked GET looks at its
+    entry (one key, or the address, compared with the last seen) and keeps the count, compares it
+    where it could draw, reads the size of the set of visits on their way the runtime keeps
+    already, and builds an address and reads it back. A patch tracks whether it placed every
+    element as it walks them, without a separate scan; each `currententrychange` (`popstate`
+    without the Navigation API) compares the key (the address) with the last seen, a visit the
+    runtime begins adds one to a counter, and each `navigate` compares its address with the one
+    being put in the entry, if any.
     On the server nothing runs that did not: `html!` writes the mark as
     an attribute and refuses a misplaced one when the markup compiles.
 
@@ -11326,14 +11359,20 @@ rules something out.
     the assignment returns, and one by a link fires `popstate` as the address changes, in the same
     task (Firefox moves for a link in a later task), with and without the Navigation API, each
     before `hashchange`, measured once in each engine; Back and Forward between entries that differ
-    by their `#id` fire `popstate`; a navigation begun as a `navigate` is dispatched aborts that one
+    by their `#id` fire `popstate`; the entry's key changes, and `currententrychange` fires, before
+    `popstate` on a move to an `#id` and on Back and Forward, and Chromium runs `window`'s
+    `popstate` listeners in the order they were put on, capture or not, where Firefox and WebKit run
+    capture ones first, measured once in each engine; a navigation begun as a `navigate` is dispatched aborts that one
     first, whose signal the runtime's listener then sees aborted, a `NavigateEvent` a script
-    dispatches is not trusted, a `navigate` a listener cancels runs none of the handlers it was
+    dispatches is not trusted, a `navigate` of a `replaceState` that a listener cancels, or in
+    which it begins another navigation, has its signal aborted once it is dispatched, measured once
+    in each engine, a `navigate` a listener cancels runs none of the handlers it was
     intercepted with, and the entry changes only when a navigation whose address waits for its page
     commits; `new FormData` fires `formdata` before it returns, and a custom element a patch puts
     in runs its `connectedCallback` before the insertion returns; in Chromium, Firefox and WebKit;
-    the smoke's checks in all three; WebKit's throw past its limit of history updates is simulated
-    there, not reached);
+    the smoke's checks in all three; WebKit's throw past its limit of history updates, and
+    Chromium's refusal without a word, which returns before the `navigate` event in
+    `third_party/blink/renderer/core/frame/history.cc`, are simulated there, not reached);
     reasoned (the form's mark says which answers are the page at their address, which neither the
     handler nor the runtime can tell; a replace in the task that draws leaves only what the draw
     itself runs (a `focus` handler, a `connectedCallback`) able to see the patch without its
@@ -11354,11 +11393,13 @@ rules something out.
     when its own `navigate` listener cancels the replace; or `replaceState` stops keeping the
     entry's key or stops aborting a navigation under way in one of the engines, or a move to an
     `#id` or a traversal between `#id` entries stops firing `popstate` before the script that made
-    it goes on in one.
+    it goes on in one, or the key stops changing before `currententrychange` fires in one.
 
-    Last checked: 2026-11-25, the runtime's size with this change on main `8b4e863b1` against
-    that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, `popstate` and
-    the key on a move to an `#id`, and the watchlist smoke on the same
+    Last checked: 2026-11-26, the runtime's size with this change against main `8b4e863b1`, whose
+    runtime main `d38271235` has unchanged, and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-25, `popstate` and the key on a move to an `#id`; 2026-11-26, `currententrychange`
+    before `popstate`, the order of `window`'s `popstate` listeners, and the signal of a
+    cancelled replace, and the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.
 
