@@ -2447,9 +2447,6 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
   const done = () => {
     if (reading.delete(read) && !reading.size) for (const run of afterReads.splice(0)) setTimeout(run);
   };
-  signal.addEventListener("abort", done);
-  // One abandoned before it started gets no abort event.
-  if (signal.aborted) done();
   // Marked busy as this visit's (past a form control named setAttribute): a newer visit's mark
   // is not cleared when this one ends. A form's navigation marks the form and the button that
   // sent it, one outside it (`form=`) too.
@@ -2458,11 +2455,15 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
   const busy = again ? [] : [document.querySelector("main"), form ?? source, form && source];
   for (const el of busy) if (el) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // Cleared when the visit ends, or at once when it is abandoned: a prefetched answer it awaits
-  // is not cancelled with it.
+  // is not cancelled with it. Cleared while the visit is still counted, as clearing runs the page's
+  // code too: a marked form pressed there is not sent either.
   const idle = () => {
     for (const el of busy) if (el && busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   };
-  signal.addEventListener("abort", idle);
+  const abandoned = () => (idle(), done());
+  signal.addEventListener("abort", abandoned);
+  // One abandoned before it started, or as it was marked, gets no abort event.
+  if (signal.aborted) abandoned();
   if (going) fetching = going;
   try {
     /** @type {Response} */
@@ -2540,10 +2541,9 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
       : await swapPage(html, signal, stay, notice, null, undefined, undefined, drew);
     if (swappedIn && !again) announce(notice);
   } finally {
-    signal.removeEventListener("abort", idle);
+    signal.removeEventListener("abort", abandoned);
     idle();
     if (fetching === going) fetching = null;
-    signal.removeEventListener("abort", done);
     done();
   }
 }
@@ -2631,7 +2631,7 @@ function readLater(seconds, wanted, read) {
 
 /**
  * What the runtime's own navigations carry in `info` ({@link go}), under keys only this module has.
- * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean, [LEAVE]?: boolean }} Info
+ * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean }} Info
  * @typedef {Omit<NavigateEvent, "info"> & { readonly info: Info | undefined }} RuntimeNavigateEvent
  */
 // The Navigation API, where the browser has it.
@@ -2687,8 +2687,6 @@ const KEEP_PLACE = Symbol("corten.keepPlace");
 const LOAD = Symbol("corten.load");
 /** What started a navigation the server redirected, or a write's answer sent on: still marked busy. */
 const SOURCE = Symbol("corten.source");
-/** Key of a navigation the runtime leaves to the browser, a load in full ({@link loadInPlace}). */
-const LEAVE = Symbol("corten.leave");
 /**
  * Key of the navigation a write sent the browser on: its page is fetched whole, as a full load
  * would, so what the write changed in the layout around `<main>` (a count in the header) is drawn
@@ -2840,7 +2838,6 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // same-document traversals too, and do need the page.
   const skip =
     !event.canIntercept ||
-    !!event.info?.[LEAVE] ||
     // Aborted as it is heard: a listener heard before the runtime's began another navigation.
     event.signal.aborted ||
     !loaded ||
@@ -3268,20 +3265,6 @@ function reload(notice = null) {
 addEventListener("pagehide", () => (left += 1));
 
 /**
- * Loads `url` in full in place of the history entry, as the browser loads it: a GET, whose
- * redirect it follows as a load does. One that differs from the address only by its `#id` is
- * loaded too, not scrolled to.
- * @param {URL} url
- */
-function loadInPlace(url) {
-  left += 1;
-  const same = pageKey(url) === pageKey(new URL(location.href));
-  if (navigation) go(url.href, { history: "replace", info: { [LEAVE]: true } });
-  else location.replace(url);
-  if (same) reload();
-}
-
-/**
  * The pending submit of each `data-patch` form. The same submit again while it is pending (a
  * double click) is ignored rather than sent twice. A newer submit aborts a pending read (a GET,
  * whose old answer is worth nothing). It does not abort a write: the server may have applied it,
@@ -3475,6 +3458,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
   const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
+  // Its presses are let go at once too: nothing is sent or drawn for them now, and what it awaits
+  // (a stylesheet a patch's element needs) may never end.
+  signal.addEventListener("abort", () => {
+    settled(press);
+    settled(pending.here);
+    settled(pending.nextPress);
+  });
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
   const here = (/** @type {boolean} */ drawing = false) => !pending.here || standing(pending.here, drawing);
@@ -3583,39 +3573,30 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       renew();
       signal.throwIfAborted();
       // A marked form's answer drawn whole, a patch or a page, is the page at the address it asked
-      // for (the redirect's, with the `#id` of its action, which fetch leaves out, a bare `#` too), in
-      // place of the entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is
-      // no such page.
+      // for (with the `#id` of its action, which fetch leaves out, a bare `#` too), in place of the
+      // entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is no such page.
+      // A redirect's address is put in without a fragment: the browser's own GET reaches the
+      // `Location`'s if it names one, else the action's, and `fetch` shows neither, so the runtime
+      // does not guess.
       // Only for a press made on a marked form, which knows its entry: one sent again from a form an
       // answer marked draws as an unmarked form's does, and leaves the address.
-      const marked = pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500;
-      // A redirect followed from an action with a `#fragment`: the browser's own GET reaches the
-      // `Location`'s fragment if it names one, else the action's, and `fetch` shows neither.
-      const lost = res.redirected && url.href.includes("#");
-      // Whether the address may move: not if what it drew began a visit or moved to another entry (a
-      // script that navigates as it connects), as the replace would cancel that navigation, or write
-      // over that entry. A press its draw made does not stop it, as it has drawn. Nor while the
-      // browser says a navigation the runtime did not begin is on its way (`transition`: one a page's
-      // `navigate` listener took, its address changed or not), which the replace would cancel too;
-      // the page reading itself again is the runtime's, and reads again later. Nor once anything has
-      // replaced the entry since the press, keeping its key (a script's `replaceState`, a navigation
-      // of the page's that replaced it, another marked answer's own replace): the runtime does not
-      // tell whose it was, and the answer is drawn under the address put in then, as an unmarked
-      // form's is.
-      const movable = (/** @type {boolean} */ drawing) => {
-        const transition = navigation?.transition;
-        return here(drawing) && !(transition && transition !== readAgainTransition) && unreplaced(pending.here?.seen);
-      };
-      // The runtime does not guess that fragment: the browser loads the request in full in place of
-      // the entry, a GET it may send again, and follows the redirect to the address the form reaches
-      // without JavaScript. Where the address may not move, the answer is drawn under it.
-      if (marked && lost && (patch || res.headers.has("corten-page")) && movable(false)) return void loadInPlace(url);
       const done =
-        marked && !lost
+        pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500
           ? () => {
-              const to = res.url + url.href.replace(/^[^#]*/, "");
+              const to = res.url + (res.redirected ? "" : url.href.replace(/^[^#]*/, ""));
               const path = location.pathname;
-              if (to === location.href || !movable(true)) return;
+              // Not if what it drew began a visit or moved to another entry (a script that navigates
+              // as it connects): the replace would cancel that navigation, or write over that entry.
+              // A press it made does not stop it, as it has drawn. Nor while the browser says a
+              // navigation the runtime did not begin is on its way (`transition`: one a page's
+              // `navigate` listener took, its address changed or not), which the replace would
+              // cancel too; the page reading itself again is the runtime's, and reads again later.
+              // Nor once anything has replaced the entry since the press, keeping its key (a script's
+              // `replaceState`, a navigation of the page's that replaced it, another marked answer's
+              // own replace): the runtime does not tell whose it was, and the answer is drawn under
+              // the address put in then, as an unmarked form's is.
+              const transition = navigation?.transition;
+              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !unreplaced(pending.here?.seen)) return;
               try {
                 history.replaceState(history.state, "", to);
               } catch {

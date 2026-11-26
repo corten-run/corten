@@ -2232,12 +2232,14 @@ A filter or scope whose answer is one part of the screen (a panel's period, a ch
 be a GET `data-patch` form too, so a change reads only what that part shows, not the rest of the
 screen. Mark it `data-address` as well, and its answer is the page at the address it asked for:
 as the patch is drawn, that address takes the place of the current history entry's, a
-`#fragment` of the form's `action` or `formaction` included, and the address of a redirect the
-request followed, each as the browser's own GET writes it (`/scope?#` for a submit that sends no
-field to an action ending in `#`). An answer redirected (3xx, not Corten's own redirect) from an
-action with a `#fragment` is loaded in full in the entry's place instead: `fetch` does not show
-whether the redirect's `Location` names a fragment of its own, which the browser's own GET would
-reach, so the browser loads the request and follows the redirect itself. No entry is added: Back goes to the page before the screen,
+`#fragment` of the form's `action` or `formaction` included, as the browser's own GET writes it
+(`/scope?#` for a submit that sends no field to an action ending in `#`). One limit: an answer
+redirected (3xx, not Corten's own redirect) puts in the address the redirect reached with no
+`#fragment` at all. The browser's own GET reaches the fragment the redirect's `Location` names,
+else the action's, and `fetch` shows neither, so the runtime does not guess one: after such a
+redirect the address can differ from the one the form reaches without JavaScript by its
+`#fragment`. Corten's own redirect (`corten-location`, [Redirects](#redirects)) names its
+fragment, and is followed as a navigation (below). No entry is added: Back goes to the page before the screen,
 not to the scope before this one, as after `history.replaceState`. A reload, a bookmark and a shared link then
 reach what the screen shows, and a form that posts without an `action` sends to it. Only an
 answer that draws whole moves the address: a 204, an empty patch, a patch with an element that
@@ -2291,7 +2293,7 @@ of the form, or of the one a patch drew in its place (found by the form's id), d
 GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
 drawn, and a GET a `formdata` listener made stale is not sent at all, nor one the page's code
 made stale as the runtime marked the form busy (a customized button's
-`attributeChangedCallback` that moves the page), nor one pressed as a visit marks its link busy. Presses count as the
+`attributeChangedCallback` that moves the page), nor one pressed as a visit marks its link busy or, abandoned, clears that mark. Presses count as the
 runtime takes them, after the page's `submit` listeners and before its `formdata` listeners, so
 a press a `submit` listener makes as it hears another counts first, and the press it heard is
 drawn with its address; once an answer is drawing, a press its draw makes (an element's

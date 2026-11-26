@@ -374,30 +374,43 @@ export async function dataAddress(browser) {
   await markedPatchVisits(browser, errors);
   // A redirect (3xx) of the form's request, the server's own (`/smoke/address-moved` answers a 303
   // to the day's scope, not Corten's `corten-location`): `fetch` follows it and shows no `#id` its
-  // `Location` names. From an action without one ("Moved, bare") the answer is drawn in place and
-  // the address is where it went. From one with an `#id`, the browser's own GET reaches the
-  // `Location`'s `#id` when it names one ("Moved, placed"), else the action's ("Moved"), which the
-  // runtime cannot tell apart: it loads the request in full in the entry's place, and the browser
-  // follows the redirect itself. Each is compared with the browser's own GET without JavaScript,
-  // with and without the Navigation API.
+  // `Location` names. The answer is drawn in place, with no other request and no load, and the
+  // address is where the redirect went, with no `#id` at all: from an action without one ("Moved,
+  // bare") that is the browser's own GET's address, and from one with an `#id` the browser's own
+  // GET reaches the `Location`'s `#id` when it names one ("Moved, placed"), else the action's
+  // ("Moved"), which the runtime cannot tell apart, and does not guess. Each from the screen at
+  // another query and, the same path's case, from the screen at the redirect's own address but for
+  // an `#id`, with and without the Navigation API; each beside the browser's own GET without
+  // JavaScript.
   for (const plain of [false, true]) {
     const api = plain ? "without the Navigation API " : "";
-    const bare = await movedBy303(browser, "Moved, bare", plain, errors);
-    check(
-      `${api}a data-address form's request redirected (3xx) from an action without an #id is drawn in place and puts the address it went to in the entry, as the browser's own GET`,
-      !bare.loaded && bare.browserGet.at === "/smoke/address?scope=day" && bare.at === bare.browserGet.at && bare.shown === "day" && bare.added === 0 &&
-        bare.documents.length === 0 && bare.asked[0] === "action /smoke/address-moved?scope=moved" && bare.back === "/smoke/address-elsewhere",
-      JSON.stringify(bare),
-    );
-    const kept = await movedBy303(browser, "Moved", plain, errors);
-    const placed = await movedBy303(browser, "Moved, placed", plain, errors);
-    check(
-      `${api}a data-address form's request redirected (3xx) from an action with an #id is loaded in full in the entry's place, reaching the #id the browser's own GET does, the action's or the Location's`,
-      [kept, placed].every((r) => r.loaded && r.at === r.browserGet.at && r.shown === "day" && r.added === 0 && r.back === "/smoke/address-elsewhere") &&
-        kept.browserGet.at === "/smoke/address?scope=day#smoke-address" && placed.browserGet.at === "/smoke/address?scope=day#smoke-address-form" &&
-        kept.documents[0] === "/smoke/address-moved?scope=moved" && placed.documents[0] === "/smoke/address-moved?scope=placed",
-      JSON.stringify({ kept, placed }),
-    );
+    for (const from of ["/smoke/address", "/smoke/address?scope=day#smoke-address"]) {
+      const runs = /** @type {const} */ ([
+        ["Moved, bare", "moved", "/smoke/address?scope=day"],
+        ["Moved", "moved", "/smoke/address?scope=day#smoke-address"],
+        ["Moved, placed", "placed", "/smoke/address?scope=day#smoke-address-form"],
+      ]);
+      /** @type {Record<string, Awaited<ReturnType<typeof movedBy303>>>} */
+      const got = {};
+      for (const [name] of runs) got[name] = await movedBy303(browser, name, plain, errors, from);
+      check(
+        `${api}a data-address form's request redirected (3xx), pressed at ${from}, is drawn in place with no other request, and puts in the address it went to without an #id, which the browser's own GET reaches with the Location's #id, else the action's`,
+        runs.every(
+          ([name, scope, browserGet]) =>
+            !got[name].loaded &&
+            got[name].browserGet.at === browserGet &&
+            got[name].at === "/smoke/address?scope=day" &&
+            got[name].shown === "day" &&
+            got[name].added === 0 &&
+            got[name].documents.length === 0 &&
+            got[name].asked.length === 2 &&
+            got[name].asked[0] === `action /smoke/address-moved?scope=${scope}` &&
+            got[name].asked[1].endsWith(" /smoke/address?scope=day") &&
+            got[name].back === "/smoke/address-elsewhere",
+        ),
+        JSON.stringify(got),
+      );
+    }
   }
   // Without JavaScript the browser sends a data-address form itself: the page at its address.
   {
@@ -634,13 +647,14 @@ export async function dataAddress(browser) {
 
 /**
  * Presses `name`, a scope button whose `formaction` the server answers with a 303, on the screen
- * reached from the page before it, and says whether a document loaded, where the page is, how many
+ * at `from` reached from the page before it, and says whether a document loaded, where the page is, how many
  * history entries it added, what it asked for of the `/smoke/address` routes (the documents loaded
  * as their address before the redirect), and where Back goes; and where the browser's own GET of
  * the button goes without JavaScript. With `plain`, without the Navigation API.
  * @param {import("@playwright/test").Browser} browser @param {string} name @param {boolean} plain @param {string[]} errors
+ * @param {string} [from] the screen's address, a path and query
  */
-async function movedBy303(browser, name, plain, errors) {
+async function movedBy303(browser, name, plain, errors, from = "/smoke/address") {
   const home = `${base}/smoke/address`;
   const noScript = await browser.newContext({ javaScriptEnabled: false });
   const bare = await noScript.newPage();
@@ -658,8 +672,9 @@ async function movedBy303(browser, name, plain, errors) {
     });
   await page.goto(`${base}/smoke/address-elsewhere`);
   // The screen, reached from the page before it: by the runtime's navigation, else by a load.
-  if (plain) await page.goto(home);
-  else await page.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/address").finished);
+  if (plain) await page.goto(`${base}${from}`);
+  else await page.evaluate((from) => /** @type {any} */ (window).navigation.navigate(from).finished, from);
+  await page.waitForFunction(() => document.getElementById("smoke-address-form") && !document.querySelector("main")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 });
   const length = await page.evaluate(() => history.length);
   /** @type {string[]} */
   const asked = [];
@@ -678,12 +693,15 @@ async function movedBy303(browser, name, plain, errors) {
     (length) => ({ at: location.href.slice(location.origin.length), shown: document.querySelector("#smoke-address output")?.textContent, added: history.length - length }),
     length,
   );
-  const documents = asked.filter((a) => a.startsWith("document ")).map((a) => a.slice("document ".length));
-  await page.evaluate(() => history.back());
+  // What it asked for, before Back asks for the page before.
+  const sent = asked.splice(0);
+  const documents = sent.filter((a) => a.startsWith("document ")).map((a) => a.slice("document ".length));
+  // Back loads a document without the Navigation API, which can end the call before it returns.
+  await page.evaluate(() => history.back()).catch(() => {});
   await page.waitForFunction(() => location.pathname === "/smoke/address-elsewhere", undefined, { timeout: 5000 }).catch(() => {});
   const back = await page.evaluate(() => location.pathname + location.search).catch((/** @type {Error} */ e) => e.message);
   await page.close();
-  return { browserGet, loaded, ...end, asked, documents, back };
+  return { browserGet, loaded, ...end, asked: sent, documents, back };
 }
 
 /**
@@ -2020,13 +2038,26 @@ async function markedPatchVisits(browser, errors) {
   // So is marking a visit's link busy: a customized link's `attributeChangedCallback` that presses
   // the marked form as the visit marks it. That press is for the page the visit leaves, and is not
   // fetched.
+  // A link marked busy is one the runtime marks: where the browser has customized built-ins, one
+  // the visit did not mark (no press) fails the check rather than skipping it.
   const busyPressed = await busyPresses(page);
-  if (!busyPressed) skip("a marked GET pressed as a visit marks its link busy is not fetched", "no customized built-in elements, or no link marked busy");
+  if (!busyPressed) skip("a marked GET pressed as a visit marks its link busy is not fetched", "no customized built-in elements");
   else
     check(
       "a marked GET pressed as a visit marks its link busy is not fetched, and the visit draws its page",
-      busyPressed.pressed && busyPressed.starts === 0 && busyPressed.at === "?scope=month" && busyPressed.shown === "month",
+      busyPressed.pressed === true && busyPressed.starts === 0 && busyPressed.at === "?scope=month" && busyPressed.shown === "month",
       JSON.stringify(busyPressed),
+    );
+  // So is clearing that mark when the visit is abandoned (`window.stop()`, its answer held): the
+  // visit is still on its way as it clears it, and a press made there is not fetched, nor does its
+  // answer move the address.
+  const busyCleared = await busyClears(page);
+  if (!busyCleared) skip("a marked GET pressed as an abandoned visit clears its link's busy mark is not fetched", "no customized built-in elements");
+  else
+    check(
+      "a marked GET pressed as an abandoned visit clears its link's busy mark is not fetched, and the address stays",
+      busyCleared.marked === true && busyCleared.pressed === true && busyCleared.starts === 0 && busyCleared.at === "" && busyCleared.shown === "all",
+      JSON.stringify(busyCleared),
     );
   await page.close();
 }
@@ -2564,8 +2595,7 @@ async function busyMoves(page) {
  * Follows a customized link (`is=`) to the screen's month scope whose `attributeChangedCallback`
  * presses Week on the marked scope form as the runtime marks the link busy for its visit, before
  * the visit is fetched. Says whether it pressed, how often Week was fetched and where the page is
- * once the visit has ended; null where the browser has no customized built-in elements (WebKit), or
- * marks no link busy.
+ * once the visit has ended; null where the browser has no customized built-in elements (WebKit).
  * @param {import("@playwright/test").Page} page
  */
 async function busyPresses(page) {
@@ -2614,7 +2644,81 @@ async function busyPresses(page) {
     at: location.search + location.hash,
     shown: document.querySelector("#smoke-address output")?.textContent,
   }));
-  return end.pressed === false ? null : end;
+  return end;
+}
+
+/**
+ * Follows a customized link (`is=`) to the screen's month scope, whose answer is held, and abandons
+ * the visit with `window.stop()` once the runtime has marked the link busy. The link's
+ * `attributeChangedCallback` presses Week on the marked scope form as that mark is cleared. Says
+ * whether the link was marked, whether it pressed, how often Week was fetched and where the page is
+ * once Week's answer would have come; null where the browser has no customized built-in elements
+ * (WebKit).
+ * @param {import("@playwright/test").Page} page
+ */
+async function busyClears(page) {
+  await page.goto(`${base}/smoke/address`);
+  const month = `${base}/smoke/address?scope=month`;
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  await page.route(month, async (route) => {
+    await held;
+    await route.continue().catch(() => {});
+  });
+  const defined = await page.evaluate(() => {
+    let starts = 0;
+    let marked = false;
+    let pressed = false;
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && url.search === "?scope=week" && new Headers(init?.headers).get("corten") === "action") starts += 1;
+      return fetch_.call(this, input, init);
+    };
+    Object.assign(window, { __clearStarts: () => starts, __clearPressed: () => pressed, __clearMarked: () => marked });
+    class BusyClears extends HTMLAnchorElement {
+      static observedAttributes = ["aria-busy"];
+      /** @param {string} _name @param {string | null} old @param {string | null} now */
+      attributeChangedCallback(_name, old, now) {
+        if (now === "true") marked = true;
+        if (old !== "true" || now !== null || pressed) return;
+        pressed = true;
+        const week = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]'));
+        week.form?.requestSubmit(week);
+      }
+    }
+    try {
+      customElements.define("smoke-busy-clears", BusyClears, { extends: "a" });
+    } catch {
+      return false;
+    }
+    const link = document.createElement("a", { is: "smoke-busy-clears" });
+    if (!(link instanceof BusyClears)) return false;
+    link.href = "/smoke/address?scope=month";
+    link.textContent = "Month, held";
+    document.querySelector("main")?.append(link);
+    return true;
+  });
+  if (!defined) {
+    await page.unroute(month);
+    return null;
+  }
+  const asked = page.waitForRequest((r) => r.url() === month, { timeout: 5000 }).then(() => true, () => false);
+  await page.getByRole("link", { name: "Month, held", exact: true }).evaluate((link) => /** @type {HTMLAnchorElement} */ (link).click());
+  await asked;
+  await page.evaluate(() => window.stop());
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 500)));
+  const end = await page.evaluate(() => ({
+    marked: /** @type {any} */ (window).__clearMarked?.() ?? null,
+    pressed: /** @type {any} */ (window).__clearPressed?.() ?? null,
+    starts: /** @type {any} */ (window).__clearStarts?.() ?? null,
+    at: location.search + location.hash,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+  }));
+  release();
+  await page.unroute(month);
+  return end;
 }
 
 /**
