@@ -489,10 +489,15 @@ flight when the last interval ended, so they are among that boundary's outstandi
 work lost at the stop cannot explain a backlog in an earlier interval. A soak with every arrival on
 schedule and no request completed in any interval (all of them in the graceful-stop tail, or all
 unrecorded) is refused at the first boundary; a saved one with all of them unrecorded is refused
-already on its totals, since more of its iterations are unfinished than the load has VUs.
+already on its totals, since more of its iterations are unfinished than the load has VUs. The same
+holds for every iteration the soak started, not only those whose request k6 counted: an iteration
+that started but never reached k6's request counter still held its VU, so a soak whose arrivals less
+k6's completed iterations are more than 1,000 (270,001 started, 270,000 requests, 269,000 completed)
+is refused, both when it is captured and when a saved one is read.
 Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
 schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
-interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is
+interval's claim from the saved arrivals, so a saved soak can claim an interval held, or the rate
+held, only when its saved counters support it; a claim they do not support is refused. The counts it prints are k6's own, never the schedule's. Memory is
 reported as unavailable, with the reason, when sampling failed, a sample had no positive size or
 the first or last interval had none; the restart, exit, signal and OOM observations are reported either
 way. A saved soak whose rate, memory, p99, restart or state claims contradict its counters is

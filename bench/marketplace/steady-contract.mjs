@@ -652,6 +652,10 @@ function windowsEvidence(windows, n, seconds) {
 // A captured cell's k6 requests less its completed iterations are at most vus_max (readLoadSummary),
 // and vus_max at most this limit (validateLoadExecution): each VU has at most one unfinished iteration.
 export const loadVus = (options) => (options.kind === "convergence" ? options.vus : fixedRateLoad.maxVUs);
+// The rule both bounds apply: an iteration holds its VU from its start until it completes, so of the
+// iterations a load started, at most its VUs are unfinished. reconcileCell applies it to the
+// iterations whose request k6 counted; a soak (soakArrivals) also to every iteration it started.
+const unfinishedWithin = (started, completed, vus) => started - completed <= vus;
 // A cell's windows, graceful-stop tail and unrecorded requests must add up to k6's own request total;
 // its unfinished iterations are at most the load's VUs (loadVus); no window's latency may be above
 // k6's aggregate maximum; and k6's aggregate failures are at least the windows' and at most the
@@ -660,7 +664,7 @@ export const loadVus = (options) => (options.kind === "convergence" ? options.vu
 export function reconcileCell(c, vus) {
   assert.ok(Number.isSafeInteger(vus) && vus > 0, "the load's VUs");
   assert.ok(Number.isSafeInteger(c.requests) && Number.isSafeInteger(c.iterations) && c.iterations >= 0 && c.iterations <= c.requests, `${cellKey(c)}: k6 request and iteration totals`);
-  assert.ok(c.requests - c.iterations <= vus, `${cellKey(c)}: more unfinished iterations than the load has VUs`);
+  assert.ok(unfinishedWithin(c.requests, c.iterations, vus), `${cellKey(c)}: more unfinished iterations than the load has VUs`);
   assert.ok(Number.isSafeInteger(c.tail) && c.tail >= 0 && Number.isSafeInteger(c.unrecorded) && c.unrecorded >= 0, `${cellKey(c)}: tail and unrecorded requests`);
   assert.equal(c.windows.reduce((sum, w) => sum + w.requests, 0) + c.tail + c.unrecorded, c.requests, `${cellKey(c)}: windows, tail and unrecorded requests do not add up to k6's request total`);
   assert.ok(c.unrecorded <= c.requests - c.iterations, `${cellKey(c)}: more unrecorded requests than unfinished iterations`);
@@ -873,9 +877,12 @@ export function intervalSchedule({ rate, seconds, windowSeconds }) {
  * the outstanding iterations at the last boundary and add no room to it, nor to any earlier one:
  * work lost at the stop cannot explain a backlog before it. Counts with every arrival on schedule
  * and no completion in any interval (all of them in the tail, or all unrecorded) are refused at the
- * first boundary.
+ * first boundary. Nor can more of the started iterations be unfinished at the end than the load has
+ * VUs (loadVus): `iterations` are k6's completed iterations, and an iteration that started but never
+ * reached k6's request counter still held its VU, so the arrivals less the completed iterations are
+ * at most maxVUs, not only the requests less them (reconcileCell).
  */
-export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIterations, arrivals, completions }) {
+export function soakArrivals({ rate, seconds, windowSeconds, requests, iterations, droppedIterations, arrivals, completions }) {
   assert.ok(Number.isSafeInteger(rate) && rate > 0 && Number.isSafeInteger(seconds) && seconds > 0, "a soak's rate and length");
   assert.ok(Number.isSafeInteger(requests) && requests >= 0 && Number.isSafeInteger(droppedIterations) && droppedIterations >= 0, "k6's requests and dropped iterations");
   const schedule = intervalSchedule({ rate, seconds, windowSeconds });
@@ -884,14 +891,17 @@ export function soakArrivals({ rate, seconds, windowSeconds, requests, droppedIt
   const started = arrivals.reduce((a, b) => a + b, 0);
   assert.ok(requests + droppedIterations <= scheduled, "k6 recorded more requests and dropped iterations than the fixed rate schedules");
   assert.ok(started + droppedIterations <= scheduled && requests <= started, "the arrivals per interval do not reconcile with k6's requests, its drops and the schedule");
+  const vus = loadVus({ kind: "soak" });
+  assert.ok(Number.isSafeInteger(iterations) && iterations >= 0 && iterations <= requests, "k6's completed iterations, no more than its requests");
   assert.ok(Array.isArray(completions) && completions.length === schedule.length && completions.every(nonNegative) && completions.reduce((a, b) => a + b, 0) <= requests,
     "a soak counts the requests completed in each interval, no more than k6's requests");
   let begun = 0, done = 0;
   for (let i = 0; i < schedule.length; i++) {
     begun += arrivals[i]; done += completions[i];
     assert.ok(done <= begun, `more requests completed by the end of interval ${i} than iterations had started by then`);
-    assert.ok(begun - done <= fixedRateLoad.maxVUs, `more iterations were outstanding at the end of interval ${i} than the load's ${fixedRateLoad.maxVUs} VUs hold in flight`);
+    assert.ok(begun - done <= vus, `more iterations were outstanding at the end of interval ${i} than the load's ${vus} VUs hold in flight`);
   }
+  assert.ok(unfinishedWithin(started, iterations, vus), `more iterations started without completing than the load's ${vus} VUs hold`);
   const shortfall = scheduled - requests - droppedIterations;
   const intervals = schedule.map((expected, index) => ({ index, startSeconds: index * windowSeconds, scheduled: expected, arrivals: arrivals[index], held: Math.abs(arrivals[index] - expected) <= allowance }));
   return { requested: rate, seconds, scheduled, requests, droppedIterations, shortfall, allowance, intervals, held: droppedIterations === 0 && shortfall <= allowance && intervals.every((i) => i.held) };
@@ -945,7 +955,7 @@ export function summarizeSoak({ windows, tail, unrecorded, requests, iterations,
   const eventStream = restartEvents.length ? "seen" : "none-seen";
   const replaced = after.id !== before.id || after.startedAt !== before.startedAt;
   const p99 = windows.filter((w) => w.p99 !== null).map((w) => w.p99);
-  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, droppedIterations, arrivals, completions: windows.map((w) => w.requests) }), memory: soakMemory(memory, seconds, end),
+  return { windows, tail, unrecorded, requests, iterations, latencyMaxMs, rate: soakArrivals({ rate, seconds: end, windowSeconds: seconds, requests, iterations, droppedIterations, arrivals, completions: windows.map((w) => w.requests) }), memory: soakMemory(memory, seconds, end),
     p99: { first: windows[0].p99, last: windows.at(-1).p99, max: p99.length ? Math.max(...p99) : null },
     failed: windows.reduce((sum, w) => sum + w.failed, 0), failedRequests,
     restarts: restartClaim({ restartCount: after.restartCount - before.restartCount, replaced, eventStream, events: restartEvents, runningAtEnd: after.running, oomKilled: after.oomKilled }) };
@@ -998,7 +1008,7 @@ function checkSoak(s) {
     assert.ok(Number.isSafeInteger(c.rate?.droppedIterations) && Array.isArray(c.rate.intervals) && c.rate.intervals.length === s.options.windows
       && c.rate.intervals.every((i) => i !== null && typeof i === "object" && nonNegative(i.arrivals)), `${cellKey(c)}: rate`);
     // The saved arrivals per interval are the input; everything else in the claim is recomputed from them.
-    assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, windowSeconds: s.options.windowSeconds, requests: c.requests,
+    assert.deepEqual(c.rate, soakArrivals({ rate: s.options.rate, seconds: s.options.windows * s.options.windowSeconds, windowSeconds: s.options.windowSeconds, requests: c.requests, iterations: c.iterations,
       droppedIterations: c.rate.droppedIterations, arrivals: c.rate.intervals.map((i) => i.arrivals), completions: c.windows.map((w) => w.requests) }), `${cellKey(c)}: the fixed-rate claim contradicts k6's counts and the schedule`);
   }
   return s;

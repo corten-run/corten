@@ -431,8 +431,9 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cells[0].failedRequests = 270001; }, /aggregate failures/],
     [(v) => { v.cells[0].failedRequests = 1; }, /aggregate failures/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), pattern); }
-  // 1000 unfinished iterations, one per VU, reconcile and read.
-  { const v = structuredClone(s); v.cells[0].iterations = v.cells[0].requests - 1000; assert.equal(validateSoak(v).cells[0].rate.held, true); }
+  // 1000 unfinished iterations, one per VU, reconcile and read: of the 270,001 starts, 999 whose
+  // request k6 counted and the one it did not (soakArrivals bounds every start, not only the requests).
+  { const v = structuredClone(s); v.cells[0].iterations = v.cells[0].requests - 999; assert.equal(validateSoak(v).cells[0].rate.held, true); }
   // A stop, an OOM kill or an exit with no start after it is an observation, not restart evidence:
   // saved with no restart, it reads.
   for (const mutate of [(r) => { r.runningAtEnd = false; }, (r) => { r.oomKilled = true; }, (r) => { r.events = [{ action: "die", atSeconds: 5 }]; r.eventStream = "seen"; }]) {
@@ -567,10 +568,10 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
   assert.throws(() => validateSoak(forged), /fixed-rate claim contradicts/);
   // Within the allowance it held; one arrival beyond it did not; more than the schedule is refused.
   const rate = { rate: 150, seconds: 1800, windowSeconds: 60 }, oneDropped = onSchedule(); oneDropped[29] -= 1;
-  assert.equal(soakArrivals({ ...rate, requests: 270001 - 151, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 151) }).held, true);
-  assert.equal(soakArrivals({ ...rate, requests: 270001 - 152, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 152) }).held, false);
-  assert.equal(soakArrivals({ ...rate, requests: 270000, droppedIterations: 1, arrivals: oneDropped, completions: served(oneDropped, 270000) }).held, false);
-  assert.throws(() => soakArrivals({ ...rate, requests: 270001, droppedIterations: 1, arrivals: onSchedule(), completions: served(onSchedule(), 270001) }), /more requests and dropped iterations than the fixed rate schedules|arrivals per interval do not reconcile/);
+  assert.equal(soakArrivals({ ...rate, requests: 270001 - 151, iterations: 270001 - 151, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 151) }).held, true);
+  assert.equal(soakArrivals({ ...rate, requests: 270001 - 152, iterations: 270001 - 152, droppedIterations: 0, arrivals: onSchedule(), completions: served(onSchedule(), 270001 - 152) }).held, false);
+  assert.equal(soakArrivals({ ...rate, requests: 270000, iterations: 270000, droppedIterations: 1, arrivals: oneDropped, completions: served(oneDropped, 270000) }).held, false);
+  assert.throws(() => soakArrivals({ ...rate, requests: 270001, iterations: 270001, droppedIterations: 1, arrivals: onSchedule(), completions: served(onSchedule(), 270001) }), /more requests and dropped iterations than the fixed rate schedules|arrivals per interval do not reconcile/);
   // The schedule per interval adds up to the whole schedule, the boundary slot in the last interval.
   assert.equal(onSchedule().reduce((a, b) => a + b, 0), 270001);
   // Slot 0 at 0 s puts 9,001 in the first interval; 1,800 s is not a whole number of 6,666,666 ns
@@ -580,25 +581,25 @@ test("a soak says the fixed rate held only when k6's counts reconcile with the s
   assert.deepEqual([onSchedule(30, 60, 125)[0], onSchedule(30, 60, 125)[29]], [7500, 7501]);
   // Arrivals that do not reconcile with k6's requests and drops, or are not one count per interval, are refused.
   for (const arrivals of [Array(30).fill(0), onSchedule().slice(1), [...onSchedule().slice(0, 29), "9001"], undefined])
-    assert.throws(() => soakArrivals({ ...rate, requests: 270000, droppedIterations: 0, arrivals, completions: served(onSchedule(), 270000) }), /arrivals/);
+    assert.throws(() => soakArrivals({ ...rate, requests: 270000, iterations: 270000, droppedIterations: 0, arrivals, completions: served(onSchedule(), 270000) }), /arrivals/);
   // Completions that are not one count per interval, or add up to more than k6's requests, are refused.
   for (const completions of [undefined, served(onSchedule(), 270000).slice(1), [...served(onSchedule(), 270000).slice(0, 29), "9000"], served(onSchedule(), 270001)])
-    assert.throws(() => soakArrivals({ ...rate, requests: 270000, droppedIterations: 0, arrivals: onSchedule(), completions }), /^AssertionError \[ERR_ASSERTION\]: a soak counts the requests completed in each interval, no more than k6's requests$/);
+    assert.throws(() => soakArrivals({ ...rate, requests: 270000, iterations: 270000, droppedIterations: 0, arrivals: onSchedule(), completions }), /^AssertionError \[ERR_ASSERTION\]: a soak counts the requests completed in each interval, no more than k6's requests$/);
 });
 
 test("a soak says held only when every interval matched its share of the schedule within tolerance, and names those that did not", () => {
   // All 270,000 requests arrived in the first minute: the totals match the schedule, the later 29
   // intervals are empty, and the rate was not sustained.
   const concentrated = [270001, ...Array(29).fill(0)];
-  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: concentrated, completions: served(concentrated, 270000) });
+  const rate = soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, iterations: 270000, droppedIterations: 0, arrivals: concentrated, completions: served(concentrated, 270000) });
   assert.deepEqual([rate.shortfall, rate.held], [1, false]);
   assert.deepEqual(rate.intervals.filter((i) => !i.held).map((i) => i.index), Array.from({ length: 30 }, (_, i) => i));
   // One interval short (a minute at half the rate, the next catching up) is named on its own.
   const uneven = onSchedule(); uneven[10] -= 4500; uneven[11] += 4500;
-  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: uneven, completions: served(uneven, 270000) }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
+  assert.deepEqual(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, iterations: 270000, droppedIterations: 0, arrivals: uneven, completions: served(uneven, 270000) }).intervals.filter((i) => !i.held).map((i) => i.index), [10, 11]);
   // Within the allowance of one second's arrivals plus one, an interval held.
   const edge = onSchedule(); edge[3] -= 151; edge[4] += 151;
-  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: edge, completions: served(edge, 270000) }).held, true);
+  assert.equal(soakArrivals({ rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, iterations: 270000, droppedIterations: 0, arrivals: edge, completions: served(edge, 270000) }).held, true);
 
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
   const cell = (arrivals) => ({ app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: windows([270000 / 60, ...Array(29).fill(0)], () => 10, 60),
@@ -627,7 +628,7 @@ test("a soak refuses counts whose requests completed before their iterations sta
   // Every iteration started on schedule (9,001 by the end of the first minute), k6 dropped none, and
   // the totals reconcile, but 270,000 requests completed in the first minute: more than had started.
   const front = [270000, ...Array(29).fill(0)];
-  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: onSchedule() };
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, iterations: 270000, droppedIterations: 0, arrivals: onSchedule() };
   const order = /^AssertionError \[ERR_ASSERTION\]: more requests completed by the end of interval 0 than iterations had started by then$/;
   assert.throws(() => soakArrivals({ ...counts, completions: front }), order);
   // One completion too many at a later boundary is refused there; exactly as many as started is not.
@@ -650,7 +651,7 @@ test("a soak refuses counts whose requests completed before their iterations sta
 
 test("a soak refuses a backlog of started iterations larger than the load's VUs can hold in flight", () => {
   assert.equal(fixedRateLoad.maxVUs, 1000);
-  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270001, droppedIterations: 0, arrivals: onSchedule() };
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270001, iterations: 270001, droppedIterations: 0, arrivals: onSchedule() };
   // Every arrival on schedule and no request completed in any interval: all 270,001 in the
   // graceful-stop tail. 9,001 iterations were outstanding at the first boundary, with 1,000 VUs.
   const none = Array(30).fill(0);
@@ -693,6 +694,33 @@ test("a soak refuses a backlog of started iterations larger than the load's VUs 
   const unrecorded = structuredClone(s);
   Object.assign(unrecorded.cells[0], { windows: intervals(none), tail: 0, unrecorded: 270001, requests: 270001, iterations: 0, p99: { first: null, last: null, max: null } });
   assert.throws(() => validateSoak(unrecorded), /^Error: corten fixture page: more unfinished iterations than the load has VUs$/);
+});
+
+test("a soak refuses more unfinished starts than the load's VUs, counting an iteration that never reached k6's request counter", () => {
+  // 270,001 iterations started on schedule, k6 counted 270,000 requests, all completed in an
+  // interval, and the start it did not count never made its request. Each VU holds one iteration from
+  // its start until it completes, so with 1,000 VUs at most 1,000 of the 270,001 starts are
+  // unfinished: 269,001 completed iterations is possible, 269,000 is not, though k6's requests less
+  // its completed iterations (999 or 1,000) are within the VUs either way.
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  const completions = served(onSchedule(), 270000);
+  const intervals = completions.map((n, index) => ({ index, startSeconds: index * 60, seconds: 60, requests: n, failed: 0, rps: n / 60, p95: n ? 10 : null, p99: n ? 20 : null }));
+  const soak = (iterations) => summarizeSoak({ rate: 150, droppedIterations: 0, failedRequests: 0, windows: intervals, tail: 0, unrecorded: 0, requests: 270000, iterations, latencyMaxMs: 25,
+    memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: onSchedule() });
+  const unfinished = /^AssertionError \[ERR_ASSERTION\]: more iterations started without completing than the load's 1000 VUs hold$/;
+  const counts = { rate: 150, seconds: 1800, windowSeconds: 60, requests: 270000, droppedIterations: 0, arrivals: onSchedule(), completions };
+  assert.equal(soakArrivals({ ...counts, iterations: 269001 }).held, true);
+  assert.throws(() => soakArrivals({ ...counts, iterations: 269000 }), unfinished);
+  // The runner's summary: exactly 1,000 unfinished starts reads held; 1,001 is refused.
+  assert.equal(soak(269001).rate.held, true);
+  assert.throws(() => soak(269000), unfinished);
+  // The reader of a saved soak: the same boundary, from the saved arrivals and completed iterations.
+  const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const s = savedPass(options, [{ app: "corten", source: "fixture", target: "page", ...soak(269001) }], { commit: "d".repeat(40) });
+  assert.equal(validateSoak(s).cells[0].rate.held, true);
+  const forged = structuredClone(s); forged.cells[0].iterations = 269000;
+  assert.equal(forged.cells[0].rate.held, true);
+  assert.throws(() => validateSoak(forged), /^Error: more iterations started without completing than the load's 1000 VUs hold$/);
 });
 
 test("memory that cannot be read leaves the restart, stop and OOM observations in place", () => {
