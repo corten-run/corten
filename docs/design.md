@@ -1516,7 +1516,12 @@ rules something out.
        `serve_wrapped`). UDP is only HTTP/3's, which [Limit 14](#limit-http1) leaves to the proxy.
     2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
        server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
-       for them as Corten could not be, and nothing measured here points at it.
+       for them as Corten could not be, and nothing measured here points at it. That last is no
+       longer so, and [Choice 76](#choice-own-http1) reopens this step for the requests that
+       frame nothing: an app that asks (`App::own_http1`, off unless set) has a connection's
+       requests without a body read and answered by Corten's own code, held to hyper's answers by
+       a differential test. A request's body, a protocol switch and every connection of an app
+       that does not ask stay hyper's, and so does everything below.
 
        While a connection is idle, a request's head must arrive within `App::header_timeout` (30
        seconds), which also closes an idle keep-alive connection, and be at most
@@ -2100,7 +2105,10 @@ rules something out.
     length from the body's size, which `tests::the_server_writes_an_answer_s_length_from_its_body`
     fails on: the router then sets it again, or that sender is shown not to need it (a `Router`
     an app serves by another library's server is that server's to write a length for,
-    [the app guide](guide/app.md)); for HTTP/2, an upstream
+    [the app guide](guide/app.md); Corten's own HTTP/1.1 connection,
+    [Choice 76](#choice-own-http1), is such a sender and is shown not to need it: it writes the
+    length from the body's size as hyper's encoder does, and that test passes on it in the
+    suite's second run); for HTTP/2, an upstream
     active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
     signal covering queued data after the body ends reopens the send design. The
     [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
@@ -2179,7 +2187,10 @@ rules something out.
     the 2-second case's rounds each, plain and TLS, at `ee411b38e`; 2026-11-20, the 2-second
     case at `5596df8b5` with the reading pattern varied, five rounds each: even 2 KiB reads
     every 125 ms from the socket over TLS and plain kept, tokio-rustls cut, 16 KiB a second
-    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut.
+    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut; 2026-11-25, the
+    answer head Corten's own HTTP/1.1 connection writes read against hyper 1.12.0's encoder, and
+    `tests::the_server_writes_an_answer_s_length_from_its_body` passed on hyper's connection and
+    on Corten's own, at `596a8a353`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
