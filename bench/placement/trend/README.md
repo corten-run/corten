@@ -6,14 +6,14 @@ so that costs that each passed do not add up unseen
 [design Choice 76](../../../docs/design.md#choice-counted-or-measured)). It is made with the
 [placement kit](../README.md#the-trend) from the one plan in [`plan.json`](plan.json), by one
 command, `node bench/placement/trend.mjs <run dir>`, which adds the row. A table with no row
-means no run has been made.
+means no run's row has been published here, not that nobody has made a run.
 
 A row gates nothing: no pull request waits on it and no release is refused by it. It reads
 every change since the release together and attributes a cost to none of them.
 
 | Column | What it is |
 | --- | --- |
-| run | The date the run started, in UTC. One run a date: each workload's seed is that date and the workload's place in the plan, and the command refuses a date the table has a row of. |
+| run | The date the run started, in UTC. One run a date: each workload's seed is that date and the workload's place in the plan, and the command refuses a date that is not later than the table's newest row, as the run's checkout has the table. |
 | base | The last release: the highest tag `vX.Y.Z` when the run started, and its commit, linked by its full id. |
 | head | The commit `main` was at when the run started, linked by its full id. |
 | workloads | For each workload of the plan, the change in user plus kernel cycles a request, `main` against the release, across K placements: the lower bound to the bound (each one-sided, 95% nominal, as [design Choice 72](../../../docs/design.md#choice-placement-runs) gives the bound), then the median of the placement medians and K, which the run's own pilot sized. "A/A resolved" says the release against itself read under +1% both ways in the same run, which is what lets the run be read. "answers differ as recorded" is explained under the table of columns. |
@@ -41,9 +41,10 @@ after each part with the two it recorded. A placement that fails any of them mak
 
 The threshold is the plan's, +2% on the lower bound, a proposal until it is settled: no run has
 shown what a run of this plan resolves. It is not the +1% a measured change is held to: that is
-read on the bound, and the kit's own page for each part still prints it. For a run past the
-threshold the command drafts an issue with the pull requests merged since the row before it,
-and opens nothing.
+read on the bound, and the kit's own page for a gated part still prints that reading (a pilot's
+reads nothing: it sizes K). For a run past the threshold the command drafts an issue with the
+pull requests merged since the row before it, or since the release when the draft says so, and
+opens nothing.
 
 A row's figures are read from the run's directory, each part's `results` as the kit leaves
 them. Whoever makes the run keeps that directory under the tag `evidence/trend-<the run's date>`.

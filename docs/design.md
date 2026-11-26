@@ -11038,7 +11038,8 @@ rules something out.
     cycles, unless a row of the trend reads the commit of `main` that candidate is made from
     against that tag with every workload read
     ([RELEASING.md](../RELEASING.md#readiness-checkpoints)): a row of an earlier commit, of
-    another release or with a workload not read stands in for no count. One kind on the
+    another release or with a workload not read stands in for no count, and none does for a
+    release-preparation pull request that changes code a request runs. One kind on the
     list cannot be told from a diff, a future's size. The test `staged_page_future_sizes`
     prints the stage's and the handler's, the only futures any test in the repository sizes,
     so a change that edits an `async` body gives those two for base and head, and that a

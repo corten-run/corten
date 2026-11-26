@@ -28,8 +28,9 @@ keeping or changing the cadence. No schedule is in effect until approved.
    probe does not build against that tag, unless
    [the trend's page](bench/placement/trend/README.md) has a row to cite in their place: its
    base is the last release's tag, its head is the commit of `main` to which the candidate
-   adds that pull request alone, and every workload is read. No run has been made, so no such
-   row exists. A row past its threshold is no gate. The first release to record the counts is
+   adds that pull request alone, and every workload is read. The row stands in for the counts
+   only when that pull request adds no change to code a request runs. No run has been made, so
+   no such row exists. A row past its threshold is no gate. The first release to record the counts is
    the baseline:
    the changes before it were not counted. From the release after it, a case that counts over
    2% more is no gate: it reopens
