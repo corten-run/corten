@@ -136,6 +136,13 @@ const within = (ms, what, work) => {
 const readWithin = (what, work) => within(5000, `${what} was not read within 5 s`, work);
 
 /**
+ * Waits `ms` by a timer of the smoke's own. A driver command (`page.waitForTimeout`) has no bound
+ * on its answer: one whose answer never comes would keep a case from its cleanup.
+ * @param {number} ms
+ */
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
  * Work under one budget of `ms` that stops for good. Each step has what is left of the budget; a
  * step that settles after the budget has ended fails as one that ran out, though its result came
  * (a result that arrives late is no result), and once a step fails or runs out (or `end` is
@@ -422,4 +429,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, steps, pollFor, cleanUp, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, pause, steps, pollFor, cleanUp, opened, closeContext };

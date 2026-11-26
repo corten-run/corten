@@ -449,7 +449,8 @@ read of itself after the failure to be a navigation whose `<main>` is drawn, whi
 stand-in puts in each navigation's `<main>` shows (a request alone is not a draw), and the failure
 already shown at that draw and still shown when the check looks again at least 500 ms after it,
 counted from the time the page recorded as it drew it (a later look, not a watch through those
-500 ms): a poll drawn before the failure was shown is not one that kept it. In the cut-body cases
+500 ms, waited by a timer of the smoke's own, as the failure's own wait is bounded by the smoke's
+clock): a poll drawn before the failure was shown is not one that kept it. In the cut-body cases
 the failure shown at that later look must be the body's own (its
 status), so another failure that took its place does not count. That first read is taken from the
 moment the stand-in failed (or answered) the write it follows, or from a held body's release, not
@@ -609,9 +610,19 @@ itself again), seen within six seconds by the smoke's clock as above, and the ch
 replaces the history entry counts only once that read's answer is drawn. The check that a page at a
 place (`#alert-status`) reads itself again has the page's load of its receipt answered still saving
 whatever the store says by then, so a write that landed before the load cannot pass it, and
-requires `Saved.` drawn at the place by the answer to a later read of that receipt (the runtime's
-read, or a load of it in a browser without the Navigation API), within six seconds the same way. Its route and request listener are removed however its cases end, each removal
-and each read of the page bounded. The slow part's reads
+requires `Saved.` drawn at the place by the answer to a later read of that receipt within six
+seconds the same way: with the Navigation API, the runtime's read in the document the case loaded,
+which a mark set on it shows is still there (a full load of the receipt is not the page reading
+itself again in place); without it, a load of the receipt. Its route and request listener are
+removed however its cases end, each removal and each read of the page bounded. Wherever a case
+leaves by the header's link and then requires no further read for a while, the press and the wait
+for News are each bounded to 30 seconds by the smoke's clock, as is sending the alert until it says
+`Saving...` in the patch cases, so a driver that never answers ends the run with its reason rather
+than keeping the case from its cleanup. The check that a read the server fails stops the reads
+requires that read sent within five seconds of the press and its 502 answer received in full (the
+browser finished loading that exact request) within five seconds of the check seeing it sent; only
+then do its 2.2 s with no further read start, so a read still on its way cannot pass for one that
+failed. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
 the same, as its request listener is removed. The first check of a held slow part looks at it only
@@ -621,8 +632,11 @@ shows is pressed in the page too; the page it opens must commit within five seco
 just before the press, a budget the press task shares, and have its part read in within five
 seconds of the check seeing that commit. A press that fails names its step: the press task finding
 no link, failing or not returning in time, or the commit not coming in time or its wait failing. A
-part not read in in time says whether the navigation's own read of `/?picks=true` (the page's load,
-or the runtime's read of the page) was seen and answered; another request with that query is not it.
+part not read in in time says whether the first request of `/?picks=true` after the press that could
+be the navigation's (a load of the page, or a `corten: nav` or `page` read of it) was seen and, if
+so, whether it was answered; another request with that query is not one. Nothing outside the
+page ties a fetch to the navigation that made it, so it is named as that first request, not as the
+navigation's own.
 The check that a read whose patch leaves the part as it was marks it failed requires that load's
 own read, answered by the route with its empty patch, and that answer's headers and its whole body
 received without error (the response finished, and the request did not fail) within five seconds

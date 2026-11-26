@@ -58,10 +58,12 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** The address the failed part links to: the page with the part read in. */
     const linkTo = new URL("/?picks=true", base);
     /**
-     * The read of that address the link's navigation makes, the first after the press: a load of the
-     * held page's own main frame, or the runtime's read of the page (`corten: nav` or `page`, not a
-     * prefetch). Another request of that address, or one of another address with the same query,
-     * is not it. @type {import("@playwright/test").Request | null}
+     * The first request after the press that could be the link's navigation reading that address: a
+     * load of the held page's own main frame, or a read of the page as the runtime makes one
+     * (`corten: nav` or `page`, not a prefetch). Nothing outside the page ties a fetch to the
+     * navigation that made it, so the diagnostic names it as the first such request, not as the
+     * navigation's own. Another request of that address, or one of another address with the same
+     * query, is not one. @type {import("@playwright/test").Request | null}
      */
     let linkRead = null;
     /** Whether the answer to that read has come, for the check that follows it. */
@@ -247,7 +249,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
       check(
         "the page it links to has the slow part read in, with JavaScript too",
         linkOpened && listed && new URL(held.url()).search === "?picks=true",
-        `${held.url()}${linkOpened ? (listed ? "" : `, its part not read in within 5 s of its commit (its navigation's read of ${linkTo.pathname}${linkTo.search} ${linkRead === null ? "not seen" : linkAnswered ? "answered" : "not answered"})`) : `, ${notOpened}`}`,
+        `${held.url()}${linkOpened ? (listed ? "" : `, its part not read in within 5 s of its commit (${linkRead === null ? `no load or page read of ${linkTo.pathname}${linkTo.search} seen after the press` : `the first load or page read of ${linkTo.pathname}${linkTo.search} after the press, a ${linkRead.isNavigationRequest() ? "load" : `corten: ${linkRead.headers()["corten"]} fetch`}, ${linkAnswered ? "answered" : "not answered"}`})`) : `, ${notOpened}`}`,
       );
     } finally {
       answer = "closing";

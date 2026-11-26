@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, pause, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -672,6 +672,21 @@ export async function pageWrites(page, browser) {
       () => own.evaluate(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]")),
       "/smoke/quoted",
     );
+  /**
+   * Whether the page comes to show a write's failure in its header with nothing busy, within 5 s by
+   * the smoke's own clock (`within`): the driver's timeout counts from when it receives the wait, and
+   * a wait whose answer never comes would keep the case from its cleanup.
+   * @param {import("@playwright/test").Page} own
+   */
+  const failureShown = (own) =>
+    within(
+      5000,
+      "the failure was not shown within 5 s",
+      own.waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }),
+    ).then(
+      () => true,
+      () => false,
+    );
   // A write the server applied whose answer the network lost: the page shows the failure in its
   // layout (as a toaster there does), for the user to send again. The page reading itself again
   // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
@@ -699,14 +714,7 @@ export async function pageWrites(page, browser) {
       // The write the page's next read of itself follows: the failed one, or the legacy one after it.
       let follows = seen.writes + 1;
       const sent = await pressWrite(own, seen, "main form button");
-      const failed =
-        sent.ok &&
-        (await own
-          .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-          .then(
-            () => true,
-            () => false,
-          ));
+      const failed = sent.ok && (await failureShown(own));
       /** @type {Pressed | null} */
       let legacySent = null;
       let legacyDrew = true;
@@ -722,9 +730,11 @@ export async function pageWrites(page, browser) {
       }
       // The page's first read of itself after the stand-in failed or answered that write, drawn
       // with the failure already shown (`nextPollDrawn`), and the failure still shown at a look at
-      // least 500 ms after that draw, by the time the page recorded as it drew it.
+      // least 500 ms after that draw, by the time the page recorded as it drew it, waited by the
+      // smoke's own timer (`pause`), so a driver that never answers cannot keep the case from its
+      // cleanup.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, seen.settled[follows], "");
-      if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
+      if (drewAgain && drawn) await pause(Math.max(0, drawn.time + 500 - Date.now()));
       const kept =
         drewAgain &&
         (await readWithin(
@@ -1079,8 +1089,8 @@ export async function pageWrites(page, browser) {
       // Looked at again at least 500 ms after the poll's draw, by the time the page recorded as it
       // drew it (a later look, not a watch through them): the failure then shown must still be the
       // body's, by its status and its event's mark, not another that took its place, even with the
-      // same status.
-      if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
+      // same status. Waited by the smoke's own timer (`pause`).
+      if (drewAgain && drawn) await pause(Math.max(0, drawn.time + 500 - Date.now()));
       const keptAs = drewAgain
         ? await readWithin(
             "the failure shown 500 ms after the poll",
@@ -1185,14 +1195,7 @@ export async function pageWrites(page, browser) {
           secondWrite = seen.writes + 1;
           sentSecondAs = await pressWrite(own, seen, "main form button");
           sentSecond = sentSecondAs.ok;
-          failed =
-            sentSecond &&
-            (await own
-              .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-              .then(
-                () => true,
-                () => false,
-              ));
+          failed = sentSecond && (await failureShown(own));
         }
       }
       releaseHeld();
@@ -1203,8 +1206,9 @@ export async function pageWrites(page, browser) {
       // The page's first read of itself after the stand-in failed the second write, drawn with the
       // failure already shown.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "", undefined, resumed);
-      // Looked at again at least 500 ms after that draw, by the time the page recorded as it drew it.
-      if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
+      // Looked at again at least 500 ms after that draw, by the time the page recorded as it drew it,
+      // waited by the smoke's own timer (`pause`).
+      if (drewAgain && drawn) await pause(Math.max(0, drawn.time + 500 - Date.now()));
       const kept =
         drewAgain &&
         (await readWithin(
@@ -1287,11 +1291,7 @@ export async function pageWrites(page, browser) {
       if (got.drew && got.waiting) {
         seen.fail = true;
         got.sentFailing = await pressWrite(own, seen, "main form button");
-        got.failed =
-          got.sentFailing.ok &&
-          (await own
-            .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-            .then(() => true, () => false));
+        got.failed = got.sentFailing.ok && (await failureShown(own));
       }
       if (got.failed) {
         // Once the held poll is out of the way, the next read asks for a partial response, and its
