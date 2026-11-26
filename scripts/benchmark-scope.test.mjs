@@ -407,10 +407,13 @@ for (const [name, paths, run] of [
   ["the scope script", ["scripts/benchmark-scope.mjs"], true],
   ["the Node pin", [".node-version"], true],
   ["what an archive of a commit holds", [".gitattributes"], true],
+  ["what an archive holds of a directory", ["README.md", "crates/.gitattributes"], true],
+  ["what an archive holds of a crate's directory", ["crates/corten-cli/src/.gitattributes"], true],
   ["an event with no diff to read", undefined, true],
   ["what no request is built from", ["README.md", "docs/design.md", "CONTRIBUTING.md", "package.json", "examples/card-market/src/main.rs",
     "crates/corten-cli/src/main.rs", "crates/corten-ui/src/lib.rs", "crates/corten-cluster/src/lib.rs", "crates/corten-macros.md",
-    "bench/fullstack/count.mjs", "bench/request-costs/README.md", ".github/workflows/ci.yml", "examples/watchlist/Cargo.toml"], false],
+    "bench/fullstack/count.mjs", "bench/request-costs/README.md", ".github/workflows/ci.yml", "examples/watchlist/Cargo.toml",
+    ".cargo/config.toml", "docs/gitattributes", "docs/x.gitattributes"], false],
 ]) {
   test(`Request Cost ${run ? "counts" : "skips"} ${name}`, () => assert.equal(selectRequestCost(paths), run));
 }
@@ -444,12 +447,21 @@ test("Request Cost runs for pull requests alone, in one job that always scopes, 
   assert.deepEqual(Object.keys(requestCost.jobs), ["request-cost"]);
   const { if: when, permissions, steps } = requestCost.jobs["request-cost"];
   assert.deepEqual([when, permissions], [undefined, undefined]);
+  // The readings' end is set in the job's first step, so what comes before them is in its time.
+  assert.match(steps[0].run, /^echo "STOP_AT=\$\(\(\$\(date \+%s\) \+ \d+\)\)" >> "\$GITHUB_ENV"$/);
   // The merge base is found in the history, and the token is not left in the checkout.
-  assert.deepEqual(steps[0].with, { "fetch-depth": 0, "persist-credentials": false });
-  // The scope's step runs for every pull request, and every step after it by what it selected.
+  assert.deepEqual(steps[1].with, { "fetch-depth": 0, "persist-credentials": false });
+  // The scope's step runs for every pull request, and every step after it by what it said: a
+  // scope that said neither true nor false fails the job, and is not a skip.
   const scope = steps.findIndex(step => step.run === "node scripts/benchmark-scope.mjs request-cost");
-  assert.deepEqual(steps.slice(0, scope + 1).map(step => [step.uses?.split("@")[0] ?? step.id, step.if]), [["actions/checkout", undefined], ["actions/setup-node", undefined], ["scope", undefined]]);
-  assert.deepEqual(steps.slice(scope + 1).map(step => step.if), ["steps.scope.outputs.run != 'true'", ...Array(4).fill("steps.scope.outputs.run == 'true'")]);
+  assert.deepEqual(steps.slice(1, scope + 1).map(step => [step.uses?.split("@")[0] ?? step.id, step.if]), [["actions/checkout", undefined], ["actions/setup-node", undefined], ["scope", undefined]]);
+  assert.deepEqual(steps.slice(scope + 1).map(step => step.if), ["steps.scope.outputs.run == 'false'",
+    "steps.scope.outputs.run != 'true' && steps.scope.outputs.run != 'false'", ...Array(4).fill("steps.scope.outputs.run == 'true'")]);
+  assert.match(steps[scope + 1].run, /^echo "Not counted, .*" >> "\$GITHUB_STEP_SUMMARY"$/);
+  assert.match(steps[scope + 2].run, /\nexit 1\n$/);
+  // The builds and the readings are the kit's controller's, which job.test.mjs runs.
+  assert.deepEqual(steps.slice(scope + 4, scope + 6).map(step => step.run.match(/^bash bench\/request-cost\/job\.sh .*$/m)?.[0]),
+    ['bash bench/request-cost/job.sh build "$RUNNER_TEMP/request-cost"', 'bash bench/request-cost/job.sh read "$RUNNER_TEMP/request-cost" "$cpu"']);
   // A fork's run has a token that reads and no secrets, and a description is whatever its author
   // typed: it is read from the event's file, never written into a script.
   assert.doesNotMatch(source, /secrets\.|github\.token|GITHUB_TOKEN/);
