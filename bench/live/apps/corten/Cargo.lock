@@ -60,6 +60,7 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "hyper",
  "hyper-util",
  "matchit",
