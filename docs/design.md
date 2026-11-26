@@ -7129,15 +7129,21 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
-    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
-    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
-    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
-    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
-    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
-    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
-    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
-    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
+    Revisit when: a change to the connection task raises a plain HTTP request by more than the
+    budget a counted change is held to, +0.5% of its base's instructions a request, on
+    [`bench/request-cost`](../bench/request-cost/README.md)'s `get`, `unstaged` or `pipeline`,
+    base and head counted as [Pull requests](../CONTRIBUTING.md#pull-requests), item 2.1, has a
+    counted change counted, which the hosted `request-cost` job does for every pull request
+    (the line is each change's own base and not a fixed count: until 2026-11-26 it was "above
+    about 17,557 instructions at `9060dfb2a`" on the harness Last checked built again, which is
+    not in the repository, and that line left 0 to 5 instructions over its own baseline of
+    17,552.3 to 17,556.9 when it was written and stood about 580 over `main` at `d15d3ac3a`, so
+    it reopened this Choice for any change first and then for none,
+    [#2167 Choice 60's Revisit-when names a fixed count (17,557 instructions at one commit) that main has since fallen about 580 below, on a harness that is not in the repository](https://github.com/corten-run/corten/issues/2167);
+    what changes that each stay under the budget add up to is not this line's to see but the
+    trend's, [`bench/placement/trend`](../bench/placement/trend/README.md); the kit counts with
+    jemalloc preloaded, which is what a rise read with glibc's allocator was to be counted again
+    with before it was believed, since in `tests::server::what_a_request_over_tcp_costs` a
     count on one connection with glibc's allocator changed level by about 370 with no change to
     what a request does; the 2.1 above is not a regression still to fix); a compiler or code
     change lets the one loop poll the plain task at what it cost before the metadata path, which
@@ -7166,7 +7172,19 @@ rules something out.
     the first session's binary of this change was built from `9060dfb2a` and the second's from
     `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
     that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
-    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again; 2026-11-26,
+    that harness once more, to see where the fixed count Revisit when then named stood (the
+    24,287.261 accepted here was the request's whole count on 2026-11-17 on the harness that is
+    not in the repository, the one built again reads the same commit about 1,214 lower, the
+    commits from there to `main` at `8d5160be2` lowered it by 5,302 more, and the connection's
+    wait for shutdown, polled only when it was woken, by 218 more, which gave about 17,557 at
+    `9060dfb2a`): two sessions of three rounds, `9060dfb2a` 17,554.920 (range
+    17,554.778-17,556.058) and 17,554.916 (range 17,553.216-17,555.770), inside what 2026-11-25
+    read, and `main` at `d15d3ac3a` 16,972.596 (range 16,971.613-16,975.479) and 16,974.877
+    (range 16,972.395-16,975.306), about 580 under that count, and with jemalloc preloaded
+    16,000.617 and 16,001.631 against 15,412.503 and 15,414.189, where four of those twelve
+    readings lay about 43 from their build's level and moved no median. Revisit when was
+    restated that day as each change's own budget, by the maintainer's decision.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
