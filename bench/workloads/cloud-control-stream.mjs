@@ -138,16 +138,64 @@ export function streamRecoveryReady(local, monitor) {
   return Date.now() >= closed.recoverAfterMs;
 }
 
-export function settledMonitor(local, state) {
-  const m = state.control.monitor, terminal = localStreamStatus(local);
-  assert.ok(m.phase === "closed" && terminal.kind === "terminal" || m.phase === "invalid" && terminal.kind === "invalid",
-    "saved monitor is not settled");
+function requireAcknowledgedStart(state) {
   assert.ok(state.control.sealed.includes("bootstrap") && state.control.ledger.every(r => r.localTerminal));
   const start = digest(`set -euo pipefail\nsystemctl start ${state.unit}\n`);
   assert.ok(state.control.ledger.some(r => r.request.epoch === "bootstrap" && r.code === 0
     && r.request.invocation.channel === "ssh" && r.request.invocation.requestSha256 === start), "acknowledged unit start required");
+}
+
+export function settledMonitor(local, state) {
+  const m = state.control.monitor, terminal = localStreamStatus(local);
+  assert.ok(m.phase === "closed" && terminal.kind === "terminal" || m.phase === "invalid" && terminal.kind === "invalid",
+    "saved monitor is not settled");
+  requireAcknowledgedStart(state);
   assert.ok(streamRecoveryReady(local, m), "closed monitor lease required");
   return { registration: monitorRegistration(local, state), terminal };
+}
+
+// The workstation stopped before writing a close marker, after an audit delivery.
+// This is local custody only. It does not say what happened on the guest.
+export function requireOrphanedAuditMonitor(local, state) {
+  requireAcknowledgedStart(state);
+  const { id, host } = monitorRegistration(local, state), { group, round } = state;
+  assert.ok(host.hostname === state.name, "monitor hostname differs");
+  const requireJournal = (value) => assert.ok(value, "monitor journal requires reconciliation");
+  const now = Date.now(), audit = [];
+  let registered = false, active = false, sequence = Infinity, leaseAt = now + 1, lastLease;
+  // Journal records are read newest first. Raw audit parts are not journaled.
+  for (const frame of journalFrames(join(local, "monitor-journal.jsonl"), true)) {
+    requireJournal(!registered && frame?.id === id);
+    if (frame.kind === "peer-lease") {
+      requireJournal(Number.isSafeInteger(frame.atMs) && frame.atMs > 0 && frame.atMs <= now && frame.atMs <= leaseAt);
+      lastLease ??= frame.atMs; leaseAt = frame.atMs;
+      continue;
+    }
+    const { kind, payload } = frame;
+    requireJournal(frame.schema === "benchmark-control-frame/v1" && Number.isSafeInteger(frame.sequence)
+      && frame.sequence > 0 && frame.sequence < sequence && payload && typeof payload === "object" && !Array.isArray(payload));
+    sequence = frame.sequence;
+    if (kind === "registered") {
+      requireJournal(sequence === 1 && digest(JSON.stringify(payload)) === state.control.monitor.registrationSha256);
+      registered = true;
+    } else if (kind === "progress") {
+      requireJournal(payload.round === round);
+      active ||= payload.state === "active";
+    } else {
+      requireJournal(audit.length < 3 && kind === ["delivery-sealed", "audit-end", "audit-begin"][audit.length]
+        && payload.group === group && typeof payload.subjectSha256 === "string" && /^[a-f0-9]{64}$/.test(payload.subjectSha256));
+      audit.push(payload);
+    }
+  }
+  requireJournal(registered && active && audit.length === 3);
+  assert.ok(lastLease && now - lastLease >= 2 * streamLimits.leaseMs, "expired peer lease required");
+  const [delivery, end, begin] = audit, { campaign, subjectSha256 } = begin;
+  requireJournal(typeof campaign === "string" && campaign.startsWith(round + "-") && /^[a-f0-9]{16}$/.test(campaign.slice(round.length + 1))
+    && delivery.campaign === campaign && [end, delivery].every((p) => p.subjectSha256 === subjectSha256));
+  const ready = JSON.parse(regular(join(local, `monitor-audit-${group}-ready.json`), 8192));
+  const queued = regular(join(local, `monitor-delivery-${group}.json`), streamLimits.deliveryBytes);
+  assert.ok(ready?.group === group && ready.campaign === campaign && ready.subjectSha256 === subjectSha256
+    && delivery.bytes === queued.length && delivery.sha256 === digest(queued), "saved audit delivery differs");
 }
 
 // A stream can journal a terminal frame before SSH fails and revokes publication.

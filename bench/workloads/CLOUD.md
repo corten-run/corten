@@ -685,6 +685,20 @@ receipt and custody before a successor can allocate, using the complete account
 census to refuse the old ID, original name, or run tag. The receipt authorizes
 no SSH, delete, or publication; a retry needs a higher round and a new commit.
 
+If the workstation died after a supervised JSON API or Mixed Production audit
+delivery, it may have left the monitor `live` without writing close markers.
+Use `benchmark-external-failed-host/v2` only after independent review confirms
+the original archive ended in failure without a recoverable result, the local
+controller tree stopped, and the externally retired host is absent by exact-ID
+404 and a complete same-account inventory. Keep the reviewed evidence outside
+Git. Use the same receipt fields with `archiveSha256` for the original failed
+archive and get `binding` with `externalFailedHostBinding(fleet, { orphaned: true })`.
+The original locks stay in place. The controller requires a complete local
+journal with an expired peer lease, the matching audit delivery and no terminal
+or close record, collection evidence or recovery lock. It rechecks those bytes
+and the same census before create. This records the failed attempt without
+trying to recover or qualify it.
+
 The same receipt can record external cleanup of a monitored attempt that stopped
 after an accepted create but before binding the droplet. The original reservation
 must have the posted droplet and action IDs, the exact uncertain create-action
