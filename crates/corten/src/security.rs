@@ -2161,8 +2161,9 @@ fn named(host: &[u8], names: Option<&[String]>) -> Asked {
 /// [`named`] with no names to hold the host to: whether it is a host and maybe a port at all.
 /// Every request to an app that answers to any host comes here, so it is in line where the
 /// request is read, and a `Host` of a name's own characters and a port is read once, its port
-/// from the end and its name four bytes at a look ([`without_port`], [`reg_name`]).
-#[inline]
+/// from the end and a name of letters, digits, `-` and `.` sixteen bytes at a look
+/// ([`without_port`], [`reg_name`]).
+#[inline(always)]
 fn any(host: &[u8]) -> Asked {
     // `[::1]:3000`: an IPv6 address is always in brackets.
     if host.first() == Some(&b'[') {
@@ -2239,8 +2240,29 @@ fn ends_with(name: &[u8], suffix: &[u8]) -> bool {
 
 /// Whether `name` is a `reg-name` (RFC 3986 3.2.2) of at least one byte: unreserved characters,
 /// sub-delimiters and percent-encoded bytes. No colon, so a second one in a `Host` is not a port's.
-#[inline]
+#[inline(always)]
 fn reg_name(name: &[u8]) -> bool {
+    // A name of 8 to 16 bytes, of the letters, digits, `-` and `.` most names are made of, is
+    // read in line sixteen bytes at a look, as its first eight and its last eight (which overlap
+    // in a name shorter than 16). Any other name is read out of line ([`spelled`]).
+    match (name.first_chunk::<8>(), name.last_chunk::<8>()) {
+        (Some(first), Some(last)) if name.len() <= 16 && unlike_a_name(first) | unlike_a_name(last) == 0 => true,
+        _ => spelled(name),
+    }
+}
+
+/// [`reg_name`] for a name it does not read in line: one longer than 16 bytes is read sixteen
+/// at a look, each 16 from its start and the last 16, which overlap the one before, for the
+/// same bytes; a shorter one, and one with any other byte, by the table below, which says the
+/// same of these.
+#[inline(never)]
+fn spelled(name: &[u8]) -> bool {
+    if let Some(last) = name.last_chunk::<16>() {
+        let unlike = name.as_chunks::<16>().0.iter().fold(unlike_a_name(last), |unlike, each| unlike | unlike_a_name(each));
+        if name.len() > 16 && unlike == 0 {
+            return true;
+        }
+    }
     // Few names hold a percent-encoded byte, so the name is read first for the bytes it holds
     // as they are, four to a look and then the one to three left over: a look at four costs
     // little more than a look at one, and a name is some tens of bytes.
@@ -2250,6 +2272,19 @@ fn reg_name(name: &[u8]) -> bool {
         return !name.is_empty();
     }
     encoded(name)
+}
+
+/// Nonzero when any of `bytes` is not a letter, a digit, `-` or `.`. Each byte is looked at with
+/// no early return, so the compiler reads them all at once: sixteen in one look, which two calls
+/// for eight are joined into.
+#[inline(always)]
+fn unlike_a_name<const N: usize>(bytes: &[u8; N]) -> u8 {
+    bytes.iter().fold(0, |unlike, &byte| {
+        let digit = byte.wrapping_sub(b'0') < 10;
+        let letter = (byte | 0x20).wrapping_sub(b'a') < 26;
+        let dash_or_dot = byte.wrapping_sub(b'-') < 2;
+        unlike | u8::from(!(digit | letter | dash_or_dot))
+    })
 }
 
 /// The bytes a `reg-name` holds as they are: unreserved characters and sub-delimiters.
@@ -2318,7 +2353,13 @@ pub(crate) struct HostCheck(Option<Arc<[String]>>);
 
 impl HostCheck {
     pub(crate) fn asked(&self, req: &Request) -> Asked {
-        asked(req, || host_lines(req.headers()), self.0.as_deref())
+        // Decided first, so the read for an app that answers to any host holds no names. The
+        // stages' check (`Policy::asked`) does not: there it made every staged request cost more
+        // (design Choice 28).
+        match self.0.as_deref() {
+            None => asked(req, || host_lines(req.headers()), None),
+            names => asked(req, || host_lines(req.headers()), names),
+        }
     }
 }
 
@@ -2895,7 +2936,7 @@ mod tests {
     /// RFC 9110 7.2's `uri-host [ ":" port ]` with RFC 3986 3.2.2's host and Corten's two
     /// choices (a name of no bytes is none, and an address in brackets is IPv6 or none), read
     /// from the start a byte at a time with no table: the other way round from [`any`], which
-    /// takes the port off the end and reads the name four bytes at a look.
+    /// takes the port off the end and reads the name many bytes at a look.
     fn is_host(host: &[u8]) -> bool {
         fn port(rest: &[u8]) -> bool {
             match rest {
@@ -2921,11 +2962,11 @@ mod tests {
         at > 0 && port(&host[at..])
     }
 
-    /// The reader's two short cuts, the port taken off the end and the name read four bytes at
-    /// a look, give what the grammar read a byte at a time gives ([`is_host`]): for every
-    /// value of up to four bytes of what a `Host` is made of and is not, and for names of each
-    /// length around a look's four bytes with each byte of them changed in turn. A name the
-    /// app does not hold is another host's when it is a host, and malformed when it is none.
+    /// The reader's short cuts, the port taken off the end and the name read sixteen or four
+    /// bytes at a look, give what the grammar read a byte at a time gives ([`is_host`]): for
+    /// every value of up to four bytes of what a `Host` is made of and is not, and for names of
+    /// each length around those looks with each byte of them changed in turn. A name the app
+    /// does not hold is another host's when it is a host, and malformed when it is none.
     #[test]
     fn a_host_read_four_bytes_at_a_look_is_what_the_grammar_says() {
         let names = ["shop.example".to_string(), ".corp.example".to_string()];
@@ -2987,6 +3028,24 @@ mod tests {
                             let asked = if whole && good { Asked::Here } else { Asked::Malformed };
                             assert_eq!(named(&host, None), asked, "{:?}", String::from_utf8_lossy(&host));
                         }
+                        hold(&host);
+                    }
+                }
+            }
+        }
+        // A name of letters, digits, `-` and `.` alone, which is read sixteen bytes at a look,
+        // of each length up to two looks and a half, with ports of a few lengths: each of the 256
+        // bytes at each place in it.
+        let plain = b"Shop-2.example-cdn.region-9.example.TEST";
+        let ports: [&[u8]; 7] = [b"", b":", b"1", b":8080", b":1234567", b":12345678", b"a:12345"];
+        for length in 1..=plain.len() {
+            for port in ports {
+                let host = with(&plain[..length], port);
+                hold(&host);
+                for at in 0..host.len() {
+                    for byte in 0..=255 {
+                        let mut host = host.clone();
+                        host[at] = byte;
                         hold(&host);
                     }
                 }
