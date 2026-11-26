@@ -9,11 +9,11 @@ import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, physical, regular } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
 import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, failedSetupRetirementFile, verifyCreateErrored,
-  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyFailedSetupRetirement, verifyHistoricalFailedNativeRetirement,
+  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
   postedContradiction, readExternalFailedHost, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckExternalFailedHost, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
-  verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
+  verifyCollectedGroup, verifyFleet, verifySetupRetry } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
 const groups = selection(), names = groups.groups.map(({ group }) => group);
@@ -87,12 +87,6 @@ const receiptSha256 = (state, file) => file === createErroredReceipt ? state.cre
 const known = ({ state }) => state?.id && state.status === "collected" && state.validation?.status === "verified";
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": failedSetupRetirementFile, unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
-
-function verifySetupRetry({ local, state, stateRoot, outcome }) {
-  assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
-  assert.ok(outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
-  verifyFailedSetupRetirement(local, state);
-}
 
 function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
@@ -168,7 +162,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   // postedCreates is the census fence and the final-gate snapshot: every earlier
   // provider-errored attempt's posted droplet in any group, settled or contradicted
   // (also after its retirement), refuses a create on its account while it is listed.
-  const createFailures = [], postedCreates = [], exitOneRetirements = [], quarantinedCreates = [];
+  const createFailures = [], postedCreates = [], setupRetirements = [], exitOneRetirements = [], quarantinedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -272,6 +266,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
             }
             catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
+            if (receipt === failedSetupRetirementFile) setupRetirements.push({ root: fleet.root, round, group, manifestSha256, stateSha256, launch });
           }
           outcome = `${state.retirement.kind}-retired`;
         } else {
@@ -483,6 +478,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       ...(createFailures.length ? { createFailures } : {}),
       ...(postedCreates.length ? { postedCreates } : {}),
       ...(quarantinedCreates.length ? { quarantinedCreates } : {}),
+      ...(setupRetirements.length ? { setupRetirements } : {}),
       ...(exitOneRetirements.length ? { exitOneRetirements } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,

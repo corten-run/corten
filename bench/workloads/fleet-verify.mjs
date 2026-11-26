@@ -12,7 +12,7 @@ import { streamLimits } from "./isolated/control-stream.mjs";
 import { digest, durable, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, verifyCreateErrored, verifyFailedNativeRetirement, verifyFailedSetupRetirement,
+import { createContradiction, createErroredCustody, failedSetupRetirementFile, readRetainedInvalidLocks, retainedInvalidOwner, verifyCreateErrored, verifyFailedNativeRetirement, verifyFailedSetupRetirement,
   exitOneEvidenceFingerprint, exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
@@ -434,6 +434,36 @@ function evidenceSnapshot(job) {
   return { stateSha256: job.stateSha256, archiveSha256: s.archiveSha256, evidenceSha256: s.evidenceSha256 };
 }
 
+export function verifySetupRetry({ local, state, stateRoot, outcome, stateSha256 }) {
+  const idle = () => {
+    assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
+    assert.ok(outcome === "available" && !present(join(local, "operation.lock"))
+      && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
+  };
+  idle();
+  verifyFailedSetupRetirement(local, state);
+  assert.equal(digest(regular(join(local, "state.json"), 1024 * 1024)), stateSha256, "setup retirement state changed during replay");
+  assert.equal(digest(regular(join(local, failedSetupRetirementFile), state.control ? 8 * 1024 * 1024 : 4096)),
+    state.retirement.evidenceSha256, "setup retirement receipt changed during replay");
+  idle();
+}
+
+export function recheckSetupRetirement(root, row, indexedCustody) {
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.equal(fleet.manifestSha256, row.manifestSha256, "prior setup retirement manifest changed");
+  if (fleet.manifest.single) {
+    assert.equal(dirname(fleet.root), root, "setup retirement belongs to another continuation");
+    assert.equal(fleet.manifest.single.group, row.group);
+  } else assert.ok(indexedCustody.some(({ root, manifestSha256 }) => root === fleet.root && manifestSha256 === row.manifestSha256),
+    "setup retirement is not in the approved index");
+  assert.equal(present(join(fleet.root, "launch-intent.json")) ? readLaunchIntent(fleet).sha256 : undefined, row.launch,
+    "prior setup retirement launch changed");
+  const saved = readGroup(fleet, row.group);
+  assert.ok(saved.stateSha256 === row.stateSha256 && saved.state?.status === "retired" && saved.state.destroyedAt,
+    "prior setup retirement reservation changed");
+  verifySetupRetry(saved);
+}
+
 // Absence of an old ID in the provider account is necessary but not sufficient:
 // the terminal attempt named in the approval must still be idle and unchanged.
 export function recheckSetupAttempt(root, row, successor) {
@@ -758,7 +788,10 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
           add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
-        if (setup) verifyFailedSetupRetirement(job.local, s);
+        if (setup) {
+          verifySetupRetry(job);
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, setup });
+        }
         else {
           const bytes = regular(join(job.local, "unused-host.json"), 4096);
           assert.equal(digest(bytes), s.retirement.evidenceSha256);
@@ -784,7 +817,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
   } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
   // A later sibling's replay may have overlapped failed-host recovery. Rebind
   // the status to the verified state and receipt, not the earlier display row.
-  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck } of retirements) {
+  for (const { group, index, stateSha256, setup, retained, historicalLocks, historicalCheck, exitOneCheck } of retirements) {
     try {
       const job = readGroup(fleet, group);
       if (present(join(job.local, "stream-recovery.lock"))
@@ -794,6 +827,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       }
       assert.equal(job.outcome, retained ? "busy" : "available");
       assert.equal(job.stateSha256, stateSha256);
+      if (setup) { verifySetupRetry(job); continue; }
       assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
       exitOneCheck?.();
       if (exitOneCheck) retainCheck?.(exitOneCheck);

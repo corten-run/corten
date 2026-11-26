@@ -1402,6 +1402,8 @@ Fleet verification and retry admission replay the saved failed-setup receipt
 against its archive and extracted evidence. For a controlled receipt they also
 verify the final setup query and the original control files in the extraction.
 Verified setup retirement permits a retry; it does not qualify a result.
+The retry approval binds the prior retirement, and the child rechecks it and
+its custody before recording the create intent and again before provider dispatch.
 
 ### Failed Native Custody And Retirement
 

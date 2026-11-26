@@ -21,7 +21,7 @@ import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress
 import { checkQuarantineCensus, externalFailedHostBinding, readFleet, readLaunchIntent, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { createErroredReceipt, createErroredRecord, offlineNeverStarted, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { createErroredReceipt, createErroredRecord, offlineNeverStarted, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 import { continuationAdmission, continuationLock, inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
@@ -901,6 +901,53 @@ test("a settled continuation placement refusal leaves the unallocated slot avail
   p.deps.catalogProvider = available;
   assert.equal(await fleetMain(args, p.deps), 3);
   assert.deepEqual(p.events(), []);
+});
+
+for (const lateLock of [false, true]) test(`a retired setup retry ${lateLock ? "refuses recovery started after handoff" : "can create with unchanged custody"}`, { timeout: 60000 }, async (t) => {
+  const group = "json-api", p = fixture(t, "ssh-late", group), root = p.h.base, prior = path.join(root, group);
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
+  fs.writeFileSync(path.join(root, "index.json"), "[]");
+  const args = (r) => [r, "--continuation-root", root, "--group", group];
+  const prepare = (r) => fleetMain([...args(r), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const approve = async (r) => {
+    assert.equal(await fleetMain([...args(r), "--detach", "--print-approval"], p.deps), 3);
+    return [...args(r), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  };
+  assert.equal(await prepare("r19"), 3);
+  assert.equal(await fleetMain(await approve("r19"), { ...p.deps, main: async () => 2 }), 2);
+  const fleet = readFleet(prior, "r19").manifest, local = path.join(prior, group, "groups-r19");
+  const evidence = "evidence-Synthetic", dir = path.join(local, evidence), ms = Date.now(), at = new Date(ms).toISOString();
+  fs.mkdirSync(dir, { recursive: true });
+  const entries = [{ name: "exit-code", body: "124\n" }], bytes = archive(entries);
+  fs.writeFileSync(path.join(dir, entries[0].name), entries[0].body);
+  fs.writeFileSync(path.join(local, "results.tgz"), bytes);
+  const state = { ...reservation({ round: "r19", commit, token: fleet.jobs[0].token, group, fleet }),
+    provider: fleet.provider, status: "retired", id: "701", ip: "192.0.2.1", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
+    evidence, extractionAttempts: [evidence], archiveSha256: digest(bytes), evidenceSha256: treeHash(dir), fullGroupQualified: false,
+    retirement: { kind: "setup-failed", evidenceSha256: "a".repeat(64) } };
+  const observation = JSON.stringify({ schema: "benchmark-failed-setup-host/v1", hostId: state.id, unit: state.unit,
+    observedAtMs: ms, setupFailed: true, exitCode: 124 });
+  const receipt = JSON.stringify(setupEvidence(observation, state, terminalSetupScript(state, 124), 124, ms, ms));
+  fs.writeFileSync(path.join(local, "failed-setup-host.json"), receipt);
+  fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({ ...state, retirement: { kind: "setup-failed", evidenceSha256: digest(receipt) } }));
+
+  assert.equal(await prepare("r21"), 3);
+  const approved = await approve("r21"), next = path.join(root, `${group}--r21`);
+  let handedOff = false;
+  p.deps.WorkerClass = class extends p.deps.WorkerClass {
+    constructor(entry, options) {
+      assert.ok(fs.existsSync(path.join(next, "launch-intent.json")));
+      if (lateLock) fs.writeFileSync(path.join(local, "stream-recovery.lock"), "{}", { flag: "wx" });
+      handedOff = true;
+      super(entry, options);
+    }
+  };
+  const code = await fleetMain(approved, p.deps);
+  assert.ok(handedOff);
+  assert.equal(p.events().filter(({ method }) => method === "POST").length, lateLock ? 0 : 1);
+  assert.equal(code, lateLock ? 2 : 3);
+  if (lateLock) assert.equal(p.saved(path.join(`${group}--r21`, group)).createIntentAt, undefined);
 });
 
 test("continuation appends authorized retries after no-create and retirement while keeping a prepared sibling", { timeout: 60000 }, async (t) => {
