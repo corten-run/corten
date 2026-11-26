@@ -246,7 +246,7 @@ fn build_asks_help(args: &[String]) -> bool {
 
 /// [`asks_help`] for `corten dev`, read with [`dev_flags`]'s grammar, as [`build_asks_help`] reads
 /// build's: help in a flag position or as `--port`'s missing value (`--port --help`), and never
-/// after a token `dev_flags` refuses (`--prot 4000 -h`, `--port http -h`, a second `--port`).
+/// after a token `dev_flags` refuses (`--prot 4000 -h`, `--port http -h`, a second `--port` with a value).
 fn dev_asks_help(args: &[String]) -> bool {
     let mut args = args.iter();
     let mut port_named = false;
