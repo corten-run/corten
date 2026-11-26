@@ -2080,15 +2080,14 @@ async fn an_answers_trailers_are_dropped_and_its_trailer_line_with_them() {
     own.stop().await;
 }
 
-/// A client that closed its side while the connection waited is not answered the request whose
-/// turn comes next, on both connections, however quick that request's handler: hyper looks for
-/// the client's end each time it has read a head with nothing behind it, before it asks the
-/// handler, and Corten's connection looks wherever its task has waited since it last read the
-/// socket. The requests before that one, read with it behind them, are answered, and their
-/// answers reach the client. (The first request's handler waits here, and the client closes its
-/// side during the wait; a client that stays is answered every request. A request that comes
-/// with its client's end, and no wait, is `h1_fuzz`'s
-/// `a_request_that_comes_with_its_clients_end_is_answered_where_hyper_answers_nothing`.)
+/// A client that has closed its side by the time the connection comes to a request of its is not
+/// answered that request, on both connections, however quick the handler: hyper looks for the
+/// client's end when it has read a head with nothing behind it, before it asks the handler, and
+/// Corten's connection looks there too. The requests before that one, read with it behind them,
+/// are answered, and their answers reach the client. (The first request's handler waits here, so
+/// the client's end has come when the last request's turn does; a client that stays is answered
+/// every request. A request that comes with its client's end, and no wait, is `h1_fuzz`'s
+/// `a_request_that_comes_with_its_clients_end_is_answered_by_neither`.)
 #[tokio::test]
 async fn a_request_whose_client_has_closed_its_side_by_its_turn_is_not_answered() {
     let slow = format!("GET /slow HTTP/1.1\r\n{HOST}\r\n");

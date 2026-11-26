@@ -334,9 +334,6 @@ struct Conn<I> {
     unflushed: bool,
     /// The task has waited since the date was last brought up to date.
     waited: bool,
-    /// The task has waited since the socket was last read: its client may have closed its side
-    /// meanwhile ([`Conn::poll_answer`]).
-    unseen: bool,
     vectored: bool,
 }
 
@@ -358,7 +355,6 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             gone: 0,
             unflushed: false,
             waited: true,
-            unseen: true,
             vectored,
         }
     }
@@ -480,24 +476,12 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         }
         // What is unread is part of a head, shorter than the limit (`parse`).
         let read = self.inbox.poll_fill(&mut self.io, cx, self.limit);
-        match read {
-            Poll::Pending => {
-                // What comes after a wait did not come with what was read before it (`parse`).
-                self.together = false;
-                self.rest();
-            }
-            Poll::Ready(Ok(count)) if count > 0 => self.unseen = false,
-            Poll::Ready(_) => {}
+        if read.is_pending() {
+            // What comes after a wait did not come with what was read before it (`parse`).
+            self.together = false;
+            self.rest();
         }
         read
-    }
-
-    /// The task waits (`pending`), or does not: kept for what is asked only after a wait, the
-    /// time of day and whether the client is still there.
-    #[inline]
-    fn waits(&mut self, pending: bool) {
-        self.waited |= pending;
-        self.unseen |= pending;
     }
 
     /// The connection waits for a request: a buffer that holds nothing and has more room than a
@@ -551,36 +535,18 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         self.poll_left(cx)
     }
 
-    /// [`Conn::poll_left`] for a request that has no answer yet: `Err` when its client has left,
-    /// once the answers before it, which are the client's all the same, have gone.
-    fn poll_gone(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if let Err(left) = self.poll_left(cx) {
-            ready!(self.poll_send(cx))?;
-            return Poll::Ready(Err(left));
-        }
-        Poll::Ready(Ok(()))
-    }
-
-    /// The handler's answer, or `Err` when the client has left and the request with it.
-    ///
-    /// **When the client's end is looked for.** Wherever the connection's task has waited since
-    /// it last read the socket, before the handler is asked: a request that was read behind one
-    /// whose handler waited, or whose answer waited for the client to take it, is not begun when
-    /// its client closed its side meanwhile, as hyper begins none (it looks at the socket each
-    /// time it has read a head with nothing behind it). And when the handler itself waits. Not
-    /// for a request whose turn comes with no wait since the read that brought it: that is every
-    /// request sent alone, and a look there is a second pass through the socket's readiness for
-    /// each (286 instructions a request, counted), to learn only whether the client's end came
-    /// in the same moment as its request. So a request that comes with its client's end behind
-    /// it is answered here if its handler does not wait, where hyper answers nothing
-    /// (`docs/design.md#choice-own-http1`).
+    /// The handler's answer. The client's end is looked for first, each time, and so before the
+    /// handler is polled at all: hyper looks when it has read a head, and so a request whose
+    /// client had closed its side by then is not answered by either, however quick its handler.
+    /// (A request read with others behind it is not looked for: its client's end is behind
+    /// them.) The answers before it are the client's all the same, and go out first.
     fn poll_answer<F>(&mut self, cx: &mut Context<'_>, answering: Pin<&mut F>) -> Poll<io::Result<http::Response<Answered>>>
     where
         F: Future<Output = Result<http::Response<Answered>, Infallible>>,
     {
-        let looked = self.unseen;
-        if looked {
-            ready!(self.poll_gone(cx))?;
+        if let Err(left) = self.poll_left(cx) {
+            ready!(self.poll_send(cx))?;
+            return Poll::Ready(Err(left));
         }
         if let Poll::Ready(Ok(answer)) = answering.poll(cx) {
             return Poll::Ready(Ok(answer));
@@ -589,9 +555,6 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         // one.
         if let Poll::Ready(Err(error)) = self.poll_send(cx) {
             return Poll::Ready(Err(error));
-        }
-        if !looked {
-            ready!(self.poll_gone(cx))?;
         }
         Poll::Pending
     }
@@ -831,7 +794,7 @@ where
             }
             let read = poll_fn(|cx| {
                 let read = conn.poll_head(cx, closing, first);
-                conn.waits(read.is_pending());
+                conn.waited |= read.is_pending();
                 read
             });
             match read.await {
@@ -855,7 +818,7 @@ where
             let mut answering = pin!(service.call(request));
             let answer = poll_fn(|cx| {
                 let answer = conn.poll_answer(cx, answering.as_mut());
-                conn.waits(answer.is_pending());
+                conn.waited |= answer.is_pending();
                 answer
             });
             match answer.await {
@@ -899,7 +862,7 @@ where
             let mut ahead = None;
             let wrote = poll_fn(|cx| {
                 let wrote = conn.poll_body(cx, &mut body, &mut coding, &mut ahead);
-                conn.waits(wrote.is_pending());
+                conn.waited |= wrote.is_pending();
                 wrote
             });
             match wrote.await {
@@ -924,7 +887,7 @@ where
         if conn.large.is_some() || conn.out.len() - conn.sent >= FLUSH_AT {
             let sent = poll_fn(|cx| {
                 let sent = conn.poll_send(cx);
-                conn.waits(sent.is_pending());
+                conn.waited |= sent.is_pending();
                 sent
             });
             if sent.await.is_err() {
@@ -939,7 +902,7 @@ where
                 return false;
             }
             tokio::task::yield_now().await;
-            conn.waits(true);
+            conn.waited = true;
         }
         // Shutdown that began while this answer was made or sent ends the connection here, as
         // one that began before its head was written does (above): no request behind it is

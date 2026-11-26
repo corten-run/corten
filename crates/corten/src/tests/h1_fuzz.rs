@@ -1261,31 +1261,28 @@ async fn a_long_unread_body_is_cut_where_hypers_reads_end() {
 }
 
 /// A request that comes with its client's end behind it (the client sent it and closed its side
-/// before the server read either) is answered by Corten's connection when nothing waited before
-/// its turn and its handler does not wait, and not by hyper's: hyper looks at the socket each
-/// time it has read a head with nothing behind it, and answers nothing to a client that has
-/// closed its side by then. Corten's connection looks where its task has waited since it last
-/// read the socket, and while a handler waits, and not for a request whose turn comes with no
-/// wait: a look for each is a second pass through the socket's readiness for every request sent
-/// alone. That is the one difference in what a client that closes its side is answered, fixed
-/// here from both sides: the last of the requests sent with the client's end is answered by
-/// Corten's connection alone, and one whose handler waits, or whose turn comes behind a wait, by
-/// neither. The gate does not meet it, since its clients close a moment after they send.
+/// before the server read either) is answered by neither connection, however quick its handler:
+/// hyper looks at the socket each time it has read a head with nothing behind it, and answers
+/// nothing more to a client that has closed its side by then, and Corten's connection looks
+/// there too, before it asks the handler. Requests with others behind them are answered: the
+/// client's end is behind those. The gate's own clients close a moment after they send, so it
+/// meets this only where a handler's wait ends as its client closes (eight streams of its long
+/// run did, while Corten's connection looked only after a wait); here the client's end is in the
+/// pipe with the request before the server is given the connection.
 #[tokio::test(start_paused = true)]
-async fn a_request_that_comes_with_its_clients_end_is_answered_where_hyper_answers_nothing() {
+async fn a_request_that_comes_with_its_clients_end_is_answered_by_neither() {
     let get = |path: &str| format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n");
     let (hyper, own) = (serve(false, 32 * 1024), serve(true, 32 * 1024));
-    // What a client sends before it closes its side, and how many of its requests each answers:
-    // hyper's connection, then Corten's own.
+    // What a client sends before it closes its side, and how many of its requests are answered.
     let cases = [
-        ("one request", get("/"), 0, 1),
-        ("three requests", get("/").repeat(3), 2, 3),
-        ("one whose handler waits", get("/wait"), 0, 0),
-        ("one behind one whose handler waits", format!("{}{}", get("/wait"), get("/")), 1, 1),
+        ("one request", get("/"), 0),
+        ("three requests", get("/").repeat(3), 2),
+        ("one whose handler waits", get("/wait"), 0),
+        ("one behind one whose handler waits", format!("{}{}", get("/wait"), get("/")), 1),
     ];
-    for (name, sent, hypers, owns) in cases {
+    for (name, sent, answered) in cases {
         let mut got = Vec::new();
-        for (connect, answered) in [(&hyper, hypers), (&own, owns)] {
+        for (which, connect) in [("hyper's", &hyper), ("own", &own)] {
             let (mut client, server) = tokio::io::duplex(WIDE);
             client.write_all(sent.as_bytes()).await.unwrap();
             client.shutdown().await.unwrap();
@@ -1293,10 +1290,9 @@ async fn a_request_that_comes_with_its_clients_end_is_answered_where_hyper_answe
             let mut all = Vec::new();
             client.read_to_end(&mut all).await.unwrap();
             let statuses = answers(&all).iter().map(|answer| answer.status).collect::<Vec<_>>();
-            assert_eq!(statuses, vec![200; answered], "{name}, {answered} expected: {:?}", String::from_utf8_lossy(&all));
+            assert_eq!(statuses, vec![200; answered], "{which}, {name}: {:?}", String::from_utf8_lossy(&all));
             got.push(undated(&all));
         }
-        // What both answer is the same bytes: Corten's connection goes on from where hyper's ends.
-        assert!(got[1].starts_with(&got[0]), "{name}");
+        assert_eq!(got[1], got[0], "{name}");
     }
 }
