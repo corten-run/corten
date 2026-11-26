@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as path } from "node:path";
 import { after, test } from "node:test";
@@ -888,4 +889,116 @@ test("the answers check on real servers: a diff that cannot compare (status 2) f
   const r = answers("answers-troubled", serve("aaaa"), serve("aaaa"), 60, { first: stand("troubled", "diff", 'echo "diff: a stand-in that cannot compare" >&2\nexit 2') });
   assert.equal(r.status, 1, r.said);
   assert.ok(r.said.includes("turns: plain: diff could not compare the two answers' headers (status 2)") && !r.said.includes("answers: same"), r.said);
+});
+
+// turns.sh's servers are stopped however it ends, within a bound, though they ignore TERM. No test
+// signals a fixture server, by number or otherwise: each ends by itself LIFE after it starts, and
+// the test waits for that rather than kill a number that may by then name another process.
+// Whether one still runs is asked of a socket of its own, which takes a connection while it runs
+// and refuses one once it has ended.
+const LIFE = 45000;
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+const noted = (file) => { try { return readFileSync(file, "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; } };
+/** Whether the fixture whose liveness socket this is still runs: it takes a connection. */
+const alive = (sock) => new Promise((done) => { const c = connect(sock); c.on("connect", () => { c.destroy(); done(true); }); c.on("error", () => done(false)); });
+/** The liveness sockets under dir of fixtures that still run, and the kit's ports that still take a connection. */
+async function left(dir) {
+  const running = [];
+  for (const f of readdirSync(dir).filter((f) => /^alive-\d+\.sock$/.test(f))) if (await alive(join(dir, f))) running.push(f);
+  return { running, busy: [18081, 18082].filter(taken) };
+}
+/**
+ * A server as turns.sh starts one (<binary> <port>), writing beside the work directory's bin/:
+ * its pid to pids when it starts, its liveness socket alive-<pid>.sock, and its pid to terms when
+ * sent TERM, which it ignores. It answers body, and never answers a request for /hang, writing
+ * its pid to hung.
+ */
+const stubborn = (body) => `#!/usr/bin/env node
+const at = (f) => require("node:path").join(__dirname, "..", f), note = (f) => require("node:fs").appendFileSync(at(f), process.pid + "\\n");
+setTimeout(() => process.exit(0), ${LIFE});
+require("node:net").createServer((c) => c.destroy()).listen(at("alive-" + process.pid + ".sock"));
+note("pids");
+process.on("SIGTERM", () => note("terms"));
+require("node:http").createServer((q, s) => { if (q.url === "/hang") note("hung"); else { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); } }).listen(Number(process.argv[2]), "127.0.0.1");
+`;
+/**
+ * turns.sh with no pair, A and B such servers answering base and head, as this test's own child
+ * (killed through its handle at 60 s). signal is sent to turns.sh alone, through that handle, once
+ * the work directory's file when holds a line. Returns as soon as turns.sh has exited, with what
+ * still runs at that moment; the test then waits, past LIFE, for the servers to have ended.
+ */
+async function stopping(t, name, { base, head, path = "/page", signal = null, when = null }) {
+  const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
+  assert.ok(cpu, "taskset names no CPU this process may run on");
+  for (const port of [18081, 18082]) assert.ok(!taken(port), `port ${port} is in use, and the kit's ports are fixed: this test needs 18081 and 18082 free`);
+  const work = join(tmp, name), plan = join(work, "plan");
+  mkdirSync(plan, { recursive: true });
+  mkdirSync(join(work, "bin"));
+  for (const [f, text] of [["headers.txt", ""], ["mask.sed", ""], ["mask.json", "[]\n"], ["request.lua", ""]]) writeFileSync(join(plan, f), text);
+  for (const [side, body] of [["base", base], ["head", head]]) writeFileSync(join(work, "bin", side), stubborn(body), { mode: 0o755 });
+  t.after(async () => {
+    const until = Date.now() + LIFE + 5000;
+    for (let l = await left(work); l.running.length > 0 || l.busy.length > 0; l = await left(work)) {
+      if (Date.now() > until) throw new Error(`fixture servers still running past their own bound: ${l.running.join(", ")} ${l.busy.join(", ")}`);
+      await wait(200);
+    }
+  });
+  const env = { ...process.env, KIT: here, START: "$BIN $PORT", REQ_PATH: path, STATUS: "200", EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, WRK_T: "1", WRK_C: "1", TURN: "1", WARMUP: "0", EXPECT: "", HEADERS: join(plan, "headers.txt"), SCRIPT: join(plan, "request.lua"), MASK: join(plan, "mask.sed"), MASK_JSON: join(plan, "mask.json") };
+  const began = Date.now(), child = spawn("sh", [join(here, "turns.sh"), join(work, "compare"), "plain", "0", join(work, "bin", "base"), join(work, "bin", "head")], { stdio: ["ignore", "pipe", "pipe"], env });
+  let said = "";
+  child.stdout.on("data", (d) => { said += d; });
+  child.stderr.on("data", (d) => { said += d; });
+  const exited = new Promise((done) => child.on("exit", (status, sig) => done({ status, signal: sig })));
+  const closed = new Promise((done) => child.on("close", done));
+  const limit = setTimeout(() => child.kill("SIGKILL"), 60000);
+  let sent = false, sentTime = null;
+  if (signal !== null) {
+    while (noted(join(work, when)).length === 0 && child.exitCode === null && child.signalCode === null && Date.now() - began < 30000) await wait(20);
+    if (noted(join(work, when)).length > 0 && child.exitCode === null && child.signalCode === null) { child.kill(signal); sent = true; sentTime = Date.now(); }
+  }
+  const end = await exited, ended = Date.now(), now = await left(work);
+  clearTimeout(limit);
+  // What turns.sh said, once its output has closed (at most a few seconds more: a curl it started may hold it).
+  await Promise.race([closed, wait(12000)]);
+  return { ...end, said, work, sent, sentTime, seconds: (ended - began) / 1000, ...now };
+}
+
+test("turns.sh, whose answers differ, sent the deadline's TERM while it stops servers that ignore TERM, finishes the stop before it ends, and nothing is left listening", LINUX, async (t) => {
+  // The servers' own record of TERM says the stop has begun; TERM is then sent to turns.sh, as
+  // the placement's timeout sends it, and must not cut that stop short.
+  const r = await stopping(t, "stop-term", { base: "aaaa", head: "bbbb", signal: "SIGTERM", when: "terms" });
+  assert.ok(r.sent, `the stop never began, or turns.sh ended before TERM could be sent: ${r.said}`);
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("turns: plain: A and B answer differently"), r.said);
+  assert.deepEqual(r.running, [], `a server turns.sh started was still running when turns.sh ended: ${r.said}`);
+  assert.deepEqual(r.busy, [], `something still answered on the kit's ports when turns.sh ended: ${r.said}`);
+  assert.ok(r.seconds < 20, `turns.sh took ${r.seconds} s to stop its servers`);
+});
+
+test("turns.sh stops two servers that ignore TERM after the answers check within a bound, KILL 5 s after TERM, and nothing is left listening", LINUX, async (t) => {
+  const r = await stopping(t, "stop-stubborn", { base: "aaaa", head: "aaaa" });
+  assert.equal(r.status, 0, r.said);
+  assert.ok(r.said.includes("answers: same"), r.said);
+  assert.equal(noted(join(r.work, "pids")).length, 2, r.said);
+  assert.equal(noted(join(r.work, "terms")).length, 2, `each server was not sent TERM once: ${r.said}`);
+  assert.deepEqual(r.running, [], `a server turns.sh started was still running when turns.sh ended: ${r.said}`);
+  assert.deepEqual(r.busy, [], "something still answered on the kit's ports when turns.sh ended");
+  // The two are stopped together: TERM, ignored, then KILL 5 s later, well short of their own bound.
+  assert.ok(r.seconds >= 4.5 && r.seconds < 15, `turns.sh took ${r.seconds} s to stop two servers that ignore TERM`);
+});
+
+test("turns.sh, killed outright while its servers run, still has them stopped within a bound, though they ignore TERM", LINUX, async (t) => {
+  // A's answer is never sent, so turns.sh is in that request's curl (bounded to 10 s) when it is
+  // killed. turns.sh sends no signal by number: a server is stopped by serve.mjs when turns.sh's
+  // end of its input closes, which a KILL of turns.sh closes too and the curl does not hold. The
+  // bound is counted from the KILL, short of the curl's 10 s and of the servers' own bound.
+  const bound = 9000;
+  const r = await stopping(t, "stop-killed", { base: "aaaa", head: "aaaa", path: "/hang", signal: "SIGKILL", when: "hung" });
+  assert.ok(r.sent, `the request never reached A, or turns.sh ended before it could be killed: ${r.said}`);
+  let now = { running: r.running, busy: r.busy };
+  while ((now.running.length > 0 || now.busy.length > 0) && Date.now() - r.sentTime < bound) { await wait(100); now = await left(r.work); }
+  const ms = Date.now() - r.sentTime;
+  assert.equal(noted(join(r.work, "pids")).length, 2, r.said);
+  assert.deepEqual(now.running, [], `a server turns.sh started was still running ${ms} ms after turns.sh was killed`);
+  assert.deepEqual(now.busy, [], `something still answered on the kit's ports ${ms} ms after turns.sh was killed`);
 });

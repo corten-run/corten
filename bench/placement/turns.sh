@@ -30,15 +30,20 @@
 # received, byte for byte. A turn in which wrk reports an error of any kind, or a counter is
 # missing, not a number, zero or under 100%, fails the placement and records nothing.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
-# raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log. A diff.txt
-# that is there before the check creates it (answers/ is made afresh), cannot be created as a new
-# file, is not a regular file of its own or does not hold the difference diff or cmp reported,
-# one that is not readable when they report none, or a diff or cmp that cannot compare (status 2),
-# fails the placement. Every curl is run with --disable, so no curl configuration of HOME's (a
+# raw-<workload>.log (every turn's perf and wrk output), answers/, serve-{A,B}.log (each server's
+# error output and serve.mjs's) and, while a server runs, serve-{A,B}.pid. A diff.txt that is
+# there before the check creates it (answers/ is made afresh), cannot be created as a new file, is
+# not a regular file of its own or does not hold the difference diff or cmp reported, one that is
+# not readable when they report none, or a diff or cmp that cannot compare (status 2), fails the
+# placement. Every curl is run with --disable, so no curl configuration of HOME's (a
 # retry, a header) changes a request or how long it may take, and with --noproxy '*', so no proxy
 # of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1.
+# Every server is run by serve.mjs, as verify.sh runs its base's, and stopped by it alone (TERM,
+# and KILL 5 s later for one that ignores TERM); turns.sh waits about 15 s at most for a stop and
+# then fails, saying the cleanup is unconfirmed, and fails too if anything still accepts on the
+# server's port after it, and a turns.sh killed outright still has its servers stopped.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,39p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,44p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -47,33 +52,89 @@ csv=$out/counts-$workload.csv; raw=$out/raw-$workload.log; ans=$out/answers
 rm -rf "$ans"; mkdir -p "$ans"; : >"$raw"
 fail() { echo "turns: $workload: $*" >&2; exit 1; }
 
-start() { # <A|B> <port> <binary>; the server's pid is then $!. Its environment is PATH, HOME, PORT and BIN and what the plan's start command sets, none of the caller's.
-    env -i PATH="$PATH" HOME="$HOME" PORT="$2" BIN="$3" taskset -c "$cpu" sh -c "exec $START" >/dev/null 2>>"$out/serve-$1.log" &
-}
 aport=18081; bport=18082
 for port in $aport $bport; do
     ! curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$port/" </dev/null || fail "something already answers on $port"
 done
 : >"$out/serve-A.log"; : >"$out/serve-B.log"
-a=; b=
-stop() { kill $a $b 2>/dev/null || true; wait $a $b 2>/dev/null || true; }
-trap stop EXIT
-trap 'exit 1' HUP INT PIPE TERM
-ready() { # <port> <pid>
-    i=0
-    until curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$1/" </dev/null; do
-        i=$((i + 1)); [ $i -lt 100 ] || fail "nothing answers on $1"; sleep 0.1
-    done
-    [ "$(taskset -cp "$2" | sed 's/.*: //')" = "$cpu" ] || fail "pid $2 is not on cpu $cpu"
+# Each server is run by serve.mjs, which starts it as its own child, writes its process number to
+# serve-<A|B>.pid (that process is the one whose CPU is checked and that perf counts: the start
+# command is exec'd, so it is the server), and stops it when its standard input ends: TERM, KILL
+# if it is still running 5 s later, and its own exit within 5 s more. Only serve.mjs signals a
+# server, through the child's handle, which holds the process until serve.mjs reaps it, so no
+# signal goes by a process number that may since name another process; this shell sends none.
+# A server's standard input is a FIFO whose one writer is this shell's descriptor 5 (A's) or 6
+# (B's), opened read and write so neither end waits for the other. serve.mjs and every curl, perf
+# and wrk get both closed, so closing one stops that server, and so does this shell's end, however
+# it ends, KILL included. Starting a server and stopping servers hold off HUP, INT, PIPE and TERM
+# (late) until they are done, a stop until serve.mjs has ended, and the shell then exits 1 for the
+# signal: the placement's deadline TERM in a stop cannot cut it short and leave a server running.
+# A trapped signal ends a wait early, with a status above 128, so a wait it woke is made again.
+# serve.mjs is run with an environment of PATH and HOME alone, and the wait for it is bounded:
+# about 15 s, more than its own 10 s at most. If it has not ended by then, turns.sh fails, saying
+# the cleanup is unconfirmed, and signals nothing. After each stop nothing may accept a connection
+# on the server's port (one connect, at most a second).
+a=; b=; sup_A=; sup_B=; late=
+hold() { woke=; trap 'late=1; woke=1' HUP INT PIPE TERM; }
+release() { trap 'exit 1' HUP INT PIPE TERM; [ -z "$late" ] || exit 1; }
+start() { # <A|B> <port> <binary>. Its environment is PATH, HOME, PORT and BIN and what the plan's start command sets, none of the caller's; its error output goes to serve-<A|B>.log.
+    hold
+    fifo=$out/serve-$1.fifo
+    rm -f "$fifo" "$out/serve-$1.pid"; mkfifo "$fifo"
+    if [ "$1" = A ]; then exec 5<>"$fifo" 7<"$fifo"; else exec 6<>"$fifo" 7<"$fifo"; fi
+    rm -f "$fifo"
+    env -i PATH="$PATH" HOME="$HOME" node "$KIT/serve.mjs" --pid="$out/serve-$1.pid" \
+        sh -c 'exec 2>>"$0"; exec "$@"' "$out/serve-$1.log" env -i PATH="$PATH" HOME="$HOME" PORT="$2" BIN="$3" taskset -c "$cpu" sh -c "exec $START" \
+        <&7 >/dev/null 2>>"$out/serve-$1.log" 5>&- 6>&- 7>&- &
+    if [ "$1" = A ]; then sup_A=$!; else sup_B=$!; fi
+    exec 7<&-
+    release
 }
-fresh() { # <A|B>: (re)starts that binary; its pid is then in $a or $b
-    if [ "$1" = A ]; then
-        [ -z "$a" ] || { kill $a; wait $a 2>/dev/null || true; }
-        start A $aport "$abin"; a=$!; ready $aport $a
-    else
-        [ -z "$b" ] || { kill $b; wait $b 2>/dev/null || true; }
-        start B $bport "$bbin"; b=$!; ready $bport $b
-    fi
+halt() { # <A|B>...: stops those servers that run, together, within about 15 s
+    hold
+    for v; do if [ "$v" = A ]; then exec 5>&-; else exec 6>&-; fi; done
+    st=0; n=0
+    for v; do
+        if [ "$v" = A ]; then s=$sup_A; sup_A=; a=; hport=$aport; else s=$sup_B; sup_B=; b=; hport=$bport; fi
+        [ -n "$s" ] || continue
+        rm -f "$out/serve-$v.pid"
+        # kill -0 sends no signal: it asks whether the shell's own child, serve.mjs, is still
+        # there. Its number cannot name another process until the shell reaps it, which the
+        # shell does while it waits for a sleep below (or in wait), and then kill -0 finds
+        # nothing. A number taken again since would read as still running, and the bound ends that.
+        while kill -0 "$s" 2>/dev/null && [ $n -lt 150 ]; do n=$((n + 1)); sleep 0.1; done
+        if kill -0 "$s" 2>/dev/null; then
+            echo "turns: $workload: serve.mjs, stopping $v's server, has not ended 15 s after its input closed: cleanup unconfirmed" >&2
+            st=1; continue
+        fi
+        while :; do
+            woke=; sst=0; wait "$s" || sst=$?
+            [ $sst -gt 128 ] && [ -n "$woke" ] || break
+        done
+        [ $sst = 0 ] || { echo "turns: $workload: serve.mjs, stopping $v's server, ended with status $sst" >&2; st=1; continue; }
+        # The server serve.mjs stopped has ended, and its listening socket with it: curl's 7 is a
+        # refused connection, and anything else is something that still accepts one.
+        cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$hport/" </dev/null || cst=$?
+        [ $cst = 7 ] || { echo "turns: $workload: something still accepts on $hport after $v's server was stopped (curl status $cst): START must be, or exec, the server that listens, not start it and leave it" >&2; st=1; }
+    done
+    release
+    return $st
+}
+trap 'halt A B || :' EXIT
+trap 'exit 1' HUP INT PIPE TERM
+ready() { # <A|B> <port>: that server answers, its process number from serve.mjs is then in $a or $b, and it is on the server's CPU
+    i=0
+    until [ -f "$out/serve-$1.pid" ] && curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$2/" </dev/null 5>&- 6>&-; do
+        i=$((i + 1)); [ $i -lt 100 ] || fail "nothing answers on $2"; sleep 0.1
+    done
+    p=$(cat "$out/serve-$1.pid")
+    case $p in ''|*[!0-9]*) fail "serve.mjs gave no process number for $1's server: $p";; esac
+    [ "$(taskset -cp "$p" | sed 's/.*: //')" = "$cpu" ] || fail "pid $p is not on cpu $cpu"
+    if [ "$1" = A ]; then a=$p; else b=$p; fi
+}
+fresh() { # <A|B>: (re)starts that binary; its server's process number is then in $a or $b
+    halt "$1" || exit 1
+    if [ "$1" = A ]; then start A $aport "$abin"; ready A $aport; else start B $bport "$bbin"; ready B $bport; fi
 }
 fresh A; fresh B
 
@@ -85,7 +146,7 @@ answer() { # <port> <out prefix>: writes <prefix>.raw-headers, .headers (masked)
     grep -qi '^accept:' "$HEADERS" || set -- "$@" -H 'Accept:'
     grep -qi '^user-agent:' "$HEADERS" || set -- "$@" -H 'User-Agent:'
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    curl --disable --noproxy '*' -sS --max-time 10 -D "$to.raw-headers" -o "$to.body" "$@" "http://127.0.0.1:$port$path" </dev/null
+    curl --disable --noproxy '*' -sS --max-time 10 -D "$to.raw-headers" -o "$to.body" "$@" "http://127.0.0.1:$port$path" </dev/null 5>&- 6>&-
     tr -d '\r' <"$to.raw-headers" | grep -iv '^date:' | sed -f "$mask" >"$to.headers"
 }
 answer $aport "$ans/A"
@@ -148,15 +209,15 @@ else
 fi
 
 # Both stopped after the check, so neither holds memory while the other is measured.
-kill $a $b; wait $a $b 2>/dev/null || true; a=; b=
+halt A B || exit 1
 turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows
     if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
-    perf stat -x, -e "$events" -p "$pid" -o "$out/turn.perf" -- sleep "$secs.4" &
+    perf stat -x, -e "$events" -p "$pid" -o "$out/turn.perf" -- sleep "$secs.4" 5>&- 6>&- &
     perfpid=$!
     sleep 0.1
     set --
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    taskset -c "$load" wrk -t"$WRK_T" -c"$WRK_C" -d"${secs}s" "$@" -s "$SCRIPT" "http://127.0.0.1:$port$path" >"$out/turn.wrk"
+    taskset -c "$load" wrk -t"$WRK_T" -c"$WRK_C" -d"${secs}s" "$@" -s "$SCRIPT" "http://127.0.0.1:$port$path" >"$out/turn.wrk" 5>&- 6>&-
     wait $perfpid
     { echo "## pair $pair_ $version_"; cat "$out/turn.perf" "$out/turn.wrk"; } >>"$raw"
     set -- $(sed -n 's/^RESULT //p' "$out/turn.wrk")
@@ -176,8 +237,7 @@ turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head r
         values="$values,$v"
     done
     echo "$pair_,$version_,$requests$values" >>"$csv"
-    kill $pid; wait $pid 2>/dev/null || true
-    if [ "$version_" = base ]; then a=; else b=; fi
+    if [ "$version_" = base ]; then halt A || exit 1; else halt B || exit 1; fi
 }
 one() { pair_=$1; version_=$2; turn "$1" "$2"; }
 echo "pair,version,requests,$columns" >"$csv"

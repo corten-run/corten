@@ -211,7 +211,14 @@ one of the commands above with its output under `<run dir>/log`:
    about 10 s), then fails, saying the cleanup is unconfirmed, and signals nothing. Nothing the
    child started is stopped: after each stop `verify.sh` makes one connection to its port, of at
    most a second, and fails if anything takes it, so a listener left by a start command that does
-   not exec its server is found, and fails the check, but stopping it is the operator's. The
+   not exec its server is found, and fails the check, but stopping it is the operator's.
+   `turns.sh` runs each server it starts, for a placement's answers and for each turn, the same
+   way: under `serve.mjs`, which writes the server's process number for the CPU check and `perf`
+   (the start command is exec'd, so that process is the server; `serve.mjs` waits idle on its
+   input, on the driver's CPU), stopped through its input after the answers check, after each
+   turn and however `turns.sh` ends, the placement's deadline TERM during the stop and a KILL of
+   `turns.sh` included, waited for about 15 s at most, and followed by one connection to the
+   server's port that nothing may take. The
    `curl`s in `verify.sh` and `turns.sh`, all to 127.0.0.1, run with `--disable`, so a `.curlrc`
    (a retry, a header) changes neither a request nor its bound, and with `--noproxy '*'`, so no
    `http_proxy` or `ALL_PROXY` of the environment's answers for the servers. A release
@@ -406,7 +413,10 @@ bodies of one length, a third body of that length under the difference the two m
 difference in a header alone and, under it, another body both sides share, a
 `diff.txt` that cannot be written, one put in place of the check's own that holds none of the difference `diff` and `cmp` reported (an empty file, or a link to `/dev/null`, which for the same answers is no regular file), one unlinked after `diff` wrote it, one linked to the expected difference before the check creates it or before the bodies line is added, which must leave that file as it was, and a `diff` that cannot compare, each of those five with a
 stand-in for a tool `turns.sh` runs, a side that never answers, and a proxy of the environment's that answers everything, which no request may reach), on a CPU the test may run
-on, and fails saying so when the kit's two ports are in use. `verify.test.mjs`, which `npm run
+on, and fails saying so when the kit's two ports are in use. It also runs `turns.sh` itself on two servers that
+ignore TERM: after answers that are the same, sent TERM while it stops them after answers that
+differ, and killed outright while they run, it must have both stopped within a bound and leave
+nothing on the kit's ports. `verify.test.mjs`, which `npm run
 check` runs too, runs the second, `verify.sh`, and with a plan of no placement, on
 a base that ignores TERM: after its two starts, ended by a failed request while the base
 runs, sent TERM while it stops the base and killed outright while the base runs, it must have

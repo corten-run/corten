@@ -354,7 +354,7 @@ test("serve.mjs ends, saying so, when its server ends before it is stopped, so i
   s.child.kill("SIGTERM");
   const end = await s.ended;
   assert.equal(end.status, 1, end.said);
-  assert.ok(end.said.includes("serve: stopped by SIGTERM, not by verify.sh; stopping the server"), end.said);
+  assert.ok(end.said.includes("serve: stopped by SIGTERM, not by its input ending; stopping the server"), end.said);
   assert.equal(await alive(sock), false, "the server is still running");
   s.child.stdin.destroy();
 });
