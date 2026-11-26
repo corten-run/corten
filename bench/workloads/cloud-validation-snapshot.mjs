@@ -307,12 +307,6 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
     assert.match(commit, /^[a-f0-9]{40}$/);
     root = realpathSync(root);
     assert.equal(commit, root === checkout ? installedCommit : head(root, readGit));
-    return captureCommittedValidation(commit, root, readGit);
-  } catch { throw validationFailure(); }
-}
-
-function captureCommittedValidation(commit, root, readGit) {
-  try {
     const paths = [...validationPaths, ...packageMetadata];
     const result = readGit("git", ["--no-replace-objects", "-C", root, "cat-file", "--batch"], {
       input: paths.map((path) => `${commit}:${path}\n`).join(""),
@@ -345,22 +339,6 @@ function captureCommittedValidation(commit, root, readGit) {
     sources.push(dependency(root, typescriptPath, typescriptSha256, 16 * 1024 * 1024));
     for (const [path, sha256] of Object.entries(semverSources)) sources.push(dependency(root, path, sha256, 64 * 1024));
     return { root: pathToFileURL(root + "/").href, sources };
-  } catch { throw validationFailure(); }
-}
-
-// Only the controller's approved absence-only path can use an older snapshot.
-// Git supplies the measured worker and every executable source; no import reads
-// a different checkout's working files. Ordinary validation remains HEAD-only.
-export function absentValidationTask(input, controllerCommit) {
-  try {
-    assert.equal(controllerCommit, installedCommit);
-    assert.match(input.commit, /^[a-f0-9]{40}$/);
-    assert.notEqual(input.commit, controllerCommit);
-    const ancestry = spawnSync("git", ["--no-replace-objects", "-C", checkout, "merge-base", "--is-ancestor", input.commit, controllerCommit], {
-      timeout: 5000, maxBuffer: 1024, windowsHide: true, shell: false, env: gitEnvironment(),
-    });
-    assert.equal(ancestry.status, 0); assert.ok(!ancestry.error);
-    return validationTask(input, { snapshot: captureCommittedValidation(input.commit, checkout, spawnSync) });
   } catch { throw validationFailure(); }
 }
 

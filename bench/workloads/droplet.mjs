@@ -13,7 +13,7 @@ import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArch
 import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
-import { absentValidationTask } from "./cloud-validation-snapshot.mjs";
+import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
@@ -47,7 +47,7 @@ function acquireHandoffLock(path, bytes) {
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
     return current?.isFile() && ["dev", "ino", "birthtimeNs", "ctimeNs", "nlink"].every(key => current[key] === owned[key]);
   };
-  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "handoff operation lock changed; preserve custody");
+  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "operation lock changed; preserve custody");
 }
 
 const sameStateFile = (a, b) => ["dev", "ino", "birthtimeNs"].every(key => a[key] === b[key]);
@@ -89,6 +89,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const recoveryLock = "stream-recovery.lock", recheckLock = createRecheckLock, groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
   const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   const groupedExitOne = recoveryApproval?.policy === failedExitOnePolicy, pinnedRetirement = groupedHandoff || groupedExitOne;
+  const absenceOnly = recoveryApproval?.policy === absentCollectionPolicy;
+  assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
   let exitOneFenceFinishedAtMs;
@@ -772,7 +774,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     const lockBytes = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
-    if (pinnedRetirement) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
+    if (pinnedRetirement || absenceOnly) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
     else durable(lock, lockBytes);
     preserveOperationLock = false;
     try {
@@ -851,6 +853,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
     }
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
+    return report;
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
   const setupExit = () => {
@@ -1470,8 +1473,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
-      if (recoveryApproval?.policy === absentCollectionPolicy) return locked(async () => {
+      if (absenceOnly) return locked(async () => {
         const original = () => {
+          assertHandoffLock();
           assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked absence reservation changed");
           assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
         };
@@ -1484,9 +1488,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         await confirmDeleted(false);
         verifyArchive();
         const beforeReplay = JSON.stringify(state);
-        await validateEvidence(true, (input) => absentValidationTask(input, recoveryApproval.controllerCommit));
+        const report = await validateEvidence(true, (input) => {
+          const root = realpathSync(options.absentMeasuredCheckout);
+          assert.equal(root, recoveryApproval.measuredRoot, "measured checkout changed");
+          return validationTask(input, { snapshot: captureValidation(input.commit, { root }) });
+        });
         assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
         await confirmDeleted(false);
+        assert.equal(sealedMonitor(local, state).terminal.sealSha256, report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
+        verifyArchive();
+        assert.equal(treeHash(join(local, state.evidence)), state.evidenceSha256, "evidence changed after replay");
         original();
         state.destroyedAt = new Date().toISOString(); save(); return 0;
       });

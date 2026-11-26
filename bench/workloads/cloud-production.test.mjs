@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -26,6 +26,10 @@ function productionHarness(t, flags = {}) {
   const spawn = (binary, argv, options) => {
     calls.push([binary, argv, options]);
     if (binary === "git") {
+      if (argv[0] === "-C" && argv[1] === flags.measuredRoot) {
+        const stdout = argv.includes("--show-toplevel") ? flags.measuredRoot : argv.includes("HEAD^{commit}") ? flags.measuredHead ?? commit : flags.measuredDirty ?? "";
+        return { status: 0, stdout };
+      }
       if (argv[0] === "show") {
         const path = argv[1].slice(41);
         return { status: 0, stdout: flags.wrongSource ? "wrong" : readFileSync(resolve(path), "utf8").replaceAll("\r\n", "\n") };
@@ -100,10 +104,18 @@ test("a merged successor reconciles only a previously verified, absent host and 
   assert.equal(saved.validation.status, "verified"); assert.ok(saved.deletionIntentAt && !saved.destroyedAt);
   assert.equal(h.deletes, 1);
   Object.assign(flags, { wrongHead: true, remoteHead: head });
-  const preview = () => productionMain([...p.args(), "--print-approval"], p.deps);
+  flags.measuredRoot = join(h.temp, "measured"); mkdirSync(flags.measuredRoot);
+  p.deps.compiler = root => root === flags.measuredRoot;
+  const args = [...p.args(), "--absent-measured-checkout", flags.measuredRoot];
+  const preview = () => productionMain([...args, "--print-approval"], p.deps);
+  await assert.rejects(productionMain([...p.args(), "--print-approval"], p.deps), /measured integrated checkout/);
   h.change(s => { delete s.deletionIntentAt; });
-  await assert.rejects(preview(), /measured integrated checkout/);
+  await assert.rejects(preview(), /verified older reservation/);
   writeFileSync(h.statePath, before);
+  flags.measuredHead = head;
+  await assert.rejects(preview(), /original measured checkout/); delete flags.measuredHead;
+  flags.measuredDirty = " M bench/source";
+  await assert.rejects(preview(), /clean measured checkout/); delete flags.measuredDirty;
   flags.unrelated = true;
   await assert.rejects(preview()); delete flags.unrelated;
   assert.equal(await preview(), 3);
@@ -111,7 +123,7 @@ test("a merged successor reconciles only a previously verified, absent host and 
   assert.equal(plan.controllerCommit, head);
   assert.equal(plan.recovery.measuredCommit, commit);
   assert.equal(plan.recovery.policy, "collect-verified-absent-host-only");
-  const approved = [...p.args(), "--approve-reviewed-merged-ready", plan.approvalSha256];
+  const approved = [...args, "--approve-reviewed-merged-ready", plan.approvalSha256];
   assert.ok(p.calls.every(([bin]) => bin === "git"));
   const live = h.host(); h.hosts([live]);
   let replayed = 0;
@@ -126,18 +138,38 @@ test("a merged successor reconciles only a previously verified, absent host and 
   assert.equal(replayed, 0); assert.deepEqual(readFileSync(h.statePath), before);
   flags.afterFetch = () => { h.change(s => { delete s.deletionIntentAt; }); };
   const n = p.calls.length;
-  await assert.rejects(run(), /measured integrated checkout/); delete flags.afterFetch;
+  await assert.rejects(run(), /verified older reservation/); delete flags.afterFetch;
   assert.ok(p.calls.slice(n).every(([bin]) => bin === "git"));
   writeFileSync(h.statePath, before);
   await assert.rejects(run(() => h.hosts([live])), /absence|still present/);
   assert.equal(replayed, 1); assert.deepEqual(readFileSync(h.statePath), before);
   h.hosts([]);
+  const invalid = join(h.local, "monitor-invalid.json");
+  await assert.rejects(run(() => writeFileSync(invalid, "{}")));
+  unlinkSync(invalid); assert.deepEqual(readFileSync(h.statePath), before);
+  const archivePath = join(h.local, "results.tgz"), archiveBytes = readFileSync(archivePath);
+  const operationLock = join(h.local, "operation.lock");
+  const whenAbsentAgain = (action) => {
+    let read = false;
+    return (bin, argv) => {
+      if (bin === "doctl" && argv[2] === "get" && argv[1] === "droplet") read = true;
+      else if (read && bin === "doctl" && argv[0] === "account") { read = false; action(); }
+    };
+  };
+  await assert.rejects(run(() => { flags.hook = whenAbsentAgain(() => writeFileSync(archivePath, "changed")); }), /archive changed/);
+  delete flags.hook; writeFileSync(archivePath, archiveBytes); assert.deepEqual(readFileSync(h.statePath), before);
+  const replacement = "replacement lock\n";
+  await assert.rejects(run(() => { flags.hook = whenAbsentAgain(() => {
+    renameSync(operationLock, operationLock + ".old"); writeFileSync(operationLock, replacement, { flag: "wx" });
+  }); }), /operation lock changed/);
+  delete flags.hook; assert.equal(readFileSync(operationLock, "utf8"), replacement); unlinkSync(operationLock);
+  assert.deepEqual(readFileSync(h.statePath), before);
   const now = performance.now.bind(performance); let elapsed = 0;
   const clock = t.mock.method(performance, "now", () => now() + elapsed);
   await assert.rejects(run(() => { elapsed = 26 * 60_000; }), e => e.controllerStage === "collect-native-replay-deadline");
-  assert.equal(replayed, 2); assert.deepEqual(readFileSync(h.statePath), before);
+  assert.equal(replayed, 5); assert.deepEqual(readFileSync(h.statePath), before);
   elapsed = 0;
-  assert.equal(await run(() => { elapsed = 16 * 60_000; }), 0); assert.equal(replayed, 3);
+  assert.equal(await run(() => { elapsed = 16 * 60_000; }), 0); assert.equal(replayed, 6);
   clock.mock.restore();
   const after = h.saved(); assert.ok(after.destroyedAt); delete after.destroyedAt;
   assert.deepEqual(after, saved);

@@ -196,24 +196,6 @@ test("an older measured commit without the placement module still captures and r
   assert.deepEqual(await h.inspect(h.input), { unmarked: true });
 });
 
-test("absence-only worker reads the measured ancestor, not edited files or the newer controller's sources", { timeout: 15000 }, async (t) => {
-  const h = await fakeNative(t, 'export function validateCampaign(input) { return { commit: input.commit, producer: "measured" }; }');
-  const path = "bench/workloads/isolated/campaign-verify.mjs";
-  writeFileSync(join(h.repo, path), 'export function validateCampaign() { return { producer: "successor" }; }');
-  git(h.repo, "add", "--", path);
-  git(h.repo, "-c", "user.name=Synthetic validation test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Synthetic successor");
-  const successor = git(h.repo, "rev-parse", "HEAD");
-  const adapter = pathToFileURL(join(h.repo, "bench/workloads/cloud-validation-snapshot.mjs"));
-  adapter.search = "?successor";
-  const validator = await withFixtureGitEnv(() => import(adapter.href));
-  assert.throws(() => validator.captureValidation(h.input.commit), /validation unavailable/);
-  assert.throws(() => validator.absentValidationTask(h.input, h.input.commit), /validation unavailable/);
-  assert.throws(() => withFixtureGitEnv(() => validator.absentValidationTask({ ...h.input, commit: "b".repeat(40) }, successor)), /validation unavailable/);
-  const task = withFixtureGitEnv(() => validator.absentValidationTask(h.input, successor));
-  assert.deepEqual(await task.result, { commit: h.input.commit, producer: "measured" });
-  removeDependencyLink(h.repo);
-});
-
 test("native worker returns only after stopping validator-owned lasting work", { timeout: 15000 }, async (t) => {
   const h = await fakeNative(t, "export function validateCampaign(input) { setInterval(() => {}, 1000); return input; }");
   let retained = false;

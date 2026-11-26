@@ -1923,7 +1923,8 @@ does not change any deadline before deletion.
 If ordinary collection at the measured commit cannot finish that replay, a
 reviewed merged successor can reconcile an already verified, successfully
 collected child with closed monitoring and a saved DELETE intent. Run the child
-`cloud-production.mjs --collect` preview from the successor; its approval must
+`cloud-production.mjs --collect --absent-measured-checkout PATH` preview from
+the successor, with `PATH` the clean original measured checkout. Its approval must
 name `collect-verified-absent-host-only` and the original measured commit. The
 ancestor must supply the successor's complete replay source list. Replay reads
 the measured commit's blobs and verifies the same evidence again. Only the exact
