@@ -259,8 +259,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   let checkHistoricalDispatch;
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
+    const creating = args[0] === "doctl" && args[1][2] === "create";
     try { await controlCheckpoint(interrupted); } catch (error) {
       if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
+      if (creating) return unsentCreate;
       throw error;
     }
     const guardDispatch = args[6];
@@ -270,7 +272,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       // before the private worker receives the mutation.
       if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
-    if (args[0] === "doctl" && args[1][2] === "create" && checkHistoricalDispatch) {
+    if (creating && checkHistoricalDispatch) {
       try { checkHistoricalDispatch(); } catch { return unsentCreate; }
     }
     let result, failure;
@@ -368,6 +370,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
         for (const row of setupRetirements) recheckSetupRetirement(root, row, indexedCustody);
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
+        if (beforeCreate === "dispatch" && setupRetirements.length) recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
         for (const slot of ["client-heavy", "client-heavy--r78"]) {

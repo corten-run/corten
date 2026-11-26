@@ -463,6 +463,8 @@ export function recheckSetupRetirement(root, row, indexedCustody) {
   assert.ok(saved.stateSha256 === row.stateSha256 && saved.state?.status === "retired" && saved.state.destroyedAt,
     "prior setup retirement reservation changed");
   verifySetupRetry(saved);
+  const batch = fleetBatchLock(fleet.root);
+  assert.equal(batch && digest(batch), row.batchSha256, "prior setup retirement fleet lock changed");
 }
 
 // Absence of an old ID in the provider account is necessary but not sufficient:

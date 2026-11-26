@@ -85,7 +85,7 @@ function roleCheckFor(fixtureCommit, sourceCommit) {
   };
 }
 
-function fixture(t, mode = "success", fakeRoleGroup, dispatchLock) {
+function fixture(t, mode = "success", fakeRoleGroup, dispatch) {
   // A throwing after hook skips the hooks after it, so the trace is checked before the
   // harness removes it and a failure is raised only after that removal has run.
   let traceFailure = null;
@@ -160,16 +160,17 @@ const synthetic = (${syntheticDependencies.toString()})({
       assert.equal(source.split(entry).length, 2, "review refusal-recording seam");
       source = source.replace(entry, "async function syntheticProductionMain(") + `
 export async function productionMain(...args) {
-  const dispatchLock = ${JSON.stringify(dispatchLock ? path.join(h.base, ...dispatchLock) : undefined)};
-  if (dispatchLock) {
+  const dispatch = ${JSON.stringify(dispatch ? { path: path.join(h.base, ...dispatch.path), cancel: dispatch.cancel } : undefined)};
+  if (dispatch) {
     const previous = args[1].interrupted;
+    let afterIntent = 0;
     args[1].interrupted = () => {
       const target = syntheticPath.join(syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], 'groups-r21', 'state.json');
-      if (!syntheticFs.existsSync(dispatchLock) && syntheticFs.existsSync(target)
-          && JSON.parse(syntheticFs.readFileSync(target, 'utf8')).createIntentAt) {
-        syntheticFs.writeFileSync(dispatchLock, '{}', { flag: 'wx' });
+      if (syntheticFs.existsSync(target) && JSON.parse(syntheticFs.readFileSync(target, 'utf8')).createIntentAt
+          && ++afterIntent >= (dispatch.cancel ? 2 : 1)) {
+        if (!syntheticFs.existsSync(dispatch.path)) syntheticFs.writeFileSync(dispatch.path, '{}', { flag: 'wx' });
       }
-      return previous();
+      return previous() || dispatch.cancel && syntheticFs.existsSync(dispatch.path);
     };
   }
   try { return await syntheticProductionMain(...args); }
@@ -915,10 +916,12 @@ test("a settled continuation placement refusal leaves the unallocated slot avail
   assert.deepEqual(p.events(), []);
 });
 
-for (const change of ["none", "after handoff", "after create intent"]) test(`a retired setup retry ${change === "none" ? "can create with unchanged custody" : `refuses recovery started ${change}`}`, { timeout: 60000 }, async (t) => {
-  const group = "json-api", lockFile = "stream-recovery.lock";
-  const dispatchLock = change === "after create intent" ? [group, group, "groups-r19", lockFile] : undefined;
-  const p = fixture(t, "ssh-late", group, dispatchLock), root = p.h.base, prior = path.join(root, group);
+for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "new batch after intent"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
+  const group = "json-api", lockFile = "stream-recovery.lock", childDir = [group, group, "groups-r19"];
+  const markers = { "after create intent": [...childDir, lockFile], "cancel before dispatch": [...childDir, "cancelled"],
+    "new batch after intent": [group, ".fleet-operation.lock"] };
+  const dispatch = markers[change] ? { path: markers[change], cancel: change === "cancel before dispatch" } : undefined;
+  const p = fixture(t, "ssh-late", group, dispatch), root = p.h.base, prior = path.join(root, group);
   p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
   fs.writeFileSync(path.join(root, "index.json"), "[]");
   const args = (r) => [r, "--continuation-root", root, "--group", group];
@@ -962,7 +965,7 @@ for (const change of ["none", "after handoff", "after create intent"]) test(`a r
   assert.equal(p.events().filter(({ method }) => method === "POST").length, change === "none" ? 1 : 0);
   assert.equal(code, change === "none" ? 3 : 2);
   if (change !== "none") {
-    const lock = path.join(local, lockFile);
+    const lock = dispatch ? path.join(root, ...dispatch.path) : path.join(local, lockFile);
     assert.ok(fs.existsSync(lock));
     const nextState = p.saved(path.join(`${group}--r21`, group));
     assert.equal(nextState.createIntentAt, undefined); assert.equal(nextState.status, "reserved");

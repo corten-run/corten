@@ -266,7 +266,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
             }
             catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
-            if (receipt === failedSetupRetirementFile) setupRetirements.push({ root: fleet.root, round, group, manifestSha256, stateSha256, launch });
+            if (receipt === failedSetupRetirementFile) setupRetirements.push({ root: fleet.root, round, group, manifestSha256, stateSha256, launch, batchSha256: lock });
           }
           outcome = `${state.retirement.kind}-retired`;
         } else {
