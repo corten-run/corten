@@ -22,13 +22,30 @@
 //! together leave together. Nothing here looks at the bytes the client has sent to decide;
 //! hyper's `pipeline_flush` does, which is what makes it unsafe.
 //!
-//! **What is held in memory.** `out` holds at most [`FLUSH_AT`] bytes, one answer's head and one
-//! body piece of [`COPIED`] bytes or less (with its chunk framing) when more is written into it.
-//! A larger piece is not copied: it is written from where it is, after `out`, before the next
-//! piece is taken from the body, so a stream is read only as fast as its client takes it. What
-//! the client sent is read only when the connection needs it (a head) and never while bytes of a
-//! head wait to be read, so a client that sends without reading is held back by the socket; the
-//! read buffer holds one read ([`Inbox`]): [`READ`] bytes or fewer, or a head of the app's limit.
+//! **What is held in memory.** Of what has not gone to the client, `out` holds less than
+//! [`FLUSH_AT`] bytes when more is written into it, and so at most that, one answer's head and
+//! one body piece small enough to copy with its chunk framing ([`COPIED`] bytes, or [`FLUSH_AT`]
+//! where the IO takes one buffer a write). In front of that it holds less than [`FLUSH_AT`]
+//! bytes that have gone already: they are dropped from it when all of it has gone, and when that
+//! many have, so a client that always leaves a little unsent does not make it hold what it was
+//! sent before. A larger piece is not copied: it is written from where it is, after `out`,
+//! before anything is written behind it. The body is asked for the piece after it first, once,
+//! and that piece is held (not copied) until the one before has gone, so a stream is read one
+//! piece ahead of what its client has taken, and a body that fails before any of its answer had
+//! to go leaves no part of it with the client. What the client sent is read only when the
+//! connection needs it (a head) and never while bytes of a head wait to be read, so a client
+//! that sends without reading is held back by the socket; the read buffer holds one read
+//! ([`Inbox`]): [`READ`] bytes or fewer, or a head of the app's limit.
+//!
+//! **When an answer cannot be finished.** A body that fails, or panics, before any byte of its
+//! answer has gone ends the connection without that answer: the answers before it are sent, and
+//! the connection is closed. That is every body that fails before the connection had to wait
+//! for it or for its client: one that fails at once, or behind pieces that fit the buffer, or
+//! behind one piece too large to copy. A body that fails later has an answer that is cut short:
+//! the client has its head and some of its body, no end of it, and a closed connection. hyper
+//! draws the line further on (it holds up to 16 pieces, or about 400 KB, before it must write),
+//! so an answer hyper would not have begun can be cut short here when its body gives more than
+//! this connection holds and then fails without ever having waited.
 //!
 //! **What a connection that waits for a request holds.** Its two buffers, each as large as its
 //! client made it and no larger than a bound: the read buffer begins at [`FIRST`] bytes and
@@ -139,11 +156,14 @@ pub(crate) struct Inbox {
     /// from what has been taken. Every allocation is made here, of a size that is known, and
     /// none is made larger afterwards.)
     grown: bool,
+    /// The last read filled what it was offered: more of what the client sent with those bytes
+    /// may wait in the socket.
+    filled: bool,
 }
 
 impl Inbox {
     pub(crate) fn new() -> Inbox {
-        Inbox { buf: BytesMut::new(), room: FIRST, small: 0, most: 0, grown: false }
+        Inbox { buf: BytesMut::new(), room: FIRST, small: 0, most: 0, grown: false, filled: false }
     }
 
     /// The connection begins to wait for a request: a buffer that grew is freed if nothing is
@@ -234,6 +254,7 @@ impl Inbox {
             ready!(read.as_mut().poll(cx))?
         };
         self.most = 0;
+        self.filled = count == offered;
         if count == offered {
             // Twice as much, in whole powers of two: 4 KB after the first size, then 8 KB.
             let twice = self.room * 2;
@@ -273,6 +294,9 @@ struct Conn<I> {
     inbox: Inbox,
     /// How long the head being read was when it was last found unfinished.
     partial: Option<usize>,
+    /// The read that brought the last of those bytes filled what it was offered, so the bytes
+    /// the next read brings may have come with them ([`Conn::parse`]).
+    together: bool,
     indices: Vec<head::Indices>,
     /// The header map of the last answer, emptied, for the next request.
     cached: Option<HeaderMap>,
@@ -301,6 +325,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             io,
             inbox: Inbox::new(),
             partial: None,
+            together: false,
             indices: Vec::new(),
             cached: None,
             limit,
@@ -323,8 +348,23 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             return Ok(None);
         }
         let found = match self.partial {
-            Some(had) if !head::may_be_whole(bytes, had) => None,
-            _ => head::scan(bytes, self.limit, &mut self.indices)?,
+            // A head found unfinished is looked through again when its end may have come, as
+            // hyper looks (`is_complete_fast`), so one sent a few bytes at a time is not parsed
+            // for each piece.
+            Some(had) if head::may_be_whole(bytes, had) => head::scan(bytes, self.limit, &mut self.indices)?,
+            // And once more without its end where hyper would have had these bytes in the read
+            // that brought the ones before them: its first read is of `READ` bytes and this
+            // connection's of `FIRST`, and what is wrong in a head is refused when a parse sees
+            // it, whether the head ends or not. So as far as hyper's first read reaches, bytes
+            // that came together (the read before these filled what it was offered) are parsed
+            // together: a wrong line in the first `READ` bytes of a head that came at once is
+            // refused here as there. A head of that length that is right is parsed once more
+            // than its end alone would have it parsed only if it is longer than two reads.
+            Some(had) if self.together && had < READ => {
+                head::scan(&bytes[..bytes.len().min(READ)], self.limit, &mut self.indices)?
+            }
+            Some(_) => None,
+            None => head::scan(bytes, self.limit, &mut self.indices)?,
         };
         let Some(scanned) = found else {
             // A head that reaches the limit unfinished is refused without waiting for the rest.
@@ -332,6 +372,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 return Err(Refusal::TooLarge.into());
             }
             self.partial = Some(bytes.len());
+            self.together = self.inbox.filled;
             return Ok(None);
         };
         self.partial = None;
@@ -369,6 +410,14 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             self.sent += of_out;
             if self.sent == self.out.len() {
                 self.out.clear();
+                self.sent = 0;
+            } else if self.sent >= FLUSH_AT {
+                // What has gone is not kept in front of what has not: a client that takes its
+                // answers slowly enough that some are always unsent would otherwise have the
+                // buffer hold every byte sent since it was last empty. Once a write's worth has
+                // gone, so each byte is moved at most once for a write's worth sent. (`mark` and
+                // `unwrite` count from `sent`, and stay as they are.)
+                self.out.drain(..self.sent);
                 self.sent = 0;
             }
             let mut wrote = wrote - of_out;
@@ -495,31 +544,63 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         }
     }
 
+    /// What an answer's body gives next: a piece, or `None` at its end (and at its trailers, which
+    /// are not sent: the body ends there). `Err` when the body fails, and when it panics: the
+    /// panic has been reported where it happened, and it ends this answer as a failure does, not
+    /// the task, which has the answers before this one to send ([`serving`]).
+    fn poll_piece(cx: &mut Context<'_>, body: &mut Answered) -> Poll<io::Result<Option<Bytes>>> {
+        use http_body::Body;
+        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Pin::new(&mut *body).poll_frame(cx)));
+        Poll::Ready(match polled {
+            Ok(Poll::Pending) => return Poll::Pending,
+            Ok(Poll::Ready(None)) => Ok(None),
+            Ok(Poll::Ready(Some(Ok(frame)))) => Ok(frame.into_data().ok()),
+            Ok(Poll::Ready(Some(Err(_)))) => Err(io::Error::other("an answer's body failed")),
+            Err(_) => Err(io::Error::other("an answer's body panicked")),
+        })
+    }
+
     /// Writes an answer's body as it comes: whether the connection can go on to another request.
-    fn poll_body(&mut self, cx: &mut Context<'_>, body: &mut Answered, coding: &mut Coding) -> Poll<io::Result<bool>> {
+    /// `ahead`: what the body gave while the piece before it waited to go, kept by the caller
+    /// from one poll to the next.
+    fn poll_body(
+        &mut self,
+        cx: &mut Context<'_>,
+        body: &mut Answered,
+        coding: &mut Coding,
+        ahead: &mut Option<Option<Bytes>>,
+    ) -> Poll<io::Result<bool>> {
         use http_body::Body;
         loop {
-            // A piece too large to copy, or enough to fill a write, goes out before the next is
-            // taken from the body: a client that reads slowly holds the stream back.
+            // A piece too large to copy, or enough to fill a write, goes out before anything is
+            // written behind it: a client that reads slowly holds the stream back. The body is
+            // asked first for what follows, once, and that is kept until what is written has
+            // gone. So a body that fails there has failed before any of its answer had to go,
+            // and the answer is not begun ([`serving`]), as with hyper, which asks a body for
+            // more before it flushes; and one that waits there is sent as far as it has come.
             if self.large.is_some() || self.out.len() - self.sent >= FLUSH_AT {
+                if ahead.is_none() {
+                    match Self::poll_piece(cx, body)? {
+                        Poll::Ready(next) => *ahead = Some(next),
+                        Poll::Pending => {
+                            self.poll_meanwhile(cx)?;
+                            return Poll::Pending;
+                        }
+                    }
+                }
                 ready!(self.poll_send(cx))?;
             }
-            let frame = match Pin::new(&mut *body).poll_frame(cx) {
-                Poll::Ready(frame) => frame,
-                Poll::Pending => {
-                    self.poll_meanwhile(cx)?;
-                    return Poll::Pending;
-                }
-            };
-            let piece = match frame {
-                None => return Poll::Ready(self.end(*coding)),
-                Some(Err(_)) => return Poll::Ready(Err(io::Error::other("an answer's body failed"))),
-                Some(Ok(frame)) => match frame.into_data() {
-                    Ok(piece) => piece,
-                    // Trailers, which are not sent: the body ends here.
-                    Err(_) => return Poll::Ready(self.end(*coding)),
+            let next = match ahead.take() {
+                Some(next) => next,
+                None => match Self::poll_piece(cx, body)? {
+                    Poll::Ready(next) => next,
+                    Poll::Pending => {
+                        self.poll_meanwhile(cx)?;
+                        return Poll::Pending;
+                    }
                 },
             };
+            let Some(piece) = next else { return Poll::Ready(self.end(*coding)) };
             let ends = body.is_end_stream();
             if piece.is_empty() {
                 if ends {
@@ -652,8 +733,19 @@ where
             match conn.parse() {
                 Ok(Some(head)) => break head,
                 Ok(None) => {}
-                // The answers before it go first; then the connection is hyper's.
-                Err(Instead::Hypers) => return conn.send().await.is_ok(),
+                // The answers before it go first; then the connection is hyper's. Not if shutdown
+                // began while they went: a request found behind an answer is not begun then
+                // (below), by hyper either.
+                Err(Instead::Hypers) => {
+                    if conn.send().await.is_err() {
+                        return false;
+                    }
+                    if !first && closing.load(Relaxed) {
+                        conn.close().await;
+                        return false;
+                    }
+                    return true;
+                }
                 Err(Instead::Refused(refusal)) => {
                     conn.refuse(refusal).await;
                     return false;
@@ -726,8 +818,9 @@ where
             return false;
         };
         if coding != Coding::Length(0) {
+            let mut ahead = None;
             let wrote = poll_fn(|cx| {
-                let wrote = conn.poll_body(cx, &mut body, &mut coding);
+                let wrote = conn.poll_body(cx, &mut body, &mut coding, &mut ahead);
                 conn.waited |= wrote.is_pending();
                 wrote
             });
@@ -750,15 +843,18 @@ where
         conn.unflushed = true;
         // A piece too large to copy goes out before anything is written behind it, and so does a
         // full buffer: a client that sends requests and reads no answers is not answered further.
-        if (conn.large.is_some() || conn.out.len() - conn.sent >= FLUSH_AT) && conn.send().await.is_err() {
-            return false;
-        }
-        if last {
-            conn.close().await;
-            return false;
+        if conn.large.is_some() || conn.out.len() - conn.sent >= FLUSH_AT {
+            let sent = poll_fn(|cx| {
+                let sent = conn.poll_send(cx);
+                conn.waited |= sent.is_pending();
+                sent
+            });
+            if sent.await.is_err() {
+                return false;
+            }
         }
         turn += 1;
-        if turn == TURN {
+        if turn == TURN && !last {
             // A client that keeps sending requests does not keep the thread: what is written goes
             // out, and other tasks run.
             if conn.send().await.is_err() {
@@ -766,6 +862,13 @@ where
             }
             tokio::task::yield_now().await;
             conn.waited = true;
+        }
+        // Shutdown that began while this answer was made or sent ends the connection here, as
+        // one that began before its head was written does (above): no request behind it is
+        // begun, whether it has been read or not, as hyper begins none once it is told.
+        if last || closing.load(Relaxed) {
+            conn.close().await;
+            return false;
         }
     }
 }
