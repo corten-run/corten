@@ -8569,8 +8569,8 @@ rules something out.
     survives a rebuilt request was to come from
     [#1890 Drop CDN caching headers from answers that are one visitor's alone and from unanswered failures](https://github.com/corten-run/corten/pull/1890),
     which marks its failures on the answer instead and has none, so this is the watch's own.
-    Held beside the handler's work in the future the route already makes, the watch adds a read and a reset of a thread's mark around each poll, and a
-    watched route holds the request's signal. A request answered in process from inside a
+    Held beside the handler's work in the future the route already makes, the watch adds a read and
+    a reset of a thread's mark around each poll, and a watched route holds the request's signal. A request answered in process from inside a
     handler (one that polls another route on its own stack) is polled within the outer watch, so
     a key the inner answer drew marks the outer one private too, even when the handler drops the
     inner answer: a private answer that could have been shared, never the other way round; the
@@ -8589,7 +8589,18 @@ rules something out.
     whether an answer may be `Public` by a function rather than a constant then added 6 or 7 to
     each staged page and none to JSON or an unstaged route; no `may_share` is left in the
     release build's symbols, so it is not a call, and the 6 or 7 are not traced to a line
-    either. These are instruction counts, not cycles. A first
+    either. These are instruction counts, not cycles. The stages' signal past the middleware was
+    counted on 2026-11-26 with `bench/request-cost` (Last checked), instructions a request, median
+    of three, at `027178adf` (this change with main merged, without it) and `4944bffac` (with it):
+    `get` 18,300 and 18,420 (+0.66%), `post` 22,748 and 22,868, `text` 17,140 and 17,266 (+0.74%),
+    `page` 43,214 and 43,340 (+0.29%), `get-browser` 23,840 and 23,960, `text-browser` 25,790 and
+    25,916, `page-browser` 221,829 and 221,956, and at a depth of 16 `get` 16,167 and 16,287 and
+    `text` 15,019 and 15,145; `unstaged` and `pipeline`, with no middleware stage, within 1, and no
+    case allocates more. In `text` 87 of the 126 are three more copies of the route's future, a
+    pointer larger, as `page::run` moves it, 18 building it and 14 polling it and the look for the
+    mark; the copies are where the compiler placed the move, not traced further. Against main
+    (`9b8834fcc`) the whole change reads `get` +87, `post` +85, `text` +91, `page` +124,
+    `page-browser` +127, `unstaged` and `pipeline` -1 and -2. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -9563,7 +9574,11 @@ rules something out.
     whose size is set when it is built), kept under the tag `evidence/cheaper-ask-1925`;
     2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
-    `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-22 for the watch for a submit key, `1a36081dd` (this change, with
+    `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-26 for the stages' signal
+    past the middleware, the probe of `bench/request-cost` at `4944bffac` against `027178adf` and
+    `9b8834fcc`, built one after another in one directory with rustc 1.100.0, counted with valgrind
+    3.24.0 in a `rust:1-trixie` container on a 12-CPU workstation, answers compared first with no
+    difference; 2026-11-22 for the watch for a submit key, `1a36081dd` (this change, with
     main merged at `d3e1b4efb`) against its merge base with main, `361724c85`, and before that
     `d3e1b4efb` against `361724c85` and `f4a4472a3` against `a0eeeacca` (whose crates are the
     same as `361724c85`'s), each with the same
