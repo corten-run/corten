@@ -140,10 +140,13 @@ fn stand_in(name: &str) -> PathBuf {
     };
     match compiled {
         Ok(status) if status.success() => base,
-        Ok(status) => {
+        // An exit code means rustc ended by itself, after its linker. Ended by a signal, it may
+        // have left the linker running, so the directory is kept.
+        Ok(status) if status.code().is_some() => {
             let removed = std::fs::remove_dir_all(&base);
             panic!("compiling the stand-in: rustc exited with {status} (removing {}: {removed:?})", base.display());
         }
+        Ok(status) => panic!("compiling the stand-in: rustc ended by {status} (kept {})", base.display()),
         Err(error) => panic!("compiling the stand-in: rustc {error} (kept {})", base.display()),
     }
 }
