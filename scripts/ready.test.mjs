@@ -127,20 +127,40 @@ test("an answer that comes after its attempt's 5 s is not read, and the attempt 
 });
 
 test("a refused connection is waited out until the app listens", async () => {
-  const probe = http.createServer();
-  await new Promise((r) => probe.listen(0, "127.0.0.1", () => r(undefined)));
-  const port = /** @type {import("node:net").AddressInfo} */ (probe.address()).port;
-  await new Promise((r) => probe.close(() => r(undefined)));
-  let asked = 0;
-  const app = http.createServer((_q, s) => (asked++, ok(s)));
-  const later = setTimeout(() => app.listen(port, "127.0.0.1"), 600);
-  try {
-    await ready(`http://127.0.0.1:${port}`, { budget: 10_000 });
-    assert.equal(asked, 1);
-  } finally {
-    clearTimeout(later);
-    app.closeAllConnections();
-    app.close();
+  // The port is picked below every default ephemeral range (Linux 32768, Windows and macOS 49152), so
+  // no server another process starts on port 0 takes it while it is free and answers in the app's
+  // place. One another process does hold is skipped for the next.
+  for (let tries = 0; ; tries++) {
+    const port = 20_000 + Math.floor(Math.random() * 10_000);
+    let asked = 0;
+    const app = http.createServer((_q, s) => (asked++, ok(s)));
+    /** @type {Promise<Error | undefined>} */
+    const listened = new Promise((r) => {
+      app.once("error", r);
+      app.once("listening", () => r(undefined));
+    });
+    const later = setTimeout(() => app.listen(port, "127.0.0.1"), 600);
+    const outcome = ready(`http://127.0.0.1:${port}`, { budget: 10_000 }).then(
+      () => "ready",
+      (e) => String(e.message),
+    );
+    const held = await listened;
+    try {
+      if (held) {
+        assert.equal(/** @type {any} */ (held).code, "EADDRINUSE");
+        assert.ok(tries < 5, "five ports below the ephemeral range were all in use");
+        // The wait may be answered by whoever holds the port; it is not this test's to judge.
+        await outcome;
+        continue;
+      }
+      assert.equal(await outcome, "ready");
+      assert.equal(asked, 1);
+      return;
+    } finally {
+      clearTimeout(later);
+      app.closeAllConnections();
+      app.close();
+    }
   }
 });
 
@@ -164,11 +184,13 @@ test("a proxy set in the environment never answers for the app", async () => {
   let proxied = 0;
   const proxy = http.createServer((_q, s) => (proxied++, ok(s)));
   let asked = 0;
-  const app = http.createServer((_q, s) => (asked++, unavailable(s)));
+  // The app refuses at once and the proxy would say ready, so the outcome names which one answered
+  // with no timeout in it.
+  const app = http.createServer((_q, s) => (asked++, s.writeHead(500).end("x")));
   await Promise.all([proxy, app].map((s) => new Promise((r) => s.listen(0, "127.0.0.1", () => r(undefined)))));
   const port = (/** @type {http.Server} */ s) => /** @type {import("node:net").AddressInfo} */ (s.address()).port;
   const proxyUrl = `http://127.0.0.1:${port(proxy)}`;
-  const code = `import("${new URL("./ready.mjs", import.meta.url).href}").then(({ ready }) => ready("http://127.0.0.1:${port(app)}", { budget: 1000 })).then(() => console.log("ready"), (e) => console.log(e.message))`;
+  const code = `import("${new URL("./ready.mjs", import.meta.url).href}").then(({ ready }) => ready("http://127.0.0.1:${port(app)}", { budget: 30_000 })).then(() => console.log("ready"), (e) => console.log(e.message))`;
   const out = await new Promise((resolve) => {
     const child = spawn(process.execPath, ["-e", code], {
       env: { ...process.env, NODE_USE_ENV_PROXY: "1", HTTP_PROXY: proxyUrl, http_proxy: proxyUrl, NO_PROXY: "", no_proxy: "" },
@@ -180,7 +202,7 @@ test("a proxy set in the environment never answers for the app", async () => {
   proxy.close();
   app.closeAllConnections();
   app.close();
-  assert.match(String(out), /did not answer 200 within 1 s \(last: 503\)$/);
+  assert.match(String(out), /answered 500, not 200 or 503$/);
   assert.equal(proxied, 0);
-  assert.ok(asked > 0);
+  assert.equal(asked, 1);
 });
