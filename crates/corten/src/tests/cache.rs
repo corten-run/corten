@@ -990,22 +990,155 @@ async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
 /// those headers and its tag.
 #[tokio::test]
 async fn an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches() {
+    let mut wrong = Vec::new();
+    for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
+        wrong.extend(rebuilt_keyed_answers_open_to_a_cdn(&format!("{how:?}"), || (RebuiltAnswer, how)).await);
+    }
+    assert!(wrong.is_empty(), "a keyed answer behind a rebuilt request and response, open to a CDN: {wrong:#?}");
+}
+
+/// As [`an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches`],
+/// with the rest of the chain run on a scoped thread of the middleware's own ([`OnAThread`]):
+/// `next` called there, or called on the request's thread and its future only polled there. The
+/// route's answer comes back on that thread and still marks the stages' signal, which they hold
+/// past the middleware.
+#[tokio::test]
+async fn an_answer_a_middleware_rebuilt_on_a_thread_of_its_own_keeps_its_submit_key_from_shared_caches() {
+    let mut wrong = Vec::new();
+    for hop in [Hop::Called, Hop::Polled] {
+        for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
+            let label = format!("{hop:?} {how:?}");
+            wrong.extend(rebuilt_keyed_answers_open_to_a_cdn(&label, || (RebuiltAnswer, how, OnAThread(hop))).await);
+        }
+    }
+    assert!(wrong.is_empty(), "a keyed answer that came back on a middleware's own thread, open to a CDN: {wrong:#?}");
+}
+
+/// A middleware that holds a keyed answer from `next`, then answers a request of its own in
+/// process (with stages of its own) whose handler panics, then waits a turn and makes a new
+/// response of the keyed answer, without its extensions: that answer still goes out the browser's
+/// alone. The nested request's panic and the turn take no mark away, nor leave one behind: a
+/// `Public` answer with no key, answered next on the same thread through the same middleware, keeps
+/// its lifetime.
+#[tokio::test]
+async fn a_keyed_answer_held_across_a_nested_request_that_panics_and_a_wait_stays_private() {
     use crate::route::get as typed;
 
-    struct RebuiltAnswer;
+    /// Answers `/panics` from the same router, waits a turn, then rebuilds the answer `next` gave.
+    struct Nests(Arc<std::sync::OnceLock<Router>>);
 
-    impl crate::Middleware for RebuiltAnswer {
+    impl crate::Middleware for Nests {
         async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
-            let (parts, body) = next.run(req).await.into_parts();
+            if req.uri().path() == "/panics" {
+                return next.run(req).await;
+            }
+            let answer = next.run(req).await;
+            let router = self.0.get().expect("the router").clone();
+            let nested = router.oneshot(Request::builder().uri("/panics").body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(nested.status(), StatusCode::INTERNAL_SERVER_ERROR, "the nested request's handler panicked");
+            tokio::task::yield_now().await;
+            let (parts, body) = answer.into_parts();
             let mut res = crate::response::Response::new(body);
             *res.status_mut() = parts.status;
             *res.headers_mut() = parts.headers;
-            for name in CDN_OVERRIDES {
-                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
-            }
             res
         }
     }
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/keyed", typed(move || async move { Public::new(minute, field()) }).0)
+                .route("/plain", typed(move || async move { Public::new(minute, "plain".to_string()) }).0)
+                .route(
+                    "/panics",
+                    typed(move || async move {
+                        if minute > Duration::ZERO {
+                            panic!("the nested request's handler");
+                        }
+                        Public::new(minute, "never".to_string())
+                    })
+                    .0,
+                ),
+        )
+    };
+    for (app, kept) in [("the default store", None), ("none kept", Some(0))] {
+        let slot = Arc::new(std::sync::OnceLock::new());
+        let mut built = App::new(routes()).middleware(Nests(slot.clone()));
+        if let Some(kept) = kept {
+            built = built.kept_answers(kept);
+        }
+        let router = built.router();
+        assert!(slot.set(router.clone()).is_ok());
+        let (status, headers, body) = fetch(&router, "GET", "/keyed", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {headers:?}");
+        assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}");
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}: {headers:?}");
+    }
+}
+
+/// Staged middleware that makes a new response of the one `next` gave, with its status, headers
+/// and body and none of its extensions, and writes every caching header a CDN reads first on it.
+struct RebuiltAnswer;
+
+impl crate::Middleware for RebuiltAnswer {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let (parts, body) = next.run(req).await.into_parts();
+        let mut res = crate::response::Response::new(body);
+        *res.status_mut() = parts.status;
+        *res.headers_mut() = parts.headers;
+        for name in CDN_OVERRIDES {
+            res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+        }
+        res
+    }
+}
+
+/// Where [`OnAThread`] makes the rest of the chain's future: on the request's thread, polled on
+/// its own (`Polled`), or on its own thread too (`Called`).
+#[derive(Clone, Copy, Debug)]
+enum Hop {
+    Called,
+    Polled,
+}
+
+/// Staged middleware that runs the rest of the chain on a scoped thread of its own and waits for
+/// it there: a `Next` and the future it gives are `Send`, and need not be `'static` for a scoped
+/// thread.
+struct OnAThread(Hop);
+
+impl crate::Middleware for OnAThread {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let runtime = tokio::runtime::Handle::current();
+        let thread = std::thread::current().id();
+        let (res, ran) = match self.0 {
+            Hop::Called => std::thread::scope(|scope| {
+                scope.spawn(|| (runtime.block_on(next.run(req)), std::thread::current().id())).join().unwrap()
+            }),
+            Hop::Polled => {
+                let answer = next.run(req);
+                std::thread::scope(|scope| {
+                    scope.spawn(|| (runtime.block_on(answer), std::thread::current().id())).join().unwrap()
+                })
+            }
+        };
+        assert_ne!(ran, thread, "the route's answer came back on the middleware's thread");
+        res
+    }
+}
+
+/// The keyed answers `steps()`'s middleware sends open to a CDN (`private, no-cache` is the only
+/// right `Cache-Control`; no CDN caching header the middleware wrote, no tag), for `/text`, a
+/// `Public` text whose handler drew a form's new submit key, and `/page`, a `Public` page with such
+/// a form, with the default store and with none kept. `/plain`, with no key, must keep its
+/// lifetime, those headers and its tag.
+async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, steps: impl Fn() -> M) -> Vec<String> {
+    use crate::route::get as typed;
 
     let minute = Duration::from_secs(60);
     let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
@@ -1033,37 +1166,35 @@ async fn an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_
     // A tag is made for a request that names one.
     let asks = [("if-none-match", "\"other\"")];
     let mut wrong = Vec::new();
-    for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
-        for (app, router) in [
-            ("the default store", App::new(routes()).middleware((RebuiltAnswer, how)).router()),
-            ("none kept", App::new(routes()).kept_answers(0).middleware((RebuiltAnswer, how)).router()),
-        ] {
-            for path in ["/text", "/page"] {
-                let (status, headers, body) = fetch(&router, "GET", path, &asks).await;
-                let (_, _, other) = fetch(&router, "GET", path, &asks).await;
-                assert_eq!(status, StatusCode::OK, "{how:?} {app}: {path}");
-                assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{how:?} {app}: {path}");
-                if headers[header::CACHE_CONTROL] != "private, no-cache" {
-                    wrong.push(format!("{how:?} {app}: {path}: Cache-Control {:?}", headers[header::CACHE_CONTROL]));
-                }
-                let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
-                if !kept.is_empty() {
-                    wrong.push(format!("{how:?} {app}: {path}: still sends {kept:?}"));
-                }
-                if headers.contains_key(header::ETAG) {
-                    wrong.push(format!("{how:?} {app}: {path}: still sends its tag"));
-                }
+    for (app, router) in [
+        ("the default store", App::new(routes()).middleware(steps()).router()),
+        ("none kept", App::new(routes()).kept_answers(0).middleware(steps()).router()),
+    ] {
+        for path in ["/text", "/page"] {
+            let (status, headers, body) = fetch(&router, "GET", path, &asks).await;
+            let (_, _, other) = fetch(&router, "GET", path, &asks).await;
+            assert_eq!(status, StatusCode::OK, "{label} {app}: {path}");
+            assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{label} {app}: {path}");
+            if headers[header::CACHE_CONTROL] != "private, no-cache" {
+                wrong.push(format!("{label} {app}: {path}: Cache-Control {:?}", headers[header::CACHE_CONTROL]));
             }
-            let (status, headers, _) = fetch(&router, "GET", "/plain", &asks).await;
-            assert_eq!(status, StatusCode::OK, "{how:?} {app}");
-            assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{how:?} {app}");
-            assert!(headers.contains_key(header::ETAG), "{how:?} {app}: {headers:?}");
-            for cdn in CDN_OVERRIDES {
-                assert_eq!(headers[cdn], "max-age=60", "{how:?} {app}: the middleware's {cdn}");
+            let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
+            if !kept.is_empty() {
+                wrong.push(format!("{label} {app}: {path}: still sends {kept:?}"));
+            }
+            if headers.contains_key(header::ETAG) {
+                wrong.push(format!("{label} {app}: {path}: still sends its tag"));
             }
         }
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &asks).await;
+        assert_eq!(status, StatusCode::OK, "{label} {app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{label} {app}");
+        assert!(headers.contains_key(header::ETAG), "{label} {app}: {headers:?}");
+        for cdn in CDN_OVERRIDES {
+            assert_eq!(headers[cdn], "max-age=60", "{label} {app}: the middleware's {cdn}");
+        }
     }
-    assert!(wrong.is_empty(), "a keyed answer behind a rebuilt request and response, open to a CDN: {wrong:#?}");
+    wrong
 }
 
 /// `NoStore` is watched as the answer it holds is: around an answer type of the app's own that

@@ -3916,16 +3916,11 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
     // and answering a timeout, stays inside the panic catch.
     let mut fut = pin!(dispatch(pending));
     let outcome = std::future::poll_fn(|cx| {
-        // Each poll reads whether the route's answer, as it came back past the app's middleware,
-        // drew a form's new submit key, for the stages' signal.
-        let polled = crate::middleware::passing(signal, || {
-            std::panic::catch_unwind(AssertUnwindSafe(|| {
-                fut.as_mut()
-                    .poll(cx)
-                    .map(|result| result.unwrap_or_else(|late| deadline_failure(late, deadline, signal, (&method, &uri))))
-            }))
-        });
-        match polled {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| {
+            fut.as_mut()
+                .poll(cx)
+                .map(|result| result.unwrap_or_else(|late| deadline_failure(late, deadline, signal, (&method, &uri))))
+        })) {
             Ok(Poll::Ready(res)) => Poll::Ready(Ok(res)),
             Ok(Poll::Pending) => Poll::Pending,
             Err(panic) => Poll::Ready(Err(panic)),
