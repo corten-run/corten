@@ -9,7 +9,8 @@
 // Starts the probe (not under callgrind), opens the connections one after another, sends one
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
-// the growth of the process's resident memory (VmRSS) by the connections. The kernel's socket
+// the growth of the process's resident memory (VmRSS) by the connections. It prints that growth in
+// bytes and the page size (`getconf PAGESIZE`), which CONTRIBUTING's gate reads. The kernel's socket
 // buffers are not the process's and are not counted. A run prints no figure when an answer was
 // not the case's or did not come in 30 seconds, when the probe had closed a connection, or when
 // its open files did not grow by the number of connections.
@@ -20,6 +21,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { spawnSync } from "node:child_process";
 import { held, resident } from "./figures.mjs";
 import { Connection, send, start } from "./probe.mjs";
 import { cases, named } from "./requests.mjs";
@@ -51,6 +53,12 @@ const port = whole("port", values.port);
 if (addresses > 254) throw new Error("--addresses takes at most 254");
 const [name] = /** @type {[string]} */ (named(values.case));
 const { configuration } = /** @type {typeof cases[string]} */ (cases[name]);
+
+// Resident memory moves a page at a time, so a difference of one page is the least a reading shows.
+const pageSize = spawnSync("getconf", ["PAGESIZE"], { encoding: "utf8" });
+const pageText = pageSize.stdout?.trim() ?? "";
+const page = Number(pageText);
+if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteger(page)) throw new Error("getconf PAGESIZE did not give the page size");
 
 const probe = await start(binary, configuration, { cpu: values.cpu, port });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
@@ -90,11 +98,12 @@ try {
   } catch (error) {
     throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
   }
-  const what = values.silent ? "sent nothing" : `answered ${requests} ${name}`;
-  // In JSON a connection that was sent nothing answered 0 requests.
-  const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, seconds };
+  const what = values.silent ? `sent nothing to the probe for ${name}` : `answered ${requests} ${name}`;
+  // In JSON a connection that was sent nothing answered 0 requests. The growth and the page size
+  // are what CONTRIBUTING's gate decides by; `bytes` is rounded and does not.
+  const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, grown: after - before, page, seconds };
   if (values.json) json = JSON.stringify(measured);
-  else console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
+  else console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after, ${after - before} grown, in ${page}-byte pages)`);
 } finally {
   await probe.stop();
 }
