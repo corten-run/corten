@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
-  treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
+  pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
 import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
@@ -808,13 +808,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyArchive = () => {
     assert.equal(fileHash(archive), state.archiveSha256, "archive changed; preserve host");
   };
-  const verifyAbsentEvidence = (report, sealedMonitor) => {
-    verifyArchive();
-    assert.equal(treeHash(join(local, state.evidence)), state.evidenceSha256, "evidence changed after replay");
-    const { terminal } = sealedMonitor(local, state);
-    assert.ok(terminal.campaign === report.campaign, "monitor campaign changed after replay");
-    assert.ok(terminal.sealSha256 === report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
-  };
+  const recordVerifiedAbsence = (report, sealedMonitor, original) =>
+    withVerifiedArchive(archive, state.archiveSha256, (archiveUnchanged) => {
+      const treeUnchanged = pinEvidenceTree(join(local, state.evidence), state.evidenceSha256, "evidence changed after replay");
+      treeUnchanged();
+      const { terminal } = sealedMonitor(local, state);
+      assert.ok(terminal.campaign === report.campaign, "monitor campaign changed after replay");
+      assert.ok(terminal.sealSha256 === report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
+      original(); archiveUnchanged();
+      state.destroyedAt = new Date().toISOString(); save(); return 0;
+    });
   async function validateEvidence(confirmedAbsent = false, start) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
@@ -1502,9 +1505,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         });
         assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
         await confirmDeleted(false);
-        verifyAbsentEvidence(report, sealedMonitor);
-        original();
-        state.destroyedAt = new Date().toISOString(); save(); return 0;
+        return recordVerifiedAbsence(report, sealedMonitor, original);
       });
       if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
         if (requireUnusedBootstrapCustody())
@@ -1644,12 +1645,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (state.deletionIntentAt) {
           // A prior verified, monitored collection may have timed out after DELETE.
           // No longer replay budget until this exact host is proved absent.
-          const recoverAbsent = !options.r21MeasuredCheckout && !state.destroyedAt && state.status === "collected"
-            && state.validation?.status === "verified" && state.control?.monitor?.phase === "closed";
-          if (recoverAbsent) await confirmDeleted();
-          verifyArchive(); const report = await validateEvidence(recoverAbsent);
+          if (absentCollectionCandidate(options, state)) {
+            const before = regular(statePath), beforeReplay = JSON.stringify(state);
+            const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+            await confirmDeleted();
+            verifyArchive(); const report = await validateEvidence(true);
+            assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
+            await confirmDeleted();
+            return recordVerifiedAbsence(report, sealedMonitor, () => {
+              assert.ok(regular(statePath).equals(before), "locked absence reservation changed");
+            });
+          }
+          verifyArchive(); await validateEvidence();
           await confirmDeleted();
-          if (recoverAbsent) verifyAbsentEvidence(report, (await import("./cloud-control-stream.mjs")).sealedMonitor);
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
         if (setupCandidate && state.evidence) checkSetupCustody(setupExit());

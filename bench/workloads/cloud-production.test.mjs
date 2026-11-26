@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -206,6 +208,26 @@ test("ordinary absence retry rechecks the saved archive after its final observat
   assert.ok(h.saved().destroyedAt); assert.equal(h.deletes, 1);
 });
 
+for (const target of ["archive", "extracted member"]) test(`absence retry rejects a changed ${target} during the final extraction scan`, async (t) => {
+  const { h, flags, before, saved } = await verifiedDeletionRetry(t);
+  const extracted = join(h.local, saved.evidence), last = join(extracted, "run.log");
+  const path = target === "archive" ? join(h.local, "results.tgz") : join(extracted, "host.txt");
+  const lstat = fs.lstatSync; let armed = false, changed = false;
+  const hook = t.mock.method(fs, "lstatSync", (file, ...args) => {
+    if (armed && !changed && file === last) { changed = true; writeFileSync(path, "changed after verification"); }
+    return lstat(file, ...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(h.task({ inspect: async () => {
+      flags.hook = afterExactAbsence(() => { armed = true; });
+      return h.report();
+    } }).collect(), target === "archive" ? /file changed while reading/ : /local handoff custody changed: extraction/);
+  } finally { delete flags.hook; hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(changed, "changed target during the final extraction scan");
+  assert.deepEqual(readFileSync(h.statePath), before); assert.equal(h.deletes, 1);
+});
+
 test("ordinary collection of a finalized result keeps the ordinary replay budget", async (t) => {
   const { h } = await verifiedDeletionRetry(t);
   assert.equal(await h.task().collect(), 0);
@@ -218,6 +240,19 @@ test("ordinary collection of a finalized result keeps the ordinary replay budget
   } }).collect(), e => e.controllerStage === "collect-native-replay-deadline");
   assert.deepEqual(readFileSync(h.statePath), before);
   assert.equal(h.deletes, 1);
+});
+
+test("contradictory saved verification does not get the extended replay budget", async (t) => {
+  const { h } = await verifiedDeletionRetry(t);
+  h.change(s => { s.exitCode = 1; });
+  const before = readFileSync(h.statePath), now = performance.now.bind(performance);
+  let elapsed = 0;
+  t.mock.method(performance, "now", () => now() + elapsed);
+  await assert.rejects(h.task({ inspect: async () => {
+    elapsed = 16 * 60_000;
+    return h.report();
+  } }).collect(), e => e.controllerStage === "collect-native-replay-deadline");
+  assert.deepEqual(readFileSync(h.statePath), before); assert.equal(h.deletes, 1);
 });
 
 function unusedBootstrapAttempt(t, flags = {}, script = "true") {
