@@ -12,8 +12,10 @@
 // A build's directory holds what the kit printed with `--json`, a file a run, named as
 // `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; beside a run that was
 // refused or did not end, `<file>.refused`, a line each time saying why; and `unbuilt`, what the
-// build said, when the probe did not build. A figure is read only from a run's whole output, of
-// the case, depth, requests and connections asked for (`figure`): anything else is no figure.
+// build said, when the probe did not build: a build with that file, empty or not, has no figure
+// and no answer, whatever else its directory holds. A figure is read only from a run's whole
+// output, of the case, depth, requests, connections and addresses asked for (`figure`): anything
+// else is no figure.
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
 // the kit gives; no case's allocations rise, by the calls themselves; and no idle reading's
@@ -32,13 +34,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { COUNTED, median, sent } from "./figures.mjs";
-import { cases, unexpected } from "./requests.mjs";
+import { Answers, cases, unexpected } from "./requests.mjs";
 
 /** Idle readings taken on each build, and the counts of a case `count.mjs` takes in a run. */
 export const RUNS = 3;
 /** The cases also counted with their requests written 16 at a time (README.md, The cases). */
 const DEEP = ["pipeline", "get", "unstaged", "text"];
-/** The idle readings: each of `idle.mjs`'s lines under Running it, of its 5,000 connections. */
+/** The idle readings: each of `idle.mjs`'s lines under Running it, of its 5,000 connections from one address. */
 const IDLE = [
   { name: "request", what: "after one request", options: [], of: { case: "pipeline", requests: 1 } },
   { name: "browser", what: "after three of a browser's requests", options: ["--case", "get-browser", "--requests", "3"], of: { case: "get-browser", requests: 3 } },
@@ -61,7 +63,7 @@ export function readings() {
   for (const name of names) all.push({ file: `count-${name}.json`, script: "count.mjs", options: ["--json", "--cases", name], expect: count("instructions", name, 1) });
   for (const name of DEEP) all.push({ file: `count-16-${name}.json`, script: "count.mjs", options: ["--json", "--depth", "16", "--cases", name], expect: count("instructions", name, 16) });
   for (const name of names) all.push({ file: `allocations-${name}.json`, script: "count.mjs", options: ["--json", "--allocations", "--cases", name], expect: count("allocations", name, 1) });
-  for (let run = 1; run <= RUNS; run += 1) for (const { name, options, of } of IDLE) all.push({ file: `idle-${name}-${run}.json`, script: "idle.mjs", options: ["--json", ...options], expect: { kind: "idle", ...of, connections: 5000 } });
+  for (let run = 1; run <= RUNS; run += 1) for (const { name, options, of } of IDLE) all.push({ file: `idle-${name}-${run}.json`, script: "idle.mjs", options: ["--json", ...options], expect: { kind: "idle", ...of, connections: 5000, addresses: 1 } });
   return all;
 }
 
@@ -96,7 +98,9 @@ export function figure(text, expect) {
  * of them, "both" when lines say both, and null when none does. The line is one a reader of the
  * description sees standing alone: `Request path: counted` or `Request path: measured` from the
  * line's first character, with nothing after it but spaces or tabs, outside a fenced code block
- * and an HTML comment, and not a block quote's (a line right under a quoted one is the quote's).
+ * and an HTML comment, and not a block quote's (a line right under a quoted one is the quote's,
+ * until a heading). This is not Markdown read whole: where it and Markdown differ, a line a
+ * reader sees is not read, never the other way (README.md, The hosted job).
  * @param {string} description @returns {"counted" | "measured" | "both" | null}
  */
 export function declared(description) {
@@ -104,11 +108,13 @@ export function declared(description) {
   /** The fence that opened the code block a line is in, the comment it is in, and the quote. */
   let [fence, hidden, quoted] = ["", false, false];
   for (const line of description.split(/\r?\n/)) {
-    const marks = hidden ? null : /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
     if (fence !== "") {
-      if (marks?.startsWith(fence) && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = "";
+      // Closed only by a line of its own character, at least as many, and nothing after them.
+      const close = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
+      if (close?.[0] === fence[0] && close.length >= fence.length) fence = "";
       continue;
     }
+    const marks = hidden ? null : /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
     if (marks) {
       fence = marks;
       continue;
@@ -123,7 +129,8 @@ export function declared(description) {
     seen = seen.replace(/<!--.*?-->/g, "");
     const open = seen.indexOf("<!--");
     if (open >= 0) [seen, hidden] = [seen.slice(0, open), true];
-    quoted = seen.trim() !== "" && (quoted || /^ {0,3}>/.test(seen));
+    // A heading is never a quote's line: it ends the quote above it.
+    quoted = seen.trim() !== "" && !/^ {0,3}#{1,6}([ \t]|$)/.test(seen) && (quoted || /^ {0,3}>/.test(seen));
     const way = /^Request path: (counted|measured)[ \t]*$/.exec(seen)?.[1];
     if (way && !quoted) said.add(way);
   }
@@ -179,8 +186,13 @@ const table = (/** @type {string[]} */ head, /** @type {string[][]} */ rows) =>
 export function compare(base, head, { description = "", names = { base: "base", head: "head" } } = {}) {
   const at = { base, head };
   const plan = Object.fromEntries(readings().map((reading) => [reading.file, reading]));
-  /** What a build that failed said last: such a build has no figure, which is said of it once. */
-  const unbuilt = { base: lines(join(base, "unbuilt")).at(-1), head: lines(join(head, "unbuilt")).at(-1) };
+  /**
+   * What a build that failed said last. The file being there is the failure, empty or not: such a
+   * build has no figure and no answer, whatever else its directory holds, which is said of it once.
+   */
+  const failed = (/** @type {string} */ directory) => (existsSync(join(directory, "unbuilt")) ? (lines(join(directory, "unbuilt")).at(-1) ?? "the build left no word of why") : undefined);
+  const unbuilt = { base: failed(base), head: failed(head) };
+  const nothing = { figure: null, why: "", refused: /** @type {string[]} */ ([]) };
   /** What keeps the rule from holding, each a clause of the verdict. @type {string[]} */
   const against = SIDES.filter((side) => unbuilt[side] !== undefined).map((side) => `the probe did not build against ${side} (${code(/** @type {string} */ (unbuilt[side]))})`);
   /** @type {string[]} */
@@ -192,7 +204,8 @@ export function compare(base, head, { description = "", names = { base: "base", 
   };
   /** Both builds' figures of a reading. @param {string} file @param {string} what @returns {[any, any]} */
   const both = (file, what) => {
-    const found = { base: taken(base, /** @type {ReturnType<typeof readings>[number]} */ (plan[file])), head: taken(head, /** @type {ReturnType<typeof readings>[number]} */ (plan[file])) };
+    const reading = /** @type {ReturnType<typeof readings>[number]} */ (plan[file]);
+    const found = { base: unbuilt.base === undefined ? taken(base, reading) : nothing, head: unbuilt.head === undefined ? taken(head, reading) : nothing };
     for (const side of SIDES) for (const reason of found[side].refused) refusals.push(`- ${code(file)} on ${side}: ${code(reason)}${found[side].figure === null ? "" : " (taken again, and counted)"}`);
     lacks(`${what} has no figure`, Object.fromEntries(SIDES.filter((side) => found[side].figure === null).map((side) => [side, found[side].why])));
     return [found.base.figure, found.head.figure];
@@ -240,13 +253,16 @@ export function compare(base, head, { description = "", names = { base: "base", 
     return [what, whole(low), whole(high), signed(high - low), percent(low, high), whole(span), shown(bases), shown(heads), up ? "rose" : ""];
   });
 
-  // A build's answer to a case is its capture when that is the answer the case must get, whole.
+  // A build's answer to a case is its capture when that is one whole answer and nothing after it,
+  // split as a count splits what a connection reads, and the answer the case must get.
   const answers = Object.keys(cases).map((name) => {
     const read = (/** @type {"base" | "head"} */ side) => {
       const file = join(at[side], "answers", `${name}.http`);
-      const bytes = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
+      const bytes = unbuilt[side] === undefined && existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
       try {
-        return { bytes, why: bytes.length === 0 ? "no capture" : unexpected(name, bytes) };
+        if (bytes.length === 0) return { bytes, why: "no capture" };
+        if (new Answers().push(bytes)[0]?.length !== bytes.length) return { bytes, why: "not one whole answer and no more" };
+        return { bytes, why: unexpected(name, bytes) };
       } catch (error) {
         return { bytes, why: /** @type {Error} */ (error).message };
       }

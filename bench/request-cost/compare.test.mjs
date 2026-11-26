@@ -40,7 +40,7 @@ function printed(file, measured) {
     return JSON.stringify({ ...of, allocations, frees, calls: { free: frees, malloc: allocations } }) + "\n";
   }
   const bytes = /** @type {number} */ (measured);
-  return JSON.stringify({ ...of, addresses: 1, bytes, before: 7_577_600, after: 7_577_600 + bytes * of.connections, seconds: 0.6 }) + "\n";
+  return JSON.stringify({ ...of, bytes, before: 7_577_600, after: 7_577_600 + bytes * of.connections, seconds: 0.6 }) + "\n";
 }
 
 const page = "<!DOCTYPE html><table><tr><td>119</td><td>A row of the page, about as long as a row of a listing is</td><td>833</td></tr></table></main></body></html>";
@@ -94,7 +94,7 @@ test("the runs to take are every case's instructions, four at a depth of 16, eve
   assert.deepEqual(all.filter(({ options }) => options.includes("--allocations")).map(({ options }) => options.at(-1)), names);
   // An idle reading's three runs are not one after another: the other readings are between them.
   assert.deepEqual(all.filter(({ script }) => script === "idle.mjs").map(({ file, options }) => `${file} ${options.join(" ")}`), [1, 2, 3].flatMap((run) => [`idle-request-${run}.json --json`, `idle-browser-${run}.json --json --case get-browser --requests 3`, `idle-silent-${run}.json --json --silent`]));
-  assert.deepEqual(all.at(-1)?.expect, { kind: "idle", case: "pipeline", requests: 0, connections: 5000 });
+  assert.deepEqual(all.at(-1)?.expect, { kind: "idle", case: "pipeline", requests: 0, connections: 5000, addresses: 1 });
   // No two runs write one file, and none names the probe, its CPU or its port: the caller's.
   assert.equal(new Set(all.map(({ file }) => file)).size, all.length);
   assert.ok(all.every(({ options }) => !options.some((option) => option === "--cpu" || option === "--port")));
@@ -131,11 +131,13 @@ test("a figure is a run's whole JSON, of the run asked for: cut short, of anothe
   assert.equal(figure(JSON.stringify({ ...calls, allocations: 16_000 }), calls), null);
   assert.equal(figure(JSON.stringify({ ...calls, allocations: 16_000.5, frees: 1 }), calls), null);
   assert.equal(figure(JSON.stringify({ ...calls, allocations: 999, frees: 999 }), calls), null);
-  // An idle run of 40 connections, of another case, of requests where none were to be sent, and
-  // one whose bytes are not its own growth over its connections.
+  // An idle run of 40 connections, of 5,000 from two addresses (`--addresses 2`), of another
+  // case, of requests where none were to be sent, and one whose bytes are not its own growth
+  // over its connections.
   const idle = /** @type {Record<string, any>} */ (expect["idle-silent-1.json"]);
   const run = JSON.parse(printed("idle-silent-1.json", 2_641));
   assert.equal(figure(JSON.stringify({ ...run, connections: 40 }), idle), null);
+  assert.equal(figure(JSON.stringify({ ...run, addresses: 2 }), idle), null);
   assert.equal(figure(JSON.stringify({ ...run, case: "get-browser" }), idle), null);
   assert.equal(figure(JSON.stringify({ ...run, requests: 1 }), idle), null);
   assert.equal(figure(JSON.stringify({ ...run, bytes: 2_000 }), idle), null);
@@ -162,6 +164,9 @@ test("the way is declared by a line a reader sees standing alone, and by nothing
     assert.equal(declared(`${open}\n${open[3] === "~" ? "```" : "~~~"}\nRequest path: measured\n`), null, open);
     assert.equal(declared(`${open}\nRequest path: measured\n${close}\n\nRequest path: counted\n`), "counted", open);
   }
+  // Nor does a line of both characters, a shorter one, or one with words after it close a fence.
+  for (const not of ["```~", "~~~`", "``", "``` and more"]) assert.equal(declared(`An example:\n\n\`\`\`\n${not}\nRequest path: measured\n\`\`\`\n`), null, not);
+  assert.equal(declared("````\n```\nRequest path: measured\n````\nRequest path: counted\n"), "counted");
   assert.equal(declared("An example:\n\n    Request path: measured\n\tRequest path: measured\n"), null);
   // A comment hides its lines, on one line or over several; what follows it is seen again.
   assert.equal(declared("<!-- Request path: measured -->\n<!--\nRequest path: measured\n-->\n"), null);
@@ -172,6 +177,14 @@ test("the way is declared by a line a reader sees standing alone, and by nothing
   assert.equal(declared("> Request path: measured\n   > Request path: measured\n"), null);
   assert.equal(declared("> The job says:\nRequest path: measured\n"), null);
   assert.equal(declared("> The job says to add a line.\n\nRequest path: measured\n"), "measured");
+  // A heading ends the quote above it, and is no declaration itself.
+  assert.equal(declared("> The job says:\n## Measurements\nRequest path: measured\n"), "measured");
+  assert.equal(declared("> The job says:\n#Request path: measured\nRequest path: measured\n# Request path: measured\n"), null);
+  // Where this is not Markdown, a line a reader sees is not read, and nothing hidden is: after
+  // an example fenced inside a list item, and after `<!--` written as code.
+  assert.equal(declared("- An example:\n  ```\n  Request path: counted\n  ```\n\nRequest path: measured\n"), "measured");
+  assert.equal(declared("- ```\n  Request path: counted\n  ```\n\nRequest path: measured\n"), null);
+  assert.equal(declared("A comment opens with `<!--`.\n\nRequest path: measured\n"), null);
 });
 
 test("the budget is more than 0.5% of base's instructions, and a rise of exactly that is inside it", () => {
@@ -353,6 +366,17 @@ test("a probe that did not build is said once: against base it leaves the change
   // A build with nothing in its directory and no word of why lacks every figure and every answer.
   rmSync(join(empty, "unbuilt"));
   assert.equal(verdict(compare(base, empty, { description: counting }).markdown).match(/ has no (figure|answer) on (base and )?head /g)?.length, 9 + 4 + 9 + 3 * RUNS + 9);
+  // The file being there is the failure: empty, and beside every figure and answer of a build
+  // that ran all the same, it leaves that build none.
+  const whole = builds(t);
+  writeFileSync(join(whole.base, "unbuilt"), "");
+  const marked = compare(whole.base, whole.head, { description: counting });
+  assert.equal(marked.status, 1);
+  assert.ok(verdict(marked.markdown).startsWith("**Does not pass as counted:** the probe did not build against base (`the build left no word of why`). By "), marked.markdown);
+  assert.equal(marked.markdown.match(/\| no figure \|$/gm)?.length, 9 + 4 + 9 + 3);
+  assert.doesNotMatch(marked.markdown, /^\| `get` \| 20,000 /m);
+  writeFileSync(join(whole.head, "unbuilt"), "");
+  assert.equal(compare(whole.base, whole.head, { description: measuring }).status, 1);
 });
 
 test("a change declared measured is reported and never failed on its figures", (t) => {
@@ -398,12 +422,17 @@ test("builds that answer differently are said to and fail nothing; a case either
   rmSync(join(base, "answers", "page.http"));
   for (const side of [base, head]) writeFileSync(join(side, "answers", "text.http"), "");
   writeFileSync(join(head, "answers", "page-browser.http"), answer("page-browser").subarray(0, -9));
-  writeFileSync(join(head, "answers", "get.http"), answer("pipeline"));
+  writeFileSync(join(head, "answers", "post.http"), answer("pipeline"));
+  // A head that says two bytes follow, and the one of them the case's body is; and a whole
+  // answer with more after it.
+  writeFileSync(join(base, "answers", "get.http"), "HTTP/1.1 200 OK\r\nContent-Length: 2\r\ndate: -\r\n\r\n3");
+  writeFileSync(join(base, "answers", "pipeline.http"), Buffer.concat([answer("pipeline"), answer("pipeline")]));
+  const not = "(`not one whole answer and no more`)";
   for (const description of [counting, "", measuring]) {
     const { markdown, status, holds } = compare(base, head, { description });
     assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], description);
-    for (const clause of ["`get` has no answer on head (`not the body of get: \"ok\"`)", "`text` has no answer on base and head (`no capture`)", "`page` has no answer on base (`no capture`)", "`page-browser` has no answer on head (`not a zstd body: "]) assert.ok(verdict(markdown).includes(clause), `${clause}\n${markdown}`);
-    assert.match(markdown, /^No answer to compare in `get`, `text`, `page`, `page-browser`\.$/m);
+    for (const clause of ["`post` has no answer on head (`not the body of post: \"ok\"`)", "`text` has no answer on base and head (`no capture`)", "`page` has no answer on base (`no capture`)", `\`page-browser\` has no answer on head ${not}`, `\`get\` has no answer on base ${not}`, `\`pipeline\` has no answer on base ${not}`]) assert.ok(verdict(markdown).includes(clause), `${clause}\n${markdown}`);
+    assert.match(markdown, /^No answer to compare in `get`, `post`, `pipeline`, `text`, `page`, `page-browser`\.$/m);
   }
 });
 

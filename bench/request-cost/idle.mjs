@@ -4,7 +4,8 @@
 // Usage: node idle.mjs <probe binary> [--connections 5000] [--case pipeline] [--requests 1 | --silent]
 //          [--addresses 1] [--cpu 0] [--port 8080] [--json]
 //
-// `--json` prints the run as a line of JSON in place of the sentence, for compare.mjs to read.
+// `--json` prints the run as a line of JSON in place of the sentence, for compare.mjs to read,
+// once the probe has been stopped: a run that fails there has printed no reading.
 // Starts the probe (not under callgrind), opens the connections one after another, sends one
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
@@ -54,6 +55,8 @@ const { configuration } = /** @type {typeof cases[string]} */ (cases[name]);
 const probe = await start(binary, configuration, { cpu: values.cpu, port });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
 const files = () => readdirSync(`/proc/${probe.pid}/fd`).length;
+/** The run as JSON, printed after the probe has stopped. @type {string | undefined} */
+let json;
 try {
   // Warm: the first connections and requests allocate what the probe keeps for all of them.
   for (let warm = 0; warm < 50; warm += 1) {
@@ -90,7 +93,9 @@ try {
   const what = values.silent ? "sent nothing" : `answered ${requests} ${name}`;
   // In JSON a connection that was sent nothing answered 0 requests.
   const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, seconds };
-  console.log(values.json ? JSON.stringify(measured) : `${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
+  if (values.json) json = JSON.stringify(measured);
+  else console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
 } finally {
   await probe.stop();
 }
+if (json !== undefined) console.log(json);
