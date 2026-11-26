@@ -726,7 +726,7 @@ impl Drop for Writing<'_> {
 }
 
 /// The path of a place on this site that `to` (a `Location`) names: one that starts at the
-/// root, or a whole URL with the request's `Host`. Another site's page is not kept here, and a
+/// root, or a whole URL with the requested authority. Another site's page is not kept here, and a
 /// reference relative to the request's path is not followed.
 fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
     let path = |rest: &'a [u8]| rest.split(|byte| matches!(byte, b'?' | b'#')).next().unwrap_or(rest);
@@ -1159,7 +1159,8 @@ impl Answers {
         }
         let count = count_of(req.uri().path().as_bytes());
         signal.writes(count);
-        Writing { answers: self, counted: Some((count, req.headers().get(header::HOST).cloned())), answered: false }
+        let host = crate::security::request_host(req.uri(), || req.headers().get(header::HOST));
+        Writing { answers: self, counted: Some((count, host.map(crate::security::RequestHost::into_header))), answered: false }
     }
 
     /// Counts a write to the paths `count` is for, so no page kept for them stands: every

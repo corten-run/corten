@@ -9062,9 +9062,9 @@ rules something out.
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
     `Location` of a write that did not fail: RFC 9111 sections 4.2.1, 5.1 and 4.4; a recipient
-    counts an answer's lifetime less its `Age`, section 4.2.3; the connection is HTTP/1.1, so a
-    request's target is its path and query and its host is the `Host` header,
-    [Limit 14](#limit-http1)); reasoned (the inputs a kept page's handler may take read, of a whole
+    counts an answer's lifetime less its `Age`, section 4.2.3; the store answers only origin-form
+    requests, whose target is a path and query and whose host comes from `Host`; for invalidation
+    a write with an absolute-form target takes its authority from that target, RFC 9112 section 3.2.2); reasoned (the inputs a kept page's handler may take read, of a whole
     document's `GET` without credentials, its URL, its `Host` and, for its language,
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
@@ -11488,7 +11488,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     developers, or when Chromium's panel stops showing an event stream's messages.
 26. <a id="limit-origin-scheme"></a>Without `Policy::hsts`, a write or a WebSocket handshake that carries no `Sec-Fetch-Site`
     (every handshake from Chromium and Firefox, and any write from a plain-http page, to which
-    browsers send none) is held to its `Origin`'s name and port against `Host`, not its scheme: a
+    browsers send none) is checked against the request-target's authority, or `Host` when the
+    target names none. Only the `Origin`'s name and port are compared, not its scheme: a
     plain-http page on the app's host passes against the app served over HTTPS
     ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
     The app cannot tell which scheme it is served over: a proxy or CDN in front usually ends TLS

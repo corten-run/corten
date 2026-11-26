@@ -424,6 +424,37 @@ async fn the_app_refuses_cross_site_writes() {
     assert_eq!(router.oneshot(req("same-origin")).await.unwrap().status(), StatusCode::OK);
 }
 
+/// A proxy may forward the whole target. The port is part of its authority, rather than
+/// the port of the connection to the proxy or the value of the separate Host line.
+#[tokio::test]
+async fn absolute_target_names_the_origin_of_a_write() {
+    use crate::security::Policy;
+    for (policy, path_status) in
+        [(Policy::new(), StatusCode::MISDIRECTED_REQUEST), (Policy::new().any_host(), StatusCode::NO_CONTENT)]
+    {
+        let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
+        let router = App::new(Routes::from(routes)).policy(policy).router();
+        let path = Request::post("/").header("host", "proxy.example").body(Body::empty()).unwrap();
+        assert_eq!(router.clone().oneshot(path).await.unwrap().status(), path_status);
+        for (target, origin, site, expected) in [
+            ("http://localhost/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("http://localhost:8000/", "http://localhost:8000", None, StatusCode::NO_CONTENT),
+            ("http://localhost:8000/", "http://localhost", None, StatusCode::FORBIDDEN),
+            ("http://localhost:80/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("https://localhost/", "https://localhost:443", None, StatusCode::NO_CONTENT),
+            ("http://localhost/", "http://localhost", Some("cross-site"), StatusCode::FORBIDDEN),
+            ("http://localhost/", "http://localhost", Some("same-origin"), StatusCode::NO_CONTENT),
+        ] {
+            let mut req = Request::post(target).header("host", "proxy.example").header("origin", origin);
+            if let Some(site) = site {
+                req = req.header("sec-fetch-site", site);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), expected, "{target} {origin} {site:?}");
+        }
+    }
+}
+
 /// A write redirected to an origin the form's page does not allow in `form-action` is an error in
 /// a debug build, as the browser stops it there; one the policy allows, a path, a page's own
 /// host and a `GET` are not, and an area's policy or the sending page's counts.
@@ -482,6 +513,8 @@ async fn a_write_redirected_outside_form_action_is_an_error_in_debug_builds() {
         let (status, _) = send("/else", "POST", mode).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}");
     }
+    let (status, _) = send("http://app.localhost/own", "POST", &[("host", "proxy.example")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "a redirect to the target's own host is 'self'");
     // Without a Referer the form may be on any of the app's pages: the checkout area allows this.
     let (status, _) = send("/sibling", "POST", &[]).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "some page of the app allows it");

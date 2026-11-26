@@ -1477,12 +1477,14 @@ fn notice_cookie(headers: &HeaderMap, plain: bool) -> Option<(&str, Gone)> {
 /// the notice is held to as well), and an `Origin` of this host, as the same-origin check on a
 /// write without that header requires ([`crate::security::Policy::same_origin`]), a default
 /// port written or left out alike.
-pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn plain_origin(uri: &Uri, headers: &HeaderMap) -> bool {
     if headers.contains_key("sec-fetch-site") {
         return false;
     }
-    let text = |name| headers.get(name).and_then(|v: &HeaderValue| v.to_str().ok());
-    let (Some(origin), Some(host)) = (text(header::ORIGIN), text(header::HOST)) else { return false };
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else { return false };
+    let Some(host) = crate::security::request_host(uri, || headers.get(header::HOST)).and_then(|at| at.text()) else {
+        return false;
+    };
     matches!(crate::security::on_host(origin, host), Some(("http", at)) if !crate::security::loopback(at))
 }
 
@@ -1588,7 +1590,7 @@ impl Req {
             } else {
                 None
             },
-            plain_write: write && !shared.https_only && plain_origin(headers),
+            plain_write: write && !shared.https_only && plain_origin(uri, headers),
             write,
             whole_action,
             fetched,
