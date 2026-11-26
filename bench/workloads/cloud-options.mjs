@@ -5,6 +5,14 @@ import { roundName, savedLoadLayout, savedPlacement, selection, terminalUnit, va
 
 // A disposition of one fenced DELETE, not a diagnostic or permission to retry.
 export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
+export function quarantineCensusTargets(command) {
+  assert.deepEqual(command.slice(0, 4), ["compute", "droplet", "list", "--pre-create-census"]);
+  assert.deepEqual(command.slice(-2), ["--output", "json"]);
+  const pairs = command.slice(4, -2);
+  assert.ok(pairs.length >= 1 && pairs.length <= 12 && new Set(pairs).size === pairs.length
+    && pairs.every((pair) => /^[a-f0-9]{64}:[a-f0-9]{64}$/.test(pair)), "invalid create quarantine targets");
+  return pairs.map((pair) => pair.split(":"));
+}
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "account-capacity", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
@@ -20,6 +28,8 @@ const providerDetails = {
   "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
     "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "catalog-request": [...catalogClosureDetails, "internal-refusal", "connect", "send", "response-status", "body-limit", "deadline", "cancelled"],
+  "create-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
+    "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "create-link-href": ["non-string", "malformed-uri", "credentials-or-fragment", "foreign-origin",
     "semantically-same-canonical-uri", "query-or-trailing-slash", "wrong-action-or-resource"],
   "list-response-count": ["terminal-count-mismatch", "total-changed"],

@@ -830,6 +830,40 @@ test("native catalog distinguishes complete invalid JSON, closed truncation and 
   });
 });
 
+test("native create reports a fixed transport reason without resolving or retrying its POST", { timeout: 10000 }, async (t) => {
+  let mode, requests = 0;
+  const server = createServer((req, res) => {
+    requests++;
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/v2/droplets");
+    req.resume();
+    if (mode === "request-error") req.socket.destroy();
+    else if (mode === "response-aborted") {
+      res.writeHead(202, { "content-length": 100 });
+      res.end("{");
+    } else if (mode === "invalid-json") res.writeHead(202).end(credential + " is not JSON");
+    else { res.writeHead(202); res.flushHeaders(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  for (const detail of ["request-error", "response-aborted", "invalid-json", "deadline"]) {
+    mode = detail;
+    const prior = requests;
+    const run = providerTransport({ repo: resolve("."), spawn, connect(url, options, callback) {
+      assert.equal(url.origin, "https://api.digitalocean.com");
+      return httpRequest({ ...options, hostname: "127.0.0.1", port: server.address().port, path: url.pathname }, callback);
+    } });
+    await assert.rejects(run(create, detail === "deadline" ? 500 : 2000, true), (error) => {
+      assert.equal(error.controlUncertain, true);
+      assert.ok(!error.pendingCreate);
+      assert.ok(!JSON.stringify(error).includes(credential));
+      assert.deepEqual(error.providerDiagnostic, { code: "create-request", detail });
+      return true;
+    });
+    assert.equal(requests, prior + 1);
+  }
+});
+
 test("native HTTP boundary pins origin, sends only memory credential and bounds redirects/body/deadline/cancellation", { timeout: 10000 }, async (t) => {
   let requests = 0, route = "account";
   const server = createServer((req, res) => {

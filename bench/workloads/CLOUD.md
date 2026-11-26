@@ -438,6 +438,12 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+`create-request` records a finite local transport reason when available, such as
+`request-error`, `response-aborted`, `invalid-json` or `deadline`. A broken response
+or a missing response is still an uncertain POST: the controller does not infer
+that it was unsent, release custody or submit it again. Older receipts that lack
+a detail do not establish any of those reasons.
+
 `account-capacity` is a code-only launch refusal: the complete census for the
 verified account reached or exceeded its valid droplet limit. The direct CLI and
 grouped receipt expose neither the limit nor the inventory. This guard stops
@@ -888,6 +894,51 @@ credential worker. Recovery can then reconcile the unique allocation under its
 durable create intent. Even if identity is found, provisioning cannot begin without
 the exact completed create-action proof. A timed-out or unsettled mutation remains
 uncertain, retains locks and cannot take this recovery shortcut.
+
+### Isolate an unacknowledged create
+
+A single group whose only create has an unacknowledged response and no saved
+droplet or action ID may be isolated in its existing continuation root. This
+does not settle the POST, record deletion, release the child or fleet locks, or
+allow the failed group to retry. Its row stays `quarantined-create`, not verified
+or retryable. Other groups can continue only in the same provider account, and
+their approved create uses one fresh, account-bracketed provider response for
+both the quarantine and historical ID checks and the ordinary pre-create
+census. Only a complete inventory with unique, checkable rows proves absence;
+there is no second read, page or retake. Nonempty pagination links, an inconsistent
+count, or an uncheckable row cannot prove absence. The worker matches the bound
+name and tag digests inside the bounded reply and returns only the sighting when
+it finds one. This works beyond the count limits for absence and when another
+field is malformed. If there is no match, only a complete, bounded projection
+can pass ordinary creation checks. In that complete inventory any earlier
+historical ID blocks the create even if renamed and untagged. This is not proof
+the original POST never succeeded. A validated
+name or tag match writes an exclusive `receipts/create-quarantine-witness.json` with the
+numeric droplet ID and the matching quarantine digest, without changing the
+original reservation. The witness blocks all subsequent creates in this root
+even if the droplet changes name or tags. Reconcile it before another create;
+there is no automatic clearance. A failed witness write retains operation
+custody. Read-only continuation reports show a valid witness as a blocked
+`quarantined-create-witnessed` attempt and still replay unrelated result
+evidence. Neither a sighting nor a quarantine report authorizes binding or
+cleanup.
+
+The operator must stop dispatch to the root and positively account for the
+original local controller, worker and their descendants. A stale PID, a missing
+droplet or a fleet failure receipt alone is not that proof. Keep that evidence
+and the unchanged outer lock outside all the state roots. Use
+`unacknowledgedCreateBinding(readFleet(attemptRoot, round, { priorSelection: true }))`
+from `fleet-verify.mjs` to get a read-only binding of the existing state, intent,
+diagnostic and three retained operation locks. Have a separate reviewer check
+the operator evidence, the binding and the provider observation. Save
+`receipts/create-quarantine.json` exclusively in that attempt with exactly
+`{ schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256 }`,
+where the digest names the retained proof. Only then archive and release the
+original outer continuation lock under the custody procedure below. Never clear
+the child locks through this route or copy the attempt to a fresh root. The
+binding and census do not replace the operator's process-tree proof.
+
+### Provider-errored create
 
 A create the provider accepts and then fails has its own terminal outcome
 ([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
