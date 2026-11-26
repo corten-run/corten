@@ -10,7 +10,7 @@ import test from "node:test";
 import * as provider from "./cloud-provider.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { publicError } from "./droplet.mjs";
-import { providerDiagnostic } from "./cloud-options.mjs";
+import { providerDiagnostic, unsentCreate } from "./cloud-options.mjs";
 import { accountId, campaign, commit, context, harness as controllerHarness, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
 import { settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
@@ -428,6 +428,18 @@ test("success IPC cannot smuggle diagnostics, unknown fields or nonempty failed 
     });
     assert.equal(h.launches, 1);
   }
+});
+
+test("cancellation at the create transport boundary never sends an action to the worker", async (t) => {
+  let cancelled = false;
+  const h = harness(t, "success", undefined, () => cancelled);
+  await h.run(account);
+  cancelled = true;
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
+  assert.equal(await h.run(create, 60000, true), unsentCreate);
+  await h.run.close();
+  assert.deepEqual(h.state().calls.map(({ method }) => method), ["GET"]);
 });
 
 test("deadline and cancellation reap an unsettled worker, preserve uncertainty and never retry", async (t) => {
