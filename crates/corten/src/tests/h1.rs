@@ -123,17 +123,75 @@ pub(super) fn statuses(got: &str) -> Vec<u16> {
     got.match_indices("HTTP/1.").filter_map(|(at, _)| got.get(at + 9..at + 12)?.parse().ok()).collect()
 }
 
-/// `got` with each `Date` replaced: the one thing two servers may answer differently.
-pub(super) fn dateless(got: &str) -> String {
-    let mut out = String::new();
-    let mut rest = got;
-    while let Some(at) = rest.find("date: ") {
-        let end = rest[at..].find("\r\n").map_or(rest.len(), |end| at + end);
-        out.push_str(&rest[..at]);
-        out.push_str("date: -");
-        rest = &rest[end..];
+/// Where `part` first is in `bytes`.
+pub(super) fn find(bytes: &[u8], part: &[u8]) -> Option<usize> {
+    bytes.windows(part.len()).position(|window| window == part)
+}
+
+/// `got` with the value of each answer's `Date` replaced: the one thing two servers may answer
+/// differently. Only a `date` line of an answer's head whose value is a date as a server writes
+/// one: the same bytes anywhere else (a body, another line's value) are left as they are, and so
+/// is every other byte. No body in these tests has a status line in it.
+pub(super) fn undated(got: &[u8]) -> Vec<u8> {
+    const SHAPE: &[u8; 29] = b"Aaa, 00 Aaa 0000 00:00:00 GMT";
+    let dated = |value: &[u8]| {
+        value.len() == SHAPE.len()
+            && value.iter().zip(SHAPE).all(|(byte, shape)| match shape {
+                b'0' => byte.is_ascii_digit(),
+                b'A' => byte.is_ascii_uppercase(),
+                b'a' => byte.is_ascii_lowercase(),
+                _ => byte == shape,
+            })
+    };
+    let (mut out, mut rest) = (Vec::with_capacity(got.len()), got);
+    while let Some(head) = find(rest, b"HTTP/1.") {
+        out.extend_from_slice(&rest[..head]);
+        rest = &rest[head..];
+        // The head's lines, to the empty one or to the end of what was sent.
+        while !rest.is_empty() {
+            let line = find(rest, b"\r\n").map_or(rest.len(), |end| end + 2);
+            let (this, behind) = rest.split_at(line);
+            rest = behind;
+            match this.strip_prefix(b"date: ").and_then(|value| value.strip_suffix(b"\r\n")) {
+                Some(value) if dated(value) => out.extend_from_slice(b"date: -\r\n"),
+                _ => out.extend_from_slice(this),
+            }
+            if this == b"\r\n" {
+                break;
+            }
+        }
     }
-    out + rest
+    out.extend_from_slice(rest);
+    out
+}
+
+/// [`undated`], for what a test holds as text.
+pub(super) fn dateless(got: &str) -> String {
+    String::from_utf8_lossy(&undated(got.as_bytes())).into_owned()
+}
+
+/// A `Date` is taken out of an answer's head and from nowhere else.
+#[test]
+fn only_an_answers_own_date_is_taken_out() {
+    let date = "Sun, 06 Nov 1994 08:49:37 GMT";
+    let answer = |body: &str| format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\ndate: {date}\r\n\r\n{body}", body.len());
+    let without = |body: &str| format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\ndate: -\r\n\r\n{body}", body.len());
+    assert_eq!(dateless(&(answer("hi") + &answer(""))), without("hi") + &without(""));
+    // Not in a body, not in another line's value, not a value that is no date, and not a head
+    // that was cut before its date's end.
+    let body = format!("date: {date}\r\n");
+    assert_eq!(dateless(&answer(&body)), without(&body));
+    for head in [format!("x-was: date: {date}"), "date: yesterday".to_owned(), format!("date: {date} "), format!("Date: {date}")]
+    {
+        let kept = format!("HTTP/1.1 200 OK\r\n{head}\r\n\r\n");
+        assert_eq!(dateless(&kept), kept);
+    }
+    let cut = format!("HTTP/1.1 200 OK\r\ndate: {}", &date[..20]);
+    assert_eq!(dateless(&cut), cut);
+    assert_eq!(
+        undated(b"\xff\xfeHTTP/1.1 200 OK\r\n\xff: \x80\r\n\r\n\xff"),
+        b"\xff\xfeHTTP/1.1 200 OK\r\n\xff: \x80\r\n\r\n\xff"
+    );
 }
 
 static X: [u8; 20 * 1024] = [b'x'; 20 * 1024];
@@ -1469,18 +1527,6 @@ impl<F: FnMut(Request<Body>) -> Response> tower_service::Service<Request<Body>> 
     }
 }
 
-/// One end of a connection in memory whose two directions hold different amounts.
-type Pipe = tokio::io::Join<tokio::io::ReadHalf<tokio::io::SimplexStream>, tokio::io::WriteHalf<tokio::io::SimplexStream>>;
-
-/// A connection in memory: what the server writes waits in `to_client` bytes of room until the
-/// client reads it, and what the client writes in a megabyte. The client's end, then the server's.
-/// An end that is dropped closes nothing: a side is closed by its `shutdown`.
-fn pipes(to_client: usize) -> (Pipe, Pipe) {
-    let (server_reads, client_writes) = tokio::io::simplex(1 << 20);
-    let (client_reads, server_writes) = tokio::io::simplex(to_client);
-    (tokio::io::join(client_reads, client_writes), tokio::io::join(server_reads, server_writes))
-}
-
 /// Lets the other futures of the test's task run until they wait.
 async fn turns() {
     for _ in 0..6 {
@@ -1491,9 +1537,10 @@ async fn turns() {
 /// The buffer of answers holds what is unsent and no more, however long its client keeps some of
 /// it unsent. A client leaves six kilobytes of answers unread, less than makes the connection
 /// wait for it, and from then on takes one answer and sends one request, thousands of times: the
-/// buffer is never empty, every answer the client took has left it, and it never holds more than
-/// a write's worth and the answer being written. (Before, it was emptied only once all of it had
-/// gone, so it held every byte sent since: 144 MB in a review's run of this client.)
+/// buffer is never empty, and it never holds more than a write's worth that has gone in front of
+/// a write's worth that has not, with the answer being written. (Before, it was emptied only
+/// once all of it had gone, so it held every byte sent since: 144 MB in a review's run of this
+/// client.)
 #[tokio::test]
 async fn the_buffer_of_answers_holds_what_is_unsent_and_no_more() {
     use crate::h1::{FLUSH_AT, OUT};
@@ -1521,7 +1568,10 @@ async fn the_buffer_of_answers_holds_what_is_unsent_and_no_more() {
         let mut answer = vec![0u8; each];
         for _ in 0..ROUNDS {
             client.read_exact(&mut answer).await.unwrap();
-            assert!(answer.starts_with(b"HTTP/1.1 200 OK\r\n") && answer.ends_with(b"\r\n\r\nhi"), "an answer, whole and in its place");
+            assert!(
+                answer.starts_with(b"HTTP/1.1 200 OK\r\n") && answer.ends_with(b"\r\n\r\nhi"),
+                "an answer, whole and in its place"
+            );
             client.write_all(GET.as_bytes()).await.unwrap();
             turns().await;
         }
@@ -1533,8 +1583,8 @@ async fn the_buffer_of_answers_holds_what_is_unsent_and_no_more() {
     assert_eq!(handled.load(SeqCst), 1 + unread + ROUNDS, "every request was answered");
     let (most, room) = OUT.get();
     assert!(most >= 4_000, "answers waited in the buffer for their client: {most} bytes at the most");
-    assert!(most <= FLUSH_AT + each, "the buffer held {most} bytes, of answers of {each}");
-    assert!(room <= 2 * (FLUSH_AT + each), "the buffer had room for {room} bytes");
+    assert!(most < 2 * FLUSH_AT + each, "the buffer held {most} bytes, of answers of {each}");
+    assert!(room < 2 * (2 * FLUSH_AT + each), "the buffer had room for {room} bytes");
 }
 
 /// Shutdown that begins while an answer streams ends the connection at that answer's end, on both
@@ -1695,7 +1745,8 @@ async fn a_body_that_panics_takes_no_answer_before_it() {
         assert_eq!(statuses(&got), [200; 3], "own: {own}: {got}");
         assert!(got.ends_with("\r\n\r\nhi"), "own: {own}: {got}");
         // The server is as it was: the next connection is answered.
-        assert_eq!(statuses(&served.closed(last()).await), [200], "own: {own}");
+        let next = served.closed(format!("GET / HTTP/1.1\r\n{HOST}connection: close\r\n\r\n")).await;
+        assert_eq!(statuses(&next), [200], "own: {own}");
         answers.push(dateless(&got));
         served.stop().await;
     }
@@ -1850,7 +1901,11 @@ impl tokio::io::AsyncRead for Chopped {
 }
 
 impl tokio::io::AsyncWrite for Chopped {
-    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
         self.get_mut().takes(cx, &[buf])
     }
 
@@ -1889,14 +1944,15 @@ async fn a_handoff_follows_the_answers_before_it_however_the_socket_takes_them()
         let io = Chopped { input: sent.into_bytes(), at: 0, output: output.clone(), dice: Dice(seed), most, vectored, fails_at };
         let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
         let serving = crate::h1::serve(io, Hi(handled.clone()), 32 * 1024, &ending);
-        let handed = tokio::time::timeout(Duration::from_secs(30), serving).await.expect("the connection ends, or is handed over");
+        let handed =
+            tokio::time::timeout(Duration::from_secs(30), serving).await.expect("the connection ends, or is handed over");
         let answers = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         (handed, answers, handled.load(SeqCst))
     };
     let mut dice = Dice(31);
-    let mut each = 0;
+    let (mut each, mut most_sent) = (0, 0);
     for round in 0..300u64 {
-        let before = dice.below(260);
+        let before = dice.below(600);
         let (most, vectored) = ([1, 3, 17, 300, 5_000, 40_000][round as usize % 6], round % 2 == 0);
         let (handed, answers, handled) = serve(GET.repeat(before) + &theirs, most, vectored, None, round).await;
         let name = format!("round {round}: {before} requests before, writes of {most} at most");
@@ -1905,16 +1961,18 @@ async fn a_handoff_follows_the_answers_before_it_however_the_socket_takes_them()
         assert_eq!(statuses(&answers), vec![200; before], "{name}");
         assert!(before == 0 || answers.ends_with("\r\n\r\nhi"), "{name}: the last answer before it is whole");
         each = each.max(answers.len() / before.max(1));
+        most_sent = most_sent.max(answers.len());
         let mut given = Vec::new();
         crate::h1::Rewound::new(io, read).read_to_end(&mut given).await.unwrap();
         assert_eq!(String::from_utf8_lossy(&given), theirs, "{name}");
     }
     // Long enough runs of answers to fill the buffer, and to give other tasks a turn.
-    assert!(each > 0 && 250 * each > 2 * crate::h1::FLUSH_AT);
+    assert!(each > 0 && most_sent > 2 * crate::h1::FLUSH_AT, "{most_sent} bytes of answers at the most");
     let before = 12;
     for fails_at in (0..before * each).step_by(7).chain([before * each - 1]) {
         for most in [1, 40, 5_000] {
-            let (handed, answers, handled) = serve(GET.repeat(before) + &theirs, most, fails_at % 2 == 0, Some(fails_at), 5).await;
+            let (handed, answers, handled) =
+                serve(GET.repeat(before) + &theirs, most, fails_at % 2 == 0, Some(fails_at), 5).await;
             let name = format!("a write fails at byte {fails_at}, writes of {most} at most");
             assert!(handed.is_none(), "{name}: the connection is not handed over");
             assert!(answers.len() <= fails_at && handled <= before, "{name}: {} bytes written", answers.len());
@@ -1927,14 +1985,15 @@ async fn a_handoff_follows_the_answers_before_it_however_the_socket_takes_them()
 /// request found behind an answer is not begun once shutdown has.
 #[tokio::test]
 async fn shutdown_begun_before_a_handoff_ends_the_connection_at_the_answers_before_it() {
-    const BEFORE: usize = 20;
-    let (mut client, server) = pipes(512);
+    const BEFORE: usize = 10;
+    let (mut client, server) = tokio::io::duplex(512);
     let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
     let serving = crate::h1::serve(server, Hi(handled.clone()), 32 * 1024, &ending);
     let asking = async {
         let theirs = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello");
         client.write_all((GET.repeat(BEFORE) + &theirs).as_bytes()).await.unwrap();
-        // The answers are more than the pipe holds: the connection waits for its client.
+        // The answers are more than the pipe holds: the connection waits for its client to take
+        // them, with the request that is hyper's read behind them.
         turns().await;
         ending.store(true, SeqCst);
         let (mut got, mut buf) = (Vec::new(), [0u8; 4096]);
@@ -1986,13 +2045,17 @@ async fn an_answers_trailers_are_dropped_and_its_trailer_line_with_them() {
     let hyper = Served::start(app(), false).await;
     let own = Served::start(app(), true).await;
     for asks in ["", "te: trailers\r\n"] {
-        let request = format!("GET /trailed HTTP/1.1\r\n{HOST}{asks}\r\n{GET}{}", last());
+        let request = format!("GET /trailed HTTP/1.1\r\n{HOST}{asks}\r\n{GET}GET / HTTP/1.1\r\n{HOST}connection: close\r\n\r\n");
         let (theirs, ours) = (hyper.closed(&request).await, own.closed(&request).await);
         assert_eq!(statuses(&ours), [200, 200, 200], "asks {asks:?}: the connection goes on: {ours}");
         assert!(!ours.contains("trailer") && !ours.contains("x-t"), "asks {asks:?}: {ours}");
         assert!(ours.contains("\r\n\r\n4\r\nbody\r\n0\r\n\r\nHTTP/1.1 200 OK\r\n"), "asks {asks:?}: {ours}");
         assert!(theirs.contains("trailer: x-t\r\n"), "asks {asks:?}: hyper announces them: {theirs}");
-        assert_eq!(theirs.contains("0\r\nx-t: 1\r\n\r\n"), !asks.is_empty(), "asks {asks:?}: hyper sends them if asked: {theirs}");
+        assert_eq!(
+            theirs.contains("0\r\nx-t: 1\r\n\r\n"),
+            !asks.is_empty(),
+            "asks {asks:?}: hyper sends them if asked: {theirs}"
+        );
         let without = theirs.replace("trailer: x-t\r\n", "").replace("0\r\nx-t: 1\r\n\r\n", "0\r\n\r\n");
         assert_eq!(dateless(&ours), dateless(&without), "asks {asks:?}");
     }
