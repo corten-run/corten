@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clientLimits, coldOutput, coldOutputBytes, coldResult, combinedRunner, eventStream, memorySampler, readBounded, runSteady } from "./steady-run.mjs";
+import { clientLimits, coldOutput, coldOutputBytes, coldResult, combinedRunner, containerBase, eventStream, memorySampler, passRunId, readBounded, runSteady } from "./steady-run.mjs";
 import { convergenceLines, eventFormat, intervalSchedule, ownerLabelKey, parseSteadyArgs, timedStartup, validateConvergence, validateSoak } from "./steady-contract.mjs";
 import { steadyReport } from "./steady-report.mjs";
 import { resultSchema } from "./run-contract.mjs";
@@ -193,6 +193,8 @@ const folderOf = (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return (name) => join(root, name);
 };
+// The prefix of every Docker name the test run's pass gives (containerBase); its run ID is the owner label's value.
+const base = containerBase("marketplace-test-run");
 const run = (fake, options, folder, extra = {}) => runSteady({ options, folder, runId: "marketplace-test-run", docker: fake.docker, git, env: {}, window: 30, clock: runClock({ now: fake.now }),
   fixture: () => "f".repeat(64), fixtureFile, upstreamReady: async () => {}, print: quiet, spawnEvents: eventsClient(fake).spawn, eventBounds: { markerMs: 200, graceMs: 5, boundMs: 50 }, ...extra });
 // A fixed 150 requests/second soak's k6 export over 30 one-minute intervals, every arrival on schedule.
@@ -220,7 +222,7 @@ test("a convergence pass starts each cell with the timed round's cold start and 
   // The k6 version came from an owned container, created, attached and removed by ID: no docker run.
   assert.equal(s.tools.k6.version, "2.4.0");
   assert.ok(!fake.calls.some((c) => c.args[0] === "run"), "no untracked docker run");
-  const version = fake.ids["marketplace-test-run-k6-version"];
+  const version = fake.ids[`${base}-k6-version`];
   assert.ok(fake.calls.some((c) => c.args[0] === "rm" && c.args.at(-1) === version), "the version probe was removed by its ID");
   // Each target's sidecar polls that target's own path, as run.mjs coldStart does, and the app starts
   // only once the sidecar is waiting, before the load container exists.
@@ -259,6 +261,44 @@ test("a convergence pass starts each cell with the timed round's cold start and 
   const unpinned = await run(fakeDocker({ exportFor: () => k6Export(flat(8)) }), options, folder("unpinned"));
   assert.match(convergenceLines({ ...round, measurement: unpinned.measurement, tools: unpinned.tools, apps: { corten: { imageId: unpinned.images.corten, runs: round.apps.corten.runs } } }, ["corten"], unpinned)[2],
     /not like-for-like.*the app CPU pinning \(cpuset\) is not recorded on both sides \(pass: not recorded; round: not recorded\)/);
+});
+
+// RFC 1035 label: what a container name must be for another container on the network to resolve it.
+const dnsLabel = /^(?=.{1,63}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+test("every container a pass starts has a name, and is reached by a hostname, that is a valid DNS label, for the longest pass name the CLI accepts", async (t) => {
+  const folder = folderOf(t);
+  const longest = "r21-runtimes-".padEnd(41, "x");
+  assert.throws(() => parseSteadyArgs(["convergence", `${longest}x`], apps, groupApps), /a pass name/);
+  assert.equal(passRunId("soak", "w4", "0123456789"), "marketplace-soak-w4-0123456789");
+  // Two runs of the same pass get different prefixes, from their run IDs' random suffixes.
+  assert.notEqual(containerBase(passRunId("convergence", longest)), containerBase(passRunId("convergence", longest)));
+  assert.match(containerBase(passRunId("convergence", longest)), /^mkt-[0-9a-f]{12}$/);
+  for (const name of [longest, "w3"]) {
+    const options = parseSteadyArgs(["convergence", name, "--apps", "tanstack-start", "--sources", "api,fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+    // The run ID as steady.mjs makes it.
+    const runId = passRunId(options.kind, options.name);
+    const fake = fakeDocker({ exportFor: () => k6Export(flat(8)) });
+    const s = await run(fake, options, folder(name), { runId });
+    assert.equal(s.complete, true, JSON.stringify(s.failures));
+    // The descriptive name and run ID are what the summary keeps, and what owns every resource.
+    assert.deepEqual([s.name, s.runId], [name, runId]);
+    const creates = fake.calls.filter((c) => c.args[0] === "create").map((c) => c.args);
+    for (const a of creates) {
+      assert.ok(dnsLabel.test(a[2]), `container name ${a[2]} (${a[2].length} characters)`);
+      assert.ok(a.includes(`${ownerLabelKey}=${runId}`), `${a[2]} carries the owner label`);
+      // Every hostname it reaches another container by: a URL argument or env value, and the app's HOSTS.
+      const hosts = a.flatMap((x) => [...x.matchAll(/http:\/\/([^:/]+):8080/g)].map((m) => m[1]));
+      const allowed = a.find((x) => x.startsWith("HOSTS="))?.slice(6).split(",").filter((h) => h !== "localhost" && h !== "127.0.0.1") ?? [];
+      for (const host of [...hosts, ...allowed]) {
+        assert.ok(dnsLabel.test(host), `hostname ${host} (${host.length} characters)`);
+        assert.ok(creates.some((b) => b[2] === host), `hostname ${host} names a container this pass made`);
+      }
+    }
+    // The upstream, both cells' apps, probes, loads and markers, and the host and k6 version probes.
+    assert.equal(creates.length, 11);
+    assert.equal(new Set(creates.map((a) => a[2])).size, 7, "one name per role: the two cells reuse theirs in turn");
+    assert.equal(fake.containers.size, 0); assert.equal(fake.networks.size, 0);
+  }
 });
 
 test("a load whose k6 engine clock does not cover the pass gives the cell no reading", async (t) => {
@@ -318,26 +358,26 @@ test("a create whose ID Docker withholds is not reported clean, and no further c
   const options = parseSteadyArgs(["convergence", "t4", "--apps", "corten,aspnet", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   // The first cell's load container: the daemon errors, and the container it made only appears
   // after the pass's final scans.
-  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), withhold: (name) => name === "marketplace-test-run-k6" });
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), withhold: (name) => name === `${base}-k6` });
   const s = await run(fake, options, folder("withheld"));
   assert.equal(s.complete, false);
   assert.equal(s.cells[0].failure, "container");
   assert.deepEqual(s.failures, [{ stage: "suite", code: "unsettled" }]);
   const errors = errorsOf(folder("withheld"));
   assert.match(errors, /context deadline exceeded/);
-  assert.match(errors, /corten fixture page did not settle \(the create of marketplace-test-run-k6 was not acknowledged\), so no further cell is measured/);
+  assert.ok(errors.includes(`corten fixture page did not settle (the create of ${base}-k6 was not acknowledged), so no further cell is measured`), errors);
   assert.equal(s.cells.length, 1, "aspnet was not measured");
-  assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-aspnet"));
+  assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === `${base}-aspnet`));
   const cleanup = cleanupOf(folder("withheld"));
   assert.equal(cleanup.complete, false);
   assert.deepEqual(cleanup.remaining, { containers: 0, networks: 0 }, "the scans found nothing, and that is not taken as clean");
-  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "unconfirmed"]]);
+  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [[`${base}-k6`, "unconfirmed"]]);
   assert.ok(cleanup.failures.some((f) => /cleanup is unconfirmed/.test(f.error)));
   assert.equal(s.cleanup.complete, false);
   assert.ok(s.cleanup.failures > 0);
-  assert.deepEqual(s.cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "unconfirmed"]]);
+  assert.deepEqual(s.cleanup.unacknowledged.map((a) => [a.name, a.outcome]), [[`${base}-k6`, "unconfirmed"]]);
   // The cell's own app was removed before the pass stopped.
-  const corten = fake.calls.find((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-corten");
+  const corten = fake.calls.find((c) => c.args[0] === "create" && c.args[2] === `${base}-corten`);
   assert.ok(corten && !fake.containers.size);
 });
 
@@ -368,7 +408,7 @@ test("a round given to --admitted-from that does not read is refused with a fixe
 test("a load container that cannot be removed still has its app removed, and no further cell is measured", async (t) => {
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t5", "--apps", "corten,aspnet", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
-  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), failRemove: (name) => name === "marketplace-test-run-k6" });
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), failRemove: (name) => name === `${base}-k6` });
   const s = await run(fake, options, folder("stuck"));
   assert.equal(s.complete, false);
   // The cell itself measured; its teardown is what failed.
@@ -377,12 +417,12 @@ test("a load container that cannot be removed still has its app removed, and no 
   assert.match(errorsOf(folder("stuck")), /corten fixture page did not settle \(container [0-9a-f]{64} was not removed\), so no further cell is measured/);
   // The app's removal is attempted after the load container's failed one, before the pass stops.
   const removals = fake.calls.map((c, index) => ({ index, args: c.args })).filter((c) => c.args[0] === "rm");
-  const firstK6 = removals.find((r) => r.args[3] === fake.ids["marketplace-test-run-k6"]), appRemoval = removals.find((r) => r.args[3] === fake.ids["marketplace-test-run-corten"]);
+  const firstK6 = removals.find((r) => r.args[3] === fake.ids[`${base}-k6`]), appRemoval = removals.find((r) => r.args[3] === fake.ids[`${base}-corten`]);
   assert.ok(firstK6 && appRemoval && appRemoval.index > firstK6.index);
   assert.ok(appRemoval.index < fake.calls.findIndex((c) => c.args[0] === "ps" && c.args.includes(`label=${ownerLabelKey}=marketplace-test-run`)), "before the teardown sweep");
-  assert.ok([...fake.containers.values()].every((c) => c.name === "marketplace-test-run-k6"), "only the stuck load container is left");
-  assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-aspnet"));
-  assert.ok(cleanupOf(folder("stuck")).failures.some((f) => f.resource === fake.ids["marketplace-test-run-k6"] || /marketplace-test-run-k6/.test(f.resource)));
+  assert.ok([...fake.containers.values()].every((c) => c.name === `${base}-k6`), "only the stuck load container is left");
+  assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === `${base}-aspnet`));
+  assert.ok(cleanupOf(folder("stuck")).failures.some((f) => f.resource === fake.ids[`${base}-k6`] || f.resource.includes(`${base}-k6`)));
   assert.ok(s.cleanup.failures > 0);
 });
 
@@ -456,14 +496,14 @@ test("a soak samples its app's memory by the container's ID, on the workstation 
   // 100 + i MiB. From that origin the first 60 s interval holds samples 0 to 5 and the last 174 to
   // 179; from the container's StartedAt, 5 s later, they would be 1 to 6 and 175 to 179.
   let tick = 0;
-  const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, (_, i) => ({ ID: args.at(-1), Name: "marketplace-test-run-corten", CPUPerc: "1.00%", MemUsage: `${100 + i}MiB / 1GiB` })) });
+  const stats = statsClient({ delayMs: 10, rows: (args) => Array.from({ length: 180 }, (_, i) => ({ ID: args.at(-1), Name: `${base}-corten`, CPUPerc: "1.00%", MemUsage: `${100 + i}MiB / 1GiB` })) });
   const s = await run(fake, options, folder("soak"), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
   assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
   validateSoak(s);
   const [cell] = s.cells;
   assert.deepEqual([cell.memory.samples, cell.memory.startMiB, cell.memory.endMiB, cell.rate.held, cell.failedRequests, cell.restarts.restarted, cell.requests], [180, 102.5, 276.5, true, 0, false, 270_000]);
-  assert.deepEqual(stats.spawned.map((x) => x.args), [["stats", "--no-trunc", "--format", "{{json .}}", fake.ids["marketplace-test-run-corten"]]]);
-  assert.ok(!stats.spawned[0].args.includes("marketplace-test-run-corten"));
+  assert.deepEqual(stats.spawned.map((x) => x.args), [["stats", "--no-trunc", "--format", "{{json .}}", fake.ids[`${base}-corten`]]]);
+  assert.ok(!stats.spawned[0].args.includes(`${base}-corten`));
 });
 
 test("a soak whose app was OOM-killed keeps its stop and OOM observations when its memory cannot be read", async (t) => {
@@ -515,7 +555,7 @@ test("a soak cell whose k6 aggregate failures exceed every request outside its i
 test("the memory sampler refuses names and settles at its bound when something holds its pipes", async (t) => {
   const folder = folderOf(t);
   const id = "a".repeat(64);
-  assert.throws(() => memorySampler({ ids: ["marketplace-test-run-corten"], file: folder("x.log"), seconds: 10, spawn: statsClient().spawn }), /immutable container IDs/);
+  assert.throws(() => memorySampler({ ids: [`${base}-corten`], file: folder("x.log"), seconds: 10, spawn: statsClient().spawn }), /immutable container IDs/);
   // A row keyed by anything but the sampled ID is an error, not a sample, and is counted, not quoted.
   const canary = "b".repeat(65);
   const named = statsClient({ rows: () => [{ ID: canary, CPUPerc: "1%", MemUsage: "1MiB / 1GiB" }, { ID: id, CPUPerc: "1%", MemUsage: `${canary} / 1GiB` }] });
@@ -553,7 +593,7 @@ test("Docker's and k6's own output never reaches summary.json or cleanup.json; i
   const saved = (dir) => readFileSync(join(dir, "summary.json"), "utf8") + readFileSync(join(dir, "cleanup.json"), "utf8");
   const clean = (dir) => { const text = saved(dir); assert.ok(!text.includes(canary) && !text.includes(token), text); };
   // A cold probe that exits 1 with untrusted output.
-  const cold = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "wait" ? "1" : args[0] === "logs" && args[1] === cold.ids["marketplace-test-run-corten-probe"]
+  const cold = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "wait" ? "1" : args[0] === "logs" && args[1] === cold.ids[`${base}-corten-probe`]
     ? `catalog-probe-ready${state.calls.some((c) => c.args[0] === "wait") ? `\n${canary} ${token}` : ""}` : undefined });
   const a = await run(cold, options, folder("cold"));
   assert.equal(a.cells[0].failure, "cold-start");
@@ -565,7 +605,7 @@ test("Docker's and k6's own output never reaches summary.json or cleanup.json; i
   assert.ok(errorsOf(folder("metric")).includes("the k6 summary export has 1 metric this load does not define"));
   clean(folder("metric"));
   // A removal that fails with Docker's own text after the first line: the record keeps the first line.
-  const stuck = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "rm" && args[3] === state.ids["marketplace-test-run-k6"] ? new Error(`docker rm -f: exit 1\n${canary} ${token}`) : undefined });
+  const stuck = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "rm" && args[3] === state.ids[`${base}-k6`] ? new Error(`docker rm -f: exit 1\n${canary} ${token}`) : undefined });
   const b = await run(stuck, options, folder("rm"));
   assert.equal(b.complete, false);
   assert.ok(cleanupOf(folder("rm")).failures.some((f) => f.error === "docker rm -f: exit 1"), JSON.stringify(cleanupOf(folder("rm")).failures));
@@ -590,8 +630,8 @@ test("summary.json keeps a value from Docker, the host or k6 only when it matche
   // itself matches the pin), and an extra repository digest on the k6 image.
   const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
     if (args[0] === "version") return `27.5.1 <${token}>`;
-    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"]) return `6.8.0-test ${token}\nmodel name\t: Synthetic <${token}>\n0-7;${token}`;
-    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6-version"]) return `k6 v2.4.0 (commit/${token}, go1.24, linux/amd64)`;
+    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-host`]) return `6.8.0-test ${token}\nmodel name\t: Synthetic <${token}>\n0-7;${token}`;
+    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-k6-version`]) return `k6 v2.4.0 (commit/${token}, go1.24, linux/amd64)`;
     if (args[0] === "image" && args[2] === k6Image) return JSON.stringify([{ Id: k6ImageId, Os: "linux", Architecture: "amd64", RepoDigests: [k6Image, `example.com/${token}@sha256:${"e".repeat(64)}`] }]);
     return undefined;
   } });
@@ -610,7 +650,7 @@ test("summary.json keeps a value from Docker, the host or k6 only when it matche
   assert.ok(k6.includes(token) && k6.includes("example.com"));
   // A CPU model longer than cpuModelLimit is not recorded, and the report says so.
   const long = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
-    args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"] ? `6.8.0-test\nmodel name\t: ${longCpu}\n0-7` : undefined }), options, folder("long"));
+    args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-host`] ? `6.8.0-test\nmodel name\t: ${longCpu}\n0-7` : undefined }), options, folder("long"));
   assert.deepEqual([long.host.kernel, long.host.cpuModelSha256, long.host.onlineCpus], ["6.8.0-test", null, "0-7"]);
   assert.match(steadyReport(long), /CPU model: not recorded \(online CPUs 0-7\)/);
   assert.ok(!readFileSync(join(folder("long"), "summary.json"), "utf8").includes("XXXX"));
@@ -628,7 +668,7 @@ test("an adapter or upstream image ID that is not a canonical Docker ID fails it
   assert.ok(readFileSync(join(folder("app"), "images.json"), "utf8").includes("leaked-canary"), "the receipt keeps it raw");
   // The upstream container reports an image that is not a canonical ID.
   const upstream = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
-    const id = state.ids["marketplace-test-run-upstream"];
+    const id = state.ids[`${base}-upstream`];
     if (args[0] === "start" && args[1] === id) state.containers.get(id).imageId = odd;
     return undefined;
   } }), options, folder("upstream"));
@@ -636,7 +676,7 @@ test("an adapter or upstream image ID that is not a canonical Docker ID fails it
   assert.ok(!readFileSync(join(folder("upstream"), "summary.json"), "utf8").includes("leaked-canary"));
   // A k6 version with text in place of its patch number does not match the pin: a tools failure.
   const k6 = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
-    args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6-version"] ? "k6 v2.4.leaked-canary" : undefined }), options, folder("k6"));
+    args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-k6-version`] ? "k6 v2.4.leaked-canary" : undefined }), options, folder("k6"));
   assert.deepEqual([k6.complete, k6.failures, k6.tools], [false, [{ stage: "suite", code: "tools" }], null]);
   assert.ok(!readFileSync(join(folder("k6"), "summary.json"), "utf8").includes("leaked-canary"));
 });
@@ -658,8 +698,8 @@ test("a soak reads restarts from a live event stream only when it shows the mark
   // app's last inspect, with no app event between. It is the live stream, never a --since replay.
   const clean = await soak("clean");
   assert.deepEqual([clean.r.eventStream, clean.r.events, clean.r.restarted], ["none-seen", [], false]);
-  const app = clean.fake.ids["marketplace-test-run-corten"], marker = clean.fake.ids["marketplace-test-run-corten-marker"];
-  const load = clean.fake.ids["marketplace-test-run-k6"];
+  const app = clean.fake.ids[`${base}-corten`], marker = clean.fake.ids[`${base}-corten-marker`];
+  const load = clean.fake.ids[`${base}-k6`];
   assert.deepEqual(clean.client.spawned.map((x) => x.args), [["events", "--filter", "type=container", "--filter", `container=${app}`, "--filter", `container=${marker}`, "--filter", `container=${load}`, "--format", eventFormat]]);
   // The load's own rows (attach, start, die, archive-path) are read and not kept.
   assert.ok(readFileSync(join(folder("clean"), "fixture", "corten", "page", "events.log"), "utf8").includes(`${load}|archive-path|`));
@@ -667,7 +707,7 @@ test("a soak reads restarts from a live event stream only when it shows the mark
   const at = (predicate) => clean.fake.calls.findIndex(predicate), last = (predicate) => clean.fake.calls.findLastIndex(predicate);
   const markerStarts = clean.fake.calls.flatMap((c, i) => (c.args[0] === "start" && c.args[1] === marker ? [i] : []));
   assert.equal(markerStarts.length, 2);
-  assert.ok(markerStarts[0] < at((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === clean.fake.ids["marketplace-test-run-k6"]), "the first marker start is before the load");
+  assert.ok(markerStarts[0] < at((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === clean.fake.ids[`${base}-k6`]), "the first marker start is before the load");
   // The app's snapshot after the load is its first inspect once k6's export has been copied out.
   const copied = last((c) => c.args[0] === "cp"), afterInspect = clean.fake.calls.findIndex((c, i) => i > copied && c.args[0] === "container" && c.args.at(-1) === app);
   assert.ok(afterInspect > copied && markerStarts[1] > afterInspect, "the second marker start is after the app's snapshot after the load");
@@ -772,7 +812,7 @@ test("a soak's app snapshots must be valid and running before they are compared,
   const s = await run(fake, options, folder("no-count"), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
   assert.equal(s.cells[0].failure, "container");
   assert.match(errorsOf(folder("no-count")), /the app's instance before the load is not recorded as a container ID, a StartedAt time, a RestartCount and its running and OOM states/);
-  assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-k6"), "no load ran");
+  assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === `${base}-k6`), "no load ran");
   // A valid pass keeps RestartCount in both raw snapshots.
   tick = 0;
   const ok = fakeDocker({ exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 });
@@ -785,7 +825,7 @@ test("a convergence cell whose app snapshots lack RestartCount, or carry the sam
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t14", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   // Only the snapshots taken after the cold start (its probe gone): before and after the load.
-  const afterColdStart = (state) => state.ids["marketplace-test-run-corten-probe"] && ![...state.containers.values()].some((c) => c.kind === "probe");
+  const afterColdStart = (state) => state.ids[`${base}-corten-probe`] && ![...state.containers.values()].some((c) => c.kind === "probe");
   const cases = [
     ["no-count", (info) => (({ RestartCount, ...rest }) => rest)(info), "container", /the app's instance before the load is not recorded/],
     ["bad-time", (info) => ({ ...info, State: { ...info.State, StartedAt: "not-a-time" } }), "container", /the app's instance before the load is not recorded/],
@@ -807,7 +847,7 @@ test("a convergence cell whose app snapshots lack RestartCount, or carry the sam
 test("the event stream settles at its bound when something holds its pipes, and waits for a marker only so long", async (t) => {
   const folder = folderOf(t);
   const app = "a".repeat(64), marker = "b".repeat(64);
-  assert.throws(() => eventStream({ app: "marketplace-test-run-corten", marker, file: folder("x.log"), spawn: statsClient().spawn }), /immutable container IDs/);
+  assert.throws(() => eventStream({ app: `${base}-corten`, marker, file: folder("x.log"), spawn: statsClient().spawn }), /immutable container IDs/);
   const fake = { listeners: [] };
   const held = eventsClient(fake, { holds: true });
   const stream = eventStream({ app, marker, file: folder("held.log"), spawn: held.spawn, markerMs: 20, graceMs: 10, boundMs: 60 });
@@ -971,7 +1011,7 @@ test("every container mounts a private copy of the verified fixture, so editing 
   const { s, mounted, fake } = await pass("edited", (n) => writeFileSync(original, JSON.stringify({ item_1: { id: `changed-${n}` } })));
   assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
   assert.equal(s.fixtureSha256, sha256(verified));
-  assert.deepEqual(mounted.map((m) => m.name), ["marketplace-test-run-upstream", "marketplace-test-run-corten", "marketplace-test-run-aspnet"]);
+  assert.deepEqual(mounted.map((m) => m.name), [`${base}-upstream`, `${base}-corten`, `${base}-aspnet`]);
   for (const m of mounted) assert.deepEqual([m.source, m.sha], [join(folder("edited"), "mounted-fixture"), s.fixtureSha256], m.name);
   assert.notEqual(sha256(readFileSync(original)), s.fixtureSha256, "the original did change during the pass");
   assert.ok(!existsSync(join(folder("edited"), "mounted-fixture")), "the copy is removed at teardown");
@@ -1064,7 +1104,7 @@ test("the cold probe's readiness and result come from its stdout alone, bounded 
   const result = (extra) => JSON.stringify({ first200At: new Date().toISOString(), successfulRequestMs: 1, bytes: 1, attempts: 1, path: "/marketplace/en-US/item_1", ...extra });
   const cases = [["extra", result({ note: 1 })], ["path", result({ path: "/other" })], ["attempts", result({ attempts: 0 })], ["long", "x".repeat(coldOutputBytes)]];
   for (const [name, line] of cases) {
-    const bad = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "logs" && args[1] === state.ids["marketplace-test-run-corten-probe"]
+    const bad = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => args[0] === "logs" && args[1] === state.ids[`${base}-corten-probe`]
       ? `catalog-probe-ready\n${state.calls.some((c) => c.args[0] === "wait") ? `${line}\n` : ""}` : undefined });
     const b = await run(bad, options, folder(name));
     assert.deepEqual([b.cells[0].failure, b.cells[0].verdict], ["cold-start", null], name);
@@ -1100,7 +1140,7 @@ test("the cold probe's stdout is read from its file as the probe wrote it, not a
     return output.result();
   });
   const probeSays = (tail) => (args, state) => {
-    if (args[0] !== "logs" || args[1] !== state.ids["marketplace-test-run-corten-probe"]) return undefined;
+    if (args[0] !== "logs" || args[1] !== state.ids[`${base}-corten-probe`]) return undefined;
     const app = state.app();
     if (!state.calls.some((c) => c.args[0] === "wait")) return "catalog-probe-ready\n";
     return `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(app.state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/marketplace/en-US/item_1" })}${tail}`;
@@ -1131,7 +1171,7 @@ test("a cold start with an empty first 200 fails as the timed validator fails it
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t22", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   const empty = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => {
-    if (args[0] !== "logs" || args[1] !== state.ids["marketplace-test-run-corten-probe"]) return undefined;
+    if (args[0] !== "logs" || args[1] !== state.ids[`${base}-corten-probe`]) return undefined;
     if (!state.calls.some((c) => c.args[0] === "wait")) return "catalog-probe-ready\n";
     return `catalog-probe-ready\n${JSON.stringify({ first200At: new Date(Date.parse(state.app().state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 0, attempts: 2, path: "/marketplace/en-US/item_1" })}\n`;
   } });
@@ -1139,7 +1179,7 @@ test("a cold start with an empty first 200 fails as the timed validator fails it
   assert.deepEqual([s.cells[0].failure, s.cells[0].verdict], ["cold-start", null]);
   assert.ok(!existsSync(join(folder("empty"), "fixture", "corten", "page", "cold.json")));
   assert.ok(errorsOf(folder("empty")).includes("the cold probe's result is not a cold start a timed round accepts (validateColdStart); its output is in cold.log"));
-  assert.ok(!empty.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === empty.ids["marketplace-test-run-k6"]), "no load runs after a refused cold start");
+  assert.ok(!empty.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === empty.ids[`${base}-k6`]), "no load runs after a refused cold start");
 });
 
 test("a cold probe that never becomes ready still leaves its log in cold.log, and a failed collection does not replace that failure", async (t) => {
@@ -1150,7 +1190,7 @@ test("a cold probe that never becomes ready still leaves its log in cold.log, an
   const quietProbe = (failCollect = false) => {
     const fake = fakeDocker({ exportFor: () => k6Export(flat(8)) }), docker = fake.docker;
     fake.docker = async (args, opts = {}) => {
-      if (args[0] !== "logs" || args[1] !== fake.ids["marketplace-test-run-corten-probe"]) return docker(args, opts);
+      if (args[0] !== "logs" || args[1] !== fake.ids[`${base}-corten-probe`]) return docker(args, opts);
       fake.calls.push({ args, file: opts.file });
       // Its stdout: written to the file when one is named for stdout alone, otherwise returned.
       if (opts.file === undefined || opts.fileStderr === false) { if (opts.file !== undefined) appendFileSync(opts.file, ""); return ""; }
@@ -1168,7 +1208,7 @@ test("a cold probe that never becomes ready still leaves its log in cold.log, an
   assert.equal(readFileSync(join(folder("early"), "fixture", "corten", "page", "cold.log"), "utf8"), "probe diagnostic\n");
   // The probe was collected before it was removed.
   const collected = early.calls.findIndex((c) => c.args[0] === "logs" && c.file?.endsWith("cold.log"));
-  const removed = early.calls.findIndex((c) => c.args[0] === "rm" && c.args.at(-1) === early.ids["marketplace-test-run-corten-probe"]);
+  const removed = early.calls.findIndex((c) => c.args[0] === "rm" && c.args.at(-1) === early.ids[`${base}-corten-probe`]);
   assert.ok(collected >= 0 && collected < removed, "cold.log is collected before the probe is removed");
   // A collection that fails: the readiness failure stands, and the collection's error is kept.
   const failing = quietProbe(true);
@@ -1184,7 +1224,7 @@ test("the mounted fixture copy is kept while a container may still mount it, and
   const folder = folderOf(t);
   const options = parseSteadyArgs(["convergence", "t19", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   // A load container that cannot be removed: cleanup is unconfirmed, so the copy stays.
-  const stuck = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), failRemove: (name) => name === "marketplace-test-run-k6" }), options, folder("stuck"));
+  const stuck = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), failRemove: (name) => name === `${base}-k6` }), options, folder("stuck"));
   assert.equal(stuck.cleanup.complete, false);
   assert.equal(stuck.complete, false);
   assert.ok(existsSync(join(folder("stuck"), "mounted-fixture", "marketplace.json")), "the copy a container may still mount is kept");
@@ -1278,7 +1318,7 @@ test("a load runs only against the app instance that served the cold probe: anot
   const folder = folderOf(t);
   // The app's inspect answers change only once the cold probe is removed: the cold start's own
   // inspect sees the instance that served the probe, the one before the load another.
-  const coldDone = (state) => state.calls.some((x) => x.args[0] === "rm" && x.args.at(-1) === state.ids["marketplace-test-run-corten-probe"]);
+  const coldDone = (state) => state.calls.some((x) => x.args[0] === "rm" && x.args.at(-1) === state.ids[`${base}-corten-probe`]);
   const changes = [
     ["started-at", (info) => ({ ...info, State: { ...info.State, StartedAt: new Date(Date.parse(info.State.StartedAt) + 1000).toISOString() } }), "another StartedAt"],
     ["restart-count", (info) => ({ ...info, RestartCount: 1 }), "another RestartCount"],
@@ -1296,8 +1336,8 @@ test("a load runs only against the app instance that served the cold probe: anot
     assert.equal(s.cells[0].failure, "instance-changed", `${at}: ${JSON.stringify(s.cells[0])}`);
     assert.ok(errorsOf(folder(at)).includes(`the app before the load is not the instance that served the cold probe: ${what}`), at);
     // No load started: no k6 or marker container, no load run, no memory sampler.
-    assert.ok(!fake.calls.some((c) => c.args[0] === "create" && (c.args[2] === "marketplace-test-run-k6" || c.args[2].endsWith("-marker"))), at);
-    assert.ok(!fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] !== fake.ids["marketplace-test-run-host"] && c.args[2] !== fake.ids["marketplace-test-run-k6-version"]), at);
+    assert.ok(!fake.calls.some((c) => c.args[0] === "create" && (c.args[2] === `${base}-k6` || c.args[2].endsWith("-marker"))), at);
+    assert.ok(!fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] !== fake.ids[`${base}-host`] && c.args[2] !== fake.ids[`${base}-k6-version`]), at);
     assert.equal(stats.spawned.length, 0, at);
     // The failure is the cell's: the pass is complete and reads, with no reading for that cell.
     assert.equal(s.complete, true, at);
@@ -1310,7 +1350,7 @@ test("the cold probe's output is read as its result only after it exits, with bo
   const options = parseSteadyArgs(["convergence", "t32", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
   const result = (state) => JSON.stringify({ first200At: new Date(Date.parse(state.app().state.StartedAt) + 5).toISOString(), successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/marketplace/en-US/item_1" });
   // Ready (its line ended) while the readiness poll reads it; `exited(state)` once it has exited.
-  const probe = (exited) => (args, state) => (args[0] === "logs" && args[1] === state.ids["marketplace-test-run-corten-probe"]
+  const probe = (exited) => (args, state) => (args[0] === "logs" && args[1] === state.ids[`${base}-corten-probe`]
     ? (state.calls.some((c) => c.args[0] === "wait") ? exited(state) : "catalog-probe-ready\n") : undefined);
   const good = await run(fakeDocker({ exportFor: () => k6Export(flat(8)), override: probe((state) => `catalog-probe-ready\n${result(state)}\n`) }), options, folder("good"));
   assert.equal(good.complete, true, JSON.stringify([good.failures, good.cells]));
@@ -1328,7 +1368,7 @@ test("the cold probe's output is read as its result only after it exits, with bo
     assert.deepEqual([s.cells[0].failure, s.cells[0].verdict], ["cold-start", null], name);
     assert.match(errorsOf(folder(name)), message, name);
     assert.ok(!existsSync(join(folder(name), "fixture", "corten", "page", "cold.json")), name);
-    assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === "marketplace-test-run-k6"), `${name}: no load after a refused cold start`);
+    assert.ok(!fake.calls.some((c) => c.args[0] === "create" && c.args[2] === `${base}-k6`), `${name}: no load after a refused cold start`);
   }
   // The final parser on its own; the readiness poll's parser still accepts a line not yet ended.
   const line = JSON.stringify({ first200At: "2026-11-25T00:00:00.000Z", successfulRequestMs: 1.5, bytes: 10, attempts: 2, path: "/p" });
@@ -1345,7 +1385,7 @@ test("a host's CPU model is saved only as its digest, even in a form a pass once
   // Letters, digits and single spaces: the form convergence v4 saved and printed as text.
   const model = "Synthetic CanaryModel 7543";
   const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) =>
-    (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-host"] ? `6.8.0-test\nmodel name\t: ${model}\n0-7` : undefined) });
+    (args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-host`] ? `6.8.0-test\nmodel name\t: ${model}\n0-7` : undefined) });
   const s = await run(fake, options, folder("canary"), { env: pinnedEnv });
   assert.equal(s.complete, true, JSON.stringify(s.failures));
   validateConvergence(s);
@@ -1407,7 +1447,7 @@ test("a cell runs only with the settings its summary records: image, CPU quota a
     assert.equal(s.cells[0].failure, "settings", `${name}: ${JSON.stringify(s.cells[0])}`);
     assert.ok(errorsOf(folder(name)).includes(`the ${what} is not the one this pass records`), name);
     // Refused before the load starts: no load run.
-    assert.ok(!fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === fake.ids["marketplace-test-run-k6"]), `${name}: no load ran`);
+    assert.ok(!fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === fake.ids[`${base}-k6`]), `${name}: no load ran`);
     assert.ok(!readFileSync(join(folder(name), "summary.json"), "utf8").includes("e".repeat(64)), name);
     // The cell's failure is the pass's record: it is complete and reads, with no reading for that cell.
     assert.equal(s.complete, true, name);
@@ -1415,7 +1455,7 @@ test("a cell runs only with the settings its summary records: image, CPU quota a
   }
   // Settings that change only in the load's inspect after it ran are refused as well, before a reading.
   let ran = false;
-  const after = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => { if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6"]) ran = true; },
+  const after = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args, state) => { if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-k6`]) ran = true; },
     inspected: (info, c) => (c.kind === "k6" && ran ? set("VUS", "64")(info) : info) });
   const late = await run(after, convergence, folder("after"), { env: pinnedEnv });
   assert.equal(late.cells[0].failure, "settings");
@@ -1443,12 +1483,12 @@ test("the app is rechecked as the instance that served the cold probe immediatel
     let tick = 0;
     const stats = statsClient({ delayMs: 10, rows: (a) => Array.from({ length: 180 }, () => ({ ID: a.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
     const s = await run(fake, options, folder(name), { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ } });
-    return { s, fake, loaded: fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === fake.ids["marketplace-test-run-k6"]) };
+    return { s, fake, loaded: fake.calls.some((c) => c.args[0] === "start" && c.args[1] === "-a" && c.args[2] === fake.ids[`${base}-k6`]) };
   };
   // A restart in place (a new StartedAt, its restart event) once the load container is created: after
   // the app's snapshot before the load and the soak's first marker start, before the load starts.
   const gap = (args, state) => {
-    if (args[0] === "create" && args[2] === "marketplace-test-run-k6") {
+    if (args[0] === "create" && args[2] === `${base}-k6`) {
       const app = state.app(); state.offset += 1000;
       app.state = { ...app.state, StartedAt: new Date(state.now()).toISOString() }; state.emit(app.id, "restart");
     }
@@ -1464,7 +1504,7 @@ test("the app is rechecked as the instance that served the cold probe immediatel
   // A restart event stamped after that recheck but before the load's StartedAt is not the load's either.
   const [, soakOptions, soakFor, soakExtra] = kinds[1];
   const stamped = await measure("soak-before-start", soakOptions, soakFor, { ...soakExtra, override: (args, state) => {
-    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6"]) { state.emit(state.app().id, "restart"); state.offset += 1; }
+    if (args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-k6`]) { state.emit(state.app().id, "restart"); state.offset += 1; }
   } });
   assert.equal(stamped.s.cells[0].failure, "instance-changed", JSON.stringify(stamped.s.cells[0]));
   assert.ok(errorsOf(folder("soak-before-start")).includes("the app had a start, restart, die, kill or OOM event stamped before the load started"));
@@ -1487,7 +1527,7 @@ function sampled(fake, options, folder, extra = {}) {
   const stats = statsClient({ delayMs: 10, rows: (a) => Array.from({ length: 180 }, () => ({ ID: a.at(-1), Name: "x", CPUPerc: "1.00%", MemUsage: "100MiB / 1GiB" })) });
   return run(fake, options, folder, { spawnStats: stats.spawn, statsBounds: { now: () => fake.startIssuedMs + 10_000 * tick++ }, ...extra });
 }
-const loadStarted = (args, state) => args[0] === "start" && args[1] === "-a" && args[2] === state.ids["marketplace-test-run-k6"];
+const loadStarted = (args, state) => args[0] === "start" && args[1] === "-a" && args[2] === state.ids[`${base}-k6`];
 const withHost = (change) => (info) => ({ ...info, HostConfig: { ...info.HostConfig, ...change } });
 
 test("an app whose settings a docker update changes after its first check, at the launch check or during the load, fails the cell `settings` and keeps no reading", async (t) => {
@@ -1497,8 +1537,8 @@ test("an app whose settings a docker update changes after its first check, at th
   // [name, the pass, when the update lands, the change, the setting the message names, whether the load ran]
   const cases = [
     // Once the load container is created: after the app's first check, seen at the launch check.
-    ["launch-quota", convergence, (args) => args[0] === "create" && args[2] === "marketplace-test-run-k6", withHost({ NanoCpus: 2e9 }), "CPU quota", false],
-    ["launch-memory", soak, (args) => args[0] === "create" && args[2] === "marketplace-test-run-k6", withHost({ Memory: 2 ** 31 }), "memory limit", false],
+    ["launch-quota", convergence, (args) => args[0] === "create" && args[2] === `${base}-k6`, withHost({ NanoCpus: 2e9 }), "CPU quota", false],
+    ["launch-memory", soak, (args) => args[0] === "create" && args[2] === `${base}-k6`, withHost({ Memory: 2 ** 31 }), "memory limit", false],
     // Once the load has started: seen in the app's inspect after it.
     ["load-cpuset", convergence, loadStarted, withHost({ CpusetCpus: "0" }), "CPU pinning (cpuset)", true],
     ["load-quota", soak, loadStarted, withHost({ NanoCpus: 2e9 }), "CPU quota", true],
@@ -1536,7 +1576,7 @@ test("an API cell's upstream is checked before the cell and after its load: sett
   assert.equal(during.s.complete, true);
   validateConvergence(during.s);
   // Between the cells (once the first cell's app is removed): the first reads, the second fails before its app exists.
-  const between = await measure("between", (args, state) => args[0] === "rm" && args.at(-1) === state.ids["marketplace-test-run-corten"]);
+  const between = await measure("between", (args, state) => args[0] === "rm" && args.at(-1) === state.ids[`${base}-corten`]);
   assert.deepEqual([between.s.cells.map((c) => [c.target, c.failure ?? "read"]), between.loads], [[["page", "read"], ["json", "settings"]], 1], JSON.stringify(between.s.cells));
   assert.ok(!existsSync(join(raw("between", "json"), "app-container.json")), "no app was created for the refused cell");
   validateConvergence(between.s);
@@ -1617,7 +1657,7 @@ test("a create whose acknowledgement was lost counts as cleaned up only once wha
   // The load container is made but its create's answer is lost, and the owner-label sweep's listing
   // leaves it out: only the lookup by its attempt label finds it.
   const omits = (args) => (args[0] === "ps" && args.includes(`label=${ownerLabelKey}=marketplace-test-run`) ? "" : undefined);
-  const lost = (name) => name === "marketplace-test-run-k6";
+  const lost = (name) => name === `${base}-k6`;
   // The run's clock and the daemon's are one fixed time that moves only when the daemon or a sleep
   // moves it on, so the 30 ms reconciliation window's first lookup is made however long the host
   // takes between the window's start and that lookup.
@@ -1627,7 +1667,7 @@ test("a create whose acknowledgement was lost counts as cleaned up only once wha
   const s = await run(stuck, options, folder("stuck"), { clock: stuckClock });
   assert.equal(s.cells[0].failure, "container");
   const cleanup = cleanupOf(folder("stuck"));
-  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome, a.found]), [["marketplace-test-run-k6", "not removed", 1]]);
+  assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome, a.found]), [[`${base}-k6`, "not removed", 1]]);
   assert.equal(cleanup.complete, false);
   assert.ok(cleanup.failures.some((f) => /not each removed or confirmed absent by its own ID/.test(f.error)));
   assert.equal(s.cleanup.complete, false);
@@ -1637,8 +1677,8 @@ test("a create whose acknowledgement was lost counts as cleaned up only once wha
   const [found, foundClock] = controlled({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits });
   const r = await run(found, options, folder("found"), { clock: foundClock });
   const record = cleanupOf(folder("found"));
-  assert.deepEqual(record.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "removed"]]);
-  assert.ok(found.calls.some((c) => c.args[0] === "rm" && c.args.at(-1) === found.ids["marketplace-test-run-k6"]), "removed by its ID");
+  assert.deepEqual(record.unacknowledged.map((a) => [a.name, a.outcome]), [[`${base}-k6`, "removed"]]);
+  assert.ok(found.calls.some((c) => c.args[0] === "rm" && c.args.at(-1) === found.ids[`${base}-k6`]), "removed by its ID");
   assert.equal(found.containers.size, 0);
   assert.equal(r.cleanup.complete, true);
   assert.ok(!existsSync(join(folder("found"), "mounted-fixture")), "the copy is removed once nothing can mount it");
@@ -1656,10 +1696,10 @@ test("a docker update during the load that is undone before the inspect after it
   // An update of a container during the load, undone before any inspect sees it: only its update event shows it.
   const updateOf = (name) => (state) => state.emit(state.ids[name], "update");
   const cases = [
-    ["app-convergence", convergence, "marketplace-test-run-corten", "app"],
-    ["load-convergence", convergence, "marketplace-test-run-k6", "load"],
-    ["upstream-api", api, "marketplace-test-run-upstream", "upstream"],
-    ["app-soak", soak, "marketplace-test-run-corten", "app"],
+    ["app-convergence", convergence, `${base}-corten`, "app"],
+    ["load-convergence", convergence, `${base}-k6`, "load"],
+    ["upstream-api", api, `${base}-upstream`, "upstream"],
+    ["app-soak", soak, `${base}-corten`, "app"],
   ];
   const passOf = (options, extra = {}) => fakeDocker({ ...(options.kind === "soak" ? { exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 } : { exportFor: () => k6Export(flat(8)) }), ...extra });
   for (const [name, options, container, role] of cases) {
@@ -1733,7 +1773,7 @@ test("the load receipt keeps the window settings as requested and as Docker repo
   assert.ok(!early.calls.some((c) => loadStarted(c.args, early)), "no load started");
   const before = JSON.parse(readFileSync(join(folder("nine-before"), "fixture", "corten", "page", "load-container-before.json"), "utf8"));
   assert.deepEqual(before.windowEnv, observedNine);
-  assert.equal(before.id, early.ids["marketplace-test-run-k6"]);
+  assert.equal(before.id, early.ids[`${base}-k6`]);
   // Docker's inspect of the load after it ran reports WINDOWS=9 for the 8 the pass asked for.
   const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), inspected: (info, c, state) => (c.kind === "k6" && state.startIssuedMs !== null ? nine(info) : info) });
   const s = await run(fake, options, folder("nine"));
@@ -1770,7 +1810,7 @@ test("a load whose inspect before it starts has no readable environment or host 
     const text = readFileSync(join(folder(name), "fixture", "corten", "page", "load-container-before.json"), "utf8");
     assert.ok(!text.includes(canary), name);
     const receipt = JSON.parse(text);
-    assert.equal(receipt.id, fake.ids["marketplace-test-run-k6"], name);
+    assert.equal(receipt.id, fake.ids[`${base}-k6`], name);
     assert.deepEqual(receipt.windowEnv.requested, { WINDOWS: "8", WINDOW_SECONDS: "15" }, name);
     assert.equal(s.complete, true, name);
     validateConvergence(s);
@@ -1794,7 +1834,7 @@ test("the live watcher starts no load on a first marker start the reader would r
   let rewritten = false;
   const rewrite = (row) => {
     const [id, action] = row.split("|");
-    if (!rewritten && action === "start" && id === fake.ids["marketplace-test-run-corten-marker"]) { rewritten = true; return [`${id}|start|not-a-time`]; }
+    if (!rewritten && action === "start" && id === fake.ids[`${base}-corten-marker`]) { rewritten = true; return [`${id}|start|not-a-time`]; }
     return [row];
   };
   const s = await run(fake, options, folder("malformed-marker"), { spawnEvents: eventsClient(fake, { rewrite }).spawn });
@@ -1812,7 +1852,7 @@ test("a cell whose event stream lost an update still has a reading, and its save
     // The app is updated during the load and undone before the inspect after it; Docker's stream,
     // with both marker starts and the fence, drops that update row as it may for a slow subscriber.
     const fake = fakeDocker({ ...(options.kind === "soak" ? { exportFor: () => soakExport(), clockMs: 1_800_000, loadMs: 50 } : { exportFor: () => k6Export(flat(8)) }),
-      duringLoad: (state) => state.emit(state.ids["marketplace-test-run-corten"], "update") });
+      duringLoad: (state) => state.emit(state.ids[`${base}-corten`], "update") });
     const client = eventsClient(fake, { drop: (row) => row.includes("|update|") });
     const s = await sampled(fake, options, folder(name), { env: pinnedEnv, spawnEvents: client.spawn });
     assert.equal(s.complete, true, name);
@@ -1843,8 +1883,8 @@ test("an app kill delivered after the marker's second start and before the fence
     let starts = 0, kill = null;
     const rewrite = (row) => {
       const [id, action, nanos] = row.split("|");
-      if (id !== fake.ids["marketplace-test-run-corten-marker"] || action !== "start" || ++starts !== 2) return [row];
-      kill = `${fake.ids["marketplace-test-run-corten"]}|kill|${BigInt(nanos) + 1n}`;
+      if (id !== fake.ids[`${base}-corten-marker`] || action !== "start" || ++starts !== 2) return [row];
+      kill = `${fake.ids[`${base}-corten`]}|kill|${BigInt(nanos) + 1n}`;
       return [row, kill];
     };
     const s = await sampled(fake, options, folder(name), { env: pinnedEnv, spawnEvents: eventsClient(fake, { rewrite }).spawn });

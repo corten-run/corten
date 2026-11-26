@@ -62,12 +62,14 @@ These results do not establish whether each adapter, the JIT runtimes in particu
 changing by the end of the 10-second warmup, or whether any app's memory and tail latency hold
 over longer runs. The [convergence and soak passes](../bench/marketplace/README.md#convergence-and-soak-passes)
 take screening readings toward those questions outside the nightly; they do not establish
-either. A convergence pass gives each cell a screening reading of throughput, not a certificate
+either. A convergence pass gives a cell a screening reading of throughput, not a certificate
 of steady state: within a stated tolerance from a named window
 to the end (every window within 10% of the tail median, three-window medians within 5%, trend
 within 5%, the onset window's own throughput within 5%, and medians of the first 60 s and of the
 60 s before the tail no more than 5% above the tail median, comparisons between medians, not of
-each window), or not within it at the end. Oscillation or drift inside those bounds reads as within
+each window), or not within it at the end. A cell that failed (a failed request, an app that
+stopped, restarted, was replaced or was OOM-killed, or an event stream that could not confirm the
+load) and a cell whose final 60-second median is zero get no reading. Oscillation or drift inside those bounds reads as within
 tolerance, a last-window shift under 10% can go undetected, the onset is resolved to one window, and
 readings at different window lengths are not comparable. k6's raw engine clock and the app
 container's before-and-after inspect are checked only while a pass runs; its saved summary records

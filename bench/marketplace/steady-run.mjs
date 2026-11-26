@@ -44,7 +44,7 @@
 // of its app that inspect shows in or before the load.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { platform, release } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
@@ -401,6 +401,25 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
  * @param {(args: string[], options?: object) => Promise<string>} p.docker bounded docker runner (commandRunner)
  * @param {(args: string[]) => Promise<string>} p.git
  */
+/**
+ * The run ID steady.mjs gives a pass: its kind, its descriptive name and a random suffix. It is what
+ * summary.json keeps and the value of the owner label on every resource; it is never a Docker name
+ * (containerBase).
+ */
+export const passRunId = (kind, name, suffix = randomBytes(5).toString("hex")) => `marketplace-${kind}-${name}-${suffix}`;
+// RFC 1035 label: at most 63 lowercase letters, digits and dashes, with no dash at either end.
+const dnsLabel = /^(?=.{1,63}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+/**
+ * The prefix of every container and network name a pass gives Docker. Its containers reach one
+ * another by name on the pass's network, so each name must be a DNS label, and a run ID made from a
+ * long pass name is not one (a 41-character name gives an 85-character probe hostname). The prefix
+ * is fixed text and the first 12 hex digits of the run ID's SHA-256, 16 characters, so it is as
+ * unique per run as the run ID's random suffix. Nothing is found by these names: every resource is
+ * read and removed by its ID, or found by the owner or attempt label, which carry the run ID.
+ * @param {string} runId
+ */
+export const containerBase = (runId) => `mkt-${createHash("sha256").update(runId).digest("hex").slice(0, 12)}`;
+
 export async function runSteady({ options, folder, runId, docker, git, interrupted = () => false, env = process.env, clock = runClock(), window = reconcileWindow,
   fixture = currentFixture, fixtureFile = join(fixtureDir, "marketplace.json"), removeCopy = (path) => rmSync(path, { recursive: true, force: true }), upstreamReady = waitHealth, spawnStats = spawn, statsBounds = {}, spawnEvents = spawn, eventBounds = {}, print = console.log }) {
   const convergence = options.kind === "convergence";
@@ -454,7 +473,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   const fixtureCopy = join(folder, "mounted-fixture");
   const fixtureMount = ["-v", `${fixtureCopy}:/fixtures:ro`];
   let fixtureCopySha256 = null;
-  const upstreamName = `${runId}-upstream`;
+  // Each Docker name: the run's prefix and a role or adapter, refused unless it is a DNS label.
+  const base = containerBase(runId);
+  const named = (name) => { assert.match(name, dnsLabel, "a container name is not a DNS label"); return name; };
+  const dockerName = (suffix) => named(`${base}-${suffix}`);
+  const upstreamName = dockerName("upstream");
   // The upstream's container ID and the settings the summary records for it, once it is created.
   let network, upstreamId, upstreamSettings;
   const port = async (id) => {
@@ -482,7 +505,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     // Both of the probe's streams, written straight to cold.log and never read back, at most once.
     const collect = async () => { logged = true; await owned.logs(probe, { file: join(raw, "cold.log") }); };
     try {
-      probe = await owned.container(["--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], `${name}-probe`);
+      probe = await owned.container(["--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], named(`${name}-probe`));
       await owned.start(probe);
       retain(join(raw, "probe-container.json"), containerReceipt(await owned.inspect(probe)));
       // Readiness and the result come from the probe's stdout alone: written afresh to
@@ -526,7 +549,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
   // One adapter, source and target: a fresh container, the cold start, one long k6 pass. Before it
   // returns or throws, every container it made has been removed or is listed in `left`.
   async function pass(cell, imageId, raw, left) {
-    const name = `${runId}-${cell.app}`;
+    const name = dockerName(cell.app);
     let sampler, app, k6, marker, stream;
     // An API cell's load reaches the upstream, so its settings are checked before the cell, at the
     // launch check and after the load, like the app's: `docker update` can change them without a
@@ -576,11 +599,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
           observed: Object.fromEntries(windowKeys.map((key) => [key, (Array.isArray(info?.Config?.Env) ? info.Config.Env : []).filter((e) => typeof e === "string" && e.startsWith(`${key}=`)).map((e) => e.slice(key.length + 1))])) } };
       };
       k6 = await step("container", () => owned.container(["--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...k6Env,
-        k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], `${runId}-k6`));
+        k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/window-load.js"], dockerName("k6")));
       // The live event stream of the app, the load and an API cell's upstream, listening before the
       // launch check: the marker's first start shows it is. Without it the cell would have no
       // event-stream check of an update or restart during the load, so no load starts.
-      marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], `${name}-marker`));
+      marker = await step("container", () => owned.container(["--network", "none", ...cpus.load.args, "--memory", "64m", nodeImage, "true"], named(`${name}-marker`)));
       stream = eventStream({ app, marker, others: [k6, ...(cell.source === "api" ? [upstreamId] : [])], file: join(raw, "events.log"), spawn: spawnEvents, ...eventBounds });
       await step("container", () => owned.start(marker));
       await step("unconfirmed", () => stream.marker(1));
@@ -705,7 +728,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     assert.match(image?.Id ?? "", /^sha256:[a-f0-9]{64}$/, "missing k6 image ID");
     let probe, output;
     try {
-      probe = await owned.container(["--network", "none", image.Id, "version"], `${runId}-k6-version`);
+      probe = await owned.container(["--network", "none", image.Id, "version"], dockerName("k6-version"));
       output = await owned.attach(probe, 60_000);
     } finally { if (probe) assert.ok(await owned.remove(probe), "the k6 version probe was not removed"); }
     // The whole provenance, with k6's own version output, is raw; summary.json keeps its image ID
@@ -746,7 +769,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       summary.host.docker = savedValue("docker", dockerVersion);
       let hostText, hostProbe;
       try {
-        hostProbe = await owned.container(["--network", "none", nodeImage, "sh", "-c", "uname -r; grep -m1 'model name' /proc/cpuinfo; cat /sys/devices/system/cpu/online"], `${runId}-host`);
+        hostProbe = await owned.container(["--network", "none", nodeImage, "sh", "-c", "uname -r; grep -m1 'model name' /proc/cpuinfo; cat /sys/devices/system/cpu/online"], dockerName("host"));
         hostText = await owned.attach(hostProbe, 60_000);
       } finally { if (hostProbe) assert.ok(await owned.remove(hostProbe), "the host probe was not removed"); }
       writeFileSync(join(folder, "host.txt"), hostText + "\n");
@@ -801,7 +824,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
     });
     save();
     summary.tools = { k6: await step("tools", () => k6Tool()), upstream: null };
-    network = await step("container", () => owned.network(`${runId}-net`));
+    network = await step("container", () => owned.network(dockerName("net")));
     const upstreamInfo = await step("container", async () => {
       upstreamId = await owned.container(["--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
         ...fixtureMount, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);

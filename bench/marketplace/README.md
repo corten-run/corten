@@ -206,6 +206,10 @@ start in a pass as it fails a timed round. What the probe wrote, stderr included
 collected before the probe is removed even when it never became ready (a collection that fails is
 recorded in `errors.log` and leaves the original failure as it was). Results
 go to `results/convergence/<name>/` and `results/soak/<name>/`, outside Git like other raw output.
+The pass's name is kept in its run ID (`marketplace-<kind>-<name>-<random>`), which `summary.json`
+records and the owner label carries. Its containers and network are named `mkt-` and 12 hex digits
+of the run ID's SHA-256, then a role or adapter, because the containers reach one another by those
+names and a name built from a long pass name would not be a DNS label (63 characters at most).
 Every container is read, logged, sampled and removed by the ID Docker printed for it, after its
 owner label is checked; teardown also removes, by ID, anything else carrying the pass's owner label.
 A create whose ID Docker did not return is looked for by its own label for a bounded time; if
