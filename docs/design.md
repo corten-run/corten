@@ -2823,11 +2823,13 @@ rules something out.
     lines, its `GET` through the stages 17 and 18 fewer, and every other case 1 to 9 fewer.
     Those figures are of that earlier tree, whose `security.rs` and `Cargo.lock` are not those
     merged: it read a long name with another byte from its start again by the table, and it had
-    no case with a name other than `localhost`. The four cases that came after it,
+    no case with a name other than `localhost`. The five cases that came after it,
     `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`),
     `unstaged-any-encoded` (4,093 `a` and `%4a`, where a table that read the percent-encoded
-    byte from the name's start would read 4,080 bytes more) and `unstaged-any-short` (`a.test`,
-    6 bytes, fewer than the eight read in line), and the count of the head of
+    byte from the name's start would read 4,080 bytes more), `unstaged-any-short` (`a.test`,
+    6 bytes, fewer than the eight read in line) and `unstaged-subdomain`
+    (`seller-desk.localhost` in an app with the default names, whose 11 bytes before
+    `.localhost` the same reader reads in line), and the count of the head of
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134)
     against its merge base, are that pull request's hosted job's table. The encoded case counts
     the read but does not by itself catch a reader given the name from its start again, as the

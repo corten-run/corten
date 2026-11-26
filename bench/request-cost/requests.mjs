@@ -24,12 +24,14 @@ const post = (path, type, body) => (port) =>
 /**
  * A name of 40 bytes, as a site's host on a CDN is, one of 4,096 that ends in `_`, one of
  * 4,096 that ends in a percent-encoded byte, and one of 6, shorter than the eight bytes a name
- * must have to be read in line.
+ * must have to be read in line; and a name under `localhost`, which an app with Corten's
+ * default names answers to, whose 11 bytes before `.localhost` are read in line.
  */
 const NAME = "shop-2.example-cdn.region-9.example.test";
 const LONG = `${"a".repeat(4095)}_`;
 const ENCODED = `${"a".repeat(4093)}%4a`;
 const SHORT = "a.test";
+const SUBDOMAIN = "seller-desk.localhost";
 
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
@@ -73,6 +75,9 @@ export const cases = {
   // `unstaged-any` with a name shorter than `localhost` and than the eight bytes read in line:
   // `a.test`, read by the table out of line.
   "unstaged-any-short": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", SHORT), body: "3" },
+  // `unstaged` to an app that names its hosts, with a name under `localhost`: the part before
+  // `.localhost`, `seller-desk`, is read as a name, where `localhost` itself is matched alone.
+  "unstaged-subdomain": { configuration: "api", request: hosted("/unstaged11?a=1&b=2", SUBDOMAIN), body: "3" },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */

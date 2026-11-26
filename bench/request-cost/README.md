@@ -30,9 +30,9 @@ item 2 asks for cycles under load as well, which this kit does not give.
 
 Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
 API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
-to the names an app answers to by default (`localhost` and IP addresses) but in the eight cases
-with `-any` in their name, where the probe is started with `HOSTS=*` and answers to any
-host. A `HOSTS` in the environment the kit is run in never reaches the probe.
+to the names an app answers to by default (`localhost`, a name under it and IP addresses) but in
+the eight cases with `-any` in their name, where the probe is started with `HOSTS=*` and answers
+to any host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 
 | Case | Configuration | Request | Answer |
 | --- | --- | --- | --- |
@@ -49,6 +49,7 @@ host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 | `unstaged-any-long` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,095 `a` and a `_` and the port | `3` |
 | `unstaged-any-encoded` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,093 `a` and `%4a` and the port | `3` |
 | `unstaged-any-short` | `api`, `HOSTS=*` | As `unstaged` to `Host: a.test` and the port, a name of 6 bytes | `3` |
+| `unstaged-subdomain` | `api` | As `unstaged` to `Host: seller-desk.localhost` and the port, a name under `localhost` whose 11 bytes before it are read as a name | `3` |
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
@@ -65,7 +66,10 @@ and not again from the name's start. That case counts the read but does not by i
 reader given the name from its start again, as the merge base it is counted against reads the
 whole name twice; a unit test in `crates/corten/src/security.rs`
 (`a_long_names_encoded_bytes_are_read_from_the_look_that_found_them`) does, by seeing the bytes
-that reader is given. Every answer is checked
+that reader is given. An app that names its hosts matches `localhost` and its own names as they
+are written, and reads as a name only what is before a name it holds subdomains under:
+`unstaged-subdomain` counts that read, of `seller-desk` in `seller-desk.localhost`, 11 bytes,
+which are read in line. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16
