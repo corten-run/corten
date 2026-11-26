@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { remoteFiles, reservation, supervisorBootstrap, upstreamImages } from "./cloud-contract.mjs";
+import { fleetPlan, remoteFiles, reservation, supervisorBootstrap, upstreamImages } from "./cloud-contract.mjs";
+import { controllerState } from "./cloud-options.mjs";
 import { remoteFiles as uploadedFiles } from "./cloud-remote.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
@@ -35,6 +36,31 @@ test("bootstrap prepares the actual client dependency roots and Node 26 before t
   assert.ok(job.includes("\ntimeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1\n"));
   assert.ok(!job.includes("setup_24.x"));
   assert.ok(job.includes('node -e \'if (process.versions.node.split(".")[0] !== "26") process.exit(1)\''));
+});
+
+test("new Hardening jobs use their existing container browser without installing Chromium on the host", () => {
+  const createdAt = "2026-11-26T00:00:00.000Z";
+  const savedGroup = (group) => {
+    const provider = { accountId: "user:account", context: "context" };
+    const { round, commit } = state, token = "a123456789abcdef";
+    const fleet = fleetPlan({ round, commit, token: state.token, tokens: { [group]: token }, provider, sshKey: "1" },
+      createdAt, undefined, { stagedPlacement: true, single: { group, indexSha256: "0".repeat(64), checkout: "/local/controller" } });
+    return { ...reservation({ round, commit, token, group, fleet }, createdAt), provider, fullGroupQualified: false };
+  };
+  const saved = savedGroup("hardening"), marked = { ...saved, hardeningContainerBrowser: true };
+  const before = uploadedFiles(saved), after = uploadedFiles(marked);
+  const install = "bootstrap_stage=browser-install\ntimeout 900 npx --no-install playwright install --with-deps chromium\n";
+  assert.ok(before["job.sh"].includes(install));
+  assert.ok(after["job.sh"] === before["job.sh"].replace(install, ""), "only the unused host install is removed");
+  assert.equal(after["pack.sh"], before["pack.sh"]);
+  assert.equal(after[saved.unit], before[saved.unit]);
+  assert.equal(controllerState(marked, marked.round), marked);
+  for (const other of [state, savedGroup("fullstack-browser")]) {
+    assert.ok(uploadedFiles(other)["job.sh"].includes(install));
+    assert.throws(() => uploadedFiles({ ...other, hardeningContainerBrowser: true }), /Hardening container browser marker/);
+  }
+  for (const hardeningContainerBrowser of [false, "true", null])
+    assert.throws(() => uploadedFiles({ ...saved, hardeningContainerBrowser }), /Hardening container browser marker/);
 });
 
 // Saved reservations without the Debian 13 marker regenerate the bytes they uploaded. These are the

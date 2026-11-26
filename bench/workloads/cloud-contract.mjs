@@ -304,6 +304,8 @@ export function validateState(s, round, options) {
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   if (s.gitSource !== undefined) assert.equal(s.gitSource, true, "Git source marker");
   if (s.trixieUpstream !== undefined) assert.equal(s.trixieUpstream, true, "Debian 13 upstream image marker");
+  if (s.hardeningContainerBrowser !== undefined)
+    assert.ok(s.hardeningContainerBrowser === true && dedicated && s.group === "hardening", "Hardening container browser marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
     assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated
@@ -889,9 +891,9 @@ ${s.benchPackage ? `bootstrap_stage=bench-dependencies
 timeout 900 npm --prefix bench ci --no-audit --no-fund
 ` : ""}bootstrap_stage=browser-dependencies
 timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
-bootstrap_stage=browser-install
+${s.hardeningContainerBrowser ? "" : `bootstrap_stage=browser-install
 timeout 900 npx --no-install playwright install --with-deps chromium
-bootstrap_stage=upstream-image
+`}bootstrap_stage=upstream-image
 timeout 900 docker pull ${s.trixieUpstream ? upstreamImages.trixie : upstreamImages.bookworm}
 bootstrap_stage=rust-install
 timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'

@@ -1334,6 +1334,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           ...(fleet ? { group: options.group, fleet } : {}),
           ...(remainingPlacement ? { remainingPlacement } : {}) }),
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true, gitSource: true, trixieUpstream: true,
+          ...(options.group === "hardening" ? { hardeningContainerBrowser: true } : {}),
           ...(fleet ? { quietBootstrap: "prelogin" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
             ...(fleet?.single?.offlineHandoff ? {} :
