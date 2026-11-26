@@ -611,13 +611,17 @@ part busy as its fetch starts, which can be before the route sees it. The link a
 shows is pressed in the page too; the page it opens must commit within five seconds counted from
 just before the press, a budget the press task shares, and have its part read in within five
 seconds of the check seeing that commit. A press that fails names its step: the press task finding
-no link, failing or not returning in time, or the commit not coming in time or its wait failing.
+no link, failing or not returning in time, or the commit not coming in time or its wait failing. A
+part not read in in time says whether an answer to the opened page's read came.
 The check that a read whose patch leaves the part as it was marks it failed requires that load's
 own read, answered by the route with its empty patch, and that answer's headers and its whole body
 received without error (the response finished, and the request did not fail) within five seconds
 from just before the load, since a read that fails, a body cut after its headers included, leaves
 the same placeholder. It loads a fresh page of the same context, whose one document's read is the
-one it waits for, so a late read of an earlier document of the held page is not taken for it.
+one it waits for, so a late read of an earlier document of the held page is not taken for it, and
+closes that page once its check is done, bounded to 30 seconds: its live streams would otherwise
+stay open, and WebKit on Windows has only so many connections to the server across contexts, so the
+read the failed part's link starts next could wait behind them and never be answered.
 
 The account page's posts without JavaScript (the name, the refused name and the picture) each
 press their button only once the page the previous post led to has loaded. That load, the post

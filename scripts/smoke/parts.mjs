@@ -55,6 +55,9 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** The documents the page loads, counted while a client navigation should load none. */
     let documents = 0;
     const onDocument = (/** @type {import("@playwright/test").Request} */ r) => r.resourceType() === "document" && documents++;
+    /** Whether an answer to a read of the address the failed part links to has come, for the check that follows it. */
+    let linkAnswered = false;
+    const onLinkAnswer = (/** @type {import("@playwright/test").Response} */ r) => new URL(r.url()).search === "?picks=true" && (linkAnswered = true);
     // The held reads are let go, the listener and route removed and the page closed however the case
     // ends. The route stops holding before the held reads are let go, so none it holds later is left
     // held. Letting go, setting the route, removing it and closing the page are each bounded, so one
@@ -159,6 +162,12 @@ export async function partReads(page, browser, swaps, noSwaps) {
         emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && emptyAnswer.body === "finished" && kept.busy === null && kept.failed === "" && !kept.line && kept.link,
         JSON.stringify({ emptyAnswer, ...kept }),
       );
+      // Closed once its check is done, bounded as a context's closing is: its live streams stay open
+      // while it does, and WebKit on Windows has only so many connections to the server across
+      // contexts, so the read the held page's link starts next could wait behind them and never be
+      // answered (#2035).
+      await within(30_000, "the empty patch case's page was not closed within 30 s", emptyPage.close());
+      fresh = null;
       answer = "abort";
       await held.goto(`${base}/`);
       await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
@@ -180,6 +189,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         const until = performance.now() + 5000;
         const press = steps(5000, ranOut);
         let pressing = true;
+        held.on("response", onLinkAnswer);
         try {
           const found = await press.step(() =>
             held.evaluate(() => {
@@ -213,12 +223,13 @@ export async function partReads(page, browser, swaps, noSwaps) {
       check(
         "the page it links to has the slow part read in, with JavaScript too",
         linkOpened && listed && new URL(held.url()).search === "?picks=true",
-        `${held.url()}${linkOpened ? (listed ? "" : ", its part not read in within 5 s of its commit") : `, ${notOpened}`}`,
+        `${held.url()}${linkOpened ? (listed ? "" : `, its part not read in within 5 s of its commit (its page's read ${linkAnswered ? "answered" : "not answered"})`) : `, ${notOpened}`}`,
       );
     } finally {
       answer = "closing";
       await cleanUp(
         () => held.off("request", onDocument),
+        () => held.off("response", onLinkAnswer),
         () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
         () => within(5000, "the held part's route was not removed within 5 s", held.unrouteAll({ behavior: "ignoreErrors" })),
         () => fresh && within(5000, "the empty patch case's route was not removed within 5 s", fresh.unrouteAll({ behavior: "ignoreErrors" })),
