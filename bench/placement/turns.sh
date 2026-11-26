@@ -16,7 +16,9 @@
 #               mask, for the ranges it states (mask.mjs)
 #   STATUS      the status every compared answer must have
 #   EXPECT      empty, or a file holding the exact text of answers/diff.txt that the change makes
-#               by design; without it A and B must answer the same
+#               by design (the diff of the masked headers, then for bodies that differ the line
+#               "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>"); without it A and B
+#               must answer the same
 #   WARMUP      unrecorded pairs before the recorded ones
 #   TURN        seconds of load in a turn; WRK_T and WRK_C, wrk's threads and connections
 #   CPU_SERVER  the CPU every server is pinned to; CPU_LOAD, wrk's CPUs
@@ -26,9 +28,10 @@
 # received, byte for byte. A turn in which wrk reports an error of any kind, or a counter is
 # missing, not a number, zero or under 100%, fails the placement and records nothing.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
-# raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log.
+# raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log. A diff.txt
+# that cannot be written, or a diff or cmp that cannot compare (status 2), fails the placement.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,27p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,30p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -87,10 +90,22 @@ done
 node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not within the range the plan states"
 cmp -s "$ans/A.headers" "$ans/A-again.headers" || fail "two answers of A differ in their headers after the mask: $ans/A*.headers"
 cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in their bodies: $ans/A*.body"
+# diff.txt is written before anything is compared, so a file that cannot be is a failure and not
+# an empty difference (printf, since a redirection that fails on the special builtin : would end
+# the shell without the reason); diff and cmp say 0 for the same, 1 for different and 2 for trouble.
 diffs=$ans/diff.txt
-diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || true
-cmp -s "$ans/A.body" "$ans/B.body" || echo "bodies differ: $(wc -c <"$ans/A.body") and $(wc -c <"$ans/B.body") bytes" >>"$diffs"
-echo "body $(wc -c <"$ans/A.body") bytes as received, sha256 $(sha256sum "$ans/A.body" | cut -c1-16) A and $(sha256sum "$ans/B.body" | cut -c1-16) B" >"$ans/bodies.txt"
+printf '' >"$diffs" || fail "$diffs cannot be written"
+st=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || st=$?
+[ $st -le 1 ] || fail "diff could not compare the two answers' headers (status $st)"
+na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
+da=$(sha256sum <"$ans/A.body"); da=${da%% *}; db=$(sha256sum <"$ans/B.body"); db=${db%% *}
+st=0; cmp -s "$ans/A.body" "$ans/B.body" || st=$?
+case $st in
+    0) ;;
+    1) echo "bodies differ: $na and $nb bytes, sha256 $da and $db" >>"$diffs" || fail "$diffs cannot be written" ;;
+    *) fail "cmp could not compare the two answers' bodies (status $st)" ;;
+esac
+echo "body $na bytes as received, sha256 $(printf %.16s "$da") A and $(printf %.16s "$db") B" >"$ans/bodies.txt"
 if [ -n "${EXPECT:-}" ]; then
     cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
     echo "answers: differ only as the plan's expected difference says" | tee "$ans/verdict.txt"

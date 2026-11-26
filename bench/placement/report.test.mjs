@@ -513,6 +513,29 @@ test("the inputs: every file the plan names by path, listed with its SHA-256 as 
   assert.ok(locked.stderr.includes("the probe's directory holds a Cargo.lock"), locked.stderr);
 });
 
+test("the expected difference: a bodies line with both bodies' SHA-256s is taken, one with their lengths alone is refused before anything is written", () => {
+  const dir = join(tmp, "expected"), env = { ...process.env };
+  delete env.DRYRUN;
+  mkdirSync(join(dir, "probe", "src"), { recursive: true });
+  writeFileSync(join(dir, "probe", "src", "main.rs"), PROBE);
+  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered((p) => { p.workloads[0].expect = "expect.txt"; }))));
+  const resolve_ = (text, work) => { writeFileSync(join(dir, "expect.txt"), text); return spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), "gated", "plain", join(dir, work)], { encoding: "utf8", env }); };
+  const headers = "5c5\n< corten-shell: 618f\n---\n> corten-shell: c21c\n", digests = `sha256 ${"a".repeat(64)} and ${"b".repeat(64)}`;
+  for (const [work, text] of [["headers", headers], ["bodies", `${headers}bodies differ: 6124 and 6124 bytes, ${digests}\n`], ["body-only", `bodies differ: 6124 and 6125 bytes, ${digests}\n`]]) {
+    const r = resolve_(text, work);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(join(dir, work, "plan", "expect.txt"), "utf8"), text);
+  }
+  // The line the kit wrote before it bound the bodies' digests, or a digest cut short, can never
+  // be what turns.sh writes, so the placement would fail after its build: it is refused here.
+  for (const [work, line] of [["lengths", "bodies differ: 6124 and 6124 bytes"], ["short", `bodies differ: 6124 and 6124 bytes, sha256 ${"a".repeat(16)} and ${"b".repeat(16)}`]]) {
+    const r = resolve_(`${headers}${line}\n`, work);
+    assert.equal(r.status, 1);
+    assert.ok(r.stderr.includes(`expect.txt, the workload's expected difference: its line "${line}" is not "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>"`) && r.stderr.includes("record the difference again with this kit"), r.stderr);
+    assert.equal(existsSync(join(dir, work)), false);
+  }
+});
+
 test("the inputs: a file name the list cannot hold and a symbolic link are refused, each in its own words", () => {
   const dir = join(tmp, "odd"), probe = join(dir, "probe"), script = join(here, "get.lua");
   mkdirSync(join(probe, "src"), { recursive: true });

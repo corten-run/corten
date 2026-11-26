@@ -4,6 +4,9 @@
 # when none is named). It measures nothing and writes under <work dir>/selftest only.
 #   answers   a wrong answer: side B is a stand-in that answers 200 with another body
 #             (wrong.mjs). turns.sh must fail before any turn and leave no counts file.
+#             Then, with the difference that wrong answer made as the expected one, a stand-in
+#             that answers with a third body of the wrong one's length (wrong.mjs other) must
+#             fail the same way: the expected difference holds the bodies, not their lengths.
 #   failed    a failed request: the request is one the probe answers 404, which both binaries
 #             answer alike, so the answers pass (the status asked of them is 404 here) and the
 #             load's requests all fail. wrk reports them, the turn must fail, and no row may be
@@ -59,10 +62,17 @@ for case in "$@"; do
     case $case in
     answers)
         printf '#!/bin/sh\nunset LD_PRELOAD\nexec node %s/selftest/wrong.mjs "$1"\n' "$KIT" >"$out/wrong-bin"; chmod +x "$out/wrong-bin"
+        printf '#!/bin/sh\nunset LD_PRELOAD\nexec node %s/selftest/wrong.mjs "$1" other\n' "$KIT" >"$out/other-bin"; chmod +x "$out/other-bin"
         run "$out/wrong" "$REQ_PATH" "$STATUS" "$out/wrong-bin"; rc=$?
         [ $rc != 0 ] && grep -q "A and B answer differently" "$out/wrong.log" && [ "$(rows "$out/wrong")" = none ] \
             || { tail -5 "$out/wrong.log"; bad "a wrong answer did not stop the placement (exit $rc, rows $(rows "$out/wrong"))"; }
-        echo "answers: a wrong answer stopped the placement before any turn (exit $rc, no counts file): $(grep -m1 'answer differently' "$out/wrong.log")" ;;
+        echo "answers: a wrong answer stopped the placement before any turn (exit $rc, no counts file): $(grep -m1 'answer differently' "$out/wrong.log")"
+        grep -q '^bodies differ: .*, sha256 ' "$out/wrong/answers/diff.txt" && cp "$out/wrong/answers/diff.txt" "$out/wrong-expect.txt" \
+            || bad "the wrong answer left no bodies line with the two digests in its diff.txt"
+        (EXPECT=$out/wrong-expect.txt; export EXPECT; run "$out/other" "$REQ_PATH" "$STATUS" "$out/other-bin"); rc=$?
+        [ $rc != 0 ] && grep -q "differ other than as the plan's expected difference says" "$out/other.log" && [ "$(rows "$out/other")" = none ] \
+            || { tail -5 "$out/other.log"; bad "a third body of the wrong one's length passed the wrong one's difference (exit $rc, rows $(rows "$out/other"))"; }
+        echo "answers: under that difference as the expected one, a third body of the same length stopped the placement before any turn (exit $rc, no counts file)" ;;
     failed)
         run "$out/failed" /no-such-path 404 "$B/base-p$first"; rc=$?
         [ $rc != 0 ] && grep -q "errors in pair" "$out/failed.log" && [ "$(rows "$out/failed")" = 0 ] \

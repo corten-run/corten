@@ -309,8 +309,8 @@ test("the bodies a part's placements answered with are the two the check kept, e
   const of = (...cs) => [2, 1].flatMap((i) => cs.map((comparison) => ({ comparison, i }))), pilot = of("pilot-plain"), gated = of("aa-plain", "change-plain");
   for (const p of ["p001", "p002"]) { put("pilot-plain", p, BODY(DIGEST.base, DIGEST.base)); put("aa-plain", p, BODY(DIGEST.base, DIGEST.base)); put("change-plain", p, BODY(DIGEST.base, DIGEST.head)); }
   assert.deepEqual([stray(res, pilot, "plain", kept), stray(res, gated, "plain", kept)], [null, null]);
-  // A later start that serves a third body of the same length passes turns.sh's comparison
-  // with the expected difference, which holds the bodies' lengths alone. It does not pass here.
+  // A later start that serves a third body of the same length: turns.sh's expected difference
+  // fails it on a placement of the change, and so does this, on any placement.
   put("change-plain", "p002", BODY(DIGEST.base, DIGEST.third));
   assert.equal(stray(res, gated, "plain", kept), `change-plain p002 answered with other bodies than the run recorded before any turn (${BODY(DIGEST.base, DIGEST.third).trimEnd()}; recorded: sha256 ${DIGEST.base} and ${DIGEST.head})`);
   // The release's own body on a later start, in an A/A; another length; a file that is not there.
@@ -356,7 +356,7 @@ function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, prom
 //   placed   a part's second placement answered with these bodies
 //   short    parts whose results hold their first placement alone
 //   late     workloads whose answers check was stopped at its time limit
-const DIFF = "5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes\n";
+const DIFF = `5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes, sha256 ${DIGEST.base.repeat(4)} and ${DIGEST.head.repeat(4)}\n`;
 let made = 0;
 function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
@@ -712,44 +712,82 @@ test("a dry run: every part the kit's dry run, the row kept with the run and mar
 });
 
 // The answers check as the command runs it, on servers of its own: turns.sh, taskset, timeout
-// and curl, with nothing stood in for. The plan's files are the least turns.sh reads.
+// and curl, with nothing stood in for but where a test says so. The plan's files are the least
+// turns.sh reads.
 const tools = process.platform === "linux" && spawnSync("sh", ["-c", "command -v taskset && command -v timeout && command -v curl && command -v sha256sum"]).status === 0;
-test("the answers check on real servers: the same, two bodies of one length, and a side that never answers", { skip: tools ? false : "needs Linux with taskset, timeout, curl and sha256sum" }, () => {
-  const serve = (body) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
-  const mute = 'require("node:net").createServer(() => {}).listen(Number(process.argv[2]), "127.0.0.1");';
+const LINUX = { skip: tools ? false : "needs Linux with taskset, timeout, curl and sha256sum" };
+const serve = (body) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
+const mute = 'require("node:net").createServer(() => {}).listen(Number(process.argv[2]), "127.0.0.1");';
+const taken = (port) => spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
+const full = (body) => createHash("sha256").update(body).digest("hex"), digest = (body) => full(body).slice(0, 16);
+// The check of two sides' answers, base and head each a script node runs, stopped after seconds.
+// expect: the text of an expected difference, given to turns.sh as a plan's is (the command's
+// own check gives none); first: a directory put first on PATH, of stand-ins for tools turns.sh runs.
+function answers(name, base, head, seconds, { expect = null, first = null } = {}) {
   // A CPU this process may run on, which need not be the first, and the kit's two ports free:
   // they are fixed, so one in use would be waited on, and is said instead.
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
-  const taken = (port) => spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
   for (const port of [18081, 18082]) assert.ok(!taken(port), `port ${port} is in use, and the kit's ports are fixed: this test needs 18081 and 18082 free`);
-  const check = (name, base, head, seconds) => {
-    const work = join(tmp, name), vars = { KIT: here, START: "$BIN $PORT", REQ_PATH: "/page", STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: seconds };
-    mkdirSync(join(work, "plan"), { recursive: true });
-    mkdirSync(join(work, "bin"));
-    writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
-    for (const [f, text] of [["headers.txt", ""], ["mask.sed", ""], ["mask.json", "[]\n"], ["request.lua", ""]]) writeFileSync(join(work, "plan", f), text);
-    for (const [side, script] of [["base", base], ["head", head]]) writeFileSync(join(work, "bin", side), `#!/usr/bin/env node\n${script}\n`, { mode: 0o755 });
-    const r = spawnSync("sh", ["-c", ANSWERS, "sh", work], { encoding: "utf8", timeout: 120000 });
-    // Whatever the check found, the servers it started are gone: nothing takes a connection.
-    for (const port of [18081, 18082]) {
-      let still = true;
-      for (let i = 0; i < 20 && still; i++) still = taken(port);
-      assert.ok(!still, `${name}: something still answers on ${port}`);
-    }
-    return { status: r.status, said: r.stdout + r.stderr, answers: join(work, "compare", "answers") };
-  };
-  const digest = (body) => createHash("sha256").update(body).digest("hex").slice(0, 16);
-  const same = check("answers-same", serve("aaaa"), serve("aaaa"), 60);
+  const work = join(tmp, name), vars = { KIT: here, START: "$BIN $PORT", REQ_PATH: "/page", STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: seconds };
+  mkdirSync(join(work, "plan"), { recursive: true });
+  mkdirSync(join(work, "bin"));
+  writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
+  for (const [f, text] of [["headers.txt", ""], ["mask.sed", ""], ["mask.json", "[]\n"], ["request.lua", ""]]) writeFileSync(join(work, "plan", f), text);
+  for (const [side, script] of [["base", base], ["head", head]]) writeFileSync(join(work, "bin", side), `#!/usr/bin/env node\n${script}\n`, { mode: 0o755 });
+  const expected = join(work, "plan", "expect.txt"), command = expect === null ? ANSWERS : ANSWERS.replace(" EXPECT= exec ", ' EXPECT="$2" exec ');
+  if (expect !== null) { assert.notEqual(command, ANSWERS); writeFileSync(expected, expect); }
+  const env = first ? { ...process.env, PATH: `${first}:${process.env.PATH}` } : process.env;
+  const r = spawnSync("sh", ["-c", command, "sh", work, expected], { encoding: "utf8", timeout: 120000, env });
+  // Whatever the check found, the servers it started are gone: nothing takes a connection.
+  for (const port of [18081, 18082]) {
+    let still = true;
+    for (let i = 0; i < 20 && still; i++) still = taken(port);
+    assert.ok(!still, `${name}: something still answers on ${port}`);
+  }
+  return { status: r.status, said: r.stdout + r.stderr, answers: join(work, "compare", "answers") };
+}
+/** A directory under the test's own of one stand-in, a shell script, for a tool turns.sh runs. */
+const stand = (dir, name, script) => { mkdirSync(join(tmp, dir), { recursive: true }); writeFileSync(join(tmp, dir, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 }); return join(tmp, dir); };
+
+test("the answers check on real servers: the same, two bodies of one length, and a side that never answers", LINUX, () => {
+  const same = answers("answers-same", serve("aaaa"), serve("aaaa"), 60);
   assert.equal(same.status, 0, same.said);
   assert.deepEqual([readFileSync(join(same.answers, "diff.txt"), "utf8"), bodies(join(same.answers, "bodies.txt"))], ["", { line: `body 4 bytes as received, sha256 ${digest("aaaa")} A and ${digest("aaaa")} B`, bytes: 4, a: digest("aaaa"), b: digest("aaaa") }]);
-  // Two bodies of one length: the difference holds their lengths and the digests tell them apart.
-  const two = check("answers-two", serve("aaaa"), serve("bbbb"), 60);
+  // Two bodies of one length: the difference holds their lengths and their SHA-256s.
+  const two = answers("answers-two", serve("aaaa"), serve("bbbb"), 60);
   assert.equal(two.status, 1, two.said);
   assert.ok(two.said.includes("turns: plain: A and B answer differently"), two.said);
-  assert.equal(readFileSync(join(two.answers, "diff.txt"), "utf8"), "bodies differ: 4 and 4 bytes\n");
+  assert.equal(readFileSync(join(two.answers, "diff.txt"), "utf8"), `bodies differ: 4 and 4 bytes, sha256 ${full("aaaa")} and ${full("bbbb")}\n`);
   assert.deepEqual([bodies(join(two.answers, "bodies.txt")).a, bodies(join(two.answers, "bodies.txt")).b], [digest("aaaa"), digest("bbbb")]);
   // A side that takes a connection and never answers: stopped at the time limit, with timeout's status.
-  const never = check("answers-never", mute, serve("aaaa"), 3);
+  const never = answers("answers-never", mute, serve("aaaa"), 3);
   assert.equal(never.status, 124, never.said);
+});
+
+test("the answers check on real servers: the difference the check recorded holds a placement to its two bodies, not to their lengths", LINUX, () => {
+  const recorded = answers("answers-recorded", serve("aaaa"), serve("bbbb"), 60);
+  assert.equal(recorded.status, 1, recorded.said);
+  const difference = readFileSync(join(recorded.answers, "diff.txt"), "utf8");
+  // That difference expected: the same two bodies pass, and a third body of the same length does not.
+  const held = answers("answers-held", serve("aaaa"), serve("bbbb"), 60, { expect: difference });
+  assert.equal(held.status, 0, held.said);
+  assert.ok(held.said.includes("answers: differ only as the plan's expected difference says"), held.said);
+  const third = answers("answers-third", serve("aaaa"), serve("cccc"), 60, { expect: difference });
+  assert.equal(third.status, 1, third.said);
+  assert.ok(third.said.includes("turns: plain: the answers differ other than as the plan's expected difference says"), third.said);
+});
+
+test("the answers check on real servers: a diff.txt that cannot be written fails it, and does not read as the same answers", LINUX, () => {
+  // A stand-in for cmp makes diff.txt a link to a directory that is not there, just before turns.sh writes it.
+  const first = stand("unwritable", "cmp", 'case "$3" in */A-again.body) ln -s /nonexistent/diff.txt "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+  const r = answers("answers-unwritable", serve("aaaa"), serve("aaaa"), 60, { first });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("answers/diff.txt cannot be written") && !r.said.includes("answers: same"), r.said);
+});
+
+test("the answers check on real servers: a diff that cannot compare (status 2) fails it, and does not read as a difference or the same answers", LINUX, () => {
+  const r = answers("answers-troubled", serve("aaaa"), serve("aaaa"), 60, { first: stand("troubled", "diff", 'echo "diff: a stand-in that cannot compare" >&2\nexit 2') });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("turns: plain: diff could not compare the two answers' headers (status 2)") && !r.said.includes("answers: same"), r.said);
 });

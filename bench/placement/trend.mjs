@@ -41,8 +41,10 @@
 //   parts      for each workload its pilot and then its gated part at the K that pilot sizes,
 //              each as README.md gives the commands: plan.mjs, build.sh, run.sh. After a part,
 //              every placement the part was resolved to have must show the two bodies the check
-//              kept (turns.sh compares a placement's headers and its bodies' lengths with the
-//              expected difference, and keeps the bodies' digests without comparing them)
+//              kept, by their digests: turns.sh holds a placement of the change to the expected
+//              difference, whose bodies line has both bodies' lengths and SHA-256s, and this
+//              holds a pilot's or an A/A's placement, which has no expected difference, to the
+//              release's body on both sides
 //   row        each workload's reading from its gated part's report.json, kept as
 //              <run dir>/row.md and then added to the page, newest first
 // A workload is read only when every step of its two parts ended with status 0 and its gated

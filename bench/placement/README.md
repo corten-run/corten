@@ -51,10 +51,17 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `workloads[].reads` | The thresholds this run reads across placements: `["margin"]`, `["reduction"]` or both. One a single build already read outside its band is left out and stays as that build read it, but for the margin of a workload read for the catalog's `page` or `json`: see [what it does not do](#what-it-does-not-do), item 14. |
 | `workloads[].reduction` | The smallest worthwhile reduction as a fraction (`0.02`), or `null` when the plan declares no benefit side. |
 | `workloads[].recordsSpread` | Whether the plan declares, before the run, that its A/A records a placement spread. |
-| `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design (the `diff` of their masked headers, and a line for bodies that differ). Without it the two must answer the same. |
+| `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design, as `turns.sh` writes it to `answers/diff.txt`: the `diff` of their masked headers, then, for bodies that differ, the line `bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>` with each SHA-256 in full. `turns.sh` compares the two files byte for byte, so the one comparison holds the headers, the bodies' lengths and the bodies themselves; `plan.mjs` refuses a bodies line of any other form. Without it the two must answer the same. |
 
 The pad lists are not in the plan: `pads.mjs` gives the two lists for a K, and `plan.mjs` refuses a
 K whose lists miss the fourth point's phase rules.
+
+The bodies line took its two SHA-256s in
+[#2152 A plan's expected difference holds a placement to its bodies' lengths, not to the bodies](https://github.com/corten-run/corten/issues/2152).
+An expected difference written before then has the lengths alone, which `plan.mjs` now refuses:
+record it again. Kept results are read as the kit they ran under compared their answers, and
+their `kit-sha256.txt` names that kit's files: results of an earlier kit were held to the
+bodies' lengths, not to the bodies.
 
 ## The commands, in order
 
@@ -127,7 +134,8 @@ builds nothing. Only a run shows the third, and a part that is read is run once,
 there is not mended by running it again. The kit has gone down that path once, in a test read
 for nothing ([Tests](#tests) says what that run was and what no run has shown).
 
-`sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer, a
+`sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer
+(and, under the difference it made as the expected one, a third body of its length), a
 failed request, a placement past its time limit, a second pad of a wrong size, files that are no
 longer what `plan.mjs` listed, a run `run.sh` must refuse and a counter that read zero each stop
 what they must. Name a case to run it alone (`answers`, `failed`, `limit`, `map`, `inputs`,
@@ -188,8 +196,9 @@ one of the commands above with its output under `<run dir>/log`:
    second pad fits is refused when that part is built, which for a gated part is after its
    pilot's turns. It then starts the two sides' unpadded binaries once and compares their
    answers as `turns.sh` compares a placement's, stopped at the plan's `placementSeconds` as a
-   placement is. That limit is on this check, which the command adds: `verify.sh`, which each
-   part's `run.sh` runs first, waits for the servers it starts with no limit of its own. A release
+   placement is. That limit is on this check, which the command adds; `verify.sh`, which each
+   part's `run.sh` runs first, holds each placement's comparison to the same limit and gives
+   each of its two starts of the base 100 readiness requests of at most a second. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
    found there is kept as the workload's `expect` for this run
@@ -200,9 +209,11 @@ one of the commands above with its output under `<run dir>/log`:
    part it reads `answers/bodies.txt` of every placement the part was resolved to have (its
    `plan/resolved.json`), so results that hold fewer are not read, and requires the two bodies
    the check kept: the release's on both sides of a pilot's or an A/A's placement, the release's and
-   `main`'s in the change. `turns.sh` holds a placement to the expected difference, which has
-   the header lines that differ and the two bodies' lengths, and keeps the bodies' digests
-   without comparing them, so a third body of the same length passes it and does not pass here.
+   `main`'s in the change. `turns.sh` holds a placement of the change to the expected
+   difference, which has the header lines that differ and the two bodies' lengths and SHA-256s,
+   so a third body of the same length fails it there. A pilot's or an A/A's placement has no
+   expected difference: `turns.sh` holds its two sides to each other, and this holds them to the
+   release's body.
 4. It reads each gated part's `report.json`, keeps the row as `<run dir>/row.md` and then adds
    it to the page, which it replaces whole from a file written beside it.
 
@@ -270,7 +281,7 @@ while it ran.
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
 | The mask | `verify.sh`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. A masked header the two starts send alike stops the run, with a range or without. |
-| Answers | `verify.sh`, `turns.sh` | Each placement answers as its unpadded binary, and a placement's two binaries alike, before its turns. |
+| Answers | `plan.mjs`, `verify.sh`, `turns.sh` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s), before its turns. A `diff.txt` that cannot be written, or a `diff` or `cmp` that cannot compare, fails the placement. |
 | Turns | `turns.sh` | Every turn on a fresh start on the server's CPU; a failed request, or a counter that is zero or under 100%, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
 | Eligibility and K | `pilot.mjs`, `plan.mjs --sized-from` | The A/A may size a run, on this plan's setup as far as item 11 below compares it, and the K passes under each model kept, at that K itself. A K nothing checked is said to be unchecked in every reading. |
@@ -374,8 +385,10 @@ tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-
 
 Those tests run one shell script, and only on Linux: `trend.test.mjs` runs the trend's answers
 check, which is `turns.sh` with no pair turned, on servers of its own (the same answer, two
-bodies of one length, a side that never answers), on a CPU the test may run on, and fails
-saying so when the kit's two ports are in use. What `build.sh`, `run.sh`, `verify.sh` and
+bodies of one length, a third body of that length under the difference the two made, a
+`diff.txt` that cannot be written and a `diff` that cannot compare, each of those two with a
+stand-in for a tool `turns.sh` runs, and a side that never answers), on a CPU the test may run
+on, and fails saying so when the kit's two ports are in use. What `build.sh`, `run.sh`, `verify.sh` and
 `turns.sh` refuse otherwise is held by the selftest alone, on a host that has `perf` and `wrk`,
 and by nothing in `npm run check`. The selftest's `inputs` case holds `build.sh`'s four checks of the files named
 by path and `run.sh`'s two, `refusals` holds `run.sh`'s refusal of results already there, of

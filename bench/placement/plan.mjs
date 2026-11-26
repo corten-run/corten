@@ -183,6 +183,18 @@ export function inputs(probe, script, expect) {
 /** The line that declares them. */
 export const inputsLine = (i) => `inputs: sha256 ${i.sha256} over the ${i.files} files the plan names by path (the probe's, the request script${/  plan\/expect\.txt\n/.test(i.text) ? ", the expected answer" : ""}), each listed with its own`;
 
+/** The line turns.sh writes in answers/diff.txt for two bodies that differ, after the headers' diff. */
+export const BODIES_DIFFER = /^bodies differ: \d+ and \d+ bytes, sha256 [0-9a-f]{64} and [0-9a-f]{64}$/;
+/**
+ * Why an expected difference's text is not one turns.sh can write, or null: a bodies line other
+ * than BODIES_DIFFER's, such as the lengths alone that the kit wrote before it bound the bodies'
+ * digests, can never be matched, so the placement would fail after its build.
+ */
+export function expectProblem(text) {
+  const odd = text.split("\n").find((l) => l.startsWith("bodies differ:") && !BODIES_DIFFER.test(l));
+  return odd === undefined ? null : `its line "${odd.slice(0, 120)}" is not "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>", the line turns.sh writes for two bodies that differ, each SHA-256 in full: record the difference again with this kit`;
+}
+
 const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
 function dryRun(env) {
@@ -205,6 +217,8 @@ async function main(argv) {
   const named = (w) => {
     const at = { probe: from(plan.probe.dir), script: w.request.script ? from(w.request.script) : join(here, "get.lua"), expect: w.expect ? from(w.expect) : null };
     for (const f of Object.values(at)) if (f && !existsSync(f)) throw new Error(`${f}: named by the plan and not there`);
+    const odd = at.expect && expectProblem(readFileSync(at.expect, "utf8"));
+    if (odd) throw new Error(`${at.expect}, the workload's expected difference: ${odd}`);
     if (existsSync(join(at.probe, "Cargo.lock"))) throw new Error(`${join(at.probe, "Cargo.lock")}: the probe's directory holds a Cargo.lock, and build.sh puts each side's own there`);
     return { ...at, list: inputs(at.probe, at.script, at.expect) };
   };
