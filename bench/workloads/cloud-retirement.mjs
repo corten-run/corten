@@ -1879,7 +1879,10 @@ export function verifyFailedSetupRetirement(local, state) {
   }
   const marker = regular(join(extracted, "exit-code"), 16).toString("utf8"), exit = Number(marker.trim());
   assert.ok(/^[1-9]\d{0,2}\n$/.test(marker) && exit <= 255, "nonzero setup exit required");
-  const script = terminalSetupScript(state, exit, state.control ? state.control.ledger.length - 1 : undefined);
+  // The same archived watcher failures the collect path selected; setupEvidence rereads them
+  // and refuses a failure without pre-registration custody.
+  const failures = state.control ? setupWatcherFailures(state, local) : [];
+  const script = terminalSetupScript(state, exit, state.control ? state.control.ledger.length - 1 : undefined, failures);
   const expected = setupEvidence(JSON.stringify(record.observation), state, script, exit, record.startedAtMs, record.finishedAtMs, local);
   assert.ok(isDeepStrictEqual(record, expected), "setup retirement receipt differs");
 }

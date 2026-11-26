@@ -1386,11 +1386,11 @@ retirement compares with the archive. Its receipt is
 `benchmark-failed-setup-host/v3`, control proof
 `benchmark-control-setup-query/v2` with exact top-level fields). A query with no
 archived failure keeps its previous bytes and schemas, so the droplet path replays
-saved receipts unchanged. Fleet verification and group continuation do not yet
-accept a v2 or v3 retirement receipt, so a group retired this way cannot be
-continued until [#2089 Fleet verification and group continuation read a failed-setup retirement receipt with a 4 KiB bound and no control custody, so only v1 receipts replay](https://github.com/corten-run/corten/issues/2089)
-lands. The proof adds no write: the failure, archive and exit stay as they
-were, and it never qualifies the group.
+saved receipts unchanged. Fleet verification and group continuation replay a v1,
+v2 or v3 retirement receipt with the same verifier, which selects the drain proof
+from the archived watcher failures, not from the receipt, so a group retired this
+way can be continued. The proof adds no write: the failure, archive and exit
+stay as they were, and it never qualifies the group.
 
 The drain proof is narrow. It can settle only a setup job whose host shows no
 Docker socket or daemon at query time (in practice one that failed before

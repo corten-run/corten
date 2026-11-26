@@ -17,7 +17,7 @@ import setupDrainSource from "./cloud-setup-drain-source.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { recheckSetupRetirement, verifyFleet } from "./fleet-verify.mjs";
 import { continuationAdmission } from "./group-continuation.mjs";
-import { verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
+import { SetupWatcherProofMissing, verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -392,6 +392,8 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   writeFileSync(join(root, "fleet-r21.json"), JSON.stringify(fleet));
   cpSync(h.local, local, { recursive: true });
   assert.ok(readFileSync(join(local, "failed-setup-host.json")).length > 4096, "real v2 receipt exceeds the legacy bound");
+  assert.equal(JSON.parse(readFileSync(join(local, "failed-setup-host.json"))).schema, "benchmark-failed-setup-retirement/v2");
+  verifyFailedSetupRetirement(local, s);
   const verify = () => verifyFleet({ root, round: "r21", commit }, { inspect: () => assert.fail("no native result") });
   let report = await verify();
   assert.equal(report.groups.find(({ group }) => group === s.group)?.outcome, "setup-failed-retired");
@@ -566,6 +568,48 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(h.inspections, 0);
   assert.equal(await h.task({ run }).collect(), 1);
   assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(h.creates, 1); assert.equal(h.inspections, 0);
+
+  // Fleet verification and continuation replay the persisted v3 receipt through the shared
+  // verifier, which must select the same archived watcher failure the collect path did.
+  verifyFailedSetupRetirement(h.local, s);
+  const root = join(h.temp, "verification"), child = join(root, s.group), local = join(child, "groups-r21");
+  mkdirSync(child, { recursive: true });
+  writeFileSync(join(root, "fleet-r21.json"), JSON.stringify(fleet));
+  cpSync(h.local, local, { recursive: true });
+  const verify = () => verifyFleet({ root, round: "r21", commit }, { inspect: () => assert.fail("no native result") });
+  let report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.outcome, "setup-failed-retired");
+  assert.equal(report.publishableBaseline, false);
+  const continuation = join(h.temp, "continuation");
+  mkdirSync(continuation);
+  writeFileSync(join(continuation, "index.json"), JSON.stringify([{ archives: {}, checkout: root, commit, root, round: "r21" }]));
+  const admission = await continuationAdmission(continuation, s.group);
+  const [retired] = admission.subject.setupRetirements;
+  const dispatchRecheck = recheckSetupRetirement(continuation, retired, admission.subject.indexedCustody);
+  admission.recheck(); dispatchRecheck();
+
+  // The archive, not the receipt, selects the drain proof: an altered or removed archived failure
+  // refuses even when the evidence tree hash, receipt and state are rebound around it.
+  const failure = `watch-failure-${failed.id}.json`;
+  const rebind = (at) => {
+    const extracted = join(at, s.evidence), receipt = join(at, "failed-setup-host.json"), record = JSON.parse(readFileSync(receipt));
+    const evidenceSha256 = treeHash(extracted), bytes = JSON.stringify({ ...record, evidenceSha256 });
+    const rebound = { ...s, evidenceSha256, retirement: { ...s.retirement, evidenceSha256: digest(bytes) } };
+    writeFileSync(receipt, bytes); writeFileSync(join(at, "state.json"), JSON.stringify(rebound));
+    return rebound;
+  };
+  for (const change of ["altered", "removed"]) {
+    const at = join(h.temp, `negative-${change}`), path = join(at, s.evidence, "control", failure);
+    cpSync(h.local, at, { recursive: true });
+    if (change === "altered") writeFileSync(path, '{"helperLine":1}\n'); else unlinkSync(path);
+    const rebound = rebind(at);
+    assert.throws(() => verifyFailedSetupRetirement(at, rebound),
+      change === "altered" ? (e) => e instanceof SetupWatcherProofMissing && /not a drainage deadline expiry/.test(e.message) : undefined, change);
+  }
+  writeFileSync(join(local, s.evidence, "control", failure), '{"helperLine":1}\n');
+  rebind(local);
+  report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.error, "group-evidence-invalid");
 });
 
 test("failed pre-registration cleanup preserves the archive and stops on missing proof, including on restart", async (t) => {
