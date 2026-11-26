@@ -193,26 +193,86 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const headTag = /<noscript data-corten-read-again="\d+"[^>]*>[\s\S]*?<\/noscript>/g;
     /** A part's read-again tag as the server writes it (`ReadAgain::from`). */
     const partTag = /<template data-corten-read-again="\d+"[^>]*><\/template>/g;
-    /** The address a part's read-again tag reads from (`data-from`), as written. @param {string} tag */
-    const tagFrom = (tag) => /data-from="([^"]*)"/.exec(tag)?.[1]?.replaceAll("&amp;", "&") ?? null;
-    /** A read-again tag's wait in seconds, as written, and for the head's its refresh's too. @param {string} tag */
-    const tagWaits = (tag) => [/data-corten-read-again="(\d+)"/.exec(tag)?.[1], ...(tag.startsWith("<noscript") ? [/content="(\d+)"/.exec(tag)?.[1]] : [])].map(Number);
+    /** A tag's attributes (`name="value"`, or a bare name as ""), by lowercased name. @param {string} tag */
+    const attrsOf = (tag) =>
+      Object.fromEntries([...tag.replace(/^<[^\s>]+/, "").matchAll(/([^\s=/>]+)(?:\s*=\s*"([^"]*)")?/g)].map((m) => [m[1].toLowerCase(), (m[2] ?? "").replaceAll("&amp;", "&")]));
+    /**
+     * The read-again tags in `body` that a browser reads as tags, where they count, each with the
+     * place its wait is written (`waits`: the value's start and end in `body`, and the value): the
+     * head's (`<noscript data-corten-read-again>` in the head, with its wait and each actual
+     * `<meta http-equiv="refresh">` in it, whose `content` is the refresh's wait), and with `part`
+     * the part's reading again from `part` (`<template data-corten-read-again data-from>`). A tag in
+     * an HTML comment is none, and the head is what is inside `<head>` or, in a navigation's answer,
+     * which has none, the run of head elements it starts with.
+     * @param {string} body @param {string} [part]
+     */
+    const readAgainTags = (body, part) => {
+      // Comments blanked to spaces of their length, so their tags are none and places stay `body`'s.
+      const html = body.replace(/<!--[\s\S]*?(?:-->|$)/g, (c) => " ".repeat(c.length));
+      const open = /<head\b[^>]*>/i.exec(html);
+      const from = open ? open.index + open[0].length : 0;
+      const close = open ? html.indexOf("</head>", from) : -1;
+      const to = open
+        ? close < 0 ? from : close
+        : (/^(?:\s+|<title\b[^>]*>[\s\S]*?<\/title>|<noscript\b[^>]*>[\s\S]*?<\/noscript>|<(?:meta|link|base)\b[^>]*>|<(?:style|script)\b[^>]*>[\s\S]*?<\/(?:style|script)>)*/i.exec(html)?.[0].length ?? 0);
+      /** Where `name`'s value is written in the tag at `at` (`tag` its text), or null. @param {string} tag @param {number} at @param {string} name */
+      const valueAt = (tag, at, name) => {
+        const m = new RegExp(`\\s${name}\\s*=\\s*"([^"]*)"`, "i").exec(tag);
+        if (!m) return null;
+        const start = at + m.index + m[0].length - 1 - m[1].length;
+        return { start, end: start + m[1].length, value: m[1] };
+      };
+      const head = [...html.slice(from, to).matchAll(/<noscript\b[^>]*>([\s\S]*?)<\/noscript>/gi)]
+        .filter((m) => "data-corten-read-again" in attrsOf(/^<[^>]*>/.exec(m[0])?.[0] ?? ""))
+        .map((m) => {
+          const at = from + /** @type {number} */ (m.index);
+          const inner = at + m[0].indexOf(">") + 1;
+          const refresh = [...m[1].matchAll(/<meta\b[^>]*>/gi)].filter((r) => attrsOf(r[0])["http-equiv"]?.toLowerCase() === "refresh");
+          return {
+            wait: valueAt(m[0].slice(0, m[0].indexOf(">") + 1), at, "data-corten-read-again"),
+            refresh: refresh.map((r) => valueAt(r[0], inner + /** @type {number} */ (r.index), "content")),
+          };
+        });
+      const parts =
+        part === undefined
+          ? []
+          : [...html.matchAll(/<template\b[^>]*>/gi)]
+              .filter((m) => "data-corten-read-again" in attrsOf(m[0]) && attrsOf(m[0])["data-from"] === part)
+              .map((m) => ({ wait: valueAt(m[0], /** @type {number} */ (m.index), "data-corten-read-again") }));
+      return { head, parts };
+    };
     /**
      * What is wrong with the read-again tags in `body`, the server's own answer saying `Saving...`,
-     * against those the server writes while a write lands: its head's tag, and with `part` its part's
-     * tag reading again from `part` (the page's address), each there and waiting `AGAIN_SECONDS`
-     * (the alerts page's own wait). Null when nothing is. @param {string} body @param {string} [part]
+     * against those the server writes while a write lands (`readAgainTags`): its head's tag, with an
+     * actual refresh in it, and with `part` its part's tag reading again from `part` (the page's
+     * address), each there and waiting `AGAIN_SECONDS` (the alerts page's own wait). Null when
+     * nothing is. @param {string} body @param {string} [part]
      */
     const tagFaults = (body, part) => {
+      const { head, parts } = readAgainTags(body, part);
       const faults = [];
-      const waits = (/** @type {string} */ what, /** @type {string[]} */ tags) => {
-        if (!tags.length) return faults.push(`without ${what}`);
-        const wrong = tags.flatMap(tagWaits).filter((s) => s !== AGAIN_SECONDS);
+      /** @param {string} what @param {({ value: string } | null)[]} waits */
+      const judge = (what, waits) => {
+        const wrong = waits.map((w) => w?.value ?? "none").filter((v) => !/^\d+$/.test(v) || Number(v) !== AGAIN_SECONDS);
         if (wrong.length) faults.push(`with ${what} waiting ${wrong.join(", ")} s, not ${AGAIN_SECONDS}`);
       };
-      waits("its head's read-again tag", body.match(headTag) ?? []);
-      if (part !== undefined) waits(`its part's read-again tag from ${part}`, (body.match(partTag) ?? []).filter((t) => tagFrom(t) === part));
+      if (!head.length) faults.push("without its head's read-again tag");
+      else if (head.some((t) => !t.refresh.length)) faults.push("with its head's read-again tag holding no refresh");
+      judge("its head's read-again tag", head.flatMap((t) => [t.wait, ...t.refresh]));
+      if (part !== undefined) {
+        if (!parts.length) faults.push(`without its part's read-again tag from ${part}`);
+        judge(`its part's read-again tag from ${part}`, parts.map((t) => t.wait));
+      }
       return faults.length ? faults.join(" and ") : null;
+    };
+    /**
+     * `body` with the waits `readAgainTags` finds (with `part`) set to `seconds`, and nothing else
+     * changed. @param {string} body @param {string} part @param {number} seconds
+     */
+    const setWaits = (body, part, seconds) => {
+      const { head, parts } = readAgainTags(body, part);
+      const places = [...head.flatMap((t) => [t.wait, ...t.refresh]), ...parts.map((t) => t.wait)].filter((w) => w !== null).sort((a, b) => b.start - a.start);
+      return places.reduce((out, w) => `${out.slice(0, w.start)}${seconds}${out.slice(w.end)}`, body);
     };
     const savedSoon = () =>
       page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
@@ -344,13 +404,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // and only when that says `Saved.` does the stand-in answer as the server does while the write
       // lands: its status line saying `Saving...`, its head's tag asking to be read again, and its
       // part's tag asking again from the page's own address after the seconds `seeds` gives it. An
-      // answer of the server's that says `Saving...` is passed through byte for byte, and its own
-      // read-again tags must be there and wait the part's `AGAIN_SECONDS` (`tagFaults`): one whose
-      // tags are missing or wait otherwise is passed through as it came and fails the case
-      // (`seedFaults`), since the stand-in must not supply or mend a tag the server got wrong. Only
-      // in the leave-before-read case, whose `seeds` wait is longer, are the server's tags' waits set
-      // to it, once they were found to be `AGAIN_SECONDS`. Only the navigation's fetch is answered
-      // so: every part read after it is the server's, or a case's own route's.
+      // answer of the server's that says `Saving...` is passed on as the server wrote it but for the
+      // navigation's mark on its status line (`markNav`), and its own read-again tags must be there
+      // and wait `AGAIN_SECONDS` (`tagFaults`): one whose tags are missing or wait otherwise is passed
+      // on so and fails the case (`seedFaults`), since the stand-in never supplies or repairs the
+      // server's tags or waits. The one exception is the leave-before-read case, whose `seeds` wait
+      // is longer: the server's waits are set to it (`setWaits`), once they were found to be
+      // `AGAIN_SECONDS`. Only the navigation's fetch is answered so: every part read after it is the
+      // server's, or a case's own route's.
       /** The pages whose navigation is answered so, by address (path and query), each with its part's wait in seconds. @type {Map<string, number>} */
       const seeds = new Map();
       /** What each of those navigations was answered with, by address, for a check's detail. @type {Map<string, string>} */
@@ -385,20 +446,20 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           if (shows === "Saving...") {
             const wrong = tagFaults(body, address);
             if (wrong !== null) {
-              const fault = `the server's own answer saying Saving... ${wrong}, passed through as it came`;
+              const fault = `the server's own answer saying Saving... ${wrong}, passed on as the server wrote it`;
               seeded.set(address, fault);
               seedFaults.set(address, fault);
               await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
               return;
             }
             if (seconds === AGAIN_SECONDS) {
-              seeded.set(address, "the server's own answer saying Saving..., with its read-again tags, unchanged");
+              seeded.set(address, "the server's own answer saying Saving..., with its read-again tags as the server wrote them");
               await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
               return;
             }
-            // The leave-before-read case's longer wait, on tags found to wait `AGAIN_SECONDS`.
-            const wait = (/** @type {string} */ t) => t.replace(/data-corten-read-again="\d+"/, `data-corten-read-again="${seconds}"`).replace(/content="\d+"/, `content="${seconds}"`);
-            const answer = body.replace(headTag, wait).replace(partTag, (t) => (tagFrom(t) === address ? wait(t) : t));
+            // The leave-before-read case's longer wait, set only where `tagFaults` found it: the
+            // head's tag, its refresh's content and the part's tag, each waiting `AGAIN_SECONDS`.
+            const answer = setWaits(body, address, seconds);
             seeded.set(address, `the server's own answer saying Saving..., with its read-again tags waiting ${AGAIN_SECONDS} s, set to ${seconds} s`);
             await route.fulfill({ status: res.status(), headers, body: markNav(token, answer) });
             return;
@@ -1096,9 +1157,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // server after that, when the right answer is `Saved.` with nothing to read again, so the
       // navigation's own fetch alone is answered as the server answers it while the write lands
       // (#2035), as `seedNavigation` answers the part cases', but only when the server's answer says
-      // `Saved.`: one that says `Saving...` is passed through byte for byte, and its own head's
-      // read-again tag must be there and wait `AGAIN_SECONDS` (`wholeFaults`), never one the stand-in
-      // supplies or mends. Every read after it is the server's.
+      // `Saved.`: one that says `Saving...` is passed on as every read here is, its part templates
+      // taken out (`asWhole`), with the navigation's mark on its status line (`markNav`), and its own
+      // head's read-again tag must be there and wait `AGAIN_SECONDS` (`wholeFaults`); the stand-in
+      // never supplies or repairs it. Every read after it is the server's.
       const shows = whole.includes(savedLine) ? "Saved." : whole.includes(savingLine) ? "Saving..." : null;
       if (!res.ok() || shows === null) {
         wholeSeeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
@@ -1107,16 +1169,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       if (shows === "Saving...") {
         const wrong = tagFaults(whole);
         if (wrong !== null) wholeFaults.set(address, `the server's own answer saying Saving... ${wrong}`);
-        wholeSeeded.set(address, wrong === null ? "the server's own answer saying Saving..., with its head's read-again tag, unchanged" : `the server's own answer saying Saving... ${wrong}, passed through as it came`);
+        wholeSeeded.set(address, wrong === null ? "the server's own answer saying Saving..., with its head's read-again tag as the server wrote it" : `the server's own answer saying Saving... ${wrong}, passed on as the server wrote it`);
         return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
       }
       wholeSeeded.set(address, "the stand-in, the server's saying Saved.");
       await route.fulfill({ status: res.status(), headers, body: markNav(token, stillSaving(whole)) });
     };
     // The whole-read route and its listener are removed however the cases below end, each within
-    // 5 s, so a hung browser fails the run with a reason rather than leaving them in place.
-    await within(5000, "the whole-read route was not set within 5 s", page.route("**/alerts?saved=*", wholeOnly));
+    // 5 s, so a hung browser fails the run with a reason rather than leaving them in place; the
+    // route is set inside the guard, and removing one that was never set does nothing.
     try {
+      await within(5000, "the whole-read route was not set within 5 s", page.route("**/alerts?saved=*", wholeOnly));
       page.on("request", onSaved);
       await page.goto(await pending());
       const waiting = await saved();
@@ -1169,8 +1232,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // held (not once it is let go); then every later read made at its address with only `shown`
         // changed, one of them answered with success, `Saved.` drawn in the same document, and the
         // page left at that address. Each wait has its own bound, and a result after it fails the case;
-        // once a step fails, the case does no more page work. The hold is let go and the route and
-        // listeners removed however the case ends.
+        // once a step fails, the case does no more page work. The write and its page's read, the
+        // route's setting and its removal are each bounded too, a bound that runs out ending the run
+        // with its reason. The hold is let go and the route and listeners removed however the case ends.
         const name = "a read a script's replaceState cancels on its way is made again";
         /** A write, and the page the server draws for its receipt's address. */
         const capture = () =>
@@ -1260,7 +1324,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         try {
           // Armed inside the guard: the read the route holds is let go however the steps end.
           try {
-            const got = await capture();
+          const got = await within(15000, "the fixture's write and its page were not read within 15 s", capture());
             const body = got?.status === 200 ? asSaving(got.body) : null;
             if (!got || !body) stopped = `the fixture drew no page for its write: ${got ? `${got.status}` : "no receipt"}`;
             else {
@@ -1271,9 +1335,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               served = { status: got.status, headers: Object.fromEntries(got.headers.filter(([header]) => !/^content-(encoding|length)$/i.test(header))), body };
               await page.goto("about:blank");
               recording = true;
-              await page.route(alerts, slow);
+              await within(5000, "the held-read route was not set within 5 s", page.route(alerts, slow));
               await page.goto(address);
-              await page.evaluate(() => ((/** @type {any} */ (window)).__replayed = 7));
+              await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__replayed = 7)));
               waiting = (await saved()) ?? "";
               const held = await steps(5000, "no read held within 5 s").step(() => isHeld).catch(() => false);
               // The page's event for the read held may come a moment after its route.
@@ -1315,7 +1379,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           } finally {
             shut = false;
             release();
-            await page.unroute(alerts, slow);
+            await within(5000, "the held-read route was not removed within 5 s", page.unroute(alerts, slow));
           }
           if (!stopped) {
             const drawn = await pollFor(6000, () =>

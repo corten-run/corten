@@ -324,7 +324,9 @@ the receipt's address. The check requires the navigation reading it to be still 
 the script replaces the address, the replaceState to cancel that navigation, and the held read to
 fail after the replaceState while it is still held (not before it, and not once it is let go); then
 every later read made at its address with only `shown` changed, one of them answered with success,
-`Saved.` drawn in the same document, and the page left at that address. A wait for a request that
+`Saved.` drawn in the same document, and the page left at that address. Its write and the read of
+the receipt's page are bounded to 15 seconds, and setting and removing its route to five each, a
+bound that runs out ending the run with its reason. A wait for a request that
 a held answer lets out starts when that answer is let go. The check of a navigation started before
 a write's page comes requires the write's request, the navigation's request read whole and the
 Stocks page drawn in the same document (its title and its watch form in `<main>`), five seconds
@@ -562,13 +564,17 @@ if it drew its own `Saving...` within five seconds of its start by the page's cl
 moment it was drawn; asking the page to navigate and reading that note are bounded to 15 seconds
 each, so a draw in time does not fail because the note came back late. Each of these navigations'
 own fetch, and that of the check that a page reached by the runtime's navigation reads itself again
-in place, gets the server's own answer byte for byte when that says `Saving...`, and the case fails
-unless it carries the server's read-again tags (the head's, and for a part, the part's reading again
-from the page's own address), each waiting the page's one second: a fixture never supplies a tag the
-server dropped or mends a wait it got wrong. Only when the write has already landed, and the server
-says `Saved.`, does the stand-in answer as the server does while it lands. Only the leave-before-read
-case changes the server's answer: once its tags are found waiting one second, it sets their wait to
-its own longer one, changing no other part of them. The check that a page reached by the runtime's
+in place, gets the server's own answer when that says `Saving...`, changed only by the mark the
+fixture puts on its status line to tell the navigation's draw (and, for the whole-page check, with
+its part templates taken out, as every read there is), and the case fails unless it carries the
+server's read-again tags (the head's, and for a part, the part's reading again from the page's own
+address), each waiting the page's one second. A tag counts only where a browser reads it: not in an
+HTML comment, the head's inside the head (a navigation's answer has none, so the head elements it
+starts with), and its wait read from it and from an actual `<meta http-equiv="refresh">` in it. A
+fixture never supplies or repairs the server's read-again tags or waits. Only when the write has
+already landed, and the server says `Saved.`, does the stand-in answer as the server does while it
+lands. Only the leave-before-read case changes the server's tags: once they are found waiting one
+second, it sets those waits to its own longer one, changing nothing else. The check that a page reached by the runtime's
 navigation reads itself again in place then requires `Saved.` drawn, at the navigation's address, by
 the answer to one of the page's own reads of that address sent after the navigation's fetch, which
 the route marks as it answers them (a `Saved.` another receipt's read drew is not this page reading
