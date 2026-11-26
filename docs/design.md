@@ -11463,8 +11463,16 @@ rules something out.
     each as the browser's own GET writes it (a submit that sends no field keeps the query's `?`,
     and an action that ends in a bare `#` keeps it, as `/scope?#`; the runtime's request for any
     GET `data-patch` form's answer, marked or not, has that query too, `?` and all, as the
-    browser's own GET of the form does), keeping the entry's `history.state` (a fragment a redirect's `Location` names itself is not
-    seen, as `fetch` does not show it, the same as for a link the runtime follows); the same
+    browser's own GET of the form does), keeping the entry's `history.state`. A redirect from an
+    action with a `#fragment` is the exception: the browser's own GET reaches the fragment the
+    redirect's `Location` names, else the action's, and `fetch` shows neither, so the runtime does
+    not write one it guesses. Where the address could move (below), it loads the request in full
+    in the entry's place instead (`navigation.navigate` with `history: "replace"`, which it does not
+    take, else `location.replace`), a GET the browser may send again, which follows the redirect to
+    the address the form reaches without JavaScript; where it could not, the answer is drawn under
+    the entry's address. From an action without one, a fragment the `Location` names is not seen,
+    the same as for a link the runtime follows (Corten's own redirect to a place names it in
+    `corten-location`). The same
     address calls nothing, and a nav link to the new address is marked current, as for a
     navigation. No entry is added, so Back goes to the page before the screen, and Forward and a
     reload read the page at the address, as for any entry. What the draw runs as it goes comes
@@ -11572,8 +11580,8 @@ rules something out.
     user has left the page it was for, and the form it would be said on with it. A submit a
     navigation aborted is over from that moment, though its own code has not yet run to
     say so: a press of its form made then (a later listener cancelled that navigation) neither waits
-    for it nor is answered by it. A press waiting for a write of its form keeps its count and its
-    entry whatever it was pressed as, and is sent as the form the write's answer drew sends it,
+    for it nor is answered by it. A press waiting for a write of its form keeps its place as the
+    latest press and its entry whatever it was pressed as, and is sent as the form the write's answer drew sends it,
     fenced as that: a read only while its press still holds, on the entry it was pressed on, a
     post the form now sends by GET included, whose answer then puts its address in if it was
     pressed on a marked form; a write when
@@ -11582,14 +11590,16 @@ rules something out.
     the answer draws every element: a dropped answer, a 204, an empty patch or an element with no
     place leaves it, while a removal of an element the page no longer has is done, as the runtime
     treats it for any patch, if it names one: a removal without an `id`, or with an empty one,
-    draws nothing. A drawn 4xx (a 422) moves it, being the destination's error view; a
+    names none, and is one that found no place, so a patch with one leaves the address whatever
+    else it draws. A drawn 4xx (a 422) moves it, being the destination's error view; a
     5xx may draw, but is a failed request and never moves it. A page answer (`corten-page`) is
     the page at the address as much as a patch is, and moves it by the same rules once `<main>`
     is drawn in place; one the runtime cannot draw in place (another layout) loads the page in
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
-    navigation, its submits are ordered as any form's are, and each press of a form counts against
-    its id, which the form a patch draws in its place keeps (a patch requires one). A marked form
+    navigation, its submits are ordered as any form's are, and each press of a form is the latest
+    of its id until a newer one, which the form a patch draws in its place keeps (a patch requires
+    one). A marked form
     needs one: `html!` refuses the mark on a form without an `id` (or with an empty one), unless
     a spread, which may write one, is on it, and the runtime takes a press of a marked form that
     has none as a press of an unmarked one, whose answer leaves the address, as it cannot tell
@@ -11607,9 +11617,12 @@ rules something out.
     and again as its fetch starts, once the runtime has marked the form and its button busy,
     which runs the page's code too (a customized button's `attributeChangedCallback`); nothing of
     the page runs between that and the fetch, so one either made stale (a newer press, a move to
-    an `#id`) is not fetched, and nor is one pressed while a visit is on its way. A press is kept
-    only until its submit ends or it is let go unsent, so the ids of forms pressed do not pile up
-    for the page's life. A press that asks for what a read of the form on
+    an `#id`) is not fetched, and nor is one pressed while a visit is on its way, a press made as the
+    visit marks its link busy included (the visit is on its way before it marks anything). The
+    latest press of an id is kept, compared by identity, only until it settles: its submit ends,
+    or it is let go unsent (a newer press replaced it as the one waiting for a write, it took a read
+    over, the form could not be read for it, or it was not sent), so the ids of forms pressed do
+    not pile up for the page's life. A press that asks for what a read of the form on
     its way asks for (the same method, address and values) takes that read over while no answer to
     it has come, as the runtime sends the same request once for any form: its answer is drawn as
     this press's, on this press's entry. Once an answer has come it may be drawing (it waits for
@@ -11742,7 +11755,7 @@ rules something out.
       nowhere else. Nor keeping a press only for one made as a read, as the build after it did: a
       post that waited, sent from a form the write's answer drew with `method="get"`, went as a
       read with no press, so its answer drew after the page had moved to an `#id` and never put
-      its address in. Every press keeps its count and entry, and is fenced as what it is sent as.
+      its address in. Every press keeps its place and entry, and is fenced as what it is sent as.
     - Taking over a read on its way that a navigation had aborted, as an earlier build
       did for any read with the same request: a press made as a later listener cancelled that
       navigation found the aborted read by its request and sent nothing. A read on its way is
@@ -11768,14 +11781,25 @@ rules something out.
       over it; and a listener that pressed another form there made the runtime's own replace count
       as the page's. Telling whose replace is running takes tracking of the kind this Choice has
       cut; the press keeps the entry, and any replace since it leaves the address.
+    - Putting the action's `#fragment` on a redirected answer's URL, as the build before this one
+      did: `fetch` shows no fragment of the `Location`, so a 303 to `/result#server` from an action
+      ending in `#button` put `/result#button` in, where the browser's own GET reaches
+      `/result#server`. Nor leaving the address for such an answer: the form without JavaScript
+      reaches the redirect's address, so the two paths would disagree (README Value 3). The
+      browser's own load of the request reaches it, for one more request, in a case a Corten app
+      meets only through a redirect that is not Corten's own.
 
-    What it costs: the runtime every page loads is 1,493 bytes larger raw (46,502 to 47,995), 619
-    with gzip (16,718 to 17,337) and 537 with brotli (15,106 to 15,643), paid once a release by
-    every user (29, 8 and 21 smaller than the build before this one, which counted the entry's
-    replaces other than its own). A
-    `data-patch` submit reads one attribute and its form's id, and adds one to that id's count in a
-    map that keeps a number for each id pressed; a press keeps the count it was made at, and a read
-    compares it where it could draw or be sent again. Only a marked form's press looks at its entry
+    What it costs: the runtime every page loads is 2,034 bytes larger raw (46,502 to 48,536), 793
+    with gzip (16,718 to 17,511) and 708 with brotli (15,106 to 15,814), paid once a release by
+    every user (411, 138 and 130 larger than the build before this one, which wrote a fragment it
+    guessed for a redirect, counted a visit only once it had marked its link busy, kept a press the
+    form could not be read for or a newer press replaced, and took an unnamed removal for a drawn
+    patch). A
+    `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
+    latest in a map until the press settles, so the map holds only presses still to be sent or
+    drawn; a read compares its press with the id's latest, by identity, where it could draw or be
+    sent again. A marked answer redirected from an action with a `#fragment` costs one more
+    request, the browser's load of the page. Only a marked form's press looks at its entry
     (one key, or the address, compared with the last seen, and its id, or its address and state,
     read as they are) and keeps both; a marked read compares them where it could
     draw, reads the size of the set of visits on their way the runtime keeps already, and builds an
@@ -11798,7 +11822,10 @@ rules something out.
     changes, measured once in each engine; `currententrychange` fires inside `replaceState`,
     before it returns, so a listener's own `replaceState` there runs inside the runtime's, in the
     smoke's checks in each engine; `fetch` keeps an empty query (`?`) in its response's
-    URL, where Chromium's `URL.search` setter drops it, measured once in each engine; a move to an
+    URL, where Chromium's `URL.search` setter drops it, measured once in each engine; a `fetch`
+    that followed a redirect shows no `#fragment` in its response's URL, and a load that follows
+    one reaches the `Location`'s fragment, else the request's, in the smoke's checks in each
+    engine; a move to an
     `#id` of the page by `location.hash` fires `popstate` and gives the entry its new key before
     the assignment returns, and one by a link fires `popstate` as the address changes, in the same
     task (Firefox moves for a link in a later task), with and without the Navigation API, each
@@ -11867,6 +11894,12 @@ rules something out.
     `history: "replace"`, `history.state`'s identity across reads, and the `search` setter and
     `fetch` on an empty query, in Playwright 1.65.1's
     Chromium 159, Firefox 159 and WebKit 27.2;
+    2026-11-26, the `#fragment` the browser's own GET reaches through a 303 whose `Location`
+    names one and one that does not, against `Response.url` and `redirected` for the same request
+    by `fetch`, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's
+    checks; the build before this one fails them in Chromium, with the checks for a press made
+    as a visit marks its link busy, a removal with no id beside a drawn element and a press
+    that never settles);
     2026-11-25 and 2026-11-26, `popstate` and the key on a move to an `#id`, `currententrychange`
     before `popstate`, the order of `window`'s `popstate` listeners and the signal of a
     cancelled replace, and the watchlist smoke on the same

@@ -342,6 +342,8 @@ fn AddressPanel<'a>(scope: &'a str) -> impl Patch {
                 <button name={f.scope} value="month" formaction={here.at(SmokeAddressId)}>"Month"</button>
                 <button name={f.scope} value="far" formaction={url::AddressElsewhere::default()}>"Elsewhere"</button>
                 <button name={f.scope} value="moved" formaction={url::AddressMoved.at(SmokeAddressId)}>"Moved"</button>
+                <button name={f.scope} value="placed" formaction={url::AddressMoved.at(SmokeAddressId)}>"Moved, placed"</button>
+                <button name={f.scope} value="moved" formaction={url::AddressMoved}>"Moved, bare"</button>
                 <button name={f.scope} value="saved" formmethod="post">"Save"</button>
             </form>
             <form method="get" action={&here}>
@@ -419,8 +421,9 @@ fn day_scope() -> url::Address {
 
 /// Answers every request for [`url::AddressMoved`] with a 303 to the day's scope, as a proxy or a
 /// layer outside Corten might, where Corten's own redirect answers the runtime with
-/// `corten-location`: the runtime's `fetch` follows it, and its `Location` names no `#id`, so a
-/// marked form's address keeps the one its `formaction` has, as the browser's own load does.
+/// `corten-location`: the runtime's `fetch` follows it and shows no `#id` of it. Its `Location`
+/// names none, so the browser's own load keeps the one the `formaction` has, except for the
+/// `placed` scope, whose `Location` names the form's own place, which the load takes instead.
 pub struct MovedBy303;
 
 impl Middleware for MovedBy303 {
@@ -428,7 +431,9 @@ impl Middleware for MovedBy303 {
         if req.uri().path() != url::AddressMoved::PATH {
             return next.run(req).await;
         }
-        (StatusCode::SEE_OTHER, [(header::LOCATION, day_scope().to_string())]).into_response()
+        let placed = req.uri().query().is_some_and(|q| q.split('&').any(|pair| pair == "scope=placed"));
+        let to = if placed { day_scope().at(SmokeAddressFormId).to_string() } else { day_scope().to_string() };
+        (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response()
     }
 }
 

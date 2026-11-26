@@ -262,34 +262,6 @@ export async function dataAddress(browser) {
       JSON.stringify(abandoned),
     );
     await traverse("forward");
-    // A redirect (3xx) of the form's request, the server's own (`/smoke/address-moved` answers a
-    // 303 to the day's scope): the address is where it went, with the `#fragment` of the form's
-    // `formaction`, which the redirect's `Location` does not name. The request `fetch` follows
-    // the redirect with is judged by its answer, a patch: Chromium does not tell Playwright the
-    // headers it was sent with. Back goes to the page before the screen.
-    const beforeMove = { index: await index(), entries: await entries() };
-    asked.length = 0;
-    const dayAnswer = scope
-      .waitForResponse((r) => new URL(r.url()).pathname === "/smoke/address" && new URL(r.url()).search === "?scope=day", { timeout: 5000 })
-      .then((r) => "corten-patch" in r.headers(), () => false);
-    await press("Moved");
-    const redirected = {
-      at: await at(),
-      index: (await index()) - beforeMove.index,
-      added: (await entries()) - beforeMove.entries,
-      shown: await shown(),
-      patch: await dayAnswer,
-      asked: asked.splice(0),
-    };
-    const redirectedBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
-    check(
-      "a data-address form's request redirected (3xx) puts the address it went to in the entry, with its formaction's #fragment",
-      redirected.at === "/smoke/address?scope=day#smoke-address" && redirected.index === 0 && redirected.added === 0 && redirected.shown === "day" && redirected.patch &&
-        redirected.asked.length === 2 && redirected.asked[0] === "action /smoke/address-moved?scope=moved" && redirected.asked[1].endsWith(" ?scope=day") &&
-        redirectedBack.at === "/smoke/address-elsewhere" && redirectedBack.shown === "all" && redirectedBack.asked.join() === "nav /smoke/address-elsewhere",
-      JSON.stringify({ redirected, redirectedBack }),
-    );
-    await traverse("forward");
     // A GET pressed while a write of the same form (its Save button) is on its way waits for the
     // write's answer, as any data-patch form's submit does, and is then sent from the form that
     // answer drew: its address takes the entry's place. The write puts none there.
@@ -400,6 +372,33 @@ export async function dataAddress(browser) {
   }
   await scope.close();
   await markedPatchVisits(browser, errors);
+  // A redirect (3xx) of the form's request, the server's own (`/smoke/address-moved` answers a 303
+  // to the day's scope, not Corten's `corten-location`): `fetch` follows it and shows no `#id` its
+  // `Location` names. From an action without one ("Moved, bare") the answer is drawn in place and
+  // the address is where it went. From one with an `#id`, the browser's own GET reaches the
+  // `Location`'s `#id` when it names one ("Moved, placed"), else the action's ("Moved"), which the
+  // runtime cannot tell apart: it loads the request in full in the entry's place, and the browser
+  // follows the redirect itself. Each is compared with the browser's own GET without JavaScript,
+  // with and without the Navigation API.
+  for (const plain of [false, true]) {
+    const api = plain ? "without the Navigation API " : "";
+    const bare = await movedBy303(browser, "Moved, bare", plain, errors);
+    check(
+      `${api}a data-address form's request redirected (3xx) from an action without an #id is drawn in place and puts the address it went to in the entry, as the browser's own GET`,
+      !bare.loaded && bare.browserGet.at === "/smoke/address?scope=day" && bare.at === bare.browserGet.at && bare.shown === "day" && bare.added === 0 &&
+        bare.documents.length === 0 && bare.asked[0] === "action /smoke/address-moved?scope=moved" && bare.back === "/smoke/address-elsewhere",
+      JSON.stringify(bare),
+    );
+    const kept = await movedBy303(browser, "Moved", plain, errors);
+    const placed = await movedBy303(browser, "Moved, placed", plain, errors);
+    check(
+      `${api}a data-address form's request redirected (3xx) from an action with an #id is loaded in full in the entry's place, reaching the #id the browser's own GET does, the action's or the Location's`,
+      [kept, placed].every((r) => r.loaded && r.at === r.browserGet.at && r.shown === "day" && r.added === 0 && r.back === "/smoke/address-elsewhere") &&
+        kept.browserGet.at === "/smoke/address?scope=day#smoke-address" && placed.browserGet.at === "/smoke/address?scope=day#smoke-address-form" &&
+        kept.documents[0] === "/smoke/address-moved?scope=moved" && placed.documents[0] === "/smoke/address-moved?scope=placed",
+      JSON.stringify({ kept, placed }),
+    );
+  }
   // Without JavaScript the browser sends a data-address form itself: the page at its address.
   {
     const noScript = await browser.newContext({ javaScriptEnabled: false });
@@ -626,11 +625,65 @@ export async function dataAddress(browser) {
   if (!kept) skip("a form's press is let go once it settles", "no DevTools heap query (Chromium only)");
   else
     check(
-      "a form's press is kept only while its submit is on its way: of 41 ids pressed, the held one's while it is held, none once all have settled",
-      kept.drawn && kept.during.join() === "smoke-press-kept-held" && kept.done && kept.after.length === 0,
+      "a form's press is kept only while its submit is on its way: of the ids pressed, the latest press of each held one while it is held (not one whose form could not be read, or one a later press replaced), none once all have settled",
+      kept.drawn && kept.during.join() === "smoke-press-kept-held,smoke-press-kept-read-c,smoke-press-kept-write-a,smoke-press-kept-write-c" && kept.done && kept.after.length === 0,
       JSON.stringify(kept),
     );
   check("no page errors on the data-address screens", errors.length === 0, errors.join(" | "));
+}
+
+/**
+ * Presses `name`, a scope button whose `formaction` the server answers with a 303, on the screen
+ * reached from the page before it, and says whether a document loaded, where the page is, how many
+ * history entries it added, what it asked for of the `/smoke/address` routes (the documents loaded
+ * as their address before the redirect), and where Back goes; and where the browser's own GET of
+ * the button goes without JavaScript. With `plain`, without the Navigation API.
+ * @param {import("@playwright/test").Browser} browser @param {string} name @param {boolean} plain @param {string[]} errors
+ */
+async function movedBy303(browser, name, plain, errors) {
+  const home = `${base}/smoke/address`;
+  const noScript = await browser.newContext({ javaScriptEnabled: false });
+  const bare = await noScript.newPage();
+  await bare.goto(home);
+  const arrived = (/** @type {URL} */ url) => url.pathname === "/smoke/address" && url.search === "?scope=day";
+  await Promise.all([bare.waitForURL(arrived, { timeout: 5000 }).catch(() => {}), bare.getByRole("button", { name, exact: true }).click()]);
+  const browserGet = await bare.evaluate(() => ({ at: location.href.slice(location.origin.length), shown: document.querySelector("#smoke-address output")?.textContent }));
+  await noScript.close();
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => errors.push(`${name}${plain ? ", plain" : ""}: ${e.message}`));
+  if (plain)
+    await page.addInitScript(() => {
+      delete (/** @type {any} */ (Window.prototype)).navigation;
+      delete (/** @type {any} */ (window)).navigation;
+    });
+  await page.goto(`${base}/smoke/address-elsewhere`);
+  // The screen, reached from the page before it: by the runtime's navigation, else by a load.
+  if (plain) await page.goto(home);
+  else await page.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/address").finished);
+  const length = await page.evaluate(() => history.length);
+  /** @type {string[]} */
+  const asked = [];
+  page.on("request", (r) => {
+    const url = new URL(r.url());
+    if (url.pathname.startsWith("/smoke/address")) asked.push(`${r.headers()["corten"] ?? r.resourceType()} ${url.pathname}${url.search}`);
+  });
+  const loading = page.waitForEvent("load", { timeout: 3000 }).then(() => true, () => false);
+  await page.getByRole("button", { name, exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const loaded = await loading;
+  await page
+    .waitForFunction(() => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  const end = await page.evaluate(
+    (length) => ({ at: location.href.slice(location.origin.length), shown: document.querySelector("#smoke-address output")?.textContent, added: history.length - length }),
+    length,
+  );
+  const documents = asked.filter((a) => a.startsWith("document ")).map((a) => a.slice("document ".length));
+  await page.evaluate(() => history.back());
+  await page.waitForFunction(() => location.pathname === "/smoke/address-elsewhere", undefined, { timeout: 5000 }).catch(() => {});
+  const back = await page.evaluate(() => location.pathname + location.search).catch((/** @type {Error} */ e) => e.message);
+  await page.close();
+  return { browserGet, loaded, ...end, asked, documents, back };
 }
 
 /**
@@ -1358,6 +1411,15 @@ async function markedPatchVisits(browser, errors) {
     [noId, emptyId].every((p) => p.done && p.at === "" && p.added === 0 && p.shown === "all"),
     JSON.stringify({ noId, emptyId }),
   );
+  // Beside an element that is drawn, such a removal is one that found no place: the patch is not
+  // drawn whole, and the address stays.
+  const mixedNoId = await patch(200, '<template data-remove></template><section id="smoke-address"><output>Mixed</output></section>');
+  const mixedEmptyId = await patch(200, '<section id="smoke-address"><output>Mixed</output></section><template id="" data-remove></template>');
+  check(
+    "a marked patch that draws an element beside a removal with no id, or an empty one, draws the element and leaves the address",
+    [mixedNoId, mixedEmptyId].every((p) => p.done && p.at === "" && p.added === 0 && p.shown === "Mixed"),
+    JSON.stringify({ mixedNoId, mixedEmptyId }),
+  );
 
   // A page answer (`corten-page`, `<main>`) is the page at the address asked for too: it is drawn
   // in place, and the address takes the entry's place.
@@ -1955,6 +2017,17 @@ async function markedPatchVisits(browser, errors) {
       busyMoved.done && busyMoved.starts === 0 && busyMoved.at === "#smoke-address" && busyMoved.shown === "all",
       JSON.stringify(busyMoved),
     );
+  // So is marking a visit's link busy: a customized link's `attributeChangedCallback` that presses
+  // the marked form as the visit marks it. That press is for the page the visit leaves, and is not
+  // fetched.
+  const busyPressed = await busyPresses(page);
+  if (!busyPressed) skip("a marked GET pressed as a visit marks its link busy is not fetched", "no customized built-in elements, or no link marked busy");
+  else
+    check(
+      "a marked GET pressed as a visit marks its link busy is not fetched, and the visit draws its page",
+      busyPressed.pressed && busyPressed.starts === 0 && busyPressed.at === "?scope=month" && busyPressed.shown === "month",
+      JSON.stringify(busyPressed),
+    );
   await page.close();
 }
 
@@ -2488,10 +2561,71 @@ async function busyMoves(page) {
 }
 
 /**
+ * Follows a customized link (`is=`) to the screen's month scope whose `attributeChangedCallback`
+ * presses Week on the marked scope form as the runtime marks the link busy for its visit, before
+ * the visit is fetched. Says whether it pressed, how often Week was fetched and where the page is
+ * once the visit has ended; null where the browser has no customized built-in elements (WebKit), or
+ * marks no link busy.
+ * @param {import("@playwright/test").Page} page
+ */
+async function busyPresses(page) {
+  await page.goto(`${base}/smoke/address`);
+  const defined = await page.evaluate(() => {
+    let starts = 0;
+    let pressed = false;
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && url.search === "?scope=week" && new Headers(init?.headers).get("corten") === "action") starts += 1;
+      return fetch_.call(this, input, init);
+    };
+    Object.assign(window, { __weekStarts: () => starts, __pressed: () => pressed });
+    class BusyPresses extends HTMLAnchorElement {
+      static observedAttributes = ["aria-busy"];
+      /** @param {string} _name @param {string | null} _old @param {string | null} now */
+      attributeChangedCallback(_name, _old, now) {
+        if (now !== "true" || pressed) return;
+        pressed = true;
+        const week = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]'));
+        week.form?.requestSubmit(week);
+      }
+    }
+    try {
+      customElements.define("smoke-busy-presses", BusyPresses, { extends: "a" });
+    } catch {
+      return false;
+    }
+    const link = document.createElement("a", { is: "smoke-busy-presses" });
+    if (!(link instanceof BusyPresses)) return false;
+    link.href = "/smoke/address?scope=month";
+    link.textContent = "Month, pressing";
+    document.querySelector("main")?.append(link);
+    return true;
+  });
+  if (!defined) return null;
+  await page.getByRole("link", { name: "Month, pressing", exact: true }).evaluate((link) => /** @type {HTMLAnchorElement} */ (link).click());
+  await page
+    .waitForFunction(() => location.search === "?scope=month" && document.querySelector("#smoke-address output")?.textContent === "month" && !document.querySelector("main")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  const end = await page.evaluate(() => ({
+    pressed: /** @type {any} */ (window).__pressed?.() ?? null,
+    starts: /** @type {any} */ (window).__weekStarts?.() ?? null,
+    at: location.search + location.hash,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+  }));
+  return end.pressed === false ? null : end;
+}
+
+/**
  * Submits 41 forms of ids of their own, unmarked and marked, holding one's answer, and asks the
  * browser's heap (Chromium's DevTools protocol, `Runtime.queryObjects`) which of the page's maps
  * hold their ids as keys: the held one's while its read is on its way, and none once every press
- * has settled. Null in a browser without that protocol.
+ * has settled. With them, a form whose `submit` listener takes its button out, so the runtime
+ * cannot read the form for it (`new FormData` throws), and two forms pressed three times, each
+ * press under a new id: one's write is held, which its two reads wait for, the second replacing the
+ * first; the other's read is held, which each later press takes over. Only the latest press of
+ * each is kept while it is held. Null in a browser without that protocol.
  * @param {import("@playwright/test").Browser} browser
  */
 async function pressesKept(browser) {
@@ -2523,7 +2657,20 @@ async function pressesKept(browser) {
     await held;
     await route.continue().catch(() => {});
   });
+  const coalesceUrl = `${home}?scope=coalesce`;
+  await page.route(coalesceUrl, async (route) => {
+    await held;
+    await route.continue().catch(() => {});
+  });
+  await page.route(home, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await held;
+    await route.fulfill({ status: 204 }).catch(() => {});
+  });
   const heldSent = page.waitForRequest((r) => r.url() === heldUrl, { timeout: 5000 }).then(() => true, () => false);
+  const coalesceSent = page.waitForRequest((r) => r.url() === coalesceUrl, { timeout: 5000 }).then(() => true, () => false);
+  const writeSent = page.waitForRequest((r) => r.url() === home && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
+  const readAfterWrite = page.waitForResponse((r) => r.url() === `${home}?scope=w`, { timeout: 10000 }).then(() => true, () => false);
   await page.evaluate(
     ({ prefix, action }) => {
       const add = (/** @type {string} */ id, /** @type {string} */ scope, /** @type {boolean} */ marked) => {
@@ -2544,25 +2691,50 @@ async function pressesKept(browser) {
       forms.push(add(`${prefix}held`, "held", false));
       Object.assign(window, { __kept: forms });
       for (const form of forms) form.requestSubmit();
+      const throws = add(`${prefix}throws`, "throws", false);
+      const taken = document.createElement("button");
+      throws.append(taken);
+      throws.addEventListener("submit", (event) => /** @type {SubmitEvent} */ (event).submitter?.remove());
+      throws.requestSubmit(taken);
+      const write = add(`${prefix}write-a`, "w", false);
+      write.method = "post";
+      const read = document.createElement("button");
+      read.formMethod = "get";
+      write.append(read);
+      write.requestSubmit();
+      write.id = `${prefix}write-b`;
+      write.requestSubmit(read);
+      write.id = `${prefix}write-c`;
+      write.requestSubmit(read);
+      const coalesced = add(`${prefix}read-a`, "coalesce", false);
+      coalesced.requestSubmit();
+      coalesced.id = `${prefix}read-b`;
+      coalesced.requestSubmit();
+      coalesced.id = `${prefix}read-c`;
+      coalesced.requestSubmit();
+      Object.assign(window, { __later: [write, coalesced] });
     },
     { prefix, action: home },
   );
-  const sent = await heldSent;
+  const sent = (await heldSent) && (await coalesceSent) && (await writeSent);
   const drawn = await page
     .waitForFunction(() => /** @type {HTMLFormElement[]} */ (/** @type {any} */ (window).__kept).slice(0, -1).every((f) => !f.hasAttribute("aria-busy")), undefined, { timeout: 10000 })
     .then(() => true, () => false);
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
   const during = await kept();
   release();
+  const answered = await readAfterWrite;
   const done = await page
-    .waitForFunction(() => !(/** @type {HTMLFormElement[]} */ (/** @type {any} */ (window).__kept).some((f) => f.hasAttribute("aria-busy"))), undefined, { timeout: 5000 })
+    .waitForFunction(() => !(/** @type {HTMLFormElement[]} */ ([...(/** @type {any} */ (window).__kept), ...(/** @type {any} */ (window).__later)]).some((f) => f.hasAttribute("aria-busy"))), undefined, { timeout: 5000 })
     .then(() => true, () => false);
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
   const after = await kept();
   await page.unroute(heldUrl);
+  await page.unroute(coalesceUrl);
+  await page.unroute(home);
   await cdp.detach();
   await page.close();
-  return { drawn: sent && drawn, during, done, after };
+  return { drawn: sent && drawn, during, done: answered && done, after };
 }
 
 /**

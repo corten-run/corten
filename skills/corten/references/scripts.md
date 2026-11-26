@@ -167,7 +167,9 @@ division: end statements with `;` and keep a division on the line it continues.
    link, Back or Forward, to another `#id` too) does not draw, and one pressed while a visit of
    the runtime's is on its way (a link or Back it fetches, one a `navigate` listener begins too)
    is not sent; an empty or incomplete patch or a drawn 5xx leaves the address, and a page answer
-   drawn in place moves it as a patch does. Where the runtime cannot tell the screen is still the
+   drawn in place moves it as a patch does. An answer a 3xx redirected from an action with a
+   `#fragment` is loaded in full in the entry's place, since `fetch` hides which fragment the
+   browser's own GET would reach. Where the runtime cannot tell the screen is still the
    press's page and entry, with nothing it did not start under way and nothing having replaced
    the entry since the press (`replaceState`, a `history: "replace"` navigation, another marked
    answer's own replace, so of two marked forms pressed before either answers the second leaves
