@@ -18,7 +18,14 @@ import http from "node:http";
  * @returns {Promise<void>}
  */
 export async function ready(base, { budget = 120_000, now = () => performance.now() } = {}) {
-  const url = new URL("/health/ready", base);
+  /** @type {URL} */
+  let url;
+  try {
+    url = new URL("/health/ready", base);
+  } catch {
+    // Node's parse error carries the input, credentials and all, so it is not passed on.
+    throw new Error("/health/ready: the readiness wait was not given a URL it can read");
+  }
   // Named without any credentials the base carries.
   url.username = "";
   url.password = "";

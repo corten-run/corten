@@ -57,17 +57,24 @@ test("any other status ends the wait at its headers, a 421, 407 or 101 included"
     n < 2 ? s.socket?.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\nConnection: Upgrade\r\n\r\n") : ok(s),
   );
   assert.deepEqual(upgrade, { outcome: "http://127.0.0.1:PORT/health/ready answered 101, not 200 or 503", requests: 1 });
-  const cut = await against((_n, q, s) => {
-    s.writeHead(500, { "content-length": "10" }).write("x");
-    setTimeout(() => q.socket.destroy(), 50);
-  });
-  assert.deepEqual(cut, { outcome: "http://127.0.0.1:PORT/health/ready answered 500, not 200 or 503", requests: 1 });
+  // A refused status is refused at its headers: its body, which never ends here, is not waited for.
+  const started = performance.now();
+  const open = await against((_n, _q, s) => void s.writeHead(500, { "content-length": "10" }).write("x"), { budget: 3000 });
+  assert.deepEqual(open, { outcome: "http://127.0.0.1:PORT/health/ready answered 500, not 200 or 503", requests: 1 });
+  assert.ok(performance.now() - started < 1000, `refused after ${Math.round(performance.now() - started)} ms`);
+  // A success that is not a 200 is not readiness.
+  const empty = await against((n, _q, s) => (n < 2 ? s.writeHead(204).end() : ok(s)));
+  assert.deepEqual(empty, { outcome: "http://127.0.0.1:PORT/health/ready answered 204, not 200 or 503", requests: 1 });
 });
 
 test("the budget ends the wait naming the last outcome, and nothing after it counts", async () => {
   const always = await against((_n, _q, s) => unavailable(s), { budget: 1234.75 });
   assert.equal(always.outcome, "http://127.0.0.1:PORT/health/ready did not answer 200 within 1.23475 s (last: 503)");
+  // The attempt that stalls is cancelled when the budget runs out, not at its own 5 s.
+  const from = performance.now();
   const stalled = await against((n, _q, s) => (n < 2 ? unavailable(s) : s.writeHead(200, { "content-length": "10" }).write("o")), { budget: 1500 });
+  const took = performance.now() - from;
+  assert.ok(took >= 1400 && took < 2500, `stalled attempt ended after ${Math.round(took)} ms`);
   assert.deepEqual(stalled, {
     outcome: "http://127.0.0.1:PORT/health/ready did not answer 200 within 1.5 s (last: 200, then its body broke off (ABORT_ERR))",
     requests: 2,
@@ -80,9 +87,17 @@ test("the budget ends the wait naming the last outcome, and nothing after it cou
   assert.deepEqual(noPause, { outcome: "http://127.0.0.1:PORT/health/ready did not answer 200 within 120 s (last: 503)", requests: 1 });
 });
 
-test("a base is named without its credentials, and one that is not plain http is refused by name", async () => {
+test("a base is named without its credentials, and one that cannot be read or is not plain http is refused by name", async () => {
   const refused = await against((_n, _q, s) => s.writeHead(500).end("x"), { auth: "user:secret@" });
   assert.equal(refused.outcome, "http://127.0.0.1:PORT/health/ready answered 500, not 200 or 503");
+  // A base Node cannot parse is refused without the input, whose credentials Node's error would carry.
+  const malformed = await ready("http://user:secret@[::1/").then(
+    () => "ready",
+    (e) => e,
+  );
+  assert.equal(malformed.message, "/health/ready: the readiness wait was not given a URL it can read");
+  assert.equal(malformed.cause, undefined);
+  assert.doesNotMatch(JSON.stringify(malformed, Object.getOwnPropertyNames(malformed)), /secret/);
   await assert.rejects(ready("https://user:secret@127.0.0.1:1"), {
     message: "https://127.0.0.1:1/health/ready: the readiness wait asks the app over plain http",
   });
