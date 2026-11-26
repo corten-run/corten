@@ -677,6 +677,11 @@ function externalFailureFixture(p) {
       assert.equal(binding.id, state.createPending.dropletId);
       assert.equal(binding.actionId, state.createPending.actionId);
       assert.throws(() => unacknowledgedCreateBinding(fleet), /without a posted ID/);
+      const statePath = path.join(local, "state.json");
+      const { monitor, ...unmonitoredControl } = state.control;
+      fs.writeFileSync(statePath, JSON.stringify({ ...state, control: unmonitoredControl }));
+      assert.throws(() => externalFailedHostBinding(fleet), /pending unregistered monitor/);
+      fs.writeFileSync(statePath, JSON.stringify(state));
       const artifact = path.join(local, "monitor-registration.json");
       fs.writeFileSync(artifact, "{}");
       assert.throws(() => externalFailedHostBinding(fleet), /child files differ/);

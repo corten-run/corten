@@ -473,6 +473,9 @@ export function externalFailedHostBinding(fleet) {
   assert.ok(single && !single.offlineHandoff, "external failure requires a monitored independent attempt");
   const { group, local, state, stateSha256, outcome } = readGroup(fleet, single.group);
   if (state?.status === "creating" && state.createPending) {
+    const monitor = state.control?.monitor;
+    assert.ok(monitor?.phase === "pending" && monitor.registrationSha256 === undefined,
+      "external posted create requires a pending unregistered monitor");
     const { launchSha256: launch, ...proof } = unboundCreateBinding(fleet, { removed: true });
     assert.equal(proof.stateSha256, stateSha256, "external failure state changed");
     const { dropletId: id, actionId } = state.createPending;
