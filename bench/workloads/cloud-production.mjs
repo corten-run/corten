@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -17,7 +17,7 @@ import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellati
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { checkQuarantineCensus, continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
   recheckExternalFailedHost, recheckSetupAttempt } from "./fleet-verify.mjs";
 
@@ -71,7 +71,8 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   if (options.detach) for (const path of benchPackagePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
-  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
+  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout
+    && options.absentMeasuredCheckout === undefined) && !compiler()) missing.push(localCompilerMissing);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery, launchHostKeySha256;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
@@ -191,7 +192,19 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
           policy: failedNativePolicy(saved) };
       }
     } else {
-      assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+      if (options.absentMeasuredCheckout !== undefined) {
+        assert.ok(saved.commit !== head && absentCollectionCandidate(options, saved), "absence-only collection requires a verified older reservation with deletion intent");
+        const measuredRoot = realpathSync(options.absentMeasuredCheckout);
+        assert.ok(outside(measuredRoot, physicalRequest) && outside(physicalRequest, measuredRoot), "measured checkout and reservation must be disjoint");
+        const measuredGit = async (...args) => (await run("git", ["-C", measuredRoot, ...args])).stdout;
+        assert.equal(realpathSync((await measuredGit("rev-parse", "--show-toplevel")).trim()), measuredRoot);
+        assert.equal((await measuredGit("rev-parse", "--verify", "HEAD^{commit}")).trim(), saved.commit, "use the original measured checkout");
+        assert.equal(await measuredGit("status", "--porcelain", "--untracked-files=all"), "", "clean measured checkout required");
+        await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+        if (!compiler(measuredRoot)) missing.push(localCompilerMissing);
+        recovery = { policy: absentCollectionPolicy, measuredCommit: saved.commit, measuredRoot, hostId: saved.id,
+          archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256 };
+      } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
       if (options.collect && saved.launchHostKeySha256 !== undefined) {
         launchHostKey(join(physicalRequest, `groups-${options.round}`), saved);
         launchHostKeySha256 = saved.launchHostKeySha256;
@@ -210,6 +223,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
       : options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
       : options.r21MeasuredCheckout ? "operator-approved-after-merged-independent-review-for-one-sealed-child-collection"
+      : recovery?.policy === absentCollectionPolicy ? "operator-approved-for-read-only-absence-and-measured-replay-only"
       : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
@@ -388,6 +402,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       requireStagedFleet(JSON.parse(bytes)), admission?.placement?.region) });
   }
   let entered = false;
+  const absenceOnly = plan.subject.recovery?.policy === absentCollectionPolicy ? plan.subject.recovery : undefined;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
     const locked = await productionPlan(options, { ...deps, holdingOperationLock: true });
@@ -399,6 +414,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
+    if (absenceOnly && binary !== "git") assert.ok(binary === "doctl" && !registration && deleteProofExpiresAtMs === undefined && guardDispatch === undefined
+      && (argv[0] === "account" && argv[1] === "get"
+        || argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "get" && argv[3] === absenceOnly.hostId), "absence reconciliation is read-only");
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
@@ -430,9 +448,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
-    } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
+    } }), ...(absenceOnly || options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
+        ...(absenceOnly || options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
           ? plan.subject.recovery : {}) },
     } : {}) });
   let result;

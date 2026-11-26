@@ -1915,7 +1915,24 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each local inspection has a fixed 15-minute deadline including snapshot setup.
+Local inspection has a 15-minute deadline including snapshot setup. With a saved
+DELETE intent, no recorded destruction and a previously verified, monitored
+result, a fresh collect may use up to 25 minutes for replay only after a
+same-account exact 404. It checks absence again and rechecks the archive,
+extracted evidence and terminal campaign and seal before recording cleanup.
+It never sends another DELETE. Other replay deadlines are unchanged.
+If ordinary collection at the measured commit cannot finish that replay, a
+reviewed merged successor can reconcile an already verified, successfully
+collected child with closed monitoring and a saved DELETE intent. Run the child
+`cloud-production.mjs --collect --absent-measured-checkout PATH` preview from
+the successor, with `PATH` the clean original measured checkout. Its approval must
+name `collect-verified-absent-host-only` and the original measured commit. The
+ancestor must supply the successor's complete replay source list. Replay reads
+the measured commit's blobs and verifies the same evidence again. Only the exact
+account and host may be read; a present host, changed reservation, or different
+replay result refuses. This route records only `destroyedAt`; it cannot connect
+to the guest or send another DELETE. Other collection paths keep their source
+requirements.
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider
