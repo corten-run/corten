@@ -1620,6 +1620,41 @@ else a page could differ by, and the answer nothing made for one request:
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
 | what it carries | | more than 1,024 distinct header names as the route's stages leave it (before the app's middleware and outer stages see the answer, so a name they add or remove does not count), a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
+Nothing is kept under `corten dev`, so the log says instead what a release build does with a
+`Public` route's answer to a `GET`: that it would keep it, and for how long, while its store has
+room (at `INFO`), or the first reason it does not and what to change (at `WARN`), such as an
+extractor of the app's own, a cookie it sets, the request's nonce, a form's submit key, a body
+under 1,024 bytes, a status other than `200` or a bound of `0` (`kept_answers(0)`):
+
+```text
+WARN corten: /items is Public, but a release build does not keep its answer: it sets a cookie; set it on an answer that is not Public
+```
+
+The reasons come from the code that decides what a release build keeps, which runs under
+`corten dev` with a store that keeps nothing and gives nothing (writes are counted as a release
+build counts them), so they cannot say other than that build does. That an answer would be kept
+says it may be, not that it is: the store under `corten dev` holds nothing, so it is never full,
+and a full one keeps the answer for a URL only when that URL was asked for before (below). A
+page's body is held whole, so its verdict is said as the answer leaves. Any other body of a known
+size is said as it ends, not before, and it still reaches your middleware and the browser as it
+comes, trailers and all. That verdict is what `corten dev` saw as the body was sent, after the
+route answered: a release build reads the body before the answer leaves, within the route's
+deadline, and keeps it only if it reads whole there. So "would keep its answer ... if it reads
+the body whole within the route's deadline" means a slow body may still miss it, and a body that
+failed under `corten dev` is said to have failed as `corten dev` read it, without a status a
+release build would answer, since one that fails only once the request's signal has ended
+(`Abort::Responded`, as the answer leaves) reads whole in a release build. A
+reason the route's type decides (its handler's inputs, an answer that is neither a page nor a
+whole body, `unstaged`) is said for any `GET`; one a middleware decides before the handler (a
+caller it read, a URL it
+changed) or the answer decides, only for a request a kept answer could stand for, one that shows
+nothing about who asks. So open the page signed out, or in a private window: a request
+with a session's cookie, a navigation inside the app, a `HEAD` or a write is its handler's whatever
+the page does, and says nothing. Each route says each verdict once while the app runs (kept with its body held whole, kept if
+it reads the body in time, or each reason, whatever its numbers), so loading a page again adds nothing, and a page that answers
+another way says the new verdict once; `corten dev` starts the app again on each change, so a
+changed page says its verdict again.
+
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
 with `req.t()` without it, before or after the page was built) it is also kept for the `Accept-Language` it was asked with, as the
@@ -1686,7 +1721,7 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app with no `Public` page and no `Public` JSON, text or file route keeps nothing whatever the
+so a change shows on the next load (the log says what a release build keeps, above). An app with no `Public` page and no `Public` JSON, text or file route keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON, text and files
 are all too small to keep, or streams or files at URLs that name their content, still holds a store, since a body's size is known only when it is made, and
 pays for no count by path: writes are counted by path from the first answer the app may keep,
