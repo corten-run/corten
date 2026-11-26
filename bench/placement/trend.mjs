@@ -32,8 +32,8 @@
 //              unpadded binaries are then started once and their answers compared as turns.sh
 //              compares a placement's, under a placement's time limit. A release and `main` may
 //              answer differently, and no plan written before the run can say how, so the
-//              difference found, as turns.sh reports one after both servers are stopped and
-//              their ports closed (status 4 and its line), is kept as the workload's expected difference
+//              difference found, as turns.sh reports one after both servers ended and nothing
+//              accepted on either port when checked (status 4 and its line), is kept as the workload's expected difference
 //              (<run dir>/expect-<workload>.txt) and every placement of the run must show
 //              exactly it. Nobody reviewed that difference: the run recorded it. The digests of
 //              the two bodies are kept too (<run dir>/bodies-<workload>.txt)
@@ -446,10 +446,11 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
     if (failed && (failed.status === 124 || failed.status === 137)) { why[w] = `the check of the two sides' answers did not finish within a placement's time limit, ${t.plan.placementSeconds} s, and was stopped, its servers' cleanup unconfirmed`; continue; }
     // A comparison that found the answers the same left a diff.txt, an empty one: none is nothing to read.
     const at = join(work, "compare", "answers"), diff = failed && !existsSync(join(at, "diff.txt")) ? "" : readFileSync(join(at, "diff.txt"), "utf8");
-    // A difference is read only as turns.sh says one after a confirmed stop of both servers: its
+    // A difference is read only as turns.sh says one after a stop of both servers that passed its
+    // checks (serve.mjs said each ended, and nothing accepted on either port when checked): its
     // status 4 and that line together. A difference it found and then failed to clean up after,
     // or any other failure, leaves the workload not read.
-    const differs = failed?.status === 4 && diff !== "" && readFileSync(failed.log, "utf8").split("\n").includes(`turns: ${w}: A and B answer differently, both servers stopped and their ports closed`);
+    const differs = failed?.status === 4 && diff !== "" && readFileSync(failed.log, "utf8").split("\n").includes(`turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked`);
     if (failed && !differs) { why[w] = `the two sides' answers could not be compared: ${failed.said}`; continue; }
     const b = bodies(join(at, "bodies.txt"));
     if (!b || (!failed && b.a !== b.b)) { why[w] = "the two sides' answers were compared, and their bodies' digests are not there as the kit keeps them (answers/bodies.txt)"; continue; }

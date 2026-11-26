@@ -46,14 +46,24 @@
 # then fails, saying the cleanup is unconfirmed, and, once every server it is stopping has ended,
 # fails too if anything still accepts on any of their ports, and a turns.sh killed outright still
 # has its servers stopped (by serve.mjs, after turns.sh has ended).
+# What a stop checks, and what it cannot: serve.mjs exits 0 only from its server's exit, which Node
+# reports once it has reaped that process, so a stop whose serve.mjs exits 0 has ended the server
+# serve.mjs started (the process START is, or execs). Once every server a stop ends has ended,
+# each of their ports is checked once. A process that START leaves behind, rather than being or
+# exec'ing the server, is not tracked: one that accepts on a port when it is checked fails the
+# stop, but one that opens a port after that check is not seen. START must be, or exec, the server.
 # When A and B answer differently and no difference is expected, both servers are stopped first,
-# and only once both have ended and nothing takes a connection on either port does turns.sh say
-# "turns: <workload>: A and B answer differently, both servers stopped and their ports closed" and
-# exit 4. A stop that fails or is unconfirmed, or a signal during it, exits 1 without that line.
-# Any other failure exits 1, or with the status of the command that failed (set -e), so it is that
-# line and status 4 together that say the answers differ and the cleanup after them is confirmed.
+# and only once serve.mjs has said each ended and nothing accepted on either port when checked
+# does turns.sh say "turns: <workload>: A and B answer differently; both servers ended and nothing
+# accepted on either port when checked" and exit 4. A stop that fails or is unconfirmed, or a
+# signal during it, exits 1 without that line. A passing verdict ("answers: same", or "answers:
+# differ only as the plan's expected difference says") is printed and written to
+# answers/verdict.txt only after the same stop of both servers has passed, so a stop that fails
+# leaves no verdict.txt. Any other failure exits 1, or with the status of the command that failed
+# (set -e), so it is that line and status 4 together that say the answers differ and the stop
+# after them passed those checks.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,54p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,64p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -225,22 +235,25 @@ fi
 echo "body $na bytes as received, sha256 $(printf %.16s "$da") A and $(printf %.16s "$db") B" >"$ans/bodies.txt"
 if [ -n "${EXPECT:-}" ]; then
     cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
-    echo "answers: differ only as the plan's expected difference says" | tee "$ans/verdict.txt"
+    verdict="answers: differ only as the plan's expected difference says"
 else
-    # A difference that is not expected is said only after a stop that is confirmed: both servers
-    # ended and their ports refuse a connection, so the line and status 4 cannot stand for answers
-    # compared on servers that were then left running.
+    # A difference that is not expected is said only after a stop that passed: serve.mjs said both
+    # servers ended and their ports refused a connection when checked, so the line and status 4
+    # do not stand for answers compared on servers that were then left running.
     if [ $hst != 0 ] || [ $bst != 0 ]; then
         cat "$diffs" >&2
         halt A B || fail "A and B's answers differ, and stopping their servers after the check failed or is unconfirmed: not read as a difference"
-        echo "turns: $workload: A and B answer differently, both servers stopped and their ports closed" >&2
+        echo "turns: $workload: A and B answer differently; both servers ended and nothing accepted on either port when checked" >&2
         exit 4
     fi
-    echo "answers: same" | tee "$ans/verdict.txt"
+    verdict="answers: same"
 fi
 
-# Both stopped after the check, so neither holds memory while the other is measured.
-halt A B || exit 1
+# Both stopped after the check, so neither holds memory while the other is measured. The verdict
+# is published only once that stop has passed, as a difference is: a stop that fails leaves no
+# verdict.txt, and no passing line, for answers compared on servers that were then left running.
+halt A B || fail "stopping the two servers after their answers were compared failed or is unconfirmed: no verdict"
+echo "$verdict" | tee "$ans/verdict.txt"
 turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows
     if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
     perf stat -x, -e "$events" -p "$pid" -o "$out/turn.perf" -- sleep "$secs.4" 5>&- 6>&- &

@@ -232,10 +232,18 @@ one of the commands above with its output under `<run dir>/log`:
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
    found there is kept as the workload's `expect` for this run, but only as `turns.sh` reports
-   one after both servers are stopped and nothing takes a connection on either port (status 4
-   and its line `A and B answer differently, both servers stopped and their ports closed`): a
-   difference after which a stop fails, is unconfirmed or is cut by a signal ends `turns.sh` 1,
-   and leaves the workload not read. The difference is kept
+   one after both servers ended and nothing accepted on either port when checked (status 4 and
+   its line `A and B answer differently; both servers ended and nothing accepted on either port
+   when checked`): a difference after which a stop fails, is unconfirmed or is cut by a signal
+   ends `turns.sh` 1, and leaves the workload not read. `turns.sh` likewise prints a passing
+   verdict (`answers: same`, or as the expected difference says) and writes
+   `answers/verdict.txt` only after that stop of both servers has passed. What the stop checks
+   is limited: `serve.mjs` exits 0 only once Node reports its server's exit, which it does once
+   it has reaped that process, so the server `serve.mjs` started (the process the start command
+   is, or execs) has ended; and each port refuses one connection when it is checked. A process
+   the start command leaves behind, rather than being or exec'ing the server, is not tracked: if
+   it opens a port after that check, it is not seen. The start command must be, or exec, the
+   server. The difference is kept
    (`<run dir>/expect-<workload>.txt`), with the two bodies' digests
    (`<run dir>/bodies-<workload>.txt`), and the row says "answers differ as recorded". Nobody
    reviewed that difference: the run recorded it.

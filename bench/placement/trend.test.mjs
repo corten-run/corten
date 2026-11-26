@@ -360,7 +360,7 @@ function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, prom
 //   differed workloads whose answers differ and whose check ended otherwise than turns.sh ends
 //            one after a confirmed stop (status 4 and DIFFERS): its status and what it said after the diff
 const DIFF = `5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes, sha256 ${DIGEST.base.repeat(4)} and ${DIGEST.head.repeat(4)}\n`;
-const DIFFERS = (w) => `turns: ${w}: A and B answer differently, both servers stopped and their ports closed\n`;
+const DIFFERS = (w) => `turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked\n`;
 let made = 0;
 function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], differed = {}, build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
@@ -801,7 +801,9 @@ test("the answers check on real servers: the same, two bodies of one length, and
   // Two bodies of one length: the difference holds their lengths and their SHA-256s.
   const two = answers("answers-two", serve("aaaa"), serve("bbbb"), 60);
   assert.equal(two.status, 4, two.said);
-  assert.ok(two.said.includes("turns: plain: A and B answer differently, both servers stopped and their ports closed\n"), two.said);
+  assert.ok(two.said.includes("turns: plain: A and B answer differently; both servers ended and nothing accepted on either port when checked\n"), two.said);
+  // A difference is no passing verdict: answers/verdict.txt is not written.
+  assert.ok(!existsSync(join(two.answers, "verdict.txt")), two.said);
   assert.equal(readFileSync(join(two.answers, "diff.txt"), "utf8"), `bodies differ: 4 and 4 bytes, sha256 ${full("aaaa")} and ${full("bbbb")}\n`);
   assert.deepEqual([bodies(join(two.answers, "bodies.txt")).a, bodies(join(two.answers, "bodies.txt")).b], [digest("aaaa"), digest("bbbb")]);
   // A side that takes a connection and never answers: stopped at the time limit, with timeout's status.
@@ -834,6 +836,17 @@ test("the answers check on real servers: answers that differ, after which a serv
   // The diff was made before the stop, so it is there: the status and the missing line, which
   // the command's own test above holds it to, are what keep it from being recorded.
   assert.equal(readFileSync(join(r.answers, "diff.txt"), "utf8"), `bodies differ: 4 and 4 bytes, sha256 ${full("aaaa")} and ${full("bbbb")}\n`);
+});
+
+test("the answers check on real servers: the same answers, after which a server is left listening, leave no passing verdict", LINUX, () => {
+  // As above, but A and B answer the same: the verdict waits for the stop, which fails, so
+  // neither "answers: same" nor answers/verdict.txt says the placement passed.
+  const r = answers("answers-left-same", brief("aaaa", 10000), brief("aaaa", 10000), 60, { start: "$BIN $PORT & exec sleep 30", linger: 15000 });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("turns: plain: something still accepts on 18081 after A's server was stopped (curl status 0)"), r.said);
+  assert.ok(r.said.includes("turns: plain: stopping the two servers after their answers were compared failed or is unconfirmed: no verdict"), r.said);
+  assert.ok(!r.said.includes("answers: same") && !existsSync(join(r.answers, "verdict.txt")), r.said);
+  assert.equal(readFileSync(join(r.answers, "diff.txt"), "utf8"), "");
 });
 
 test("the answers check on real servers: a difference in the headers alone holds a placement to the body the two sides share", LINUX, () => {
@@ -1128,8 +1141,9 @@ for (const [what, head, status] of [["that differ", "bbbb", 4], ["that are the s
   assert.notEqual(r.status, status, r.said);
   assert.equal(r.status, 1, r.said);
   assert.ok(r.said.includes("turns: plain: something still accepts on 18081 after A's server was stopped (curl status 0)"), r.said);
-  // Answers that are the same are said before that stop, and its failure is what ends turns.sh 1.
-  assert.ok(!r.said.includes("A and B answer differently") && (status === 0 || !r.said.includes("answers: same")), r.said);
+  // Neither a difference nor a passing verdict is said, or written to verdict.txt, before that stop passes.
+  assert.ok(!r.said.includes("A and B answer differently") && !r.said.includes("answers: same"), r.said);
+  assert.ok(!existsSync(join(r.work, "compare", "answers", "verdict.txt")), r.said);
   assert.ok(!r.said.includes(": done, "), r.said);
   assert.equal(noted(join(r.work, "terms")).length, 2, `each server was not sent TERM once: ${r.said}`);
 });
