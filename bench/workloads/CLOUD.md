@@ -673,7 +673,8 @@ attempt's own fleet slot. The record has `schema: "benchmark-external-failed-hos
 and `operatorProofSha256`, the SHA-256 of the reviewed operator record binding
 that evidence. Keep the operator record and raw archive outside Git. Do not
 record a failure when results might still be recoverable. The controller requires
-the original stopped locks and invalid, locally closed monitor. It rechecks the
+the original stopped locks and invalid, locally closed monitor, with a complete
+journal and no terminal or audit frame. It rechecks the
 receipt and custody before a successor can allocate, using the complete account
 census to refuse the old ID, original name, or run tag. The receipt authorizes
 no SSH, delete, or publication; a retry needs a higher round and a new commit.

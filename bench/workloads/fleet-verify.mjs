@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full, providerDiagnostic } from "./cloud-options.mjs";
-import { livePeerLease, settledMonitor, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { livePeerLease, requireUnfinishedJournal, settledMonitor, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { streamLimits } from "./isolated/control-stream.mjs";
 import { digest, durable, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
@@ -463,14 +464,17 @@ export function externalFailedHostBinding(fleet) {
   assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === "invalid"
     && !state.archiveSha256 && !state.evidence && !state.validation && !state.collectedAt && !state.deletionIntentAt && !state.destroyedAt,
     "external failure requires an uncollected invalid attempt");
-  const hasConflict = () => readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz(?:\.|$)|monitor-terminal\.json$|audit-delivery\.lock$|state\.json\.tmp$)/.test(name))
+  const hasConflict = () => ["results.tgz", "monitor-terminal.json", "audit-delivery.lock", "state.json.tmp"].some((name) => present(join(local, name)))
+    || readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz\.|monitor-audit-)/i.test(name))
     || [createQuarantineFile, quarantineWitnessFile].some((name) => present(join(root, "receipts", name)));
   assert.ok(!hasConflict(), "external failure cannot supersede other evidence or custody");
   const capture = (name, max) => digest(regular(join(local, name), max));
+  const journal = join(local, "monitor-journal.jsonl");
   const monitor = () => [capture("monitor-invalid.json", 8192), capture("monitor-local-closed.json", 8192),
-    capture("monitor-registration.json", 131072)];
+    capture("monitor-registration.json", 131072), fileHash(journal, streamLimits.journalBytes)];
   const monitorFiles = monitor();
   settledMonitor(local, state);
+  requireUnfinishedJournal(journal, state.control.monitor.id);
   const intent = readLaunchIntent(fleet), batch = reportBatch(fleet, () => undefined);
   assert.ok(batch && batch !== "busy", "external failure requires the original stopped batch owner");
   const { pid, approvalSha256 } = batchLock(batch.bytes);

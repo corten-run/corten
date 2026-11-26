@@ -70,7 +70,7 @@ function auditDirectory(path) {
   physical(path);
 }
 
-function* journalFrames(path) {
+function* journalFrames(path, requireComplete = false) {
   const before = lstatSync(path); assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
@@ -81,6 +81,7 @@ function* journalFrames(path) {
     for (let end = size; end > 0;) {
       const start = Math.max(0, end - chunkBytes), bytes = Buffer.alloc(end - start);
       assert.equal(readSync(fd, bytes, 0, bytes.length, start), bytes.length);
+      if (requireComplete && end === size) assert.equal(bytes.at(-1), 10, "incomplete monitor journal");
       const chunk = suffix.length ? Buffer.concat([bytes, suffix]) : bytes;
       let right = chunk.length;
       for (let left = chunk.lastIndexOf(10); left >= 0; left = left === 0 ? -1 : chunk.lastIndexOf(10, left - 1)) {
@@ -147,6 +148,17 @@ export function settledMonitor(local, state) {
     && r.request.invocation.channel === "ssh" && r.request.invocation.requestSha256 === start), "acknowledged unit start required");
   assert.ok(streamRecoveryReady(local, m), "closed monitor lease required");
   return { registration: monitorRegistration(local, state), terminal };
+}
+
+// A stream can journal a terminal frame before SSH fails and revokes publication.
+export function requireUnfinishedJournal(path, monitorId) {
+  let registered = false;
+  for (const frame of journalFrames(path, true)) {
+    assert.ok(frame?.kind === "local-closed" || frame?.id === monitorId
+      && ["registered", "progress", "peer-lease"].includes(frame.kind), "monitor journal requires reconciliation");
+    if (frame.kind === "registered") registered = true;
+  }
+  assert.ok(registered, "monitor journal requires reconciliation");
 }
 
 export function sealedMonitor(local, state) {

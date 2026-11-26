@@ -76,13 +76,17 @@ test("a reviewed external failure leaves original launch custody intact and requ
   const records = [{ id: monitorId, binding: monitorBinding, publicationRevoked: true },
     { id: monitorId, binding: monitorBinding, remoteDrained: false, closedAtMs, recoverAfterMs }, registration];
   for (const [i, path] of monitorPaths.entries()) writeFileSync(path, JSON.stringify(records[i]));
+  const journal = join(local, "monitor-journal.jsonl");
+  const frame = (kind, payload, sequence) => JSON.stringify({ schema: "benchmark-control-frame/v1", id: monitorId, kind, payload, sequence }) + "\n";
+  const registered = frame("registered", registration, 1);
+  writeFileSync(journal, registered);
   const statePath = join(local, "state.json");
   writeFileSync(statePath, JSON.stringify(state));
   const target = "hardening";
   await assert.rejects(continuationAdmission(root, target, { repo }), (error) => error.code === "ESRCH" || /custody|supervision/.test(error.message));
   const binding = { round, group, accountId, id, manifestSha256: fleet.manifestSha256, stateSha256: fileHash(statePath),
     launch: fileHash(intentPath), batchLockSha256: fileHash(batch), launchLockSha256: fileHash(launch), operationLockSha256: fileHash(operation),
-    monitorFiles: monitorPaths.map((path) => fileHash(path)), nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+    monitorFiles: [...monitorPaths, journal].map((path) => fileHash(path)), nameSha256: digest(state.name), tagSha256: digest(state.tag) };
   const receipt = join(receipts, "external-failed-host.json");
   const record = { schema: "benchmark-external-failed-host/v1", binding, operatorProofSha256: "d".repeat(64) };
   writeFileSync(receipt, JSON.stringify({ ...record, binding: { ...binding, accountId: "user:wrong-account" } }));
@@ -100,12 +104,20 @@ test("a reviewed external failure leaves original launch custody intact and requ
   writeFileSync(recovery, "recovery active");
   assert.throws(() => admission.recheck(), /recovery is active/);
   unlinkSync(recovery);
-  for (const name of ["results.tgz", "results.tgz.download", "results.tgz.synced", "failed-native-results.tgz", "failed-native-capture.json", "evidence-Synthetic"]) {
+  for (const name of ["results.tgz", "results.tgz.download", "results.tgz.synced", "failed-native-results.tgz", "failed-native-capture.json", "evidence-Synthetic", "Results.Tgz.Download",
+    ...(process.platform === "win32" ? ["RESULTS.TGZ"] : [])]) {
     const path = join(local, name);
     writeFileSync(path, "unclassified collection artifact");
     assert.throws(() => admission.recheck(), /cannot supersede other evidence/);
     unlinkSync(path);
   }
+  writeFileSync(journal, registered + frame("terminal", { id: monitorId, nativeTerminal: true, sealSha256: "f".repeat(64) }, 2)
+    + JSON.stringify({ kind: "local-closed", code: 255, signal: null, remoteTerminal: false }) + "\n");
+  assert.throws(() => admission.recheck(), /journal requires reconciliation/);
+  await assert.rejects(continuationAdmission(root, target, { repo }), /journal requires reconciliation/);
+  writeFileSync(journal, registered + '{"kind":"termi');
+  assert.throws(() => admission.recheck(), /incomplete monitor journal/);
+  writeFileSync(journal, registered);
   writeFileSync(statePath, `${JSON.stringify(state)}\n`);
   assert.throws(() => admission.recheck(), /external failure binding differs/);
 });

@@ -645,6 +645,8 @@ function externalFailureFixture(p) {
       "monitor-invalid.json": { id: monitorId, binding: monitorBinding, publicationRevoked: true },
       "monitor-local-closed.json": { id: monitorId, binding: monitorBinding, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs } }))
       fs.writeFileSync(path.join(local, name), JSON.stringify(value));
+    fs.writeFileSync(path.join(local, "monitor-journal.jsonl"), JSON.stringify({ schema: "benchmark-control-frame/v1", id: monitorId,
+      kind: "registered", sequence: 1, payload: app }) + "\n");
     const owner = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
     assert.equal(owner.status, 0);
     const pid = owner.pid;
