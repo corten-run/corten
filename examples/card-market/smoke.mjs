@@ -957,11 +957,14 @@ try {
   for (const [head, body] of asks()) alone.push(await raw(`${head}${closing}\r\n${body}`));
   const together = await raw(asks().map(([head, body], at, all) => `${head}${at === all.length - 1 ? closing : ""}\r\n${body}`).join(""));
   const less = (/** @type {string} */ sent) => sent.replace(/^(date|connection): .*\r\n/gim, "");
-  const lines = [...together.matchAll(/^HTTP\/1\.1 (\d{3})/gm)].map((line) => line[1]).join(" ");
+  // The status each gets alone. Together they are read as one string: a body does not end in a
+  // line break, so the answer behind it does not begin a line and cannot be found by one.
+  const lines = alone.map((sent) => /^HTTP\/1\.1 (\d{3}) /.exec(sent)?.[1] ?? "none").join(" ");
+  const same = less(together) === alone.map(less).join("");
   check(
     "requests sent in one write, one with a body among them, are each answered in order as each is alone",
-    lines === "200 200 401 200" && less(together) === alone.map(less).join(""),
-    `${lines}; ${together.length} bytes together, ${alone.map((sent) => sent.length).join(" + ")} alone`,
+    lines === "200 200 401 200" && same,
+    `${lines} alone; ${together.length} bytes together, ${alone.map((sent) => sent.length).join(" + ")} alone, ${same ? "the same" : "not the same"} but for Date and Connection`,
   );
 
   // Back and forward restore a page from memory. Playwright turns the back/forward cache off, and
