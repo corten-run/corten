@@ -85,7 +85,8 @@ pub fn sorted_pairs(query: &str) -> Vec<Pair<'_>> {
     // that is left of `form_urlencoded::parse` is its splitting: fields at `&`, empty ones
     // skipped, key and value at the first `=`. That is done here without the decoder's passes
     // over each key and value (the links an app writes itself, `?a=1&b=2`, are such queries).
-    // Both characters are ASCII, so no byte of another character is taken for one.
+    // Both characters are ASCII, so no byte of another character is taken for one. A query that
+    // has one pays for the look up to it and is then decoded as before.
     let mut pairs: Vec<Pair<'_>> = if query.bytes().any(|b| b == b'%' || b == b'+') {
         form_urlencoded::parse(query.as_bytes()).collect()
     } else {
@@ -966,17 +967,21 @@ mod tests {
 
     #[test]
     fn an_escape_at_any_place_in_a_query_keeps_it_from_the_direct_split() {
-        // Every kind of field, and long enough that the escape is also looked for well past the
-        // first bytes of the query.
-        let plain = "alpha=one&beta=two&&gamma&=delta&epsilon=猫=é;x&".repeat(4);
-        assert!(plain.len() > 128 && !plain.contains(['%', '+']));
-        for at in (0..=plain.len()).filter(|&at| plain.is_char_boundary(at)) {
-            for escape in ["+", "%2B", "%41"] {
-                let query = format!("{}{escape}{}", &plain[..at], &plain[at..]);
-                let read = sorted_pairs(&query);
-                // Split directly, the escape would be in a key or a value as it was written.
-                assert!(read.iter().all(|(key, value)| !key.contains(escape) && !value.contains(escape)), "{query}");
-                assert_eq!(read, decoded(&query), "{query}");
+        // Every kind of field. A search for an escape that took a query in blocks could miss one
+        // by where it lies in a block or in what is left over, so a query of each length up to
+        // this one's is read with the escape at each of its places.
+        let whole = "alpha=one&beta=two&&gamma&=delta&epsilon=猫=é;x&".repeat(2);
+        assert!(whole.len() > 96 && !whole.contains(['%', '+']));
+        let places = |text: &str| (0..=text.len()).filter(|&at| text.is_char_boundary(at)).collect::<Vec<_>>();
+        for plain in places(&whole).into_iter().map(|end| &whole[..end]) {
+            for at in places(plain) {
+                for escape in ["+", "%2B", "%41"] {
+                    let query = format!("{}{escape}{}", &plain[..at], &plain[at..]);
+                    let read = sorted_pairs(&query);
+                    // Split directly, the escape would be in a key or a value as it was written.
+                    assert!(read.iter().all(|(key, value)| !key.contains(escape) && !value.contains(escape)), "{query}");
+                    assert_eq!(read, decoded(&query), "{query}");
+                }
             }
         }
     }
@@ -1091,8 +1096,8 @@ mod tests {
 
     /// What reading a route's query into its sorted pairs costs, for callgrind, counted as
     /// [`what_reading_a_form_costs`] is: `QUERY_READS` (200) reads of `QUERY`, which is `a=1&b=2`
-    /// unless set. A query with an escape (`q=a+b&page=2`) is looked through for one before the
-    /// decoder reads it, which no case of `bench/request-cost` sends.
+    /// unless set. A query with an escape (`q=a+b&page=2`) is searched for one before the decoder
+    /// reads it, which no case of `bench/request-cost` sends.
     #[test]
     #[ignore]
     fn what_reading_a_query_costs() {
