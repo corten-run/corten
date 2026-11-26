@@ -62,10 +62,10 @@ export function windowsProcessStart(pid) {
   if (!result.error && result.status === 0 && !result.stderr && /^[1-9]\d{0,14}$/.test(result.stdout.trim())) return Number(result.stdout.trim());
 }
 
-function lockEvidence(path) {
+function lockEvidence(path, limit = 1024) {
   const meta = () => lstatSync(path, { bigint: true });
   const identity = (s) => [s.dev, s.ino, s.nlink, s.size, s.birthtimeNs, s.mtimeNs, s.ctimeNs];
-  const before = meta(), bytes = regular(path, 1024), stamp = identity(before);
+  const before = meta(), bytes = regular(path, limit), stamp = identity(before);
   assert.deepEqual(identity(meta()), stamp, "lock changed during read");
   return { bytes, stamp, sha256: digest(bytes), at: Math.max(...[before.birthtimeMs, before.mtimeMs, before.ctimeMs].map(Number)),
     dated: before.birthtimeMs > 0n && before.mtimeMs > 0n && before.ctimeMs > 0n };
@@ -516,6 +516,10 @@ export function recheckSetupAttempt(root, row, successor) {
 // An operator-reviewed external cleanup never changes the old launch's state
 // or grants result or deletion authority. The next create must prove absence.
 export function externalFailedHostBinding(fleet, { orphaned = false } = {}) {
+  return externalFailureBinding(fleet, orphaned);
+}
+
+function externalFailureBinding(fleet, orphaned, historical) {
   const { root, manifest, manifestSha256 } = fleet, { round, provider, single } = manifest;
   assert.ok(single && !single.offlineHandoff, "external failure requires a monitored independent attempt");
   const { group, local, state, stateSha256, outcome } = readGroup(fleet, single.group);
@@ -558,7 +562,12 @@ export function externalFailedHostBinding(fleet, { orphaned = false } = {}) {
     settledMonitor(local, state);
     requireUnfinishedJournal(journal, state.control.monitor.id);
   }
-  const intent = readLaunchIntent(fleet), batch = reportBatch(fleet, () => undefined);
+  const batchPath = join(root, ".fleet-operation.lock");
+  const readBatch = () => {
+    if (!historical) return reportBatch(fleet, () => undefined);
+    return present(batchPath) ? lockEvidence(batchPath) : null;
+  };
+  const intent = readLaunchIntent(fleet), batch = readBatch();
   assert.ok(batch && batch !== "busy", "external failure requires the original stopped batch owner");
   const { pid, approvalSha256 } = batchLock(batch.bytes);
   const locks = [];
@@ -569,7 +578,12 @@ export function externalFailedHostBinding(fleet, { orphaned = false } = {}) {
   });
   assert.ok(owner.pid === pid && approvalSha256 === intent.approvalSha256 && Date.parse(owner.at) <= Date.parse(state.createIntentAt),
     "external failure requires original launch custody");
-  assert.ok(!retainedInvalidOwner(local, state) && sameChildLocks(local, locks) && sameReportBatch(batch, reportBatch(fleet, () => undefined))
+  // Only replay of an existing external receipt may recognize a reused PID.
+  // The process must be newer than the receipt and every original lock.
+  const stopped = historical ? reportOwner(pid, [batch, ...locks, historical.receipt], historical.processStart, Date.parse(owner.at)) !== "busy"
+    : !retainedInvalidOwner(local, state);
+  if (historical) assert.ok(stopped, "external failure requires the original stopped batch owner");
+  assert.ok(stopped && sameChildLocks(local, locks) && sameReportBatch(batch, readBatch())
     && isDeepStrictEqual(monitorFiles, monitor()) && stateSha256 === readGroup(fleet, group).stateSha256 && !hasConflict(),
     "external failure custody changed or recovery is active");
   return { round, group, accountId: provider.accountId, id: state.id, manifestSha256, stateSha256, launch: intent.sha256,
@@ -577,21 +591,22 @@ export function externalFailedHostBinding(fleet, { orphaned = false } = {}) {
     nameSha256: digest(state.name), tagSha256: digest(state.tag) };
 }
 
-export function readExternalFailedHost(fleet) {
+export function readExternalFailedHost(fleet, { processStart = windowsProcessStart } = {}) {
   const dir = join(fleet.root, "receipts"), path = join(dir, externalFailedHostFile);
   if (!present(path)) return;
   physical(dir);
-  const bytes = regular(path, 8192), record = quarantineJson(bytes);
+  const receipt = lockEvidence(path, 8192), { bytes } = receipt, record = quarantineJson(bytes);
   const orphaned = record?.schema === "benchmark-external-failed-host/v2";
   const schema = orphaned ? "benchmark-external-failed-host/v2" : "benchmark-external-failed-host/v1";
   assert.ok(record?.schema === schema, "external failure schema differs");
-  const binding = externalFailedHostBinding(fleet, { orphaned });
+  const binding = externalFailureBinding(fleet, orphaned, { processStart, receipt });
   const operatorProofSha256 = record?.operatorProofSha256;
   assert.ok(typeof operatorProofSha256 === "string" && /^[a-f0-9]{64}$/.test(operatorProofSha256), "external failure operator proof required");
   const archiveSha256 = record.archiveSha256;
   if (orphaned) assert.ok(typeof archiveSha256 === "string" && /^[a-f0-9]{64}$/.test(archiveSha256), "external failure archive hash required");
   assert.ok(isDeepStrictEqual(record, { schema, binding, operatorProofSha256, ...(orphaned ? { archiveSha256 } : {}) }),
     "external failure binding differs");
+  assert.ok(stillSame(receipt, lockEvidence(path, 8192)), "external failure receipt changed during replay");
   const { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256 } = binding;
   return { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256,
     root: fleet.root, externalFailureSha256: digest(bytes) };
