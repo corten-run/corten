@@ -10,11 +10,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
-import { supervise } from "./process.mjs";
-import { observeHost, sampleAuditClock, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { startupOutcome, supervise } from "./process.mjs";
+import { observeHost, sampleAuditClock, terminalClockPolicy, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
+import { hostStorageFailure, trackHostStorageStartup } from "./host-durable-writer.mjs";
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
@@ -97,7 +98,11 @@ export function createCampaign({ authorize }) {
         blockers: ["campaign halted; no retry or assumed cleanup", error.message] });
     }
     if (expiry) event(c, "offline-audit-expired", expiry);
-    else event(c, "halted", { error: error.message });
+    else {
+      const storage = c.startupStorageFailure ?? hostStorageFailure(error)
+        ?? hostStorageFailure(Object.getOwnPropertyDescriptor(error, "cause")?.value);
+      event(c, "halted", { error: error.message, ...(storage ? { hostStorageFailure: storage } : {}) });
+    }
     save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
   }
   async function exclusive(handle, fn) {
@@ -108,13 +113,23 @@ export function createCampaign({ authorize }) {
       throw error;
     } finally { c.busy = false; }
   }
-  async function command(c, binding, invocation, directory, signal, retainTerminalClock, compilerTarget) {
+  async function command(c, binding, invocation, directory, phase, signal, retainTerminalClock, compilerTarget) {
     c.stream?.check();
     own(c.handle); verifyWorkingSources(c.plan.bindings[0]);
     const observerStop = new AbortController();
     const commandSignal = signal ? AbortSignal.any([signal, observerStop.signal]) : observerStop.signal;
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
-    let result, observer, hostManifestSha256, pid;
+    const hostDirectory = join(c.directory, directory, `command-${number}-host`);
+    let startupDiagnostic = trackHostStorageStartup(hostDirectory);
+    let result, observer, hostManifestSha256, pid, attachmentComplete = false;
+    function disposeObserver() {
+      const rejected = observer; observer = undefined;
+      rejected?.dispose();
+    }
+    function captureStartupDiagnostic(timedOut) {
+      const storage = startupDiagnostic?.(timedOut); startupDiagnostic = undefined;
+      if (storage && startupOutcome(result) !== "accepted") c.startupStorageFailure = storage;
+    }
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
@@ -122,32 +137,41 @@ export function createCampaign({ authorize }) {
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
           GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env }, signal: commandSignal,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
-        async onStart(value, startupSignal) {
+        onStartupRejected(outcome) {
+          try { disposeObserver(); }
+          finally { if (outcome === "deadline") captureStartupDiagnostic(true); }
+        },
+        async onStart(value, startupSignal, checkStartup) {
           pid = value; event(c, "command-started", { pid });
           try {
+            checkStartup();
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
-              directory: join(c.directory, directory, `command-${number}-host`), command: number, pid, signal: commandSignal, startupSignal,
+              directory: hostDirectory, command: number, pid, signal: commandSignal, startupSignal,
               onFault() { observerStop.abort(); } });
-            startupSignal.throwIfAborted();
+            checkStartup();
             await observer.attach(pid);
-            startupSignal.throwIfAborted();
+            checkStartup();
+            attachmentComplete = true;
           } catch (error) {
-            observer?.dispose(); observer = undefined; throw error;
+            disposeObserver(); throw error;
           }
         },
       });
-    } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
+    } finally {
+      try { captureStartupDiagnostic(false); }
+      finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
+    }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
-    if (observer) {
+    if (startupOutcome(result) === "accepted") {
       const manifest = await observer.finish(result, retainTerminalClock, settled); hostManifestSha256 = manifest.sha256;
       for (const file of manifest.entries.filter((e) => e.type === "file")) c.files.push({
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
-    } else if (result.terminal) settled?.(); // The gate never admitted this child.
+    } else if (result.terminal && !attachmentComplete) settled?.(); // No completed attachment owns setup.
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
-      join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;
+      join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result, phase }) : null;
     if (lifetime) assert.equal(lifetime.manifestSha256, hostManifestSha256, "command lifetime seal differs");
     // A drained cancellation may be collected, never advanced or qualified. All
     // other commands require complete actual lifetime proof before another spawn.
@@ -172,7 +196,8 @@ export function createCampaign({ authorize }) {
       c.stream?.open(cpus, roles);
     }
     const closeControlWindow = c.offlineHandoff ? beginOfflineWindow(c.control) : c.control ? beginControlWindow(c.control) : null;
-    const settlePolicy = c.stream || c.offlineHandoff ? udevSettlePolicy(binding.request.group, phaseName) : null;
+    const settlePolicy = c.stream || c.offlineHandoff
+      ? terminalClockPolicy(binding, binding.execution.invocation, c.plan.round, phaseName) : null;
     const retainUdev = settlePolicy !== null;
     const before = observeHost(c.stream?.registration, retainUdev, c.offlineHandoff); save(c, `${relative}/host-before.json`, before);
     if (c.stream || c.offlineHandoff) verifyHostBoundary(before, before);
@@ -187,7 +212,7 @@ export function createCampaign({ authorize }) {
         mkdirSync(dirname(target), { recursive: true }); physical(dirname(target));
         compilerTarget = { ...reserveCompilerTarget(target), settled: true };
       }
-      try { result = await command(c, binding, invocation, relative, signal, retainUdev && native, compilerTarget); }
+      try { result = await command(c, binding, invocation, relative, phaseName, signal, retainUdev && native, compilerTarget); }
       catch (error) { problem = error; throw error; }
       finally {
         try { if (compilerTarget) await compilerTarget.close(compilerTarget.settled); }
@@ -369,7 +394,7 @@ export function createCampaign({ authorize }) {
           if (hostManifestSha256) {
             const invocation = [...effective.preparation.fixtures, effective.execution.invocation][p.commands.length - 1];
             const observation = inspectLifetime(effective, invocation,
-              join(c.directory, p.relative, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result });
+              join(c.directory, p.relative, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result, phase: "timing" });
             assert.equal(observation.manifestSha256, hostManifestSha256);
             host = composeHostProof(effective, native, observation);
           }

@@ -6,9 +6,8 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
-import { hostTerminalClock } from "./host-observation.mjs";
+import { hostTerminalClock, processIdentity, processRecordKey, terminalClockPolicy } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { jsonPreparationInvocation, jsonPreparationRound } from "../registry.mjs";
 import { executableProofFailure, executableProofFailureMessage, executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
 import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
@@ -27,12 +26,7 @@ function observing(operation, action) {
     throw error;
   }
 }
-export function processIdentity(stat) {
-  const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
-  assert.ok(match); const rest = match[4].split(" ");
-  assert.match(rest[18] ?? "", /^\d+$/);
-  return { pid: Number(match[1]), startTicks: rest[18], comm: match[2] };
-}
+export { processIdentity, processRecordKey };
 function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
@@ -284,29 +278,53 @@ function readBrowserParticipant(id, executables, pending) {
     const infos = JSON.parse(docker(["container", "inspect", id])); assert.equal(infos.length, 1);
     assert.equal(infos[0].Id, id); return containerState(infos[0]);
   };
-  const container = inspect();
-  if (!container.state.Running) return { startedAt, endedAt: Date.now(), container, kernel: null };
-  const pid = container.state.Pid;
-  assert.ok(Number.isSafeInteger(pid) && pid > 0);
-  const at = `/proc/${pid}`, stat = readFileSync(`${at}/stat`, "utf8"), identity = processIdentity(stat);
-  assert.equal(identity.pid, pid);
-  const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
-  participantGroup(path, id);
-  const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
-  assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
-  assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
-  assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
-  assert.deepEqual(inspect(), container, "Docker participant changed during kernel observation");
-  return { startedAt, endedAt: Date.now(), container,
-    kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
+  let stage = "inspect-open";
+  try {
+    const container = inspect();
+    if (!container.state.Running) return { startedAt, endedAt: Date.now(), container, kernel: null };
+    stage = "container-pid";
+    const pid = container.state.Pid;
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    stage = "process-identity-open";
+    const at = `/proc/${pid}`, stat = readFileSync(`${at}/stat`, "utf8"), identity = processIdentity(stat);
+    assert.equal(identity.pid, pid);
+    stage = "process-cgroup-open";
+    const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
+    participantGroup(path, id);
+    stage = "kernel-census";
+    const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
+    stage = "process-identity-close";
+    assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), identity);
+    stage = "process-cgroup-close";
+    assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
+    stage = "inspect-close";
+    assert.deepEqual(inspect(), container, "Docker participant changed during kernel observation");
+    stage = "boot-id";
+    return { startedAt, endedAt: Date.now(), container,
+      kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
+  } catch (error) {
+    if (error && typeof error === "object") dockerParticipantStages.set(error, stage);
+    throw error;
+  }
 }
-function browserDocker(excluded, executables, pending) {
+const dockerParticipantStages = new WeakMap();
+const dockerGapCodes = new Set(["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ETIMEDOUT",
+  "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"]);
+function dockerGapDiagnostic(error) {
+  // Only a fixed stage and an allowlisted own code, never error text or child output.
+  let code;
+  try { code = Object.getOwnPropertyDescriptor(error, "code")?.value; }
+  catch { /* Diagnostics must not replace a captured gap. */ }
+  return { stage: dockerParticipantStages.get(error) ?? "unknown", code: dockerGapCodes.has(code) ? code : "unknown" };
+}
+function browserDocker(excluded, executables, pending, noteGap) {
   const inventory = docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean).sort();
   assert.equal(new Set(inventory).size, inventory.length); inventory.forEach((id) => assert.match(id, containerId));
   const participants = [], gaps = [];
   for (const id of inventory.filter((id) => !excluded.has(id))) {
     try { participants.push(captureBrowserParticipant(id, executables, pending)); }
-    catch { gaps.push(id); } // No daemon diagnostics, commands, labels or environment retained.
+    catch (error) { gaps.push(id); noteGap(error); }
   }
   return { inventory, participants, gaps };
 }
@@ -374,6 +392,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   // sampling. Pin them now and seal their bytes after the final sample.
   pending = captureDocker || commandCpus || binding.request.group === "catalog-page" ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
+  let firstDockerGap;
+  function noteDockerGap(error) { firstDockerGap ??= dockerGapDiagnostic(error); }
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null, previousCatalogProcesses = binding.request.group === "catalog-page" ? [] : null;
   function notifyFault() {
@@ -419,7 +439,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return key;
     });
     sampleOperation = "docker-inventory";
-    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending);
+    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending, noteDockerGap);
     if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
       const path = groupPath(kernel.cgroup);
       assert.ok(scopeCpuSetMatches(kernel.groups, path, liveCpus.application)
@@ -500,6 +520,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       let identity;
       try {
         durable(staged, `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
+          ...(firstDockerGap ? { firstDockerGap } : {}),
           command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent),
           ...(terminalClock ? { terminalClock } : {}) }, null, 2)}\n`);
         identity = lstatSync(staged);
@@ -519,12 +540,6 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return tree(directory);
     },
   });
-}
-
-function processRecordKey(p) {
-  return sha(serial({ ...processIdentity(p.stat), cgroup: p.cgroup,
-    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
-      : { executableSha256: p.executableSha256 }), type: p.type }));
 }
 
 export function resolveParticipantExecutables(process, proof) {
@@ -637,9 +652,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     leader: [...identities.values()].some((p) => p.pid === context.leaderPid) };
   const complete = Object.values(checks).every(Boolean);
   if (terminal.terminalClock !== undefined) {
-    const jsonPrepare = context.group === "json-api" && context.round === jsonPreparationRound(round)
-      && isDeepStrictEqual(invocation, jsonPreparationInvocation(round)) && isDeepStrictEqual(invocation, binding.execution?.invocation);
-    assert.ok(context.group === "localized-marketplace" || jsonPrepare, "terminal clock not allowed for this invocation");
+    assert.ok(terminalClockPolicy(binding, invocation, round, expected.phase), "terminal clock not allowed for this invocation");
     assert.equal(terminal.terminalClock.bootId, context.bootId);
   }
   return { status: complete ? "verified" : "blocked", cleanupComplete: complete, context,

@@ -60,6 +60,14 @@ the cause of a swallowed exception. Successful samples describe only completed
 observations, not the failed attempt. Do not infer a specific exit race, permission
 failure, identity change or latency cause from a generic `host-observation-gap` alone.
 
+If a Docker participant snapshot fails, a sealed terminal record also includes
+`firstDockerGap`: the failed collector stage and an allowlisted error code, or
+`unknown`. It is absent without a gap. Only the first failure is described,
+including when a later sample is complete. The diagnostic keeps no error text,
+daemon output, commands, environment or values read from procfs. The existing
+sample still records the gap and notifies as before. A stage identifies a failed
+check, not the cause of the underlying failure, and adds no retry.
+
 ## Fault Shutdown
 
 The first irrecoverable interval observation or storage failure requests command-local
@@ -221,6 +229,21 @@ A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retain
 ownership until the operation returns and cleanup is attempted; partial files and
 an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
 an empty cgroup nor an eventual successful fsync clears a prior storage failure.
+`halted` events retain `hostStorageFailure` for known FIFO faults, including
+during startup: the first writer operation, its allowlisted code (or
+`unknown`), and, only for a quota refusal, the first exceeded limit
+(`total-bytes`, `queued-bytes`, `queued-frames` or `queued-records`).
+A timed-out wait identifies the active writer stage if one is known. Record,
+directory and final sample closes are distinct from sync. Startup retains the
+writer's first fault even if cleanup later fails. When the supervisor reports
+its setup deadline as the first interruption of a pending writer, the halt can
+name the stage without waiting for I/O. When attachment is still draining, the
+campaign journals the supervisor outcome without finishing the disposed observer.
+An earlier leader exit or ordinary cancellation is not a writer deadline.
+These labels do not contain exception text, paths or process details. A frame
+limit reports a full queue, not why the writer fell behind. No terminal seal
+is published on this path.
+
 Fully observed and flushed cancelled/forced evidence retains the old contract:
 it can be collected as explicitly nonqualifying evidence, never a clean success.
 A new abort during finish cannot seal an earlier contradictorily clean result.

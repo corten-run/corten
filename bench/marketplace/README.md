@@ -297,9 +297,15 @@ app's and profile's results; the report marks each stage that lost a pass
 than three passes only there; of two passes each number is the lower of its column's two
 values, not a median. The stop is the app's only when the container stopped after the phase
 began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
-containers, Docker recorded no kill, stop or restart of the app, and nothing failed that the
-stop does not explain (only docker stats errors stamped after the app finished); otherwise the
-run fails.
+containers, Docker recorded no kill, stop or restart of the app, and no phase step failed.
+An ordinary app exit does not require samples after the exit. When sampling was active, the
+client must return the expected shutdown status; a matching signal cannot establish who sent
+it before the client was reaped. A client exit observed before the stop request, any client
+stderr, an incomplete record, or a sampler deadline fails the phase. Replay refuses
+recorded faults and rechecks the Docker CPU and memory display format, finite values after unit
+conversion, and the matching sample summary even when the app stopped. A well-formed terminal
+zero (such as `0.00%` and `0B / 0B`) is allowed for a stopped phase. Only phases that did not
+start a sampler (warmup) need neither file.
 Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
@@ -368,8 +374,9 @@ above exits nonzero for invalid evidence. Run it from a checkout of the measured
 against the pins of the checkout it loads, so a round measured before a pin moved fails from a
 newer checkout, with a message naming the pin it expected and the measured commit. A split round validates each native `dN` folder;
 the merged summary alone is not a producer folder. The historical summary reporter remains
-available, but its success is not raw-evidence validation. Old folders without the new
-receipts fail closed; do not backfill them with inferred observations.
+available, but its success is not raw-evidence validation. Newer validators may require
+receipt fields that an older producer did not write. Replay older folders from the producer's
+measured checkout, not the latest checkout; do not backfill receipts with inferred observations.
 Raw replay checks the profile, settings, app image label and qualification receipts under the
 same contract. V1 replay is offline only and still requires the original raw receipts.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual

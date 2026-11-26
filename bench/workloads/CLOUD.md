@@ -121,6 +121,73 @@ merged-controller recovery actions still have their exact eligibility and
 approval requirements. Do not rewrite a saved reservation or reuse its approval.
 Do not compare timings across placements.
 
+### JSON API c-16 Placement (Opt-In)
+
+[#2057 JSON API r67 has insufficient apparatus headroom during fast adapters' warmups](https://github.com/corten-run/corten/issues/2057)
+found that on a `c-8` the uncapped warmup drives k6 (quota 4, CPUs 4-7) to its
+headroom bound while one fast app core is not saturated.
+`bench/json-api/placement.mjs` defines an opt-in layout for a `c-16` host that
+gives only the load generator more CPUs. It reuses the pins of catalog's
+`c16-generator-v1` under JSON API's own name:
+
+| CPUs | Role | Budget |
+| --- | --- | --- |
+| 0 | host: driver, control apparatus | unpinned host work, as today |
+| 1 | app | quota 1, unchanged |
+| 2-3 | upstream (one Node process) | quota 2, unchanged |
+| 4-15 | k6 and the load resource sampler, which accounts for all twelve | quota 12 (default: 4 on CPUs 4-7) |
+| 4-7 | the untimed cold probe, a subset of the k6 CPUs as today | quota 4, unchanged |
+
+The selector is `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` together with exactly
+`JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and `JSON_API_LOAD_CPUS=4-15`.
+Any other value, an empty value or another pin refuses, and the runner side refuses
+a host with fewer than 16 logical CPUs before any container starts. Without the
+selector the CPU settings are exactly the default contract's. Catalog's
+`--load-layout c16-generator-v1` stays catalog-only.
+
+A result records its placement explicitly: `measurement.cpus` keeps each
+role's quota and cpuset as it does today, and an opt-in result adds
+`measurement.loadLayout: "json-c16-generator-v1"` and
+`measurement.generatorPlacement`, with the cold probe at
+`{ "quota": 4, "cpuset": "4-7" }` and the load sampler at
+`{ "quota": 12, "cpuset": "4-15" }`. `recordedPlacement` accepts a quota-12 load only
+with the marker and both exact records, and refuses either with any other CPUs.
+Default results carry neither, so their saved bytes and replay do not change.
+
+No fence changes. The load headroom bound is already 80% of the k6 quota (320% on
+the default, 960% on `c-16`); the upstream bounds stay below 80% of one core, both
+sampled and counted. The Corten API warmups that failed on the upstream's sampled
+peak are a separate, open constraint: more k6 cores do not address it.
+
+To select it, add `--load-layout json-c16-generator-v1` to the single-group
+`--prepare` command with `--group json-api`; it is refused on any other group, on
+detach or without a continuation root. It may be combined with `--offline-handoff`.
+The prepared fleet saves the marker as `single.loadLayout`, and its one job carries
+`host: c-16/sfo2` and `loadLayout`, so the approvals, the reservation, the
+census, the create mode and the job (`nproc` at least 16 and
+`campaign-entry.mjs ... --group json-api --load-layout json-c16-generator-v1`) all
+follow from the saved fleet. Placement selection then requires `c-16/sfo2` to be
+advertised. The campaign binding requests the four `c16Env` variables and expects
+the c-16 CPUs. A fleet, reservation or job without the marker, including every
+saved one, keeps its exact bytes.
+
+`bench/json-api/run.mjs` reads the four variables the binding requests, records the
+layout, runs k6 at quota 12 on 4-15 and keeps the cold probe and CPU counter reader
+on 4-7. The isolated JSON evidence check (`isolated/evidence.mjs`) and JSON staging
+(`isolated/json-staging.mjs`) each require the recorded `measurement.loadLayout` to
+equal the layout the binding requested, so a default result cannot satisfy a c-16
+binding and a c-16 result cannot satisfy a default one. `bench/json-api/report.mjs`
+has no binding to compare with. It checks the summary against itself: a quota-12 load
+is accepted only with the marker, and the recorded CPUs and `generatorPlacement` must
+equal that layout's exact values. Native campaign replay captures
+`bench/json-api/placement.mjs` as a named member of the measured source closure. A
+measured commit that predates it replays under its own closure list, which never
+names the file.
+
+This is apparatus placement for future runs, not a measured speedup and not a fix for
+the upstream constraint above. Do not compare JSON API timings across the two
+placements, and do not rerun saved groups only to adopt it.
+
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
 ordering, correctness checks and measurement settings apart from the catalog
@@ -371,6 +438,12 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
+`create-request` records a finite local transport reason when available, such as
+`request-error`, `response-aborted`, `invalid-json` or `deadline`. A broken response
+or a missing response is still an uncertain POST: the controller does not infer
+that it was unsent, release custody or submit it again. Older receipts that lack
+a detail do not establish any of those reasons.
+
 `account-capacity` is a code-only launch refusal: the complete census for the
 verified account reached or exceeded its valid droplet limit. The direct CLI and
 grouped receipt expose neither the limit nor the inventory. This guard stops
@@ -398,6 +471,16 @@ A collect refusal with a supported operator route keeps its own stage through th
 wrapper instead: `setup-watcher-proof-missing`, `setup-host-proof-refused`,
 `offline-never-started`, `create-errored-contradicted` or
 `create-contradiction-unpublished`.
+After the archive is extracted, collect marks which native replay check stopped:
+`collect-native-evidence-refused` (checks of the extracted directory and its
+saved exit marker, or post-replay integrity), `collect-native-replay-start`,
+`collect-native-replay-deadline`, `collect-native-replay-interrupted`,
+`collect-native-replay-refused` (worker rejected), or
+`collect-native-report-refused` (replay prerequisites or the report did not
+bind to the reservation and terminal check). These stages do not authorize
+retirement or change the replay deadline.
+Initial archive scanning and extraction, and the grouped path's first exit
+marker read, still report `controller-collect`.
 The stage identifies the failing operation, not its cause or whether a host exists.
 Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
@@ -696,6 +779,33 @@ probes, other SSH packets at the fence, a changed rule, or an actual unexpected
 login/guardian intrusion still refuse the phase. The fence reopens at phase end;
 the service's stop hook removes it on an interrupted phase.
 
+The campaign passes the rule set to `nft` as one argument: a single atomic
+batch that refuses an existing table, followed by the same readback and policy
+check. It never feeds rules on standard input: Node gives a spawned child a
+socket there, and Noble's nftables 1.0.9 refuses `nft -f -` on a socket
+(`Not a regular file: "/dev/stdin"`, exit 1) while accepting the same rules
+from a shell pipe. The hosted SSH ingress check
+(`scripts/benchmark-ssh-ingress-ci.sh`, run as root on Ubuntu 24.04) keeps that
+socket-stdin install as a negative that must fail with nft's socket refusal and
+leave no fence (only on nftables 1.0.9; 1.0.6 and 1.1.3 accept a socket), then
+installs through the production call. The same refusal was reproduced in an
+Ubuntu 24.04.5 root filesystem with nftables 1.0.9 and Node 26.13.1, where
+r62's measured `beginOfflineWindow` refuses on its first call with the same
+message. That shows r62's measured module cannot install the fence on Noble's
+nftables 1.0.9, consistent with r62's pre-timing halt in
+[#2033 Marketplace r62 halts before timing with native SSH fence unavailable after offline handoff](https://github.com/corten-run/corten/issues/2033);
+it was not reproduced on a benchmark host. It is separate from the
+post-terminal failure in
+[#2051 Marketplace r65 completes timing but the post-terminal drain probe refuses](https://github.com/corten-run/corten/issues/2051).
+r62 remains an invalid attempt.
+
+A fence refusal names only a fixed step and class, never host text: an `nft`
+call failure names its operation (`install`, `install readback`,
+`close readback` or `remove`) and outcome (`error=`, `signal=` or `exit=`),
+and a readback that does not parse or verify is `install readback invalid`,
+`install readback policy mismatch`, or the same for `close readback`. A
+refusal after the install leaves the fence for the unit's stop hook.
+
 For first qualification, arrange the independent audit rendezvous before
 timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
 the existing [read-only owned-host observation](#independent-native-audits)
@@ -784,6 +894,51 @@ credential worker. Recovery can then reconcile the unique allocation under its
 durable create intent. Even if identity is found, provisioning cannot begin without
 the exact completed create-action proof. A timed-out or unsettled mutation remains
 uncertain, retains locks and cannot take this recovery shortcut.
+
+### Isolate an unacknowledged create
+
+A single group whose only create has an unacknowledged response and no saved
+droplet or action ID may be isolated in its existing continuation root. This
+does not settle the POST, record deletion, release the child or fleet locks, or
+allow the failed group to retry. Its row stays `quarantined-create`, not verified
+or retryable. Other groups can continue only in the same provider account, and
+their approved create uses one fresh, account-bracketed provider response for
+both the quarantine and historical ID checks and the ordinary pre-create
+census. Only a complete inventory with unique, checkable rows proves absence;
+there is no second read, page or retake. Nonempty pagination links, an inconsistent
+count, or an uncheckable row cannot prove absence. The worker matches the bound
+name and tag digests inside the bounded reply and returns only the sighting when
+it finds one. This works beyond the count limits for absence and when another
+field is malformed. If there is no match, only a complete, bounded projection
+can pass ordinary creation checks. In that complete inventory any earlier
+historical ID blocks the create even if renamed and untagged. This is not proof
+the original POST never succeeded. A validated
+name or tag match writes an exclusive `receipts/create-quarantine-witness.json` with the
+numeric droplet ID and the matching quarantine digest, without changing the
+original reservation. The witness blocks all subsequent creates in this root
+even if the droplet changes name or tags. Reconcile it before another create;
+there is no automatic clearance. A failed witness write retains operation
+custody. Read-only continuation reports show a valid witness as a blocked
+`quarantined-create-witnessed` attempt and still replay unrelated result
+evidence. Neither a sighting nor a quarantine report authorizes binding or
+cleanup.
+
+The operator must stop dispatch to the root and positively account for the
+original local controller, worker and their descendants. A stale PID, a missing
+droplet or a fleet failure receipt alone is not that proof. Keep that evidence
+and the unchanged outer lock outside all the state roots. Use
+`unacknowledgedCreateBinding(readFleet(attemptRoot, round, { priorSelection: true }))`
+from `fleet-verify.mjs` to get a read-only binding of the existing state, intent,
+diagnostic and three retained operation locks. Have a separate reviewer check
+the operator evidence, the binding and the provider observation. Save
+`receipts/create-quarantine.json` exclusively in that attempt with exactly
+`{ schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256 }`,
+where the digest names the retained proof. Only then archive and release the
+original outer continuation lock under the custody procedure below. Never clear
+the child locks through this route or copy the attempt to a fresh root. The
+binding and census do not replace the operator's process-tree proof.
+
+### Provider-errored create
 
 A create the provider accepts and then fails has its own terminal outcome
 ([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
@@ -1258,6 +1413,115 @@ controller checks the unit is idle, saves the campaign and native output roots
 (including evidence of absence), verifies the local copies, and checks the
 host and roots again. A changed or live host is retained. Neither the wrapper
 archive nor the later capture qualifies the group or supplies timing results.
+
+### Retire An Already Captured Handoff Failure
+
+Ordinary collection still keeps a host when the native outcome is
+`native-validated` but the wrapper exits 2. For a closed, settled single-group
+monitor with the original measured-controller capture already saved, use the
+same `--retire-failed-native` action from a clean, reviewed, merged descendant
+that passes the source comparison above. Preview from that checkout:
+
+```sh
+node bench/workloads/droplet.mjs "$round" --state-dir "$state_dir" \
+  --retire-failed-native --print-approval
+```
+
+Require recovery policy `grouped-handoff-failure-existing-custody-only`. Compare
+its measured and capture controller commits, host and account, launch and
+monitor identities, reservation and capture digests, and both archive digests
+against the already collected attempt. Run the same command with
+`--approve-reviewed-merged-ready <approvalSha256>` instead of `--print-approval`.
+The controller checks that exact approval again under the operation lock,
+reproduces the original capture script hash, and verifies both retained archives
+and extracted trees before contacting the host. Revoked or unsettled monitor
+custody, competing or retained locks, and unexplained prior retirement traces
+are refusals, not grounds to take over, recapture or repack.
+
+The action uses the existing fresh full rehash, final quiescence and ownership
+fences, and bounded DELETE. Before intent and dispatch it rechecks the held
+lock, verified custody file identities, both extraction inventories, and the
+approved capture and retirement receipt. These checks read metadata and small
+records, not archive or extraction payloads, inside the same proof deadline.
+The handoff controller checks the approved reservation bytes and file identity
+before every state write, including SSH requests and acknowledgements, and only
+advances that expectation after publishing its own verified replacement.
+Unexpected state is not repaired or overwritten; the operation lock is retained.
+It records the merged repair commit separately from the unchanged original
+capture. If DELETE was uncertain and the operation lock was released cleanly,
+take a new preview at the same repair commit. With a recorded deletion intent,
+the action can only verify exact authenticated absence. It rechecks local
+custody under the held lock after that observation, before recording completion,
+whether DELETE was acknowledged or this is an absence-only retry. It cannot
+repeat DELETE, qualify the group, promote the wrapper exit, or publish the
+native output.
+
+### Retire The Sealed Client Heavy Exit 1
+
+For [#2082 Benchmark r78 Client Heavy: ordinary collection keeps a paid terminal host after binding its failed archive](https://github.com/corten-run/corten/issues/2082),
+use the same separate `--retire-failed-native --print-approval` command, not another
+`--collect`. This policy is limited to monitored, dedicated, staged single-group
+Client Heavy r78 measured at `7c13920f87b6baa6c7f967027d2eff9358201e4c`. Use a
+clean, independently reviewed, merged descendant that passes the committed
+source comparison above. The measured checkout, archive and extraction remain
+unchanged.
+
+Require policy `r78-client-heavy-sealed-exit-one-retirement-only` and operation
+`observe-terminal-and-retire`. Check the preview against this attempt's consumed
+launch intent, exact reservation, account and allocation, launch key, registered
+boot, sealed campaign and original archive and extraction hashes. Use the exact
+new approval hash with `--approve-reviewed-merged-ready`. The locked controller
+requires a source-bound raw exit 1, a finished failed group (not a native-validated
+group), an intact collection manifest and stream seal/drain, and the complete
+r78 journal from authorization and bootstrap admission through the observed
+command exit, phase seal and campaign finish. The sealed host observation must
+name the same campaign, invocation, leader PID and start ticks, registered boot
+and delegated cgroup. Its samples must show that leader in that group between
+empty boundary samples, with each recorded process in only one cgroup per
+sample. No pending native roots, validation, deletion intent or competing
+custody may remain. This checks the command lifecycle, not renderer or native
+qualification. It compares the original tar members to the bound extraction
+before contacting the host. The verified extraction walk also computes the
+existing campaign, control and native subtree hashes from the same bytes.
+The collection manifest is still replayed separately, and the recheck after
+that replay requires unchanged extraction metadata.
+
+Both host observations use the launch-pinned key and the current same-account
+allocation. The read-only probe requires the original boot and job controls, an
+idle terminal unit with exit 1, no active benchmark work and no unaccounted
+Client Heavy work roots. It checks the still-original wrapper archive and live
+campaign/control/output roots against the held bytes. The final fence keeps
+the same root inventory and rehashes the original archive within the existing
+60-second DELETE proof window; it never repacks, downloads or runs native
+validation. A mismatch or incomplete observation preserves custody.
+
+The account preflight must finish within the proof window before the controller
+writes the retirement files and durable deletion intent. Only an explicit
+local pre-dispatch refusal or a positive not-dispatched acknowledgement from
+the private worker can return to fresh approval and two new host observations.
+The already acknowledged control ledger stays intact, and any tentative
+retirement files are retained as unsent history, not as proof of deletion. These
+checks permit at most one dispatched DELETE; only an authenticated exact-ID 404
+on the saved account records completion. If DELETE dispatch or acknowledgement
+is uncertain but the operation lock settled, preview again at the same repair
+commit. Require operation `reconcile-absence-only` and approve that new hash;
+it may only check absence, with no SSH or repeat DELETE. The same local custody
+check runs after the provider worker closes, before publishing absence or
+releasing the operation lock. If custody drifts, keep the lock and leave new
+absence unrecorded, even if the provider read itself throws. An unexplained prior
+receipt without its intent, interrupted publication or retained lock requires
+operator inspection, never automatic takeover. Fleet and continuation treat
+the attempt as unqualified and do not admit a successor before confirmed
+absence. A successor approval binds the retired attempt's exact state, launch
+intent and retirement receipt. The receipt binds a local metadata fingerprint
+of the verified archive and extraction. The child rechecks these bindings and
+the absence of retained custody before create intent and again before dispatch,
+without rereading archive or extraction payloads. Keep the original files in
+place; replaced or moved evidence may not match that fingerprint. The saved
+ID must also still be absent from the same-account census. No timings or result
+are accepted by this route.
+
+### Earlier Failed Native Migrations
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at

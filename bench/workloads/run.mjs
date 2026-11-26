@@ -4,28 +4,12 @@ import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { finished } from "node:stream/promises";
-import { contractSha256, definition, groupNames, selectedApps } from "./registry.mjs";
+import { contractSha256, definition, groupNames, runnerFor, selectedApps } from "./registry.mjs";
 import { deploymentPlan } from "./deployments.mjs";
 
+export { runnerFor };
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const runners = Object.freeze({
-  "catalog-page": ["bench/catalog/run.mjs", "--group", "catalog-page"],
-  "json-api": ["bench/json-api/run.mjs", "--group", "json-api"],
-  "localized-marketplace": ["bench/marketplace/run.mjs", "--group", "localized-marketplace"],
-  "mixed-production": ["bench/mixed-production/run.mjs"],
-  "fullstack-browser": ["bench/fullstack-browser/run.mjs"],
-  "client-heavy": ["bench/client-heavy/run.mjs"],
-  "live-delivery": ["bench/live/run.mjs", "--group", "live-delivery"],
-  "recoverable-live": ["bench/recoverable-live/run.mjs"],
-  hardening: ["bench/hardening/run.mjs"],
-});
 const filters = new Set(["apps", "app", "cases", "case", "group", "groups", "part", "source", "sources", "locale", "locales", "only", "skip", "exclude", "verify-app", "verify-source", "verify-case", "verify-phase", "detach", "collect", "ssh-key", "state-dir"]);
-
-export function runnerFor(group) {
-  definition(group);
-  const [entry, ...selection] = runners[group];
-  return { entry, selection: [...selection] };
-}
 
 export function invocation(argv) {
   assert.ok(Array.isArray(argv) && argv.every((arg) => typeof arg === "string"), "argument array required");

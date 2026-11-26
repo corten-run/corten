@@ -93,15 +93,21 @@ const benchMetadata = ["bench/package.json", "bench/package-lock.json"];
 // The committed bench manifest and lock, as parsed objects an edit may change or delete.
 const benchFiles = () => Object.fromEntries(benchMetadata.map((path) => [path, JSON.parse(readFileSync(join(checkout, path), "utf8"))]));
 
-async function fakeNative(t, source, { realGraph = false, unconfirmed = false, bench = () => {} } = {}) {
+// `omit` builds an older measured commit: those closure paths are neither committed nor in its copied snapshot list.
+async function fakeNative(t, source, { realGraph = false, unconfirmed = false, bench = () => {}, omit = [] } = {}) {
   const h = harness(t), repo = join(h.temp, "validator"), root = join(repo, "bench/workloads");
-  for (const path of validationPaths) {
+  const paths = validationPaths.filter((path) => !omit.includes(path));
+  for (const path of paths) {
     const target = join(repo, path); mkdirSync(dirname(target), { recursive: true });
     if (realGraph) copyFileSync(join(checkout, path), target);
     else writeFileSync(target, "export {};\n");
   }
   for (const name of ["cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs"])
     copyFileSync(new URL(name, import.meta.url), join(root, name));
+  for (const path of omit) {
+    const snapshot = join(root, "cloud-validation-snapshot.mjs"), before = readFileSync(snapshot, "utf8"), entry = `\n  ${JSON.stringify(path)},`;
+    assert.equal(before.split(entry).length, 2, "omitted path is listed once"); writeFileSync(snapshot, before.replace(entry, ""));
+  }
   if (unconfirmed) {
     const path = join(root, "cloud-validation-snapshot.mjs");
     writeFileSync(path, readFileSync(path, "utf8").replace('import { Worker } from "node:worker_threads";', `
@@ -132,7 +138,7 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false, b
   for (const [path, value] of Object.entries(files)) writeFileSync(join(repo, path), JSON.stringify(value));
   if (source !== undefined) writeFileSync(join(root, "isolated/campaign-verify.mjs"), source);
   git(repo, "init", "--initial-branch=main");
-  git(repo, "add", "--", ...validationPaths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs", "package.json", "package-lock.json", ...Object.keys(files));
+  git(repo, "add", "--", ...paths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs", "package.json", "package-lock.json", ...Object.keys(files));
   git(repo, "-c", "user.name=Synthetic validation test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Synthetic validation fixture");
   const approvedCommit = git(repo, "rev-parse", "HEAD");
   // The copied modules read the fixture's HEAD on import and capture from it on inspection, on the
@@ -141,6 +147,54 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false, b
   const inspect = (/** @type {any[]} */ ...args) => withFixtureGitEnv(() => native.inspectCampaign(...args));
   return { ...h, repo, inspect, input: { folder: root, round: "r21", commit: approvedCommit }, started: join(root, "started") };
 }
+
+test("JSON API c-16 replay evaluates the committed placement module in the sealed worker; dropping it stays blocked", { timeout: 60000 }, async (t) => {
+  const path = "bench/json-api/placement.mjs";
+  assert.equal(validationPaths.filter((p) => p === path).length, 1);
+  const h = await fakeNative(t, `import {readFileSync} from "node:fs"; import {createHash} from "node:crypto";
+    import {inspectJson, renderJson} from "../../json-api/report.mjs";
+    export function validateCampaign({folder}) {
+      const {summary, artifacts} = JSON.parse(readFileSync(folder + "/c16-result.json", "utf8"));
+      const load = (ref) => { const bytes = artifacts[ref?.path];
+        if (bytes === undefined || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw new Error("raw artifact"); return JSON.parse(bytes); };
+      const report = inspectJson(summary, {load});
+      return { baseline: report.baseline, layout: summary.measurement.loadLayout, line: renderJson(report).includes("not a measured speedup") };
+    }`, { realGraph: true });
+  // The real opt-in result, saved as run.mjs saves it under JSON_API_LOAD_LAYOUT on a 16-CPU host.
+  const { result } = await import("../json-api/test-fixtures.mjs"), { c16Env, runnerPlacement } = await import("../json-api/placement.mjs");
+  const artifacts = new Map(), f = result([], { artifacts, placement: runnerPlacement(c16Env, 16) });
+  assert.ok(artifacts.size > 0);
+  writeFileSync(join(h.input.folder, "c16-result.json"), JSON.stringify({ summary: f.summary, artifacts: Object.fromEntries(artifacts) }));
+  const snapshot = captureFixture(h.input.commit, { root: h.repo }), row = snapshot.sources.find((r) => r.path === path);
+  assert.equal(row.source, readFileSync(join(checkout, path), "utf8").replaceAll("\r\n", "\n"));
+  // Replacing the checkout file after commit cannot run: replay uses the committed bytes.
+  const marker = join(h.input.folder, "unapproved-placement");
+  writeFileSync(join(h.repo, path), `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "unapproved");`);
+  assert.deepEqual(await h.inspect(h.input), { baseline: true, layout: "json-c16-generator-v1", line: true });
+  assert.equal(existsSync(marker), false);
+  const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
+    constructor(entry, options) {
+      options.workerData.sources = options.workerData.sources.filter((r) => r.path !== path);
+      super(entry, options);
+    }
+  } });
+  await assert.rejects(task.result, /validation unavailable/);
+  assert.equal(existsSync(marker), false);
+});
+
+test("an older measured commit without the placement module still captures and replays under its own closure list", { timeout: 15000 }, async (t) => {
+  const path = "bench/json-api/placement.mjs";
+  const h = await fakeNative(t, 'import "../../json-api/report.mjs"; export function validateCampaign() { return { unmarked: true }; }', { omit: [path] });
+  assert.throws(() => git(h.repo, "cat-file", "-e", `${h.input.commit}:${path}`));
+  // This checkout's list names the module, so it cannot read that commit; the commit's own adapter can.
+  assert.throws(() => captureFixture(h.input.commit, { root: h.repo }), /validation unavailable/);
+  const own = await withFixtureGitEnv(() => import(pathToFileURL(join(h.repo, "bench/workloads/cloud-validation-snapshot.mjs")).href));
+  assert.equal(own.validationPaths.includes(path), false);
+  const snapshot = withFixtureGitEnv(() => own.captureValidation(h.input.commit));
+  assert.equal(snapshot.sources.some((r) => r.path === path), false);
+  assert.equal(snapshot.sources.length, validationPaths.length - 1 + 1 + Object.keys(semverSources).length);
+  assert.deepEqual(await h.inspect(h.input), { unmarked: true });
+});
 
 test("native worker returns only after stopping validator-owned lasting work", { timeout: 15000 }, async (t) => {
   const h = await fakeNative(t, "export function validateCampaign(input) { setInterval(() => {}, 1000); return input; }");
@@ -306,6 +360,7 @@ test("semver snapshot pins same-read library bytes before actual worker executio
 test("only named replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
   const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs" || path === "bench/fullstack/edge.mjs"
     || path === "bench/fullstack-browser/document-navigation.mjs"
+    || path === "bench/json-api/load-resource-proof.mjs" || path === "bench/json-api/placement.mjs"
     || path === "bench/workloads/isolated/native-roles.mjs" || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
@@ -314,6 +369,8 @@ test("only named replay dependencies extend the worker source budget", { timeout
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
+    "bench/json-api/load-resource-proof.mjs",
+    "bench/json-api/placement.mjs",
     "bench/typescript.mjs",
     "bench/workloads/isolated/native-roles.mjs",
   ]);
@@ -322,10 +379,10 @@ test("only named replay dependencies extend the worker source budget", { timeout
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
       // Inject below the exact parent manifest check to exercise the worker's own bound. The
-      // fixture never imports document-navigation, so only its named slot, not a generic extra
+      // fixture never imports the JSON proof, so only its named slot, not a generic extra
       // one, keeps an unused path in its place from fitting.
       options.workerData.sources = options.workerData.sources.map((row) =>
-        row.path === "bench/fullstack-browser/document-navigation.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+        row.path === "bench/json-api/load-resource-proof.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
       super(entry, options);
     }
   } });
@@ -437,6 +494,38 @@ test("evidence commit cannot select historical code; absent closure and changed 
   // Existing module captured its original commit. That graph still exists and
   // package pin failure is independent of the missing current HEAD member.
   await assert.rejects(h.inspect(h.input), { message: "native campaign validation unavailable or invalid; evidence/host preserved" });
+});
+
+test("native replay timeout has a fixed stage and retains custody if the worker does not settle", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let stops = 0, retains = 0, unreferences = 0;
+  const pending = inspectCampaign({}, { start: () => ({
+    result: new Promise(() => {}), stop: () => stops++, unref: () => unreferences++,
+  }), preserveLock: () => retains++ });
+  const rejected = assert.rejects(pending, {
+    message: "native campaign validation unavailable or invalid; evidence/host preserved",
+    controllerStage: "collect-native-replay-deadline",
+  });
+  t.mock.timers.tick(validationLimit + 1);
+  assert.equal(stops, 1);
+  assert.equal(retains, 0);
+  t.mock.timers.tick(validationStopLimit);
+  await rejected;
+  assert.equal(retains, 1);
+  assert.equal(unreferences, 1);
+});
+
+test("native replay startup, interruption and worker refusal have closed stages", async () => {
+  const raw = Object.assign(new Error("PRIVATE_EVIDENCE_VALUE"), { controllerStage: "collect-native-replay-deadline" });
+  const message = "native campaign validation unavailable or invalid; evidence/host preserved";
+  await assert.rejects(inspectCampaign({}, { start: () => { throw raw; } }),
+    { message, controllerStage: "collect-native-replay-start" });
+  await assert.rejects(inspectCampaign({}, { start: () => ({ result: Promise.reject(raw) }) }),
+    { message, controllerStage: "collect-native-replay-refused" });
+  let started = false;
+  await assert.rejects(inspectCampaign({}, { interrupted: () => true, start: () => { started = true; } }),
+    { message, controllerStage: "collect-native-replay-interrupted" });
+  assert.equal(started, false);
 });
 
 test("cancellation retains the lock if stopping a real-worker adapter is unconfirmed", { timeout: 15000 }, async (t) => {
