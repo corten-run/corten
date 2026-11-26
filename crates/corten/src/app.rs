@@ -2489,11 +2489,13 @@ fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
 }
 
 /// The rest of the request under the deadline and the panic catch: the app's middleware, then the
-/// area's or API's, then the route and its handler.
+/// area's or API's, then the route and its handler, given the request's signal past the middleware
+/// (`crate::middleware::Handle`).
 pub(crate) struct Next<'a, S: Steps> {
     steps: &'a S,
     scope: S::Scope<'a>,
     route: Option<Route>,
+    signal: &'a crate::Signal,
 }
 
 impl<'a, S: Steps> Next<'a, S> {
@@ -2508,7 +2510,7 @@ impl<'a, S: Steps> Next<'a, S> {
     // Not an `async fn`: a layer of its own would move the request once more.
     #[inline]
     pub(crate) fn run(self, req: Request) -> impl Future<Output = Response> + Send + 'a {
-        self.steps.run(req, self.route, self.scope)
+        self.steps.run(req, self.route, self.scope, self.signal)
     }
 }
 
@@ -2528,6 +2530,7 @@ pub(crate) trait Steps: Send + Sync + 'static {
         req: Request,
         route: Option<Route>,
         scope: Self::Scope<'a>,
+        signal: &'a crate::Signal,
     ) -> impl Future<Output = Response> + Send + 'a;
 }
 
@@ -2545,8 +2548,14 @@ impl<M: Middleware> Steps for Plain<M> {
     }
 
     #[inline]
-    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
-        self.0.call(req, crate::middleware::Handle(route))
+    fn run<'a>(
+        &'a self,
+        req: Request,
+        route: Option<Route>,
+        (): (),
+        signal: &'a crate::Signal,
+    ) -> impl Future<Output = Response> + Send + 'a {
+        self.0.call(req, crate::middleware::Handle { route, signal })
     }
 }
 
@@ -2571,11 +2580,12 @@ impl<M: Middleware> Steps for Scoped<M> {
         req: Request,
         route: Option<Route>,
         stack: Self::Scope<'a>,
+        signal: &'a crate::Signal,
     ) -> impl Future<Output = Response> + Send + 'a {
         use futures_util::future::Either;
         match stack {
-            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route))),
-            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route })),
+            [] => Either::Left(self.0.call(req, crate::middleware::Handle { route, signal })),
+            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route, signal })),
         }
     }
 }
@@ -2724,13 +2734,15 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let next = Next { steps: &self.steps, scope: steps, route };
+        let next = Next { steps: &self.steps, scope: steps, route, signal: &watch.0 };
         // The signal ends when this future is dropped, then when the response is dropped.
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
         let asked = watch.0.asked_language();
-        // Held by the request, so a middleware's new response in place of the one it was given
-        // still goes out as an answer that drew a form's new submit key.
+        // Held by the stages' signal, which the route's answer marks past the middleware too
+        // (`crate::middleware::Handle`), so a middleware's new response in place of the one it was
+        // given, to a request it may have rebuilt, still goes out as an answer that drew a form's
+        // new submit key.
         let drew_key = watch.0.key_drawn();
         let mut res = signal::follow(res, watch, self.zoned());
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after

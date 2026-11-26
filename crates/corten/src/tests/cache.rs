@@ -980,6 +980,92 @@ async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
     }
 }
 
+/// A middleware may rebuild both sides: give `next` a request made from the method, URI, version,
+/// headers and body of the one it was given, with none of its extensions or with a signal of its
+/// own ([`Rebuilds`]), and make a new response of the answer it gets back, without its extensions
+/// either. The route then marks no signal the stages read, and the answer's own mark is gone, but
+/// the stages hold their signal past the middleware: an answer whose handler or page drew a form's
+/// new submit key still goes out the browser's alone, without the CDN caching headers the
+/// middleware wrote and without a tag, whatever the app keeps. One with no key keeps its lifetime,
+/// those headers and its tag.
+#[tokio::test]
+async fn an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches() {
+    use crate::route::get as typed;
+
+    struct RebuiltAnswer;
+
+    impl crate::Middleware for RebuiltAnswer {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (parts, body) = next.run(req).await.into_parts();
+            let mut res = crate::response::Response::new(body);
+            *res.status_mut() = parts.status;
+            *res.headers_mut() = parts.headers;
+            for name in CDN_OVERRIDES {
+                res.headers_mut().insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    let filler = || "keyed ".repeat(200);
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/text", typed(move || async move { Public::new(minute, format!("{}{}", field().to_html(), filler())) }).0)
+                .route(
+                    "/page",
+                    typed(move |req: Req| async move {
+                        let form = html! {
+                            <form method="post">
+                                {field()}
+                                <p>{filler()}</p>
+                            </form>
+                        };
+                        Public::new(minute, req.test_page_for("Keyed", form))
+                    })
+                    .0,
+                )
+                .route("/plain", typed(move || async move { Public::new(minute, filler()) }).0),
+        )
+    };
+    // A tag is made for a request that names one.
+    let asks = [("if-none-match", "\"other\"")];
+    let mut wrong = Vec::new();
+    for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
+        for (app, router) in [
+            ("the default store", App::new(routes()).middleware((RebuiltAnswer, how)).router()),
+            ("none kept", App::new(routes()).kept_answers(0).middleware((RebuiltAnswer, how)).router()),
+        ] {
+            for path in ["/text", "/page"] {
+                let (status, headers, body) = fetch(&router, "GET", path, &asks).await;
+                let (_, _, other) = fetch(&router, "GET", path, &asks).await;
+                assert_eq!(status, StatusCode::OK, "{how:?} {app}: {path}");
+                assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{how:?} {app}: {path}");
+                if headers[header::CACHE_CONTROL] != "private, no-cache" {
+                    wrong.push(format!("{how:?} {app}: {path}: Cache-Control {:?}", headers[header::CACHE_CONTROL]));
+                }
+                let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
+                if !kept.is_empty() {
+                    wrong.push(format!("{how:?} {app}: {path}: still sends {kept:?}"));
+                }
+                if headers.contains_key(header::ETAG) {
+                    wrong.push(format!("{how:?} {app}: {path}: still sends its tag"));
+                }
+            }
+            let (status, headers, _) = fetch(&router, "GET", "/plain", &asks).await;
+            assert_eq!(status, StatusCode::OK, "{how:?} {app}");
+            assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{how:?} {app}");
+            assert!(headers.contains_key(header::ETAG), "{how:?} {app}: {headers:?}");
+            for cdn in CDN_OVERRIDES {
+                assert_eq!(headers[cdn], "max-age=60", "{how:?} {app}: the middleware's {cdn}");
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a keyed answer behind a rebuilt request and response, open to a CDN: {wrong:#?}");
+}
+
 /// `NoStore` is watched as the answer it holds is: around an answer type of the app's own that
 /// is `Public` on one branch, a relay that kept the upstream's `Surrogate-Control` drew a form's
 /// new submit key, and goes out `private, no-store` without that header, which `no-store` does not

@@ -8557,13 +8557,19 @@ rules something out.
     it already had), which the stages read before they settle the answer, so a middleware of the
     app's that makes a new response of the one it was given, with its body and headers and none
     of its extensions, does not take the mark away; a layer around the app (`App::layer`) still
-    runs after the answer is settled. One that also gives `next` a request rebuilt without the
-    first one's extensions takes the signal away with them, so a keyed answer it rebuilds too
-    can go out as its route wrote it; request provenance that survives a rebuilt request is being
-    made in
+    runs after the answer is settled. A middleware can also give `next` a request rebuilt
+    without the first one's extensions, or with a signal of its own, and the route then marks a
+    signal the stages do not read (or none), so the stages hold their own signal past the
+    middleware: `next` gives it to the route's side of the chain (`middleware::handle`, which
+    no middleware can stand in for), and that marks it when the route's answer comes back with
+    the mark, before any middleware sees the answer. So a middleware that rebuilds both the
+    request and the response does not take the mark away either. That costs every staged request
+    a pointer more in the futures `next` makes and a look for the mark in an answer's
+    extensions, which the usual answer has none of (measured below). Request provenance that
+    survives a rebuilt request was to come from
     [#1890 Drop CDN caching headers from answers that are one visitor's alone and from unanswered failures](https://github.com/corten-run/corten/pull/1890),
-    and the watch is to use it once that is merged. Held beside the handler's work in the future the route
-    already makes, the watch adds a read and a reset of a thread's mark around each poll, and a
+    which marks its failures on the answer instead and has none, so this is the watch's own.
+    Held beside the handler's work in the future the route already makes, the watch adds a read and a reset of a thread's mark around each poll, and a
     watched route holds the request's signal. A request answered in process from inside a
     handler (one that polls another route on its own stack) is polled within the outer watch, so
     a key the inner answer drew marks the outer one private too, even when the handler drops the

@@ -540,9 +540,11 @@ impl Signal {
     }
 
     /// The request's answer holds a form's new submit key ([`crate::cache::Unrepeatable`]): a
-    /// page's render that drew one, or the watch around a handler that did (`answer::Made`). Held
-    /// by the request, not the response, so the stages still see it after a middleware made a new
-    /// response of the one it was given, and send it to no shared cache.
+    /// page's render that drew one, the watch around a handler that did (`answer::Made`), or the
+    /// route's answer with that mark as it comes back to the stages' own signal
+    /// (`middleware::handle`). Held by the request, not the response, so the stages still see it
+    /// after a middleware made a new response of the one it was given, to a request it may have
+    /// rebuilt, and send it to no shared cache.
     pub(crate) fn mark_key_drawn(&self) {
         self.0.drawn.fetch_or(KEY_DRAWN, Ordering::Relaxed);
     }
