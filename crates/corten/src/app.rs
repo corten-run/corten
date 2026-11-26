@@ -2472,7 +2472,9 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        let mut req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        // An HTTP/1.1 message with no `Host` line, which only its reader knows of a request.
+        crate::security::mark_unnamed(&mut req);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
@@ -2847,10 +2849,9 @@ impl<S: Steps> Layer<S> {
         let req = pending.get();
         let headers = req.headers();
         let mut origin = Origin::new(headers);
-        // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
-        // page, no caller lookup.
-        if !self.policy.answers(req.uri(), || origin.host()) {
-            let mut res = crate::security::misdirected();
+        // A request for another name (a DNS-rebound page), or one HTTP does not allow, runs
+        // nothing of the app's: no error page, no caller lookup.
+        if let Some(mut res) = self.policy.asked(req, &mut origin).refusal() {
             let vary = res.headers().contains_key(header::VARY);
             self.policy.headers(&mut res, None, &self.policy.csp, vary);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);

@@ -10,7 +10,7 @@ not remove that requirement.
 | Concern | Default | Override |
 |---|---|---|
 | Address | `HOST` (both loopback addresses, `127.0.0.1` and `[::1]`, so `localhost` answers at once however it resolves), `PORT` (`3000`) | environment; `corten::serve_on(listeners, app)` for listeners of your own (a Unix socket) with the same shutdown, `corten::serve_wrapped(listeners, move \|tcp\| acceptor.accept(tcp), app)` for HTTPS ([below](#your-own-listeners)) |
-| Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
+| Names it answers to | `localhost`, IP addresses; any other `Host` gets `421`, and a missing, repeated or malformed one `400` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
@@ -264,6 +264,63 @@ included, since the browser treats the rebound page as same-origin. On loopback,
 machine can reach the app, that is the access model it would break, so the check is the default
 rather than a setting to remember.
 
+The same check answers `400 Bad Request` to a request HTTP does not allow, whatever names the
+app has and with `Policy::any_host()` too, and nothing of the app runs for it either. The
+first two are what HTTP requires, and the third is Corten's choice where HTTP leaves one:
+
+1. an HTTP/1.1 request with no `Host` line, or a request with more than one, the same value or
+   not, which [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112#section-3.2) (3.2) requires;
+2. a `Host` that is not a host and maybe a port, which it requires too: one with a user
+   (`user@shop.example`), a path (`shop.example/x`), a space (`shop.example, other.example`),
+   a port that is no number, or an IPv6 address with a zone (`[fe80::1%25eth0]`, which
+   [RFC 9844](https://www.rfc-editor.org/rfc/rfc9844) took back out of a URI's host). Names
+   joined by a comma alone (`shop.example,other.example`) are not refused: a comma is a
+   character a host's name may hold
+   ([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.2.2), 3.2.2), so the value
+   is read as one name, as it was before: the `421` unless the app answers to any host, and a
+   subdomain where its end is under a name the app lists with a leading dot;
+3. by Corten's choice: a `Host` with nothing in it, or a port alone, which HTTP lets a server
+   read as its own default name (also beside a target that names its host, as in
+   `GET http://shop.example/ HTTP/1.1` with `Host:`, where HTTP has a server ignore what `Host`
+   says); an address in brackets that is not IPv6 (`[v1.fe80]`: the grammar has a place
+   for an address of a later version, none is defined, and RFC 3986 asks for an error where
+   the version is not known); and a target that names its host
+   (`GET http://shop.example/ HTTP/1.1`, or a host alone) where that host and port are not
+   what a `Host` is held to above: a user in it (`http://user@shop.example/`), which HTTP says
+   a server should treat as an error, a port that is no number (`http://shop.example:abc/`),
+   or an address in brackets that is not IPv6 or has a zone (`http://[v1.fe80]/`,
+   `http://[fe80::1%25eth0]/`). The target's host is the one the request asks for, so the
+   check reads it where it would read `Host`, and by the same rule.
+
+Nothing else in a request-target is refused: the check reads none of its path or query, and
+whatever the parse lets through there is routed as before, though HTTP says a server should
+answer an invalid request-line with a `400` or a redirect. That is a byte outside ASCII (`/café`
+from a client that sends it as typed, where a browser sends `/caf%C3%A9`), a `|` or a `%` before
+no hex digits, `*` with any method, and a host alone with a method other than `CONNECT`.
+
+The connection stays open after it, as after the `421`: the server knows where the request
+ends, so the next one on the connection is answered (one whose body had not all arrived is
+closed, as after any answer that leaves a body unread). A request-line that cannot be parsed at
+all (a target that is not UTF-8) never reaches the check: the server answers its own bare `400`
+and closes. A request with no `Host` is still answered when it is HTTP/1.0, and when Corten's
+server did not read it off a connection: a test's `app().test()`, or a `Router` another
+library's server calls as a tower `Service`, which answers for the requests it reads (every
+other case above is a `400` there too). What reaches the server is what counts: a proxy that
+speaks HTTP/1.1 to the app and passes on no `Host` for a client that sent none sends a request
+that gets the `400`. nginx as [the deploy guide](deploy.md#nginx) sets it up is not
+such a proxy. Run with that configuration (nginx 1.31.9, `proxy_set_header Host $http_host`,
+the app with `HOSTS=shop.example`): for an HTTP/1.0 client that sends no `Host`, nginx writes
+`Host: app`, the name of its `upstream` block, as the first line of an HTTP/1.1 request, and
+the app answers that name with the `421`, as it did before this check refused anything; an
+HTTP/1.1 client with no `Host` gets nginx's own `400` and the app is not asked; a client that
+names `shop.example`, over HTTP/1.0 or HTTP/1.1, is answered. The first request
+refused for each reason is logged, with its method, its path and the reason: never its query,
+and of a `Host` or a target's host that is none only the name in it, without a user before or a
+path after (no name at all where an `@` comes after a `/`, a `?` or a `#`, since which part is
+the user cannot then be told; a name with a space in it is logged as sent). A method, a path or
+a name longer than 200 bytes is given by its first 200 and its length, in that line and in the
+`421`'s.
+
 A deployed app lists the names it is served under, where the deploy sets `HOST` and `PORT`:
 
 ```sh
@@ -272,10 +329,13 @@ HOSTS=shop.example,.shop.example   # the domain, and (leading dot) every subdoma
 
 or in code, `App::policy(Policy::new().host("shop.example"))`. Behind a proxy that rewrites
 `Host`, it is the name the proxy sends. A health check that calls the app by an IP address, or
-by `localhost`, is answered as before. The first refused name is logged, so a deploy that forgot
+by `localhost`, is answered as before, when it sends a `Host` line or speaks HTTP/1.0: a check
+written by hand as `GET /health/live HTTP/1.1` with no `Host` is the `400` above. The first refused name is logged, so a deploy that forgot
 its name says why it answers 421. An app served under names it cannot list in advance (each
-customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself. The check
-compares one header with a short list.
+customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself; its `Host`
+is still read, for the `400` above. The check reads one header and compares it with a short
+list; what it does not find there as written (a subdomain's own part, another host's name, any
+name when the app answers to any) is also read byte by byte.
 
 ## The client's address
 
@@ -1186,7 +1246,8 @@ routes module, the app's, an area's or an API's; the probes a load balancer send
 `/health/live` and `/health/ready`. It goes through none of the stages above: no same-origin
 check, signal or deadline, no middleware (the app's, its area's or its API's), no error page,
 security headers, `Cache-Control`, tag, compression or allowed origins. What it keeps adds no
-stage: the host check every request meets (a name the app does not answer to gets `421`),
+stage: the host check every request meets (a name the app does not answer to gets `421`, and a
+request HTTP does not allow `400`),
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on its answer (below),
 a panic answered `500`, and, under an API's prefix, the API's JSON for a failure. Its handler's
 answer is otherwise sent as it made it, a raw `Response` too, and every other route keeps every
@@ -1325,7 +1386,19 @@ more than the same checks written into the handler (86 in an API's module; 67 an
 glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
-check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+check's read of `Host` and its match against the app's names. Refusing what HTTP does not allow
+([Host names](#host-names)) added to a request whose first header line is not `Host`: 17 to 19
+with `Host` second, and 49 to 54 with it last of a browser's eight lines, about where
+Playwright's WebKit on Linux writes it (its Chromium and Firefox write it first, and so does
+nginx as the deploy guide sets it up). A request with `Host` first is no longer searched for it
+and costs 90 to 126 fewer than before in an app that names its hosts. An app that answers to any
+host now reads `Host` too, every byte of it, to refuse one that is no host: 111 to 113 more with
+it first, of which 34 to 36 find the line and the rest read `localhost:8080`, and 311 to 312 with
+it last of eight
+(counted over a socket at `5c7b006dc`, each build in turn, each figure the
+difference of the two builds' medians of three runs, with main built a
+second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
+55; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
@@ -2059,7 +2132,7 @@ Under the prefix:
    endpoint's JSON-RPC errors, as `examples/card-market`'s `/mcp` answers them): it returns a
    `ToJson` value, so a key check in `Identify` and the API's unknown URLs, wrong methods,
    methods no route has (501), deadline and refusals all answer as its clients parse them. A `421` for a host the app does
-   not answer is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
+   not answer, or the `400` for a request HTTP does not allow ([Host names](#host-names)), is not the API's (no route ran), and a URL outside the prefix is the pages' 404.
 5. `Api::allow_origin` lets one site's pages call these routes from the browser: Corten answers
    its CORS preflight, adds `Access-Control-Allow-Origin` and lets its writes through. The
    pages keep refusing that site's writes. The site authenticates with a token: a write from it
