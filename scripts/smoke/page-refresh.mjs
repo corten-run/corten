@@ -72,32 +72,90 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       return `${base}${from}`;
     };
     /**
-     * Navigates the runtime's way, and waits until the page is there, still saving. The page itself
-     * records that, from before the navigation starts (a client navigation keeps the document), so
-     * a waiter that starts late does not miss a `Saving...` its first part read has already
-     * replaced. @param {string} url
+     * The token each of `go`'s navigations gives the answer to its own fetch of the page, by the
+     * page's address (path and query). The route that answers that fetch (`seedNavigation`,
+     * `wholeOnly`) puts it on the status line it draws (`markNav`), the first time only, so `go` can
+     * tell the navigation's own draw from the page it left, which may say `Saving...` at the same
+     * moment, and from a later read.
+     * @type {Map<string, string>}
+     */
+    const navTokens = new Map();
+    /**
+     * `body`, the answer to the runtime navigation's fetch of `address`, with the token `go` gave that
+     * navigation on its status line (`data-smoke-nav`), once: the token is used up by the first fetch.
+     * @param {string} address @param {string} body
+     */
+    const markNav = (address, body) => {
+      const token = navTokens.get(address);
+      if (token === undefined) return body;
+      navTokens.delete(address);
+      return body.replace('<p id="alert-status"', `<p data-smoke-nav="${token}" id="alert-status"`);
+    };
+    /**
+     * Navigates the runtime's way to `url`, and says whether that navigation drew its own page there
+     * still saving, in the same document. The page records it from before the navigation starts, the
+     * moment it is drawn, so a waiter that starts late does not miss a `Saving...` its first part read
+     * has already replaced: a status line saying `Saving...` counts only with the token the answer to
+     * this navigation's own fetch carries (`markNav`), at `url`, and only while the document is the
+     * one `go` started in (the record is on its window, which a full load loses). A page left that
+     * says `Saving...` too, a page drawn by another read, or a full load is not this navigation's
+     * draw. Waits up to 5 s for it, then reads the record (`saving`, `sameDocument`), with where the
+     * page is and its status line, for a check's details.
+     * @param {string} url
+     * @returns {Promise<{ token: string, saving: boolean, sameDocument: boolean, at: string, status: string | null }>}
      */
     const go = async (url) => {
-      await page.evaluate((url) => {
-        const w = /** @type {any} */ (window);
-        w.__smokeSawSaving = false;
-        const look = () => {
-          if (location.href === url && document.getElementById("alert-status")?.textContent === "Saving...") {
-            w.__smokeSawSaving = true;
-            seen.disconnect();
-          }
-        };
-        const seen = new MutationObserver(look);
-        seen.observe(document, { subtree: true, childList: true, characterData: true });
-        w.navigation.navigate(url);
-        look();
-      }, url);
-      // Or seen now, in case the navigation loaded a new document, which starts without the record.
-      await page.waitForFunction(
-        (url) => (/** @type {any} */ (window)).__smokeSawSaving === true || (location.href === url && document.getElementById("alert-status")?.textContent === "Saving..."),
-        url,
-      );
+      const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const address = new URL(url).pathname + new URL(url).search;
+      navTokens.set(address, token);
+      try {
+        await page.evaluate(
+          ({ url, token }) => {
+            const w = /** @type {any} */ (window);
+            const note = { token, saving: false, stop: () => seen.disconnect() };
+            w.__smokeGo = note;
+            const look = () => {
+              const status = document.getElementById("alert-status");
+              if (location.href === url && status?.getAttribute("data-smoke-nav") === token && status.textContent === "Saving...") {
+                note.saving = true;
+                seen.disconnect();
+              }
+            };
+            const seen = new MutationObserver(look);
+            seen.observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-nav"] });
+            w.navigation.navigate(url);
+          },
+          { url, token },
+        );
+        // A full load ends the wait too: its document has no record of this navigation.
+        await page
+          .waitForFunction(
+            (token) => {
+              const note = (/** @type {any} */ (window)).__smokeGo;
+              return note?.token !== token || note.saving === true;
+            },
+            token,
+            { timeout: 5000 },
+          )
+          .catch(() => {});
+        return await readWithin(
+          "the navigation's record",
+          page.evaluate((token) => {
+            const note = (/** @type {any} */ (window)).__smokeGo;
+            const sameDocument = note?.token === token;
+            if (sameDocument) note.stop();
+            return { token, saving: sameDocument && note.saving === true, sameDocument, at: location.href, status: document.getElementById("alert-status")?.textContent ?? null };
+          }, token),
+        );
+      } finally {
+        navTokens.delete(address);
+      }
     };
+    /**
+     * What `go` saw, for a check's details. @param {{ saving: boolean, sameDocument: boolean, at: string, status: string | null }} nav
+     */
+    const wentTo = (nav) =>
+      nav.saving ? "Saving... drawn by the navigation" : nav.sameDocument ? `no Saving... drawn by the navigation (the page at ${nav.at} says ${nav.status})` : `a new document loaded (at ${nav.at}, saying ${nav.status})`;
     const saved = () => page.textContent("#alert-status");
     const savedSoon = () =>
       page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
@@ -267,7 +325,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const headed = bare.includes("</title>") ? bare.replace("</title>", `</title>${head}`) : `${head}${bare}`;
           const answer = headed.includes("</main>") ? headed.replace("</main>", `${tag}</main>`) : `${headed}${tag}`;
           seeded.set(address, `the stand-in, the server's saying ${shows}`);
-          await route.fulfill({ status: res.status(), headers, body: answer });
+          await route.fulfill({ status: res.status(), headers, body: markNav(address, answer) });
         } catch (error) {
           seeded.set(address, `failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`);
           await route.abort().catch(() => {});
@@ -445,18 +503,26 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
            * `go` to `to` within 5 s, its navigation answered as still saving, with its part read
            * again after `seconds` (`seeds`). @param {string} to @param {number} [seconds]
            */
-          const goTo = (to, seconds = AGAIN_SECONDS) => {
+          const goTo = async (to, seconds = AGAIN_SECONDS) => {
             seeds.set(new URL(to).pathname + new URL(to).search, seconds);
-            return within(5000, "the runtime's navigation to a page still saving was not seen within 5 s", go(to));
+            const nav = await within(5000, "the runtime's navigation to a page still saving was not seen within 5 s", go(to));
+            if (!nav.saving) throw new Error(`the runtime's navigation to ${new URL(to).pathname}${new URL(to).search}: ${wentTo(nav)}`);
+            return nav;
           };
           const reachedUrl = await readWithin("the pending write's page", pending());
-          await goTo(reachedUrl);
+          const nav = await goTo(reachedUrl);
           await savedSoon();
           const reached = await readWithin("the status line after the navigation's wait for Saved.", saved());
+          // The same document throughout: the record `go` put on its window is still there, which a
+          // full load (a document read, then its part) would have lost.
+          const kept = await readWithin(
+            "whether the navigation kept the document",
+            page.evaluate((token) => (/** @type {any} */ (window)).__smokeGo?.token === token, nav.token),
+          );
           check(
             "a page's part reached by the runtime's navigation is read again, not the page",
-            reached === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
-            `${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(new URL(reachedUrl).pathname + new URL(reachedUrl).search) ?? "nothing seen"})`,
+            nav.saving && nav.sameDocument && kept && reached === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
+            `${wentTo(nav)}, then ${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(new URL(reachedUrl).pathname + new URL(reachedUrl).search) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
           );
           // Away while the part still owes a read: the runtime's navigation reaches a page still
           // saving, whose part reads are each held unanswered from then on, so the part cannot draw
@@ -810,7 +876,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
-      const body = asWhole(await res.text());
+      const asked = new URL(route.request().url());
+      const mode = route.request().headers()["corten"];
+      const whole = asWhole(await res.text());
+      // The runtime's navigation (`corten: nav`, or `page` for a whole read) carries `go`'s token.
+      const body = mode === "nav" || mode === "page" ? markNav(asked.pathname + asked.search, whole) : whole;
       await route.fulfill({ status: res.status(), headers, body });
     };
     await page.route("**/alerts?saved=*", wholeOnly);
@@ -1051,13 +1121,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     if (swaps) {
       await page.evaluate(() => (/** @type {any} */ (window)).__marker = 6);
       const entries = await page.evaluate(() => history.length);
-      await go(await pending());
-      const reached = await saved();
+      // `Saving...` as the navigation drew it, recorded by the page (`go`), not looked at once it
+      // returns, by when the page may have read itself again and say `Saved.`; `Saved.` once the
+      // page has read itself again, in the same document.
+      const nav = await go(await pending());
       await savedSoon();
+      const status = await saved();
+      const kept = await page.evaluate((token) => (/** @type {any} */ (window)).__marker === 6 && (/** @type {any} */ (window)).__smokeGo?.token === token, nav.token);
       check(
         "a page reached by the runtime's navigation reads itself again in place",
-        reached === "Saving..." && (await saved()) === "Saved." && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 6)),
-        `${reached} -> ${await saved()}`,
+        nav.saving && nav.sameDocument && status === "Saved." && kept,
+        `${wentTo(nav)} -> ${status}${kept ? "" : ", the document not kept"}`,
       );
       check("each read replaces the history entry", (await page.evaluate(() => history.length)) === entries + 1, `${entries} -> ${await page.evaluate(() => history.length)}`);
       // Away while a write lands: once the page is in and has armed its read again (the head's

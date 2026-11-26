@@ -96,6 +96,8 @@ export async function pageWrites(page, browser) {
       nav: (/** @type {string} */ body, /** @type {number} */ _at) => body,
       /** What a write's answer waits for, by the write's number. @type {(writes: number) => Promise<unknown> | undefined} */
       hold: (/** @type {number} */ _writes) => /** @type {Promise<unknown> | undefined} */ (undefined),
+      /** What the answer to any other request waits for, by its place in `asked`. @type {(at: number) => Promise<unknown> | undefined} */
+      holdRead: (/** @type {number} */ _at) => /** @type {Promise<unknown> | undefined} */ (undefined),
     };
     // Closed here if the page, its route or its load fails: no case has the page to close yet.
     try {
@@ -133,6 +135,7 @@ export async function pageWrites(page, browser) {
               return route.abort("failed");
             }
             if (write) await seen.hold(writes);
+            else await seen.holdRead(at);
             if (write) seen.settled[writes] = sinceNow(seen);
             await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
             if (write) seen.answers += 1;
@@ -1095,6 +1098,11 @@ export async function pageWrites(page, browser) {
       /** @type {number | undefined} */ at,
     ) => body.replace(/<span([^>]*)>Watchlist<\/span>/, `<span$1${headers ? "" : ` data-smoke-at="${at}"`}>Count ${writes}</span>`);
     const { own, seen } = await writtenPage(counted, undefined, "/smoke/written/again");
+    /** @type {() => void} */
+    let releaseHeld = () => {};
+    const heldRead = new Promise((resolve) => (releaseHeld = () => resolve(undefined)));
+    /** The place in `seen.asked` of the read held through the second write, once one is. @type {number | null} */
+    let heldAt = null;
     try {
       seen.nav = markNav;
       await within(
@@ -1105,6 +1113,18 @@ export async function pageWrites(page, browser) {
       await watchWritten(own, "Count 1");
       await watchMarks(own);
       const firstWrite = seen.writes + 1;
+      // The page's second read of itself from the first write's answer on, counted as `readAsked`
+      // counts the first (the whole read below), is held at the stand-in, answer and all, from the
+      // moment it reaches it until it is let go below: the next read after the whole one, whatever
+      // its kind.
+      seen.holdRead = (at) => {
+        const from = seen.settled[firstWrite];
+        if (heldAt !== null || from === undefined || !seen.asked[at].startsWith("GET /smoke/written/again")) return undefined;
+        const reads = seen.asked.flatMap((a, i) => (i >= from.at && seen.askedAt[i] > from.time && a.startsWith("GET /smoke/written/again") ? [i] : []));
+        if (reads[1] !== at) return undefined;
+        heldAt = at;
+        return heldRead;
+      };
       const sentFirst = await pressWrite(own, seen, "main form button");
       const drew = sentFirst.ok && (await writtenSeen(own));
       // Read whole while it reads itself again: the page's first read of itself after the stand-in
@@ -1115,33 +1135,41 @@ export async function pageWrites(page, browser) {
       const wholeBefore = wholeAt === null ? null : seen.asked[wholeAt];
       const wholeDrawn = wholeAt !== null && (await drawnBy(own, wholeAt, seen.askedAt[wholeAt] + 5000)) !== null;
       seen.fail = true;
-      // Clicked as before, not pressed in one page task (`pressWrite`): that press can come between
-      // a whole read's answer and its draw, which replaces the form while the write is out (the
-      // runtime then says the failure on the form's successor or the document, #2068, which other
-      // cases test). This check does not cover that order: its click comes once the read before it
-      // is drawn. The click must land within 5 s of being asked for, and its write reach the stand-in
-      // within 5 s of the click returning.
+      // The second write is pressed in one page task (`pressWrite`) while the page's next read of
+      // itself after the whole one is held at the stand-in (above), so no read's answer is drawn
+      // between the press finding the button and pressing it (a click the one-second poll's draw
+      // lands on can reach no button, #2035), nor while the write is out (a draw then replaces the
+      // form while the write is out, and the runtime says the failure on the form's successor or the
+      // document, #2068, which other cases test). The held read must reach the stand-in within 5 s
+      // of the whole read's draw being seen; the press and its write reaching the stand-in share 5 s
+      // (`pressWrite`), and the failure must be shown within 5 s of that. Then the held read is let
+      // go: a whole read asked before the failure, which the runtime makes again as a read of <main>
+      // (`deferWholeRead`, as the waiting-poll case below tests). The read checked below is the
+      // first asked after the write failed, which the held one is not.
+      /** @type {Awaited<ReturnType<typeof pressWrite>> | null} */
+      let sentSecondAs = null;
+      let held = false;
       let sentSecond = false;
       let failed = false;
       /** @type {number | undefined} */
       let secondWrite;
       if (wholeDrawn) {
-        const writesBefore = seen.writes;
-        secondWrite = writesBefore + 1;
-        const clicked = await own.click("main form button", { timeout: 5000 }).then(
-          () => true,
-          () => false,
-        );
-        sentSecond = clicked && (await pollFor(5000, async () => seen.writes > writesBefore)) === true;
-        failed =
-          sentSecond &&
-          (await own
-            .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
-            .then(
-              () => true,
-              () => false,
-            ));
+        held = (await pollFor(5000, async () => heldAt !== null)) === true;
+        if (held) {
+          secondWrite = seen.writes + 1;
+          sentSecondAs = await pressWrite(own, seen, "main form button");
+          sentSecond = sentSecondAs.ok;
+          failed =
+            sentSecond &&
+            (await own
+              .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+              .then(
+                () => true,
+                () => false,
+              ));
+        }
       }
+      releaseHeld();
       // The page's first read of itself after the stand-in failed the second write, drawn with the
       // failure already shown.
       const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "");
@@ -1160,6 +1188,8 @@ export async function pageWrites(page, browser) {
         drew &&
           wholeBefore === "GET /smoke/written/again page" &&
           wholeDrawn &&
+          held &&
+          sentSecond &&
           failed &&
           again === "GET /smoke/written/again nav" &&
           drewAgain &&
@@ -1167,9 +1197,10 @@ export async function pageWrites(page, browser) {
           arrived.ok &&
           shown.brand === "Count 2" &&
           seen.asked.includes("GET /smoke/quoted page"),
-        JSON.stringify({ sentFirst, drew, wholeBefore, wholeDrawn, sentSecond, failed, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
+        JSON.stringify({ sentFirst, drew, wholeBefore, wholeDrawn, held, heldRead: heldAt === null ? null : seen.asked[heldAt], sentSecondAs, failed, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      releaseHeld();
       await closeContext(own.context(), "the read-again failure case's context");
     }
   }
