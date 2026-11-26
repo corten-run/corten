@@ -2494,7 +2494,7 @@ fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
 pub(crate) struct Next<'a, S: Steps> {
     steps: &'a S,
     scope: S::Scope<'a>,
-    ends: &'a crate::middleware::Ends,
+    ends: &'a crate::middleware::Ends<'a>,
 }
 
 impl<'a, S: Steps> Next<'a, S> {
@@ -2527,7 +2527,7 @@ pub(crate) trait Steps: Send + Sync + 'static {
     fn run<'a>(
         &'a self,
         req: Request,
-        ends: &'a crate::middleware::Ends,
+        ends: &'a crate::middleware::Ends<'a>,
         scope: Self::Scope<'a>,
     ) -> impl Future<Output = Response> + Send + 'a;
 }
@@ -2549,7 +2549,7 @@ impl<M: Middleware> Steps for Plain<M> {
     fn run<'a>(
         &'a self,
         req: Request,
-        ends: &'a crate::middleware::Ends,
+        ends: &'a crate::middleware::Ends<'a>,
         (): (),
     ) -> impl Future<Output = Response> + Send + 'a {
         self.0.call(req, crate::middleware::Handle(ends))
@@ -2575,7 +2575,7 @@ impl<M: Middleware> Steps for Scoped<M> {
     fn run<'a>(
         &'a self,
         req: Request,
-        ends: &'a crate::middleware::Ends,
+        ends: &'a crate::middleware::Ends<'a>,
         stack: Self::Scope<'a>,
     ) -> impl Future<Output = Response> + Send + 'a {
         use futures_util::future::Either;
@@ -2728,18 +2728,16 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        // The route and the stages' hold on their signal, which the route's answer marks as it
-        // comes back past the middleware when it drew a form's new submit key, from whatever
-        // thread polled it.
-        let ends = crate::middleware::Ends { route, watch };
+        // The route and the stages' signal, which the route's answer marks as it comes back past
+        // the middleware when it drew a form's new submit key, from whatever thread polled it.
+        let ends = crate::middleware::Ends { route, signal: &watch.0 };
         // The middleware of the area or API the request is in, where one has some. Taken after
         // the signal, so it is dropped before it: `Next` holds both for one lifetime.
         let steps = self.steps.scope(scope);
         let next = Next { steps: &self.steps, scope: steps, ends: &ends };
         // The signal ends when this future is dropped, then when the response is dropped.
-        let res = page::render_errors(&self.shared, pending, next, deadline, &ends.watch.0, mount, &mut page).await;
-        let crate::middleware::Ends { route, watch } = ends;
-        drop(route);
+        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        drop(ends);
         let caller = watch.0.is_personal();
         let asked = watch.0.asked_language();
         // Held by the stages' signal, which the route's answer marks as it comes back past the

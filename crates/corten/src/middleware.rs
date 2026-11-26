@@ -224,19 +224,17 @@ pub(crate) type Stack = Arc<[Arc<dyn Erased>]>;
 /// What the stages give the end of their chain, past the app's middleware: the route, and their
 /// own signal, which the route's answer marks as it comes back when it drew a form's new submit
 /// key ([`Keyed`]). The stages hold it; each link of the chain carries a reference to it, so the
-/// route goes down the chain as one pointer, not the two it is, and the signal with it. It owns
-/// the stages' hold on the signal ([`crate::signal::Watch`]), which the stages keep across the
-/// chain anyway, so the stages' future is no larger for it.
-pub(crate) struct Ends {
+/// route goes down the chain as one pointer, not the two it is, and the signal with it.
+pub(crate) struct Ends<'a> {
     pub(crate) route: Option<crate::router::Route>,
-    pub(crate) watch: crate::signal::Watch,
+    pub(crate) signal: &'a crate::Signal,
 }
 
 /// The rest of the request after the app's middleware: the area's or API's middleware still to
 /// run (none for most routes), then the route ([`Ends`]).
 pub(crate) struct Rest<'a> {
     pub(crate) stack: &'a [Arc<dyn Erased>],
-    pub(crate) ends: &'a Ends,
+    pub(crate) ends: &'a Ends<'a>,
 }
 
 impl Next for Rest<'_> {
@@ -251,7 +249,7 @@ impl Next for Rest<'_> {
 
 /// The route alone ([`Ends`]), after the app's middleware, for a request in no area or API with
 /// middleware.
-pub(crate) struct Handle<'a>(pub(crate) &'a Ends);
+pub(crate) struct Handle<'a>(pub(crate) &'a Ends<'a>);
 
 impl Next for Handle<'_> {
     #[inline]
@@ -266,7 +264,7 @@ impl Next for Handle<'_> {
 /// own `404` is (`crate::cache::Unshared`). The answer is read for a form's new submit key as it
 /// comes back ([`Keyed`]), before any middleware sees it.
 #[inline]
-fn handle<'a>(ends: &'a Ends, req: Request) -> impl Future<Output = Response> + Send + 'a {
+fn handle<'a>(ends: &'a Ends<'a>, req: Request) -> impl Future<Output = Response> + Send + 'a {
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it.
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
@@ -283,7 +281,7 @@ fn handle<'a>(ends: &'a Ends, req: Request) -> impl Future<Output = Response> + 
             Some(here) => Either::Right(Box::pin(async move { here.fill(answer.await).await })
                 as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
         };
-    Keyed { answer, signal: &ends.watch.0 }
+    Keyed { answer, signal: ends.signal }
 }
 
 pin_project_lite::pin_project! {
