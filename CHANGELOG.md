@@ -186,7 +186,7 @@ builds against.
   context, a component's CSS file or `#[component(js)]`. For a static data block passed to
   a fixed HTML-only slot, pass the complete tag via trusted `raw`, without untrusted input.
 
-- **Breaking:** Hand-written named schemas calling the old hidden `Generator::define` helper now use `Generator::define::<Self>(read, name, make)`, without a string identity argument. Schema names must be ASCII TypeScript identifiers without a dollar sign that can be referenced by name, so they also work as JSON Schema references and OpenAPI component keys. The derives check the shared name rules at compile time; TypeScript generation rejects `as` as a type alias name but keeps it as an interface name. Generate separate JSON Schema and TypeScript definitions for distinct Rust types whose paths print the same, including types from different versions of one dependency. Reject a JSDoc import during declaration generation if it names the wrong definition.
+- **Breaking:** Hand-written named schemas calling the old hidden `Generator::define` helper now call `generator.define::<Self>(read, name, make)` on the `&mut Generator` they are given, without a string identity argument. Schema names must be ASCII TypeScript identifiers without a dollar sign that can be referenced by name, so they also work as JSON Schema references and OpenAPI component keys. The derives check the shared name rules at compile time; TypeScript generation rejects `as` as a type alias name but keeps it as an interface name. Generate separate JSON Schema and TypeScript definitions for distinct Rust types whose paths print the same, including types from different versions of one dependency. Reject a JSDoc import during declaration generation if it names the wrong definition.
 
 - **Breaking:** The router no longer sets `Content-Length` on an answer the server writes it for. hyper writes the same line from the body's exact size, so a page, a file or JSON from Corten's server says the same length as before, and a request makes two allocations fewer. An answer Corten's server did not send (a test with `App::test()`, a request sent through `app.router()`, or an app's own loop that serves the router) no longer carries the header unless it answers a `HEAD` or its handler set it: read `answer.bytes().len()` or the body's `size_hint()`, and have a server that does not write the length from the body set the header. Three answers change on the wire, each to what HTTP asks: a `101`, `204` or `304` given a body with bytes no longer says its length, a `HEAD` no longer says `Content-Length: 0` for one of those (RFC 9110 8.6), and an answer whose handler set `Transfer-Encoding` over a body of known size is sent chunked, with no length in its `HEAD`, where the client got no answer because hyper refused to send the two headers together.
 
@@ -344,8 +344,9 @@ builds against.
   floor moves and why SQLx stays on 0.8.
   Build the app with Rust 1.89 or later.
 
-- **Breaking:** An app using `corten-cluster` must depend on async-nats 0.52, since
-  `Cluster::start` takes an `async_nats::Client`. 0.52 removes `From<&str>` and
+- **Breaking:** An app using `corten-cluster` passed through async-nats 0.52 on the way to 0.53
+  (install 0.53, as the entry above says), since `Cluster::start` takes an `async_nats::Client`.
+  0.52 removes `From<&str>` and
   `From<String>` for `HeaderValue`; use `HeaderValue::try_from`, `from_lossy` or the
   `insert`/`append` methods that take a string. Such an app also takes 0.51's changes: new
   error-kind variants, new public consumer fields, websocket errors as tokio-websockets 0.13
