@@ -66,8 +66,9 @@ If a Docker participant snapshot fails, a sealed terminal record also includes
 including when a later sample is complete. The diagnostic keeps no error text,
 daemon output, commands, environment or values read from procfs. The existing
 sample still records the gap and notifies as before. A stage identifies a failed
-check, not the cause of the underlying failure. A `kernel-census` failure also
-names the fixed census check (`operation`), and a failure after startup rechecks
+check, not the cause of the underlying failure. A `kernel-census` failure in one
+of the fixed census checks also names it (`operation`); an ancestor read or the
+root-PID check can fail there without one. A failure after startup rechecks
 records their `attempts`.
 
 A container's first process can rename itself or exec its entrypoint just after
@@ -75,11 +76,13 @@ Docker reports it running (the Node image runs `docker-entrypoint.sh`, which exe
 `node`, whose main thread then renames itself). The collector rechecks only that
 churn: a changed process name between the opening and closing reads
 (`process-name-close`), or a changed name or executable inode in the container's
-census, on a container whose RFC 3339 Docker `StartedAt` is at most one second old.
-It takes the whole capture again, starting no new attempt 250 ms after the first. A capture admitted after a
-recheck must have the same Docker start time, PID and kernel start time as the
-failed one; a mismatch is a gap at `startup-recheck`. Any other failure, an older
-or unreadable start time, or churn that outlasts the budget remains a gap and
+census, on a container whose RFC 3339 Docker `StartedAt` is a real calendar time
+at most one second old. It takes the whole capture again, checking before each
+new attempt that 250 ms have not passed since the first began. A capture admitted
+after a recheck must have the same Docker start time, PID and kernel start time as
+the failed one, checked before its executables are pinned; a mismatch is a gap at
+`startup-recheck` and leaves no executable proof. Any other failure, an older,
+unreadable or impossible start time, or churn that outlasts the budget remains a gap and
 notifies `onFault` as before. A sealed terminal record counts admitted rechecks in
 `dockerStartupRechecks` (count and the first stage, code and attempts).
 
