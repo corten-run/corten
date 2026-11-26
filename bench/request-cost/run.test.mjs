@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import * as compare from "./compare.mjs";
 import { counted } from "./probe.mjs";
 import { cases } from "./requests.mjs";
 
@@ -245,6 +246,33 @@ test("idle.mjs prints no figure when a connection's answer is not the case's", {
   assert.doesNotMatch(run.stdout, /bytes a connection/);
 });
 
+test("each kind of run compare.mjs asks for is one the kit takes, and its --json is what was measured, the whole figure compare.mjs reads", { skip }, async () => {
+  const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
+  const take = async (/** @type {string} */ file, /** @type {string[]} */ more = [], asked = {}) => {
+    const { script, options, expect } = /** @type {ReturnType<typeof compare.readings>[number]} */ (plan[file]);
+    const run = await running(script, [...options, ...more]);
+    assert.equal(run.status, 0, `${file}: ${run.stderr}`);
+    // One line, and nothing of the table printed for people.
+    assert.match(run.stdout, /^\{.*\}\n$/, file);
+    return { text: run.stdout, expect, found: compare.figure(run.stdout, { ...expect, ...asked }) };
+  };
+  const count = (await take("count-get.json")).found;
+  assert.deepEqual([count.median, count.counts, count.windows.map((/** @type {any} */ window) => [window.instructions, window.others, window.threads])], [1001, [1001, 1001, 1001], Array(3).fill([1_000_600, 243, 1])]);
+  assert.ok(count.windows.every((/** @type {any} */ window) => window.seconds > 0 && window.seconds < 30));
+  // 992 requests are counted at a depth of 16: 992,600 over them.
+  const deep = (await take("count-16-pipeline.json")).found;
+  assert.deepEqual([deep.depth, deep.requests, deep.windows[0].instructions, deep.median], [16, 992, 992_600, 1001]);
+  // The calls themselves, not calls a request.
+  const calls = (await take("allocations-get.json")).found;
+  assert.deepEqual([calls.requests, calls.allocations, calls.frees, calls.calls], [1000, 16_000, 0, { malloc: 16_000 }]);
+  // The stand-in's 40 connections are a whole run of 40, and not the reading of 5,000 asked for.
+  for (const [file, requests] of /** @type {const} */ ([["idle-request-1.json", 1], ["idle-browser-1.json", 3], ["idle-silent-1.json", 0]])) {
+    const { text, expect, found } = await take(file, ["--connections", "40"], { connections: 40 });
+    assert.deepEqual([found.requests, found.connections, found.bytes], [requests, 40, Math.round((found.after - found.before) / 40)], file);
+    assert.equal(compare.figure(text, expect), null, file);
+  }
+});
+
 test("an option that would give a figure of something else is refused before anything is started", () => {
   const refused = (/** @type {string} */ script, /** @type {string[]} */ args, /** @type {RegExp} */ why) => {
     const run = spawnSync(process.execPath, [join(kit, script), "no-such-probe", ...args], { encoding: "utf8" });
@@ -257,6 +285,7 @@ test("an option that would give a figure of something else is refused before any
   refused("count.mjs", ["--allocations", "--reps", "2"], /--reps is for instruction counts/);
   refused("count.mjs", ["--answers", "answers", "--reps", "2"], /--reps is for instruction counts/);
   refused("count.mjs", ["--answers", "answers", "--depth", "2"], /--answers sends its requests one at a time/);
+  refused("count.mjs", ["--answers", "answers", "--json"], /--json is of a count/);
   refused("count.mjs", ["--cases", "get,pages"], /no case "pages"/);
   refused("idle.mjs", ["--silent", "--requests", "3"], /--silent sends nothing/);
   refused("idle.mjs", ["--addresses", "255"], /--addresses takes at most 254/);

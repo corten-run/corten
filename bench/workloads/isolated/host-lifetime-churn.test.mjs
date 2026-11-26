@@ -9,6 +9,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { test } from "node:test";
+import { storageLimits } from "./host-durable-writer.mjs";
 import { beginLifetime, captureBrowserParticipant, inspectBrowserParticipants, processIdentity } from "./host-lifetime.mjs";
 import { participantExecutables } from "./participant-executables.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
@@ -496,8 +497,8 @@ test("failed enqueue admission rolls back only that sample's captures and preser
   assert.equal(f.held.size, 1);
   const samples = f.samples().length;
   const entered = f.pauseWrite(); f.capture(); await entered;
-  for (let i = 1; i < 64; i++) f.capture();
-  f.nextExecutable = true; f.capture(); // The 65th frame is refused synchronously.
+  for (let i = 1; i < storageLimits.frames; i++) f.capture();
+  f.nextExecutable = true; f.capture(); // The next frame is refused synchronously.
   assert.equal(f.samples().length, samples); assert.deepEqual([...f.held], [acceptedFD]);
   assert.equal(createHash("sha256").update(fs.readFileSync(acceptedFD)).digest("hex"),
     createHash("sha256").update("original executable").digest("hex"));

@@ -6,14 +6,14 @@ import { isBuiltin, registerHooks } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
-import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
+import { digest, physical, regular } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
+import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, failedSetupRetirementFile, verifyCreateErrored,
   exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
   postedContradiction, readExternalFailedHost, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckExternalFailedHost, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
-  verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
+  verifyCollectedGroup, verifyFleet, verifySetupRetry } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
 const groups = selection(), names = groups.groups.map(({ group }) => group);
@@ -85,11 +85,12 @@ function verifyCreateErroredAttempt(saved) {
 }
 const receiptSha256 = (state, file) => file === createErroredReceipt ? state.createErrored?.evidenceSha256 : state.retirement?.evidenceSha256;
 const known = ({ state }) => state?.id && state.status === "collected" && state.validation?.status === "verified";
-const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
+const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": failedSetupRetirementFile, unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
 function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
+  if (kind === "setup-failed") return verifySetupRetry(saved);
   assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
   if (kind === "native-failed") {
     if (exitOne) {
@@ -109,18 +110,9 @@ function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
     }
   } else {
     assert.ok(saved.outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
-    const bytes = regular(join(local, retirementFile(kind)), 4096), record = JSON.parse(bytes);
+    const bytes = regular(join(local, retirementFile(kind)), 4096);
     assert.equal(digest(bytes), evidenceSha256, "unresolved custody: retirement receipt changed");
-    if (kind === "unused") verifyUnusedEvidence(record, state);
-    else {
-      const extracted = join(local, state.evidence), campaign = join(extracted, "campaign");
-      assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256);
-      assert.equal(treeHash(extracted), state.evidenceSha256);
-      if (present(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), []); }
-      const marker = full(regular(join(extracted, "exit-code"), 16).toString("utf8"), /[1-9]\d{0,2}\n/, "nonzero setup exit");
-      const exit = Number(marker.trim()); assert.ok(exit <= 255);
-      assert.deepEqual(record, setupEvidence(JSON.stringify(record.observation), state, terminalSetupScript(state, exit), exit, record.startedAtMs, record.finishedAtMs));
-    }
+    verifyUnusedEvidence(JSON.parse(bytes), state);
   }
 }
 
@@ -170,7 +162,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   // postedCreates is the census fence and the final-gate snapshot: every earlier
   // provider-errored attempt's posted droplet in any group, settled or contradicted
   // (also after its retirement), refuses a create on its account while it is listed.
-  const createFailures = [], postedCreates = [], exitOneRetirements = [], quarantinedCreates = [];
+  const createFailures = [], postedCreates = [], setupRetirements = [], exitOneRetirements = [], quarantinedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -274,6 +266,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
             }
             catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
+            if (receipt === failedSetupRetirementFile) setupRetirements.push({ root: fleet.root, round, group, manifestSha256, stateSha256, launch, batchSha256: lock });
           }
           outcome = `${state.retirement.kind}-retired`;
         } else {
@@ -460,7 +453,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         "no-create custody changed");
       // The same custody predicates as the scan: a lock that appeared since refuses.
       if (retirementFile === createErroredReceipt) assert.ok(createErrored(current), "continuation create failure custody changed");
-      if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
+      if (retirementFile === failedSetupRetirementFile) verifySetupRetry(current);
+      else if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
         retirementFile === "failed-native-host.json" ? undefined : retirementFile === createErroredReceipt ? 64 * 1024 : 4096)),
         receiptSha256(current.state, retirementFile), "continuation retirement changed");
     }
@@ -484,6 +478,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       ...(createFailures.length ? { createFailures } : {}),
       ...(postedCreates.length ? { postedCreates } : {}),
       ...(quarantinedCreates.length ? { quarantinedCreates } : {}),
+      ...(setupRetirements.length ? { setupRetirements } : {}),
       ...(exitOneRetirements.length ? { exitOneRetirements } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,

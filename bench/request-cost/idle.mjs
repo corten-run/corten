@@ -2,8 +2,10 @@
 // grows for each of many connections. Needs Linux with taskset and libjemalloc.so.2 (README.md).
 //
 // Usage: node idle.mjs <probe binary> [--connections 5000] [--case pipeline] [--requests 1 | --silent]
-//          [--addresses 1] [--cpu 0] [--port 8080]
+//          [--addresses 1] [--cpu 0] [--port 8080] [--json]
 //
+// `--json` prints the run as a line of JSON in place of the sentence, for compare.mjs to read,
+// once the probe has been stopped: a run that fails there has printed no reading.
 // Starts the probe (not under callgrind), opens the connections one after another, sends one
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
@@ -34,6 +36,7 @@ const { values, positionals } = parseArgs({
     addresses: { type: "string", default: "1" },
     cpu: { type: "string", default: "0" },
     port: { type: "string", default: "8080" },
+    json: { type: "boolean", default: false },
   },
 });
 const [binary] = positionals;
@@ -60,6 +63,8 @@ if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteg
 const probe = await start(binary, configuration, { cpu: values.cpu, port });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
 const files = () => readdirSync(`/proc/${probe.pid}/fd`).length;
+/** The run as JSON, printed after the probe has stopped. @type {string | undefined} */
+let json;
 try {
   // Warm: the first connections and requests allocate what the probe keeps for all of them.
   for (let warm = 0; warm < 50; warm += 1) {
@@ -78,7 +83,8 @@ try {
     if (!values.silent) await send(connection, name, requests);
     all.push(connection);
   }
-  const took = `${((performance.now() - began) / 1000).toFixed(1)} s`;
+  const seconds = (performance.now() - began) / 1000;
+  const took = `${seconds.toFixed(1)} s`;
   await sleep(1000);
   const after = memory();
   const accepted = files() - open;
@@ -93,7 +99,12 @@ try {
     throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
   }
   const what = values.silent ? `sent nothing to the probe for ${name}` : `answered ${requests} ${name}`;
-  console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after, ${after - before} grown, in ${page}-byte pages)`);
+  // In JSON a connection that was sent nothing answered 0 requests. The growth and the page size
+  // are what CONTRIBUTING's gate decides by; `bytes` is rounded and does not.
+  const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, grown: after - before, page, seconds };
+  if (values.json) json = JSON.stringify(measured);
+  else console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after, ${after - before} grown, in ${page}-byte pages)`);
 } finally {
   await probe.stop();
 }
+if (json !== undefined) console.log(json);
