@@ -2185,8 +2185,8 @@ const holdsNav = (el) => matchesOf(el, NAV) || !!queryOne(el, NAV);
  * page or any page under it) and removes it from the rest, after a navigation and after a patch
  * that puts one on the page or removes one. Of the links of one `data-nav-group` (`Req::nav_of`),
  * only the deepest that holds the page is current; a link holds it at its own URL or, in a group the
- * server named with a trailing `+`, at one of the paths in its `data-nav-also` (`NavTo::also`). The
- * shell is not re-rendered by client
+ * server named with a trailing `+`, at one of the paths in its `data-nav-also` (`NavTo::also`), all
+ * of them compared by comparison key there (`alsoDepth`). The shell is not re-rendered by client
  * navigation, so its menu would otherwise keep pointing at the first page. A link made current,
  * or current when first seen (the server's mark on a full load, or in a row a write's page or a
  * patch drew again), is brought into view in the row that scrolls it, so a long nav row does not
@@ -2202,14 +2202,15 @@ function markCurrent(kept = []) {
   const links = [];
   /** The deepest link that holds the page in each group. @type {Map<Element | string, number>} */
   const deepest = new Map();
+  /** The comparison key of `here`, made for the first group with other addresses. @type {string | undefined} */
+  let page;
   for (const link of Array.from(document.querySelectorAll(NAV))) {
     const path = new URL(/** @type {HTMLAnchorElement} */ (link).href).pathname;
     const base = path.replace(/\/+$/, "");
     const holds = here === path || (link.getAttribute("data-nav") === "section" && here.startsWith(`${base}/`));
     const named = link.getAttribute("data-nav-group");
     const group = named ?? link;
-    let depth = holds ? base.length : -1;
-    if (named?.endsWith("+")) depth = alsoDepth(link, here, depth);
+    const depth = named?.endsWith("+") ? alsoDepth(link, path, (page ??= keyOf(here))) : holds ? base.length : -1;
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
   }
@@ -2229,23 +2230,37 @@ function markCurrent(kept = []) {
 }
 
 /**
- * How deep `link` is when it holds the page `here` at its own URL (`depth`, -1 when it does not)
- * or at one of the paths of its `data-nav-also` (`NavTo::also`), by the same rule. The server wrote
- * each as a comparison key: as `location.pathname` shows it, with `|` as `%7C` (Chromium's spelling)
- * and an escape's hex digits uppercase (WebKit keeps `%7c` here and sends `%7C`), and compared it
- * with the request path's key, so `here` is made the same key and compared as text, not parsed again.
+ * How deep `link`, in a group with other addresses, is when it holds the page at its own URL's
+ * pathname `path` or at one of the paths of its `data-nav-also` (`NavTo::also`), by the same rule:
+ * -1 when it holds it at none. The server wrote each of those paths as a comparison key and compared
+ * them with the request path's key, so `path` and the page are made the same key (`page`, of
+ * `location.pathname`) and compared as text, not parsed again.
  * @param {Element} link
- * @param {string} here
- * @param {number} depth
+ * @param {string} path
+ * @param {string} page
  */
-function alsoDepth(link, here, depth) {
+function alsoDepth(link, path, page) {
   const section = link.getAttribute("data-nav") === "section";
-  const page = here.replaceAll("|", "%7C").replace(/%[\da-f]{2}/gi, (escape) => escape.toUpperCase());
-  for (const path of link.getAttribute("data-nav-also")?.split(" ") ?? []) {
-    const base = path.replace(/\/+$/, "");
-    if (page === path || (section && page.startsWith(`${base}/`))) depth = Math.max(depth, base.length);
+  let depth = -1;
+  for (const at of [keyOf(path), ...(link.getAttribute("data-nav-also")?.split(" ") ?? [])]) {
+    const base = at.replace(/\/+$/, "");
+    if (page === at || (section && page.startsWith(`${base}/`))) depth = Math.max(depth, base.length);
   }
   return depth;
+}
+
+/**
+ * The comparison key of a pathname, as the server makes it (`NavTo::also`): `|` as `%7C`, which
+ * Chromium shows and Firefox and WebKit keep, an escape of a letter, a digit, `-`, `.`, `_` or `~`
+ * as that character, and the hex digits of every other escape uppercase, as WebKit asks for a path
+ * its `location.pathname` keeps as written.
+ * @param {string} path
+ */
+function keyOf(path) {
+  return path.replaceAll("|", "%7C").replace(/%[\da-f]{2}/gi, (escape) => {
+    const char = String.fromCharCode(parseInt(escape.slice(1), 16));
+    return /[\w.~-]/.test(char) ? char : escape.toUpperCase();
+  });
 }
 
 /** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */

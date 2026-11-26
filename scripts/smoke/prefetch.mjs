@@ -351,13 +351,17 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
  * `NavTo::also` at older addresses written in forms the browser does not show as written: a character
  * beyond ASCII, a `%2e%2E` segment, a `|` (raw in Firefox's and WebKit's request and pathname,
  * `%7C` in Chromium's), a lowercase escape (`%7c`, which WebKit keeps in `location.pathname` but
- * sends as `%7C`) and a trailing space. For each, the server marks the entry at the browser's own
- * request for that address (a navigation, so each engine's network path), and the runtime, ranking
- * copies of the same links it never saw marked, marks the same one at that address after a client
- * navigation.
+ * sends as `%7C`), a trailing space, and escaped unreserved characters (`%2e%2ex`, `%7eold%41`,
+ * which WebKit keeps in `location.pathname` but sends decoded, `..x` and `~oldA`). For each, the
+ * server marks the entry at the browser's own request for that address (a navigation, so each
+ * engine's network path), and the runtime, ranking copies of the same links it never saw marked,
+ * marks the same one at that address after a client navigation. Then a nav whose deeper entry's own
+ * URL (`/smoke/nav/old%7c/team/people`) is under another entry's older address: it wins at a page
+ * under it in either spelling of the escape, by the server and the runtime alike.
  */
 export async function navAlso(browser, swaps) {
   const name = "a nav entry is current at its page's older addresses, by the server and the runtime alike";
+  const team = "in a nav with other addresses a deeper entry's own URL wins in any spelling, by the server and the runtime alike";
   const context = await browser.newContext();
   const page = await context.newPage();
   // Each older address as a stored link carries it, with the path the server writes for it.
@@ -367,7 +371,11 @@ export async function navAlso(browser, swaps) {
     ["/smoke/nav/a|b", "/smoke/nav/a%7Cb"],
     ["/smoke/nav/old%7chome", "/smoke/nav/old%7Chome"],
     ["/smoke/nav/older", "/smoke/nav/older"],
+    ["/smoke/nav/%2e%2ex", "/smoke/nav/..x"],
+    ["/smoke/nav/%7eold%41", "/smoke/nav/~oldA"],
   ];
+  // Pages under the team nav's People entry, in the spelling its URL has and in another.
+  const visits = ["/smoke/nav/old%7c/team/people/alex", "/smoke/nav/old%7C/team/people/alex"];
   const also = cases.map(([, path]) => path).join(" ");
   /** Whether the server draws the entry marked and the section not, in one answer. */
   const marked = (/** @type {string} */ html) => {
@@ -377,8 +385,13 @@ export async function navAlso(browser, swaps) {
   };
   /** The same, for a request sent outside the browser. */
   const served = async (/** @type {string} */ href) => marked(await (await page.request.get(new URL(href, base).href)).text());
+  /** The aria-current of the team nav's Settings and People links in one answer. */
+  const teamMarks = (/** @type {string} */ html) =>
+    ["Settings", "People"].map((label) => (new RegExp(`<a [^>]*aria-current="page"[^>]*>${label}</a>`).test(html) ? "page" : "-")).join(" ");
   /** @type {string[]} */
   const seen = [];
+  /** @type {string[]} */
+  const teamSeen = [];
   const drawn = await (await page.request.get(`${base}/smoke/nav/here`)).text();
   const written = drawn.match(/<a href="\/smoke\/nav\/here" data-nav data-nav-group="[0-9a-f]{8}(\+?)" data-nav-also="([^"]*)"/);
   if (written?.[1] !== "+" || written[2] !== also) seen.push(`server wrote group mark "${written?.[1]}" and paths "${written?.[2]}"`);
@@ -392,9 +405,18 @@ export async function navAlso(browser, swaps) {
     const response = await page.goto(new URL(href, base).href);
     if (!response || !marked(await response.text())) seen.push(`server at the browser's request for ${href} (${response?.url()}): unmarked`);
   }
+  for (const visit of visits) {
+    const outside = teamMarks(await (await page.request.get(new URL(visit, base).href)).text());
+    if (outside !== "- page") teamSeen.push(`server at ${visit}: ${outside}`);
+    const response = await page.goto(new URL(visit, base).href);
+    const marks = response ? teamMarks(await response.text()) : "no answer";
+    if (marks !== "- page") teamSeen.push(`server at the browser's request for ${visit}: ${marks}`);
+  }
   if (!swaps) {
     check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
     skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
+    check(team, teamSeen.length === 0, teamSeen.join("; ") || "server only: without swaps a client navigation loads the page in full");
+    skip(`${team} (runtime)`, "without the Navigation API the browser loads that page in full");
     await context.close();
     return;
   }
@@ -425,5 +447,30 @@ export async function navAlso(browser, swaps) {
     if (marks !== "- page") seen.push(`runtime at ${at}: ${marks}`);
   }
   check(name, seen.length === 0, seen.join("; ") || "server and runtime marked the entry at every older address");
+  for (const visit of visits) {
+    await page.goto(`${base}/smoke/nav/old%7c/team/people/start`);
+    // Unmarked copies of the team nav's links in the shell, and a plain link to the page under it.
+    await page.evaluate((visit) => {
+      const nav = document.createElement("nav");
+      nav.id = "team-copy";
+      for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
+        const copy = /** @type {Element} */ (link.cloneNode(true));
+        copy.removeAttribute("aria-current");
+        nav.append(copy);
+      }
+      const under = document.createElement("a");
+      under.id = "team-visit";
+      under.setAttribute("href", visit);
+      under.textContent = "Alex";
+      document.querySelector("header")?.append(nav, under);
+    }, visit);
+    const before = await page.evaluate(() => location.pathname);
+    await page.click("#team-visit");
+    await page.waitForFunction((before) => location.pathname !== before && document.title.startsWith("Nav team"), before);
+    await page.waitForFunction(() => !!document.querySelector("#team-copy a[aria-current]"), null, { timeout: 5000 }).catch(() => {});
+    const marks = await page.evaluate(() => Array.from(document.querySelectorAll("#team-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
+    if (marks !== "- page") teamSeen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${marks}`);
+  }
+  check(team, teamSeen.length === 0, teamSeen.join("; ") || "server and runtime marked People under it in both spellings");
   await context.close();
 }

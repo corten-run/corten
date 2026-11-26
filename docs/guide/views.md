@@ -595,13 +595,19 @@ is current at `/governance` as at `/settings`, by the same rule and depth, and i
 `/settings`. The other paths are written in `data-nav-also` as comparison keys, not as any one
 engine spells them: the path `location.pathname` shows at that address, by the URL Standard (the
 query and fragment left out, the ends trimmed, `.` and `..` segments resolved, and a space or a
-character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the two spellings
+character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the spellings
 engines differ on made one. A `|` is written `%7C`, as Chromium shows it where Firefox and WebKit keep
-it, and an escape's hex digits are uppercase, as WebKit sends `/old%7chome` as `/old%7Chome` while its
-`location.pathname` keeps `%7c`; no escape is decoded. The server makes the request's path the same
-key and the runtime `location.pathname`, and each compares the keys as plain text, so they mark the
-same entry in every engine, at first render and after a client navigation. The nav's group name ends
-in `+` when an entry has other addresses, so the runtime reads `data-nav-also` only in such a nav.
+it. An escape is normalized as RFC 3986 does, since WebKit asks for a path so normalized while its
+`location.pathname` keeps it as written: one of a letter, a digit, `-`, `.`, `_` or `~` is the
+character (WebKit asks for `/old/%2e%2ex` as `/old/..x`), and any other has uppercase hex digits
+(`/old%7chome` as `/old%7Chome`). In a nav with other addresses every entry's own URL is compared by
+its key too, so a deeper entry still wins in another spelling. The server makes the request's path
+the same key and the runtime `location.pathname`, and each compares the keys as plain text, so they
+mark the same entry at first render and after a client navigation in Playwright's Chromium, Firefox
+and WebKit builds, where these spellings were measured. A nav without other addresses compares the
+paths as written, as before; there the engines' spellings can still differ.
+The nav's group name ends in `+` when an entry has other addresses, so the runtime reads
+`data-nav-also` and compares by key only in such a nav.
 Like `data-nav`, `html!` refuses it written as an attribute by hand; a spread of pairs passes it
 through, as it does `data-nav` and `data-nav-group`.
 

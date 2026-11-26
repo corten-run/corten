@@ -103,11 +103,21 @@ pub mod url {
     pub struct NavPage<'a> {
         pub name: &'a str,
     }
+
+    /// A page under an older address of a nav entry, where another entry's own URL holds it more
+    /// deeply: in a nav with other addresses, every URL is compared by the same key (#2119).
+    #[route("/smoke/nav/{name}/team/people/{who}", get = nav_team)]
+    pub struct NavTeam<'a> {
+        pub name: &'a str,
+        pub who: &'a str,
+    }
 }
 
 /// An older address of the nav page, written by hand as an app's own route might write it, in a
 /// form the browser does not show as written: a character beyond ASCII (asked for
-/// percent-encoded), a `..` segment written `%2e%2E` (resolved away) and a trailing space (trimmed).
+/// percent-encoded), a `..` segment written `%2e%2E` (resolved away), a trailing space (trimmed),
+/// and escaped unreserved characters a `Local` refuses (`%2e`, `%7e`, `%41`), which WebKit asks for
+/// decoded and shows as written.
 struct OlderNav(&'static str);
 
 impl corten::Route for OlderNav {
@@ -121,20 +131,37 @@ impl corten::Route for OlderNav {
 /// The nav: the section `/smoke/nav`, which holds every address less deeply, and the entry, also
 /// current at `/smoke/nav/café`, `/smoke/nav/settings`, `/smoke/nav/a|b` (a `Local`, whose `|`
 /// Firefox and WebKit keep and Chromium encodes), `/smoke/nav/old%7chome` (a `Local` with a
-/// lowercase escape, which WebKit shows as written and asks for as `%7C`) and `/smoke/nav/older`.
+/// lowercase escape, which WebKit shows as written and asks for as `%7C`), `/smoke/nav/older`,
+/// `/smoke/nav/%2e%2ex` (asked for by WebKit as `/smoke/nav/..x`) and `/smoke/nav/%7eold%41` (as
+/// `/smoke/nav/~oldA`).
 async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
     let section = corten::Local::parse("/smoke/nav").expect("a local path");
     let piped = corten::Local::parse("/smoke/nav/a|b").expect("a local path");
     let lower = corten::Local::parse("/smoke/nav/old%7chome").expect("a local path");
     let (cafe, dotted, spaced) =
         (OlderNav("/smoke/nav/caf\u{e9}"), OlderNav("/smoke/old/%2e%2E/nav/settings"), OlderNav("/smoke/nav/older "));
+    let (escaped_dots, unreserved) = (OlderNav("/smoke/nav/%2e%2ex"), OlderNav("/smoke/nav/%7eold%41"));
     let here = url::NavPage { name: "here" };
-    let nav = req.nav_of([
-        (corten::NavTo::section(&section), "Nav"),
-        (corten::NavTo::page(&here).also(&cafe).also(&dotted).also(&piped).also(&lower).also(&spaced), "Here"),
-    ]);
+    let entry = corten::NavTo::page(&here).also(&cafe).also(&dotted).also(&piped).also(&lower).also(&spaced);
+    let nav = req.nav_of([(corten::NavTo::section(&section), "Nav"), (entry.also(&escaped_dots).also(&unreserved), "Here")]);
     req.page(html! {
         <Layout req={&req} title="Nav" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// The team nav: Settings, a section also at `/smoke/nav/old%7c/team`, and People, a section at
+/// `/smoke/nav/old%7c/team/people`, deeper, so current on every page under it in any spelling of
+/// its `%7c`: WebKit asks for it as `%7C` and shows it as written, and a stored link may carry `%7C`.
+async fn nav_team(req: Req, Params(_): Params<url::NavTeam<'_>>) -> HtmlResult {
+    let settings = corten::Local::parse("/smoke/nav/settings").expect("a local path");
+    let team = corten::Local::parse("/smoke/nav/old%7c/team").expect("a local path");
+    let people = corten::Local::parse("/smoke/nav/old%7c/team/people").expect("a local path");
+    let nav =
+        req.nav_of([(corten::NavTo::section(&settings).also(&team), "Settings"), (corten::NavTo::section(&people), "People")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav team" viewer={None} head="">
             <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
         </Layout>
     })

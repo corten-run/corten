@@ -375,9 +375,11 @@ fn nav_entries_with_other_addresses_name_their_group_by_whole_boundaries() {
 }
 
 /// An entry's other address is written as `location.pathname` shows it at that address, by the URL
-/// Standard, and both the server and the runtime compare the page's path with that text alone: `.`
-/// and `..` segments resolved (`%2e` too), the ends of the URL trimmed, and `|` read as `%7C` in
-/// both, which Chromium shows and Firefox and WebKit keep, so every engine marks the same entry (#2119).
+/// Standard, made a comparison key, and both the server and the runtime compare the page's path's
+/// key with that text alone: `.` and `..` segments resolved (`%2e` too), the ends of the URL trimmed,
+/// `|` read as `%7C` in both, which Chromium shows and Firefox and WebKit keep, and an escaped
+/// unreserved character decoded, which WebKit asks for decoded, so every engine marks the same entry
+/// (#2119).
 #[test]
 fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
     use crate::{
@@ -414,7 +416,8 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         ("/..", "/"),
         ("/a/../..", "/"),
         ("/a/...", "/a/..."),
-        ("/a/%2e%2ex", "/a/%2E%2Ex"),
+        ("/a/%2e%2ex", "/a/..x"),
+        ("/old/%41%7e%2D%5f%30", "/old/A~-_0"),
         ("/old ", "/old"),
         (" \t/old\u{1} ", "/old"),
         ("/old ?x", "/old%20"),
@@ -437,7 +440,7 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
     let piped = Written("/old|x");
     assert!(link("/old|x", &piped).1 && link("/old%7Cx", &piped).1);
     assert!(!link("/old", &piped).1 && !link("/old%7Cy", &piped).1);
-    // A lowercase escape is one key with its uppercase form, never decoded: WebKit keeps `%7c` in
+    // A lowercase escape is one key with its uppercase form, not decoded: WebKit keeps `%7c` in
     // `location.pathname` but asks for `%7C`, where Chromium and Firefox ask for `%7c` as written.
     assert!(link("/old%7cx", &piped).1);
     let lower = Local::parse("/old%7chome").unwrap();
@@ -460,6 +463,100 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         out.contains(r#" aria-current="page""#)
     };
     assert!(section("/old|x/more") && section("/old%7Cx/more") && !section("/old|xy"));
+}
+
+/// The server marks an entry at its other address for each request a browser sends for that
+/// address, not only for the comparison key: measured in Playwright 1.65.1's builds (Linux),
+/// Chromium and Firefox ask for the path as written, `|` as `%7C` in Chromium, and WebKit decodes
+/// each escape of an unreserved character (`%2e`, `%41`, `%7e`) and uppercases the rest, while its
+/// `location.pathname` keeps the path as written (#2119).
+#[test]
+fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+    };
+    #[derive(crate::Route)]
+    #[route("/new-settings")]
+    struct Settings;
+    /// A route written by hand, as an app's own may write one: a `Local` refuses an escaped
+    /// unreserved character.
+    struct Written(&'static str);
+    impl crate::Route for Written {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/written";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let marked = |path: &str, also: &'static str| {
+        let nav = nav_links(path, [(NavTo::page(&Settings).also(&Written(also)), ())]);
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out.contains(r#" aria-current="page""#)
+    };
+    // Each older address as a page writes it, then what Chromium, Firefox and WebKit ask for.
+    for (written, sent) in [
+        ("/old/%2e%2ex", ["/old/%2e%2ex", "/old/%2e%2ex", "/old/..x"]),
+        ("/old/x%2Ey", ["/old/x%2Ey", "/old/x%2Ey", "/old/x.y"]),
+        ("/old/%41b%61", ["/old/%41b%61", "/old/%41b%61", "/old/Aba"]),
+        ("/old/%2d%5f%7e%30", ["/old/%2d%5f%7e%30", "/old/%2d%5f%7e%30", "/old/-_~0"]),
+        ("/old/%7c", ["/old/%7c", "/old/%7c", "/old/%7C"]),
+        ("/old/|", ["/old/%7C", "/old/|", "/old/|"]),
+        ("/old/caf%c3%a9", ["/old/caf%c3%a9", "/old/caf%c3%a9", "/old/caf%C3%A9"]),
+        ("/old/%5b%2f%3a", ["/old/%5b%2f%3a", "/old/%5b%2f%3a", "/old/%5B%2F%3A"]),
+    ] {
+        for sent in sent {
+            assert!(marked(sent, written), "{written} at {sent}");
+        }
+    }
+    // An escape of a reserved character, or of `%`, is not the character.
+    assert!(!marked("/old/a/b", "/old/a%2fb") && marked("/old/a%2Fb", "/old/a%2fb"));
+    // `%252e` is `%` and the text `2e`, which no browser asks for as `%252E`.
+    assert!(!marked("/old/a%2e", "/old/a%252e") && !marked("/old/a.", "/old/a%252e") && marked("/old/a%252e", "/old/a%252e"));
+    assert!(!marked("/old/a%252E", "/old/a%252e"));
+    assert!(marked("/old/a%2eb", "/old/a.b") && !marked("/old/a%252eb", "/old/a.b"));
+}
+
+/// In a nav with other addresses the entries' own URLs are compared by the same key as the other
+/// addresses, on the server as in the runtime: a deeper entry's own URL that WebKit asks for in
+/// another spelling (`%7c` as `%7C`) still wins over a shallower entry's other address (#2119).
+/// A nav without other addresses compares its URLs as before they existed.
+#[test]
+fn a_nav_with_other_addresses_compares_its_own_urls_by_the_same_key() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    let settings = Local::parse("/settings").unwrap();
+    let team = Local::parse("/old%7c/team").unwrap();
+    let people = Local::parse("/old%7c/team/people").unwrap();
+    let current = |path: &str| {
+        nav_links(path, [(NavTo::section(&settings).also(&team), "Settings"), (NavTo::section(&people), "People")])
+            .links()
+            .filter(|(link, _)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out.contains(r#" aria-current="page""#)
+            })
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>()
+    };
+    for path in ["/old%7c/team/people/alex", "/old%7C/team/people/alex", "/old|/team/people/alex", "/old%7C/team/people"] {
+        assert_eq!(current(path), ["People"], "{path}");
+    }
+    for path in ["/old%7c/team/alex", "/old%7C/team", "/settings/x"] {
+        assert_eq!(current(path), ["Settings"], "{path}");
+    }
+    assert_eq!(current("/old%7c/teams"), [] as [&str; 0]);
+    // Without other addresses, the URL is compared as written.
+    let plain = nav_links("/old%7C/team/people", [(NavTo::section(&people), ())]);
+    let (link, ()) = plain.links().next().unwrap();
+    let mut out = String::new();
+    link.render_attrs(&mut out);
+    assert!(!out.contains("aria-current"), "{out}");
 }
 
 /// What a page whose nav is an eight-entry `Req::nav_of` with no other addresses (`NavTo::also`)
