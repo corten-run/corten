@@ -102,6 +102,11 @@ the start of capture; the final inspect must start before 75 ms on the monotonic
 clock. Failed confirmation retains the original gap; later proc reads and
 startup retries do not use this path.
 
+Replay counts only verified kernel records as live coverage. An `exited` or
+`removing` row must have a finish between the end of the last verified running
+capture and the end of its own capture. Later stopped rows can report the same
+finish; they do not extend live coverage.
+
 ## Fault Shutdown
 
 The first irrecoverable interval observation or storage failure requests command-local

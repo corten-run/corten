@@ -335,7 +335,7 @@ function justStarted(startedAt) {
   const age = Date.now() - Date.parse(time);
   return age >= 0 && age <= startupWindowMs;
 }
-function stoppedDockerState(state, endedAt, earliest = -Infinity) {
+function stoppedDockerState(state, endedAt, earliest) {
   if ((state.Status !== "exited" && state.Status !== "removing") || state.Pid !== 0
     || ["Running", "Paused", "Restarting", "Dead"].some((key) => state[key] !== false)
     || typeof state.OOMKilled !== "boolean" || !Number.isSafeInteger(state.ExitCode) || state.ExitCode < 0) return false;
@@ -932,16 +932,10 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       || s.at >= endedAt && samples[i - 1]?.at <= endedAt);
     if (covering.length < 2 || covering.some((s) => !s.docker || s.docker.gaps.includes(p.id))) return false;
     const records = samples.flatMap((s) => s.docker.participants.filter((r) => r.container.id === p.id));
-    const live = records.filter((r) => r.kernel !== null);
-    if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
-      || live[0].startedAt > startedAt + maximumSampleGapMs
-      || live.at(-1).endedAt < endedAt - maximumSampleGapMs) return false;
-    for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
-      && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
     for (const s of samples.filter((s) => s.at >= startedAt && s.at <= endedAt))
       if (!s.docker.participants.some((r) => r.container.id === p.id)) return false;
     let identity, previousEnd = -1, phase = 0;
-    const accounting = new Map(), ancestorControls = new Map();
+    const live = [], accounting = new Map(), ancestorControls = new Map();
     for (const r of records) {
       assert.ok(Number.isSafeInteger(r.startedAt) && Number.isSafeInteger(r.endedAt) && r.endedAt >= r.startedAt
         && r.startedAt >= previousEnd); previousEnd = r.endedAt;
@@ -949,7 +943,7 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       const c = r.container;
       assert.equal(c.imageId, p.imageId); assert.equal(c.restartCount, 0);
       for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(c.state[key], false);
-      if (!r.kernel && c.state.Status === "created") {
+      if (r.kernel === null && c.state.Status === "created") {
         if (phase !== 0) return false;
         assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0); assert.equal(c.state.OOMKilled, false);
         assert.equal(c.state.ExitCode, 0);
@@ -958,17 +952,16 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
         continue;
       }
       assert.equal(c.state.StartedAt, p.terminal.state.StartedAt);
-      if (!r.kernel) {
-        if (c.state.Status === "removing") assert.ok(stoppedDockerState(c.state, r.endedAt));
-        else assert.equal(c.state.Status, "exited");
-        assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0);
+      if (r.kernel === null) {
         if (phase === 0 || p.terminal.state.Running && r.startedAt <= endedAt) return false;
+        assert.ok(stoppedDockerState(c.state, r.endedAt, live.at(-1).endedAt), "invalid stopped Docker observation");
         phase = 2;
         if (r.endedAt < endedAt - maximumSampleGapMs) return false;
         if (!p.terminal.state.Running) for (const key of ["ExitCode", "OOMKilled", "FinishedAt"])
           assert.equal(c.state[key], p.terminal.state[key]);
         continue;
       }
+      assert.ok(r.kernel && typeof r.kernel === "object" && !Array.isArray(r.kernel), "invalid Docker kernel observation");
       if (phase === 2) return false;
       phase = 1;
       assert.equal(c.state.Status, "running"); assert.equal(c.state.Running, true);
@@ -1025,7 +1018,13 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       assert.equal(controls["memory.max"].trim(), String(limits.Memory));
       if (limits.CpusetCpus) assert.equal(controls["cpuset.cpus.effective"].trim(), limits.CpusetCpus);
       if (cpus && !participantCpuSetsWithin(k, path, cpus[p.role])) return false;
+      live.push(r);
     }
+    if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
+      || live[0].startedAt > startedAt + maximumSampleGapMs
+      || live.at(-1).endedAt < endedAt - maximumSampleGapMs) return false;
+    for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
+      && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
   }
   return true;
 }

@@ -187,7 +187,7 @@ function browserFixture(t, selectedApp = "app", isolated = false, workload = "fu
   });
   const id = "f".repeat(64), imageId = `sha256:${"e".repeat(64)}`, dockerPath = `/system.slice/docker-${id}.scope`;
   const state = { Status: "running", Pid: 300, Running: true, Paused: false, Restarting: false, OOMKilled: false,
-    Dead: false, ExitCode: 0, StartedAt: "2026-11-14T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
+    Dead: false, ExitCode: 0, StartedAt: new Date(10).toISOString(), FinishedAt: "0001-01-01T00:00:00Z" };
   const participant = { id, role: "application", app: "app", case: "case", imageId, window: { startedAt: 20, endedAt: 70 },
     terminal: { id, imageId, restartCount: 0, state: structuredClone(state), limits: { NanoCpus: 1e9, Memory: 2 ** 30, CpusetCpus: "" } } };
   const g = group(dockerPath, [300]); g.files["cpu.max"] = "100000 100000\n"; g.files["memory.max"] = `${2 ** 30}\n`;
@@ -341,11 +341,15 @@ for (const [role, id, allowed, escaped] of [
   if (role === "browser") assert.equal(replayBrowser(f).checks.accounting, false);
 });
 
-function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true } = {}) {
-  const f = browserFixture(t, "corten"), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
+function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true, workload = "fullstack-browser" } = {}) {
+  const live = workload === "live-delivery";
+  const f = browserFixture(t, "corten", live, workload), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
   f.observation.samples = Array.from({ length: 41 }, (_, i) => {
     const at = i * 100, sample = structuredClone(template); sample.at = at;
-    if (i === 0 || i === 40) { sample.groups = [group(path)]; sample.processes = []; }
+    if (i === 0 || i === 40) {
+      sample.groups = [group(path)]; sample.processes = [];
+      if (live) sample.groups[0].files["cpuset.cpus.effective"] = "4-7\n";
+    }
     if (i < 2 || i > 38) sample.docker = { inventory: [], participants: [], gaps: [] };
     else {
       const r = sample.docker.participants[0]; r.startedAt = at + 1; r.endedAt = at + 3; r.kernel.at = at + 2;
@@ -356,12 +360,12 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
   const running = structuredClone(p.terminal.state), neverStarted = { ...running, Status: "created", Running: false, Pid: 0,
     StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
   const terminal = exited ? { ...running, Status: "exited", Running: false, Pid: 0, ExitCode: 1,
-    FinishedAt: "2026-11-14T00:00:04Z" } : running;
+    FinishedAt: new Date(3650).toISOString() } : running;
   const task = "browser-abcdef", caseKey = definition("fullstack-browser").cases[0].key;
   const image = { Id: p.imageId, Config: { Entrypoint: ["node"], Cmd: ["server.mjs"] } };
   const info = { Id: p.id, Name: "/native-case", Image: p.imageId,
     Config: { ...image.Config, Env: ["MARKETPLACE_SOURCE=fixture"], Labels: { "agent.owner": "codex", "agent.task": task } },
-    RestartCount: 0, State: neverStarted, HostConfig: { NanoCpus: 1e9, CpuQuota: 0, CpuPeriod: 0, CpusetCpus: "",
+    RestartCount: 0, State: neverStarted, HostConfig: { NanoCpus: 1e9, CpuQuota: 0, CpuPeriod: 0, CpusetCpus: live ? "1" : "",
       Memory: 2 ** 30, MemorySwap: 2 ** 31, ShmSize: 64 * 2 ** 20, PidsLimit: null, NetworkMode: "bridge" }, Mounts: [] };
   const snapshot = (state) => participantSnapshot({ ...info, State: state }, image);
   const identity = { event: "participant", role: "application", app: "corten", case: caseKey };
@@ -376,7 +380,7 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
     ...["container", "network", "image", "volume"].map((kind) => ({ event: "inventory", at: 3870, kind, scope: "owned", code: 0, ids: [] })),
   ].map((e, seq) => ({ ...e, seq }));
   const replay = replayExecution({ json: () => ({ schema: "native-browser-execution/v2", task,
-    commit: f.bound.request.commit, startedAt: 100, endedAt: 3900, events }) }, null);
+    commit: f.bound.request.commit, startedAt: 100, endedAt: 3900, events }) }, null, { isolated: live });
   assert.deepEqual(replay.blocked, []); assert.equal(replay.cleanupComplete, true);
   assert.deepEqual(replay.participants[0].window, { startedAt: 200, endedAt: 3800 });
   Object.assign(f.native.hostSubject, { participants: replay.participants, processWindows: replay.processWindows,
@@ -388,6 +392,49 @@ function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbse
     const r = sample.docker.participants[0]; r.kernel = null; r.container.state = structuredClone(terminal);
   }
   return f;
+}
+
+function setStoppedRows(f, status, finishedAt, from = 3700) {
+  const [{ terminal }] = f.native.hostSubject.participants;
+  terminal.state.FinishedAt = finishedAt;
+  for (const sample of f.observation.samples.filter((s) => s.at >= from)) {
+    for (const r of sample.docker.participants) {
+      r.kernel = null;
+      r.container.state = { ...terminal.state, Status: status };
+    }
+  }
+}
+
+for (const workload of ["fullstack-browser", "live-delivery"]) {
+  const proof = (f) => {
+    const observation = replayBrowser(f), { participants, toolIdentities: { node, browser } } = f.native.hostSubject;
+    return workload === "fullstack-browser" ? inspectBrowserParticipants(f.native.hostSubject, observation)
+      : inspectLiveActors(f.bound, observation, { node, browser }, participants,
+        [{ app: "corten", startedAt: 900, endedAt: 1100, renderer: null }]);
+  };
+  for (const status of ["exited", "removing"]) test(`r95 replay: ${workload} validates the finish on every ${status} row`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { exited: true, workload });
+    setStoppedRows(f, status, new Date(3650).toISOString());
+    assert.equal(proof(f), true, "both stopped rows may report the same earlier finish");
+    for (const [label, finish] of [
+      ["zero time", "0001-01-01T00:00:00Z"],
+      ["before the last running observation", new Date(3500).toISOString()],
+      ["after the first stopped observation", new Date(3750).toISOString()],
+    ]) {
+      setStoppedRows(f, status, finish);
+      assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "invalid stopped Docker observation" }, label);
+    }
+  });
+  test(`r95 replay: ${workload} refuses kernel:false as live coverage`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { exited: true, workload });
+    assert.equal(proof(f), true);
+    f.native.hostSubject.participants[0].window.endedAt = 3803;
+    f.observation.samples = f.observation.samples.filter((s) => s.at !== 2700);
+    setStoppedRows(f, "exited", new Date(2650).toISOString(), 2800);
+    assert.equal(proof(f), false, "the last real running record ended 1.2 s before the window ended");
+    f.observation.samples.find((s) => s.at === 3800).docker.participants[0].kernel = false;
+    assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "invalid Docker kernel observation" });
+  });
 }
 
 for (const [name, options] of [
@@ -433,11 +480,7 @@ for (const delay of [1000, 1001]) test(`created prefix keeps the exact ${delay}m
 
 for (const delay of [1000, 1001]) test(`exited suffix keeps the exact ${delay}ms continuity boundary`, (t) => {
   const f = lifecycleBoundaryFixture(t, { exited: true });
-  const terminal = f.observation.samples[38].docker.participants[0];
-  for (const sample of f.observation.samples.filter((s) => s.at >= 2800 && s.at < 3700)) {
-    sample.docker.participants[0] = structuredClone(terminal);
-    Object.assign(sample.docker.participants[0], { startedAt: sample.at + 1, endedAt: sample.at + 3 });
-  }
+  setStoppedRows(f, "exited", new Date(2800).toISOString(), 2800);
   const last = f.observation.samples[27].docker.participants[0];
   last.endedAt = 3800 - delay; last.kernel.at = last.endedAt - 1;
   assert.deepEqual(browserResourceResults(f), delay === 1000 ? ["verified", "verified"] : ["blocked", "blocked"]);
@@ -480,7 +523,7 @@ test("actual participant observations cannot hide a 3.2 second internal hole beh
 
 test("a valid exited failed participant does not need a still-running terminal PID", (t) => {
   const f = browserFixture(t), state = f.native.hostSubject.participants[0].terminal.state;
-  Object.assign(state, { Status: "exited", Running: false, Pid: 0, OOMKilled: true, ExitCode: 137, FinishedAt: "2026-11-14T00:00:01Z" });
+  Object.assign(state, { Status: "exited", Running: false, Pid: 0, OOMKilled: true, ExitCode: 137, FinishedAt: new Date(60).toISOString() });
   f.native.outcomes[0].outcome = "failed";
   assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
 });
@@ -518,7 +561,7 @@ test("created-before-start and stopped-after-window boundaries are not live OS c
   samples[0].docker = { inventory: [p.id], participants: [before], gaps: [] };
   const after = structuredClone(before); after.startedAt = 99; after.endedAt = 101;
   Object.assign(after.container.state, { Status: "exited", StartedAt: p.terminal.state.StartedAt,
-    FinishedAt: "2026-11-14T00:00:01Z", ExitCode: 143 });
+    FinishedAt: new Date(98).toISOString(), ExitCode: 143 });
   samples[2].docker = { inventory: [p.id], participants: [after], gaps: [] };
   assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
 });
