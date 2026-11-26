@@ -738,6 +738,10 @@ builds against.
   header names. A client on another revision (2024-11-05 among them) sends one
   `agent::PROTOCOL_VERSIONS` lists, or no header; the app has nothing to change
   ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
+- **Breaking:** A request HTTP/1.1 does not allow gets `400` before anything of the app runs: an HTTP/1.1 request
+  with no `Host` line (a health check written by hand must send one), any request with two, a `Host` that is no host, or
+  a target whose host is none (`http://shop.example:abc/`, routed before)
+  ([#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)).
 
 ### Other changes
 
