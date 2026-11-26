@@ -495,7 +495,9 @@ for (const scenario of [
           }
           if (path === `/proc/${first}/cmdline`) {
             attempt.cmdlines.set(first, (attempt.cmdlines.get(first) ?? 0) + 1);
-            return Buffer.from(`--type=${number === 1 ? "utility" : "renderer"}\0`);
+            if (number === 1) return Buffer.from("--type=utility\0");
+            // Chromium's renderer rewrites argv as one title followed by NUL padding.
+            return Buffer.from(`${fs.readlinkSync(`/proc/${first}/exe`)} --type=renderer --lang=en-US\0\0`);
           }
           const value = original.call(this, path, ...args);
           if (path === `${scope}/cpu.stat`) capture.cpu.push(value);

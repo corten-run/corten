@@ -23,8 +23,8 @@ only, and a POSIX shell.
 | [`bench/fullstack/count.mjs`](../fullstack/count.mjs) | A catalog app's container under load, counted by `perf stat` | User and kernel instructions and cycles of the catalog's item page or JSON. Use it when the change is exercised by those routes, and for cycles. |
 
 Callgrind counts user-space instructions only: it does not see the kernel. A count from this kit
-reads work, not speed: item 2 asks for cycles under load as well for a change around the
-handler, and this kit does not give them.
+reads work, not speed: it decides a change item 2 has counted, and of one it has measured
+item 2 asks for cycles under load as well, which this kit does not give.
 
 ## The cases
 

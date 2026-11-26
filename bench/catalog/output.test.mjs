@@ -43,6 +43,24 @@ test("ordinary command capture and failure tails remain bounded", () => {
   output.close();
 });
 
+test("fileStderr: false writes the client's stdout alone to the file, byte for byte; by default both streams go there", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "catalog-output-stdout-"));
+  try {
+    for (const [fileStderr, expected] of [[false, "ready\n{} \n\n"], [undefined, "ready\nwarning\n{} \n\n"]]) {
+      const file = join(dir, `${fileStderr}.log`), output = commandOutput({ file, capture: false, ...(fileStderr === undefined ? {} : { fileStderr }) });
+      output.stdout(Buffer.from("ready\n")); output.stderr(Buffer.from("warning\n")); output.stdout(Buffer.from("{} \n\n"));
+      output.close();
+      assert.equal(readFileSync(file, "utf8"), expected);
+      assert.equal(output.diagnostic(), "warning\n");
+    }
+    // Through commandRunner, from a real child.
+    const { command } = commandRunner({ cwd: dir });
+    const file = join(dir, "child.log");
+    await command(process.execPath, ["-e", "process.stdout.write('out  \\n\\n');process.stderr.write('err')"], { file, capture: false, fileStderr: false });
+    assert.equal(readFileSync(file, "utf8"), "out  \n\n");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("split UTF-8 chunks are decoded only after byte capture", () => {
   const output = commandOutput();
   const bytes = Buffer.from("\u20ac\u00a3\n");

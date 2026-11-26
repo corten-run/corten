@@ -19,7 +19,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { checkQuarantineCensus, continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
-  recheckSetupAttempt } from "./fleet-verify.mjs";
+  recheckExternalFailedHost, recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -242,7 +242,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return error;
   };
   try {
-  let checkExitOneDispatch;
+  let checkHistoricalDispatch;
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
     try { await controlCheckpoint(interrupted); } catch (error) {
@@ -256,7 +256,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       // before the private worker receives the mutation.
       if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
-    if (args[0] === "doctl" && args[1][2] === "create") checkExitOneDispatch?.();
+    if (args[0] === "doctl" && args[1][2] === "create") checkHistoricalDispatch?.();
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
     // Hand custody back before cancellation: take the stream handle, record
@@ -295,6 +295,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
   const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
+  const externalFailures = unconfirmed.filter((row) => row.externalFailureSha256 !== undefined);
   // Every posted droplet of an earlier provider-errored attempt, in any group, is fenced
   // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
   const continuation = manifest?.single ? admission?.subject.continuation : undefined;
@@ -333,7 +334,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
       if (beforeCreate === true) {
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
-        const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
+        const checks = unconfirmed.filter((row) => row.root !== undefined && row.externalFailureSha256 === undefined)
+          .map((row) => recheckSetupAttempt(root, row, manifest));
         for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
         // Last, immediately before the create is recorded and dispatched under this child's
         // own locks: an earlier provider-errored attempt of this group must still hold no
@@ -346,6 +348,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
       }
       if (beforeCreate !== "census") {
+        for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
@@ -360,7 +363,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       return currentPeers;
     }
   });
-  if (exitOneRetirements.length) checkExitOneDispatch = () => checkFleetAdmission("dispatch");
+  if (exitOneRetirements.length || externalFailures.length) checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
@@ -406,16 +409,23 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   const inspectPreCreateInventory = !historicalHostsAbsent ? (rows, complete) => {
     const listed = rows.some(({ id }) => historicalIds.has(String(id)));
+    const externalListed = rows.some(({ name, tags }) => externalFailures.some((row) =>
+      typeof name === "string" && digest(name) === row.nameSha256
+      || tags?.some((tag) => typeof tag === "string" && digest(tag) === row.tagSha256)));
     if (quarantined.length) {
       checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
-      assert.ok(!listed, "an earlier historical host is listed; preserve reservation");
     }
+    assert.ok(!externalListed && (!(quarantined.length || externalFailures.length) || !listed),
+      "an earlier historical host is listed; preserve reservation");
     historicalHostsAbsent = complete && !listed;
   } : undefined;
+  // The worker returns at most one compact witness. Keep quarantine targets
+  // ahead of external failures, which are all checked against the complete census.
+  const censusTargets = quarantined.length ? quarantined : externalFailures.slice(0, 1);
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
-    inspectPreCreateInventory, quarantineTargets: quarantined.map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
+    inspectPreCreateInventory, preCreateCensusTargets: censusTargets.map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
