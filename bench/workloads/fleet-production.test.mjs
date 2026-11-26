@@ -643,7 +643,7 @@ function externalFailureFixture(p) {
     const initial = { ...reservation({ round, commit, group, token, fleet: manifest }, at),
       createIntentAt: at, provider: manifest.provider, fullGroupQualified: false };
     const monitor = { schema: "benchmark-supervised-control/v1", id: monitorId };
-    const state = posted ? { ...initial, status: "creating", createPending: { dropletId: "701", actionId: "801" },
+    const state = posted ? { ...initial, skipHostChromium: true, status: "creating", createPending: { dropletId: "701", actionId: "801" },
       control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
         monitor: { ...monitor, phase: "pending" } } } : { ...initial, status: "running",
       id: "701", ip: "192.0.2.1",
