@@ -70,6 +70,12 @@ type Result<T, E = UploadError> = std::result::Result<T, E>;
 /// }
 /// # let _: Methods = post(create);
 /// ```
+///
+/// That `Error` is Corten's refusal of the request, never shared, wherever the handler answers it,
+/// as a [`BodyError`](crate::extract::BodyError)'s is. One the handler builds itself
+/// (`UploadError::Fields` for its own check of a field) is treated the same way: building one opts
+/// in to a refusal's caching. A failure of the handler's own is an `Error` of its own
+/// (`Error::status`), which keeps its usual caching.
 #[derive(Debug)]
 pub enum UploadError {
     /// The request took more of the body than [`Upload::limit`] (413): fields, files it read or
@@ -107,7 +113,8 @@ impl From<UploadError> for Error {
             UploadError::Fields(_) => StatusCode::UNPROCESSABLE_ENTITY,
             UploadError::Stalled => StatusCode::REQUEST_TIMEOUT,
         };
-        Error::new(error.to_string()).with_status(status)
+        // The request's, read by Corten: never shared, wherever the handler answers it.
+        Error::corten(error.to_string()).with_status(status)
     }
 }
 
@@ -288,7 +295,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
     async fn from_request(req: Request, _: &S) -> Result<Self, Response> {
         let boundary = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).and_then(boundary);
         let Some(boundary) = boundary else {
-            return Err(Error::new("Upload requests must have Content-Type: multipart/form-data with a boundary")
+            return Err(Error::corten("Upload requests must have Content-Type: multipart/form-data with a boundary")
                 .with_status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
                 .into_response());
         };

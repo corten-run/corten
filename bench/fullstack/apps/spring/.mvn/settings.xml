@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven reads these settings through .mvn/maven.config, in place of a user's own (#1763). Maven
+  Central is reached through Google's public mirror of it, which is in Maven's own mirror guidance,
+  because hosted CI runners were rate limited by repo.maven.apache.org (HTTP 429) past every
+  retry. Only the host changes: the same coordinates and versions, and maven.config's
+  strict checksums fail a download whose bytes do not match the checksum the mirror serves.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>google-maven-central</id>
+      <name>Google's mirror of Maven Central</name>
+      <mirrorOf>central</mirrorOf>
+      <url>https://maven-central.storage-download.googleapis.com/maven2/</url>
+    </mirror>
+  </mirrors>
+</settings>

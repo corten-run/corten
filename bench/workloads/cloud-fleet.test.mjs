@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
@@ -11,10 +11,13 @@ import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, campaign, commit, context, harness, metadata, subject, syntheticDelivery, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerFailure, controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { digest } from "./cloud-local.mjs";
+import { digest, treeHash } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import setupDrainSource from "./cloud-setup-drain-source.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
+import { recheckSetupRetirement, verifyFleet } from "./fleet-verify.mjs";
+import { continuationAdmission } from "./group-continuation.mjs";
+import { verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -383,6 +386,49 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   assert.equal(await h.task({ run }).collect(), 1); assert.equal(h.inspections, 0);
   assert.equal(h.saved().fullGroupQualified, false);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
+
+  const root = join(h.temp, "verification"), child = join(root, s.group), local = join(child, "groups-r21");
+  mkdirSync(child, { recursive: true });
+  writeFileSync(join(root, "fleet-r21.json"), JSON.stringify(fleet));
+  cpSync(h.local, local, { recursive: true });
+  assert.ok(readFileSync(join(local, "failed-setup-host.json")).length > 4096, "real v2 receipt exceeds the legacy bound");
+  const verify = () => verifyFleet({ root, round: "r21", commit }, { inspect: () => assert.fail("no native result") });
+  let report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.outcome, "setup-failed-retired");
+  assert.equal(report.publishableBaseline, false);
+  const continuation = join(h.temp, "continuation");
+  mkdirSync(continuation);
+  writeFileSync(join(continuation, "index.json"), JSON.stringify([
+    { archives: {}, checkout: root, commit, root, round: "r21" },
+  ]));
+  // A legacy v4 fleet's unrelated intent file is outside continuation custody.
+  writeFileSync(join(root, "launch-intent.json"), "ignored legacy record");
+  const admission = await continuationAdmission(continuation, s.group);
+  const [retired] = admission.subject.setupRetirements;
+  assert.equal(retired.launch, undefined);
+  const dispatchRecheck = recheckSetupRetirement(continuation, retired, admission.subject.indexedCustody);
+  admission.recheck();
+  const lateLock = join(local, "stream-recovery.lock");
+  writeFileSync(lateLock, "{}", { flag: "wx" });
+  assert.throws(dispatchRecheck, /group recovery remains active/);
+  assert.throws(() => admission.recheck(), /group recovery remains active/);
+  unlinkSync(lateLock);
+  dispatchRecheck();
+  admission.recheck();
+  const extracted = join(local, s.evidence), custody = join(extracted, "control");
+  const entry = join(custody, readdirSync(custody)[0]), changed = readFileSync(entry);
+  changed[0] ^= 1;
+  writeFileSync(entry, changed);
+  report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.error, "group-evidence-invalid");
+  const receipt = join(local, "failed-setup-host.json"), record = JSON.parse(readFileSync(receipt));
+  const evidenceSha256 = treeHash(extracted), bytes = JSON.stringify({ ...record, evidenceSha256 });
+  const rebound = { ...s, evidenceSha256, retirement: { ...s.retirement, evidenceSha256: digest(bytes) } };
+  writeFileSync(receipt, bytes);
+  writeFileSync(join(local, "state.json"), JSON.stringify(rebound));
+  assert.throws(() => verifyFailedSetupRetirement(local, rebound), /original control custody bytes differ/);
+  report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.error, "group-evidence-invalid");
 
   for (const mode of ["native", "absent-proof", "active", "unacknowledged", "monitor-artifact", "changed-record", "foreign-unit"]) {
     const f = configured(t), g = f.h;

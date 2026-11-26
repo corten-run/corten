@@ -8,7 +8,8 @@ import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationR
 import { readApparatus, verifyApparatus } from "./control-stream.mjs";
 
 const udevCgroup = "0::/system.slice/systemd-udevd.service/udev\n";
-const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd"]);
+// Systemd 255 installs systemd-udevd as a symlink to the udevadm executable.
+const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd", "/usr/bin/udevadm"]);
 export const udevSettleMs = 5000;
 export const hostObservationBytes = 256 * 2 ** 20;
 

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, readdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { digest, evidenceEnvelope, evidenceFileIdentity, fileHash, physical, pinEvidenceTree, regular, treeHash } from "./cloud-local.mjs";
+import { digest, evidenceEnvelope, evidenceFileIdentity, fileHash, physical, pinEvidenceTree, regular, treeHash, verifiedEvidenceTree } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { bootstrapWorkspaceScript, portableEvidenceSegment, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
 import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
@@ -231,10 +231,10 @@ function preplanGroup(local, state, readGrouped = groupedFailure) {
 function originalFailedWrapper(local, state, verifyTree = verifyEvidenceTree, exit = 2) {
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
-  verifyTree(extracted, state.evidenceSha256, "original failed extraction changed");
+  const subtrees = verifyTree(extracted, state.evidenceSha256, "original failed extraction changed");
   assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from(`${exit}\n`)), "custody requires the saved failure exit, not a successful report");
   const folder = join(extracted, "campaign"); physical(folder);
-  return { extracted, folder };
+  return { extracted, folder, subtrees };
 }
 
 function verifyNativeEntryLog(extracted, state, exit) {
@@ -370,7 +370,9 @@ function exitOneLifetime(directory, state, grouped, campaign, binding, pid, comm
   }
 }
 
-function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, result) {
+const exitOnePhase = "00-client-heavy-timing";
+
+function exitOneCampaign(state, grouped, { extracted, folder, subtrees }, campaign, plan, result) {
   verifyNativeEntryLog(extracted, state, 1);
   const { status } = result, dir = join(folder, campaign);
   assert.equal(status.state, "finished");
@@ -391,7 +393,7 @@ function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, 
   assert.ok(Array.isArray(entries) && entries.length <= evidenceEnvelope.nodes && deploymentSha256(entries) === sha256,
     "archived collection manifest differs");
   verifyExitOneManifest(dir, entries);
-  const phase = "00-client-heavy-timing";
+  const phase = exitOnePhase;
   const subtree = (root) => entries.filter(({ path }) => path === root || path.startsWith(root + "/"))
     .map(({ path, ...record }) => ({ path: path.slice(root.length + 1), ...record }));
   const native = `${phase}/native`, nativeManifest = JSON.parse(read(`${phase}/native-manifest.json`));
@@ -455,10 +457,10 @@ function exitOneCampaign(state, grouped, { extracted, folder }, campaign, plan, 
   }
   assert.deepEqual(readdirSync(extracted).sort(), ["campaign", "control", "exit-code", "host.txt", "run.log"],
     "unexpected original archive root");
-  const archivedNative = treeHash(join(dir, native));
+  const archivedNative = subtrees[`campaign/${campaign}/${native}`];
   const empty = archivedNative === digest("d\0\0");
-  return { campaign: treeHash(folder), native: archivedNative, empty,
-    control: treeHash(join(extracted, "control")),
+  return { campaign: subtrees.campaign, native: archivedNative, empty,
+    control: subtrees.control,
     wrapper: { runLog: fileHash(join(extracted, "run.log")), host: fileHash(join(extracted, "host.txt")) } };
 }
 
@@ -489,12 +491,16 @@ export function verifyFailedExitOneCustody(local, state, { pin = false } = {}) {
   const grouped = { ...groupedFailure(local, state), exitOne: true };
   assert.deepEqual(grouped.roots, ["/bench/campaign", `/bench/repo/${grouped.phases.timing}`]);
   grouped.roots.push("/bench/control");
-  let unchanged;
-  const inspected = failedNativeArchiveEvidence(local, state, grouped, groupedFailure,
-    pin ? (...args) => { unchanged = pinEvidenceTree(...args); } : verifyEvidenceTree);
+  let tree;
+  const paths = ["campaign", `campaign/${grouped.terminal.campaign}/${exitOnePhase}/native`, "control"];
+  const inspected = failedNativeArchiveEvidence(local, state, grouped, groupedFailure, (...args) => {
+    tree = verifiedEvidenceTree(...args, paths);
+    return tree.hashes;
+  });
+  tree.unchanged();
   const launchIntentSha256 = fileHash(launch, 1024 * 1024), fleetManifestSha256 = fileHash(fleet, 1024 * 1024);
   const assertCustody = (includeTree = true, authored = false) => {
-    if (includeTree) unchanged?.();
+    if (includeTree && pin) tree.unchanged();
     publications(authored);
     for (const [path, before] of inputs)
       assert.ok(evidenceFileIdentity(path) === before, "local exit-one custody changed");
@@ -1856,4 +1862,24 @@ export function setupEvidence(raw, state, script, exitCode, startedAtMs, finishe
   return { schema: `benchmark-failed-setup-retirement/${version}`, round: state.round, commit: state.commit, id: state.id, unit: state.unit,
     archiveSha256: state.archiveSha256, evidenceSha256: state.evidenceSha256, exitCode, scriptSha256: digest(script),
     observation, startedAtMs, finishedAtMs };
+}
+
+export const failedSetupRetirementFile = "failed-setup-host.json";
+export function verifyFailedSetupRetirement(local, state) {
+  assert.equal(state.retirement?.kind, "setup-failed");
+  const bytes = regular(join(local, failedSetupRetirementFile), state.control ? 8 * 1024 * 1024 : 4096);
+  assert.equal(digest(bytes), state.retirement.evidenceSha256, "setup retirement receipt changed");
+  const record = JSON.parse(bytes);
+  const extracted = join(local, state.evidence), campaign = join(extracted, "campaign");
+  assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "setup archive changed");
+  assert.equal(treeHash(extracted), state.evidenceSha256, "setup evidence changed");
+  if (lstatSync(campaign, { throwIfNoEntry: false })) {
+    physical(campaign);
+    assert.equal(readdirSync(campaign).length, 0, "native evidence cannot use setup retirement");
+  }
+  const marker = regular(join(extracted, "exit-code"), 16).toString("utf8"), exit = Number(marker.trim());
+  assert.ok(/^[1-9]\d{0,2}\n$/.test(marker) && exit <= 255, "nonzero setup exit required");
+  const script = terminalSetupScript(state, exit, state.control ? state.control.ledger.length - 1 : undefined);
+  const expected = setupEvidence(JSON.stringify(record.observation), state, script, exit, record.startedAtMs, record.finishedAtMs, local);
+  assert.ok(isDeepStrictEqual(record, expected), "setup retirement receipt differs");
 }

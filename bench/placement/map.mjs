@@ -1,0 +1,186 @@
+// map.mjs: what the placement plan's fifth point reads from LLD's maps (-Wl,-Map), gzipped or not
+// (CONTRIBUTING.md, Pull requests, item 2; docs/design.md#choice-placement-runs, "Code aligned beyond 16
+// bytes"):
+//   node map.mjs record <unpadded map>          a side's record, as JSON: each input section of
+//                                               .text aligned beyond 16 bytes, in order, and every
+//                                               symbol of .text from the first of them on
+//   node map.mjs refuse <unpadded map>          exit 1 with the reason when the side has no
+//                                               reading across placements: a section aligned
+//                                               beyond 64 bytes, or a .text.* section named for a
+//                                               Rust-mangled symbol at or after the first section
+//                                               aligned beyond 16 bytes or in another output
+//                                               section
+//   node map.mjs data <unpadded map> <placement map> <first pad bytes>
+//                                               where the placement's .data begins and whether
+//                                               that is where the rule says (exit 1 when not)
+//   node map.mjs check <unpadded map> <placement map> <first pad bytes> <second pad bytes>
+//                                               the placement against the unpadded link by LLD's
+//                                               layout rule; exit 1 with each reason it fails
+// A map line is VMA, LMA, size and alignment, then an output section at no indent, an input
+// section (`file:(name)`) at 8 spaces or a symbol at 16. LLD lays the input sections of an output
+// section in order, each at the first multiple of its own alignment at or after the end of the
+// one before it.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
+
+/** Beyond this alignment a pad does not move a section by its own size. */
+export const STEP = 16;
+/** Beyond this alignment a side has no reading. */
+export const LIMIT = 64;
+export const LINE = 64;
+/** The second pad's sizes. */
+export const SIZES = [16, 32, 48, 64];
+export const PAD = ".text.corten_layout_pad";
+export const SECOND_PAD = ".text.corten_layout_pad2";
+/** The fifth point's pattern for a section named for a Rust-mangled symbol, as CONTRIBUTING.md prints it. */
+export const RUST_NAME = /\.(_R[A-Za-z0-9_.$]+|_ZN[A-Za-z0-9_.$]*17h[0-9a-f]{16}E(\.llvm\.\d+)?)$/;
+
+/** A map file's text, gunzipped when it is gzipped. */
+export function mapText(bytes) {
+  return (bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes).toString("utf8");
+}
+
+/** The output sections of a map, each with its input sections, each with its symbols. */
+export function readMap(text) {
+  const out = [];
+  let cur = null, sec = null;
+  for (const raw of text.split("\n")) {
+    const m = /^\s*([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+(\d+) (.*)$/.exec(raw.replace(/\r$/, ""));
+    if (!m) continue;
+    const row = { at: parseInt(m[1], 16), size: parseInt(m[3], 16), align: Number(m[4]) }, rest = m[5];
+    if (!rest.startsWith(" ")) { cur = { name: rest, ...row, inputs: [] }; out.push(cur); sec = null; }
+    else if (/^ {8}\S/.test(rest) && cur) {
+      const id = rest.trim(), k = id.lastIndexOf(":(");
+      sec = { id, file: k < 0 ? id : id.slice(0, k), section: k < 0 ? "" : id.slice(k + 2, -1), ...row, symbols: [] };
+      cur.inputs.push(sec);
+    } else if (/^ {16}\S/.test(rest) && sec) sec.symbols.push({ name: rest.trim(), at: row.at });
+  }
+  return out;
+}
+
+const text = (map) => {
+  const t = map.find((o) => o.name === ".text");
+  if (!t) throw new Error("no .text output section in the map");
+  return t;
+};
+const base = (path) => path.replace(/^.*[\\/]/, "");
+/** Where the map says an input section came from, less directories: an archive and its member, or an object file. */
+export function origin(file) {
+  const m = /^(.*)\(([^()]*)\)$/.exec(file);
+  return m ? { archive: base(m[1]), member: base(m[2]) } : { object: base(file) };
+}
+
+/**
+ * What a run records of a side from its unpadded link's map: each input section of .text aligned
+ * beyond 16 bytes, in order with its alignment, and every symbol the map lists in .text from the
+ * first of them on, by symbol and by archive and member, or object file.
+ */
+export function record(map) {
+  const inputs = text(map).inputs, first = inputs.findIndex((s) => s.align > STEP);
+  const alignments = {};
+  for (const s of inputs) alignments[s.align] = (alignments[s.align] ?? 0) + 1;
+  return {
+    inputs: inputs.length,
+    alignments,
+    aligned: inputs.filter((s) => s.align > STEP).map((s) => ({ section: s.section, ...origin(s.file), align: s.align })),
+    sectionsBefore: first < 0 ? inputs.length : first,
+    list: first < 0 ? [] : inputs.slice(first).flatMap((s) => s.symbols.map((y) => ({ symbol: y.name, ...origin(s.file) }))),
+  };
+}
+
+const rustNamed = (s) => s.section.startsWith(".text.") && RUST_NAME.test(s.section);
+
+/** Why a side has no reading across placements, from its unpadded link's map; [] when it has one. */
+export function refusals(map) {
+  const t = text(map), why = [];
+  const beyond = t.inputs.filter((s) => s.align > LIMIT);
+  if (beyond.length) why.push(`${beyond.length} input sections of .text are aligned beyond ${LIMIT} bytes: ${beyond.slice(0, 3).map((s) => `${s.section} (${s.align})`).join(", ")}`);
+  const first = t.inputs.findIndex((s) => s.align > STEP);
+  if (first >= 0) for (const s of t.inputs.slice(first).filter(rustNamed)) why.push(`${s.section} [${base(s.file)}] is named for a Rust-mangled symbol and lies at or after the first section aligned beyond ${STEP} bytes`);
+  for (const o of map) if (o !== t) for (const s of o.inputs.filter(rustNamed)) why.push(`${s.section} [${base(s.file)}] is named for a Rust-mangled symbol and lies in ${o.name}`);
+  return why;
+}
+
+const up = (x, a) => Math.ceil(x / a) * a;
+const mod = (x) => ((x % LINE) + LINE) % LINE;
+
+/** Where a placement's .data begins, where the rule puts it in a 64-byte line and whether it is there. */
+export function data(unpadded, placed, pad) {
+  const a = unpadded.find((o) => o.name === ".data"), b = placed.find((o) => o.name === ".data");
+  if (!a || !b) return { at: null, offset: null, want: null, fits: false };
+  return { at: b.at, offset: mod(b.at), want: mod(a.at + pad), fits: mod(b.at) === mod(a.at + pad) };
+}
+
+/**
+ * A placement's map against its side's unpadded link's, in place of "every function moved by
+ * exactly the pad's size": .text begins where it did and holds the first pad's section, of the
+ * plan's size, then the unpadded link's input sections in its order, each with its size and
+ * alignment, then the second pad's section, of the size given, one of the four; in both links
+ * every input section begins at the first multiple of its alignment at or after the end of the
+ * one before it; every symbol of .text is in the same input section in both links, as far from
+ * its start; and .data is where the rule says.
+ */
+export function check(unpadded, placed, pad, second) {
+  const A = text(unpadded), B = text(placed), why = [];
+  if (A.at !== B.at) why.push(`.text begins at 0x${B.at.toString(16)}, not 0x${A.at.toString(16)} as in the unpadded link`);
+  const first = B.inputs[0], last = B.inputs.length > 1 ? B.inputs[B.inputs.length - 1] : null;
+  if (!first || first.section !== PAD || first.size !== pad || first.at !== B.at) why.push(`the first input section of .text is ${first?.id}, ${first?.size} bytes at 0x${first?.at.toString(16)}, not the first pad of ${pad} bytes at its start`);
+  if (!SIZES.includes(second)) why.push(`a second pad of ${second} bytes is not one of ${SIZES.join(", ")}`);
+  if (!last || last.section !== SECOND_PAD || last.size !== second || last.align !== STEP) why.push(`the last input section of .text is ${last?.id}, ${last?.size} bytes aligned to ${last?.align}, not the second pad of ${second} bytes aligned to ${STEP}`);
+  const rest = B.inputs.slice(1, -1);
+  let same = rest.length === A.inputs.length;
+  if (!same) why.push(`.text has ${A.inputs.length} input sections unpadded and ${rest.length} between the pads in the placement`);
+  else for (let i = 0; i < rest.length; i++) {
+    const a = A.inputs[i], b = rest[i];
+    if (a.id !== b.id || a.size !== b.size || a.align !== b.align) { same = false; why.push(`input section ${i} differs: ${a.id} (${a.size} bytes, aligned to ${a.align}) against ${b.id} (${b.size}, ${b.align})`); break; }
+  }
+  const loose = (t) => { let dot = t.at, bad = 0; for (const s of t.inputs) { dot = up(dot, s.align); if (s.at !== dot) { bad++; dot = s.at; } dot += s.size; } return bad; };
+  const looseA = loose(A), looseB = loose(B);
+  if (looseA) why.push(`${looseA} input sections of the unpadded .text do not begin at the first multiple of their alignment at or after the end of the one before`);
+  if (looseB) why.push(`${looseB} input sections of the placement's .text do not begin at the first multiple of their alignment at or after the end of the one before`);
+  let symbols = 0, off = 0, exact = 0, sectionsExact = 0;
+  const before = A.inputs.findIndex((s) => s.align > STEP), firstAligned = before < 0 ? A.inputs.length : before;
+  if (same) for (let i = 0; i < rest.length; i++) {
+    const a = A.inputs[i], b = rest[i];
+    symbols += a.symbols.length;
+    if (i < firstAligned && b.at - a.at === pad) sectionsExact++;
+    if (a.symbols.length !== b.symbols.length) { off += Math.max(a.symbols.length, b.symbols.length); continue; }
+    for (let k = 0; k < a.symbols.length; k++) {
+      const x = a.symbols[k], y = b.symbols[k];
+      if (x.name !== y.name || x.at - a.at !== y.at - b.at) off++;
+      else if (i < firstAligned && y.at - x.at === pad) exact++;
+    }
+  }
+  if (off) why.push(`${off} symbols of .text are not in the input section the unpadded link has them in, as far from its start`);
+  const d = data(unpadded, placed, pad);
+  if (!d.fits) why.push(`.data begins ${d.offset} bytes into a ${LINE}-byte line, not ${d.want}, the unpadded link's offset plus the first pad's size`);
+  return {
+    ok: why.length === 0, why, pad, second, inputs: A.inputs.length, symbols, sectionsBeforeAligned: firstAligned, sectionsBeforeAlignedMovedByPad: sectionsExact,
+    symbolsBeforeAlignedMovedByPad: exact, dataAt: d.at, dataOffset: d.offset,
+  };
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const [mode, a, b, padArg, secondArg] = process.argv.slice(2);
+  const load = (file) => readMap(mapText(readFileSync(file)));
+  const fail = (lines) => { for (const l of lines) console.error(`map.mjs: ${l}`); process.exit(1); };
+  if (mode === "record" && a) console.log(JSON.stringify(record(load(a))));
+  else if (mode === "refuse" && a) {
+    const why = refusals(load(a));
+    if (why.length) fail(why);
+    console.log("no refusal: no section aligned beyond 64 bytes, and none named for a Rust-mangled symbol at or after the first aligned beyond 16 or outside .text");
+  } else if (mode === "data" && b && Number.isInteger(Number(padArg))) {
+    const d = data(load(a), load(b), Number(padArg));
+    console.log(`.data 0x${d.at?.toString(16)} offset ${d.offset} want ${d.want} ${d.fits ? "fits" : "elsewhere"}`);
+    process.exit(d.fits ? 0 : 1);
+  } else if (mode === "check" && b && Number.isInteger(Number(padArg)) && Number.isInteger(Number(secondArg))) {
+    const r = check(load(a), load(b), Number(padArg), Number(secondArg));
+    console.log(`.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link between a first pad of ${r.pad} bytes and a second of ${r.second}; ${r.sectionsBeforeAlignedMovedByPad} of the ${r.sectionsBeforeAligned} sections before the first aligned beyond ${STEP} bytes moved by exactly the pad, with ${r.symbolsBeforeAlignedMovedByPad} symbols; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`);
+    console.log("JSON " + JSON.stringify(r));
+    if (!r.ok) fail(r.why);
+  } else {
+    console.error("usage: node map.mjs record|refuse <unpadded map> | data <unpadded map> <placement map> <pad> | check <unpadded map> <placement map> <pad> <second pad>");
+    process.exit(2);
+  }
+}

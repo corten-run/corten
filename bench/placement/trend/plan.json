@@ -1,0 +1,52 @@
+{
+  "trend": 1,
+  "base": "release",
+  "head": "origin/main",
+  "seed": "date",
+  "threshold": 0.02,
+  "plan": {
+    "plan": 1,
+    "name": "trend",
+    "probe": {
+      "dir": "../example/probe",
+      "tree": ["Cargo.toml", "Cargo.lock", "README.md", "crates", "docs"],
+      "toolchain": "1.100.0",
+      "env": { "ZSTD_SYS_USE_PKG_CONFIG": "1" },
+      "build": "cargo build --release",
+      "binary": "release/probe",
+      "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain"
+    },
+    "host": {
+      "cpuModel": null,
+      "cpus": { "server": 2, "load": [4, 5], "driver": 7 }
+    },
+    "load": { "threads": 2, "connections": 64, "seconds": 3 },
+    "R": 8,
+    "placementSeconds": 600,
+    "pilot": { "K": 100 },
+    "workloads": [
+      {
+        "name": "plain",
+        "declared": "GET /private to the probe's configuration plain, no request header of its own: the record page for one visitor, about 6 KB, not kept. In the trend because it is the whole of a page's request: the connection, the routing, the stages, the handler, the page rendered and its headers written, so a cost added to any of them on this request's path shows here. Not read by it: a cost on a path this request does not take (a request body, a compressed answer, a stream, a patch, a session), which the two workloads together do not show either.",
+        "request": { "path": "/private", "headers": [] },
+        "status": 200,
+        "mask": [],
+        "K": "pilot",
+        "reads": ["margin"],
+        "reduction": null,
+        "recordsSpread": false
+      },
+      {
+        "name": "unstaged",
+        "declared": "GET /unstaged to the probe's configuration plain, no request header of its own: a route that says unstaged, a short str out. In the trend because it is the least a request can be: the connection, the routing and the answer written, with no stage and no page, so a cost added around the handler is the largest share of this request that it is of any. Not read by it: a stage's cost, a page's rendering, and every path neither workload takes; two requests to one probe do not show every cost a change counts.",
+        "request": { "path": "/unstaged", "headers": [] },
+        "status": 200,
+        "mask": [],
+        "K": "pilot",
+        "reads": ["margin"],
+        "reduction": null,
+        "recordsSpread": false
+      }
+    ]
+  }
+}

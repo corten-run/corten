@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe } from "./contract.mjs";
 import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, nativeArtifactRoot } from "../registry.mjs";
-import { catalogFleetPlacement } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, jsonFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import { djangoAsgi } from "../../mixed-production/source-audit.mjs";
 import { nativeControlPartition } from "./native-roles.mjs";
 
 export const campaignSchema = "benchmark-isolated-campaign/v1";
@@ -68,13 +69,15 @@ export function bindGroupCampaign(input, mode = "dedicated") {
   const { group, ...request } = input;
   assert.ok(groupNames.includes(group), "unknown registry group");
   assert.ok(mode === "dedicated" || alternateCampaignPlacements.includes(mode) && group !== "catalog-page"
-    || mode === catalogFleetPlacement.loadLayout && group === "catalog-page", "unknown group placement");
+    || mode === catalogFleetPlacement.loadLayout && group === "catalog-page"
+    || mode === jsonFleetPlacement.loadLayout && group === "json-api", "unknown group placement");
   return bindNativeCampaign(request, [group], groupCampaignSchema, mode);
 }
 function bindNativeCampaign(input, order, schema, mode) {
   const rounds = campaignRounds(input.round);
-  const recipes = schema === groupCampaignSchema && order[0] === "client-heavy" && clientComparisonRecipe
-    ? { ...productionRecipes, "client-heavy": clientComparisonRecipe } : productionRecipes;
+  const dedicatedRecipe = schema === groupCampaignSchema && (order[0] === "mixed-production" ? djangoAsgi.recipe
+    : order[0] === "client-heavy" ? clientComparisonRecipe : null);
+  const recipes = dedicatedRecipe ? { ...productionRecipes, [order[0]]: dedicatedRecipe } : productionRecipes;
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
     recipe: recipes[group], review: null }, mode));
   const first = bindings[0];

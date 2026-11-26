@@ -145,7 +145,8 @@ test("the client-heavy collector's source test, run under a caller's GIT_DIR, re
 
 test("group continuation's checkout test, run under a caller's GIT_DIR, reads its own fixture and leaves the caller alone", (t) => {
   // measuredCheckout() runs Git on the environment of the process, as Evidence.source() does.
-  nested(t, "../bench/workloads/group-continuation.test.mjs", 1, ["init", "add", "commit", "worktree", "rev-parse"]);
+  nested(t, "../bench/workloads/group-continuation.test.mjs", 1, ["init", "add", "commit", "worktree", "rev-parse"],
+    ["^a retained group at X finds its original checkout"]);
 });
 
 test("fixtureGitCommands passes other commands through and reports a failed fixture Git as a failure", async (t) => {

@@ -15,13 +15,14 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import { djangoAsgi } from "../../mixed-production/source-audit.mjs";
 import { browserContainers, browserCpus, parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
 import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
-import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, fleetCatalogSlugs, host, jsonFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 export const alternateCampaignPlacements = Object.freeze(fleetCatalogSlugs.regions
@@ -110,6 +111,7 @@ export const recipes = freeze({
   "marketplace-short-window": ["localized-marketplace"],
   "mixed-measure": ["mixed-production"],
   "mixed-production-measure": ["mixed-production"],
+  [djangoAsgi.recipe]: ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
   ...(clientComparisonRecipe ? { [clientComparisonRecipe]: ["client-heavy"] } : {}),
 });
@@ -136,7 +138,8 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
 function subjectFor(r, sources, campaignMode) {
   assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
     || alternateCampaignPlacements.includes(campaignMode) && r.group !== "catalog-page"
-    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
+    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page"
+    || campaignMode === jsonFleetPlacement.loadLayout && r.group === "json-api", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
     assert.equal(sources.files.find((file) => file.path === path)?.sha256, sha256(bytes), `${path}: latest-stable source differs`);
@@ -160,6 +163,8 @@ function reviewDeclaration(review, subjectSha256) {
   return { state: "declared-not-authenticated", declaration: clone(review) };
 }
 
+const mixedMeasurement = (recipe) => ["mixed-measure", "mixed-production-measure", djangoAsgi.recipe].includes(recipe);
+
 // Pure native command and option derivation, not source or execution admission.
 export function nativeExecution(group, round, recipe, reviewId) {
   const available = Object.fromEntries(selectedApps(group).map((app) => [app, {}]));
@@ -177,10 +182,12 @@ export function nativeExecution(group, round, recipe, reviewId) {
     effective = parse(args, available);
   } else if (group === "mixed-production") {
     defaults = mixedOptions(base); args.push("--build");
-    if (["mixed-measure", "mixed-production-measure"].includes(recipe)) {
+    if (mixedMeasurement(recipe)) {
+      const profile = recipe === "mixed-measure" ? "defaults" : "matched";
       args.push("--measure");
-      if (recipe === "mixed-production-measure") args.push("--profile", "matched");
-      changes.push({ measure: true, profile: recipe === "mixed-production-measure" ? "matched" : "defaults" });
+      if (profile === "matched") args.push("--profile", profile);
+      if (recipe === djangoAsgi.recipe) args.push("--django-deployment", djangoAsgi.deployment);
+      changes.push({ measure: true, profile, ...(recipe === djangoAsgi.recipe && { djangoDeployment: djangoAsgi.deployment }) });
     }
     effective = mixedOptions(args);
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
@@ -237,17 +244,23 @@ function resources(group, recipe, campaignMode) {
     requiredEvidence: "effective command cgroup cpuset for the browser and driver; Docker and kernel CPU/memory receipts for application and upstream" };
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
-    measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+    measurement: mixedMeasurement(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, qualificationWorker: 2 ** 30, load: 2 ** 31 }, loadSharedMemoryBytes: 512 * 2 ** 20 } : null,
-    requestedCpuEnv: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
+    requestedCpuEnv: mixedMeasurement(recipe) ? { MIXED_PRODUCTION_APP_CPUS: "1", MIXED_PRODUCTION_API_CPUS: "2-3", MIXED_PRODUCTION_LOAD_CPUS: "4-7" } : null,
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
-    const wide = campaignMode === catalogFleetPlacement.loadLayout;
+    const wide = campaignMode === catalogFleetPlacement.loadLayout, json = campaignMode === jsonFleetPlacement.loadLayout;
+    // The JSON API c-16 pins are catalog's c16-generator-v1 under JSON API's own selector. cpuSettings
+    // reads its pins by the catalog names and refuses any other, so a changed JSON pin cannot pass silently.
     const env = wide ? { ...catalogFleetPlacement.cpuEnv, CATALOG_LOAD_LAYOUT: campaignMode }
+      : json ? { ...jsonFleetPlacement.cpuEnv, JSON_API_LOAD_LAYOUT: campaignMode }
       : Object.fromEntries(Object.entries({ APP: "1", API: "2-3", LOAD: "4-7" }).map(([role, value]) => [`${prefix}_${role}_CPUS`, value]));
+    const jsonPins = json && Object.fromEntries(Object.entries(jsonFleetPlacement.cpuEnv)
+      .map(([key, value]) => [key.replace(/^JSON_API_/, "CATALOG_"), value]));
     return { nativeCpuDefaults: cpuSettings({}), requestedCpuEnv: env,
-      expectedCpus: wide ? cpuSettings(env, campaignMode) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+      expectedCpus: wide ? cpuSettings(env, campaignMode)
+        : json ? cpuSettings(jsonPins, catalogFleetPlacement.loadLayout) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, load: 2 ** 31 },
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };

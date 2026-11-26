@@ -8,6 +8,7 @@ import { join, relative, isAbsolute } from "node:path";
 import { bindExecutionParticipant, createAttachedParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
 import { immutableGit } from "./immutable-git.mjs";
 import { mountSourceHash } from "./execution-inputs.mjs";
+import { djangoAsgi } from "./source-audit.mjs";
 import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -40,10 +41,22 @@ function replay(folder, s) {
   } });
 }
 async function vector(folder, change = () => {}, options = {}) {
-  const s = summary(), p = participant(s); change(p); let present = false, network = true;
+  const s = summary(), p = participant(s);
+  let inspectedImage = imageInfo;
+  if (options.djangoSource) {
+    const source = options.djangoSource;
+    s.options = { ...s.options, profile: "matched", build: true, djangoDeployment: djangoAsgi.deployment };
+    s.inventory = ["django"]; s.apps = { django: { image: { id: image } } };
+    p.Name = `/${s.runId}-django-${source}`;
+    p.Config.Cmd = [...djangoAsgi.command];
+    p.Config.Entrypoint = null;
+    p.Config.Env = ["PROFILE=matched", `MARKETPLACE_SOURCE=${source}`, `DJANGO_SETTINGS_MODULE=${djangoAsgi.settings}`];
+    inspectedImage = { ...imageInfo, Config: { Cmd: [...djangoAsgi.command], Entrypoint: null } };
+  }
+  change(p, inspectedImage); let present = false, network = true;
   const docker = async (args) => {
     if (args[0] === "inspect") return JSON.stringify([p]);
-    if (args[0] === "image" && args[1] === "inspect") return JSON.stringify([imageInfo]);
+    if (args[0] === "image" && args[1] === "inspect") return JSON.stringify([inspectedImage]);
     if (args[0] === "ps") {
       if (options.queryFailure) throw new Error("secret-canary");
       return args.some((arg) => arg.startsWith("label=")) ? "" : present ? id : "";
@@ -367,6 +380,39 @@ test("execution saved replay derives actual limits and terminal absence without 
   assert.deepEqual(paths.map((path) => hash(readFileSync(join(folder, path)))), before);
   for (const path of paths) assert.doesNotMatch(readFileSync(join(folder, path), "utf8"), /secret-canary|DATABASE_URL|MIXED_CONTROL_TOKEN/);
 }));
+
+test("Django ASGI replay checks the shipped command and settings in both sources", async (t) => {
+  for (const source of ["fixture", "api"]) await t.test(source, () => temporary(async (folder) => {
+    const s = await vector(folder, () => {}, { djangoSource: source });
+    assert.equal(replay(folder, s).resources, "verified");
+    mutate(folder, "participant-created", (event) => {
+      event.data.env.find(([key]) => key === "DJANGO_SETTINGS_MODULE")[1] = "itempage.settings";
+    });
+    assert.throws(() => replay(folder, s), /execution evidence differs/);
+  }));
+  await t.test("same-image WSGI command", () => temporary(async (folder) => {
+    const s = await vector(folder, (p, image) => {
+      p.Config.Cmd = image.Config.Cmd = ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"];
+    }, { djangoSource: "api" });
+    assert.throws(() => replay(folder, s), /execution evidence differs/);
+  }));
+  for (const source of ["fixture", "api"]) {
+    await t.test(`${source}: ASGI Cmd hidden behind a WSGI entrypoint`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Entrypoint = image.Config.Entrypoint = ["python", "start_matched.py"];
+      }, { djangoSource: source });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+    await t.test(`${source}: ASGI Cmd digest with WSGI combined digest`, () => temporary(async (folder) => {
+      const s = await vector(folder, (p, image) => {
+        p.Config.Cmd = image.Config.Cmd = ["sh", "-c", "python -m django migrate --noinput && exec python start_matched.py"];
+      }, { djangoSource: source });
+      for (const kind of ["participant-created", "participant-terminal"])
+        mutate(folder, kind, (e) => { e.data.cmdSha256 = hash(JSON.stringify(djangoAsgi.command)); });
+      assert.throws(() => replay(folder, s), /execution evidence differs/);
+    }));
+  }
+});
 
 test("execution contradictions reject recomputed receipt hashes", async (t) => {
   for (const [name, change] of Object.entries({ quota: (p) => p.limits.NanoCpus = 0, memory: (p) => p.limits.Memory = 0,

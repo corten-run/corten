@@ -928,6 +928,12 @@ impl<M: Middleware> App<M> {
     /// request's mode, like any page, with the failure's status; `failure.detail()` is the error,
     /// set only under `corten dev`. A JSON route's failures, and a data client's, are JSON instead.
     /// `corten new` writes one. Without it, Corten sends a plain document.
+    ///
+    /// In place of a handler's own failure the page keeps what a middleware wrote, a CDN's
+    /// caching headers included, so a middleware that tells a CDN to keep every answer must not
+    /// do so for an error page that reads the raw `Cookie` or `Authorization` itself: find who is
+    /// asking through a `Caller` (which makes the answer private) or leave failures uncached
+    /// (the guide's Error pages).
     pub fn error_page<H, T, S>(mut self, page: H, state: S) -> Self
     where
         H: ErrorPageFn<T, S>,
@@ -968,7 +974,10 @@ impl<M: Middleware> App<M> {
     /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
-    /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON,
+    /// under `corten dev`, where the log says instead, once for each route and verdict, whether a
+    /// release build would keep a `Public` route's answer to a `GET` that shows nothing about who
+    /// asks while its store has room, and if not the first reason (a bound of 0 among them); an
+    /// app with no `Public` route of a kind it keeps (a page, or JSON,
     /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
@@ -1627,10 +1636,15 @@ impl<M: Middleware> App<M> {
         if let Some(unstaged) = unstaged {
             table = table.merge(unstaged);
         }
-        // Under `corten dev` every load is the handler's, so a change shows on the next one. An app
-        // with no route eligible to keep a page has none for a write to drop, so its writes are not
-        // counted.
-        shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        // An app with no route eligible to keep a page has none for a write to drop, so its writes
+        // are not counted. Under `corten dev` every load is the handler's, so a change shows on the
+        // next one: the store stands so the code that decides what it keeps runs as it does in a
+        // release build, but nothing is kept in it, and each `Public` route says in the log what
+        // a release build does with its answer (`crate::router::Telling`).
+        shared.kept = if !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        if dev {
+            table = table.telling();
+        }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);
@@ -1993,6 +2007,28 @@ impl Closing {
     }
 }
 
+/// The waker a connection's wait for shutdown is polled with: it notes that the wait was woken
+/// and wakes the connection's task, which polls the wait again only then. Whatever a poll of the
+/// wait did to be polled again, it did with this waker: left it with the channel, which wakes it
+/// when shutdown begins or the server is gone, or woke it itself to be polled again soon (tokio
+/// does when the task's budget is spent, and when a task dump polls the task). So the task does
+/// not rest on which of those a poll did.
+struct Heard {
+    woken: std::sync::atomic::AtomicBool,
+    task: std::task::Waker,
+}
+
+impl std::task::Wake for Heard {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, std::sync::atomic::Ordering::Release);
+        self.task.wake_by_ref();
+    }
+}
+
 /// Accepts connections on `listener` and serves each until `stop` holds a [`Closing`]; then
 /// stops accepting, lets each connection finish the request it is in (an idle one closes) until
 /// the time it gives that connection, closes those still open then, and returns once all have
@@ -2062,9 +2098,35 @@ where
             let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
-            let closing = tokio::select! {
-                _ = conn.as_mut() => return,
-                closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
+            // The wait for shutdown has a waker of its own ([`Heard`]) and is polled only when
+            // that waker has fired, and at first. So a wake of the task for the connection (every
+            // read and write) asks only whether it has, one load, where polling the wait again
+            // took a lock connections on every thread share: the mutex of one of the lists the
+            // channel keeps its waiters in (tokio has eight, and a wait is put on one at random).
+            // The task is spawned above, so the waker it is polled with here is its own for as
+            // long as it runs.
+            let closing = {
+                let task = std::future::poll_fn(|cx| std::task::Poll::Ready(cx.waker().clone())).await;
+                let heard = Arc::new(Heard { woken: std::sync::atomic::AtomicBool::new(true), task });
+                let waker = std::task::Waker::from(heard.clone());
+                let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
+                let stopped = std::future::poll_fn(|cx| {
+                    if conn.as_mut().poll(cx).is_ready() {
+                        return std::task::Poll::Ready(None);
+                    }
+                    if !heard.woken.load(std::sync::atomic::Ordering::Acquire) {
+                        return std::task::Poll::Pending;
+                    }
+                    // Cleared before the poll, so a wake during it or after it is kept.
+                    heard.woken.store(false, std::sync::atomic::Ordering::Release);
+                    let mut cx = std::task::Context::from_waker(&waker);
+                    // A channel whose sender is gone is an error here, and ends the wait.
+                    stopping.as_mut().poll(&mut cx).map(|closing| Some(closing.ok().and_then(|closing| *closing)))
+                });
+                match stopped.await {
+                    Some(closing) => closing,
+                    None => return,
+                }
             };
             conn.as_mut().graceful_shutdown();
             // The server gone without a shutdown: close now.
@@ -2175,7 +2237,9 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        let mut req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        // An HTTP/1.1 message with no `Host` line, which only its reader knows of a request.
+        crate::security::mark_unnamed(&mut req);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
@@ -2224,6 +2288,8 @@ pub(crate) struct Scope {
     /// the policy, else the app's. An API's answers keep their own CSP and send its referrer policy.
     csp: Arc<Csp>,
     shell: u64,
+    /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
+    lines: http::HeaderMap,
     /// Its middleware, after the app's: each area's around it, outermost first, then its API's
     /// (with the APIs' around it).
     middleware: crate::middleware::Stack,
@@ -2263,6 +2329,7 @@ impl Scopes {
                 mount: None,
                 deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
                 body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
+                lines: policy.lines(&csp, true),
                 csp,
                 shell,
                 middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
@@ -2279,13 +2346,15 @@ impl Scopes {
                 mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
             let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
             let prefix = mount.prefix.clone();
-            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, middleware };
+            let lines = policy.lines(&csp, false);
+            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, middleware };
             prefixed.push((prefix, Arc::new(scope)));
         }
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         let app = |own| {
             let csp = policy.csp.clone();
-            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, middleware: Default::default() })
+            let lines = policy.lines(&csp, true);
+            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, lines, middleware: Default::default() })
         };
         Scopes { own_paths, own: app(true), app: app(false), prefixed }
     }
@@ -2545,10 +2614,9 @@ impl<S: Steps> Layer<S> {
         let req = pending.get();
         let headers = req.headers();
         let mut origin = Origin::new(headers);
-        // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
-        // page, no caller lookup.
-        if !self.policy.answers(req.uri(), || origin.host()) {
-            let mut res = crate::security::misdirected();
+        // A request for another name (a DNS-rebound page), or one HTTP does not allow, runs
+        // nothing of the app's: no error page, no caller lookup.
+        if let Some(mut res) = self.policy.asked(req, &mut origin).refusal() {
             let vary = res.headers().contains_key(header::VARY);
             self.policy.headers(&mut res, None, &self.policy.csp, vary);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
@@ -2609,13 +2677,7 @@ impl<S: Steps> Layer<S> {
             if mount.is_none() {
                 self.policy.document(&mut refused, csp, mode.swaps());
             }
-            // An error page that drew a submit key keeps the rule every such page has.
-            let policy = if refused.extensions().get::<cache::Unrepeatable>().is_some() {
-                cache::drawn_unsettled(refused.headers_mut())
-            } else {
-                cache::PRIVATE
-            };
-            refused.headers_mut().insert(header::CACHE_CONTROL, policy);
+            cache::settle_refused(&mut refused);
             pending.discard();
             return refused;
         }
@@ -2683,10 +2745,15 @@ impl<S: Steps> Layer<S> {
         if foreign {
             res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
-        // First: the security headers reserve room for `Cache-Control` and `Vary` too.
-        self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
-        if mount.is_none() {
-            self.policy.document(&mut res, csp, mode.swaps());
+        // An answer that brings none of its scope's lines is given them all in one pass; any
+        // other has each inserted.
+        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp, caller);
+        if !ready {
+            // First: the security headers reserve room for `Cache-Control` and `Vary` too.
+            self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
+            if mount.is_none() {
+                self.policy.document(&mut res, csp, mode.swaps());
+            }
         }
         let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
         let seen = Seen {
@@ -2700,7 +2767,9 @@ impl<S: Steps> Layer<S> {
         };
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
-        cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        if !ready {
+            cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        }
         // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
         // when its headers as sent let a shared cache keep it.
         #[cfg(debug_assertions)]
