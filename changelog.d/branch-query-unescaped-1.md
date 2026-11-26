@@ -1,1 +1,0 @@
-- A route's query with no `%` and no `+` in it, as in a link the app wrote itself, is read without the form decoder, so each such request does less work; `Params` reads the same parameters as before ([#2169 A route's query is run through the form decoder even when it holds nothing to decode, about 260 instructions a request](https://github.com/corten-run/corten/issues/2169)).
