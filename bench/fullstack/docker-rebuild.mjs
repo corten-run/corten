@@ -27,7 +27,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { compiledIn, contextOf, copyFilter, dockerfileOf, median, ranARun, ranSteps, recipes, runChange } from "./builds.mjs";
+import { compiledIn, contextOf, copyFilter, dockerfileOf, median, ranARun, ranSteps, rebuildTimeoutMs, recipes, runChange } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -81,7 +81,7 @@ const usec = (/** @type {string} */ name) => {
 const build = (/** @type {string} */ name, /** @type {string} */ context, /** @type {string} */ dockerfile, /** @type {string[]} */ extra, /** @type {boolean} */ mustRun) => {
   const c = usec(name);
   const s = Date.now();
-  const output = must(["buildx", "build", "--builder", name, "--progress", "plain", "--output", "type=cacheonly", "-f", dockerfile, ...extra, context], 20 * minute);
+  const output = must(["buildx", "build", "--builder", name, "--progress", "plain", "--output", "type=cacheonly", "-f", dockerfile, ...extra, context], rebuildTimeoutMs);
   const ms = Date.now() - s;
   const cpuS = +((usec(name) - c) / 1e6).toFixed(1);
   const ran = ranSteps(output);
