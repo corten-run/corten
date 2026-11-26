@@ -33,8 +33,8 @@ export async function run(args) {
     ({ readUpstreamSnapshot } = await import("./check.mjs")); placement = await import("./placement.mjs");
   } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
   const options = c.parseArgs(args), group = c.descriptor();
-  // Without JSON_API_LOAD_LAYOUT this is exactly c.cpuSettings(process.env). The opt-in c-16
-  // layout refuses here, before any result folder or container, on a host below 16 CPUs.
+  // Without JSON_API_LOAD_LAYOUT this is exactly c.cpuSettings(process.env). An opt-in layout
+  // refuses here, before any result folder or container, if the host has too few CPUs.
   const layout = placement.runnerPlacement(process.env, availableParallelism()), cpus = layout.cpus;
   const folder = join(here, "results", options.round);
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder); // Never overwrite old evidence.
@@ -47,7 +47,7 @@ export async function run(args) {
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...c.phases] },
     apps: Object.fromEntries(options.apps.map((app) => [app, { images: {}, checks: {}, runs: Object.fromEntries(group.cases.map((p) => [p.key, []])),
       aggregates: Object.fromEntries(group.cases.map((p) => [p.key, {}])), projections: Object.fromEntries(group.cases.map((p) => [p.key, outcomes.timedCaseProjection([], options.passes)])) }])) };
-  // The untimed cold probe and CPU counter reader keep the original generator CPUs (4-7 under c-16).
+  // The untimed cold probe and CPU counter reader stay on 4-7 under either opt-in layout.
   const probeCpus = placement.coldProbeCpus(summary.measurement);
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (line) => { const text = `${new Date().toISOString()} ${line}`; console.log(text); appendFileSync(join(folder, "run.log"), `${text}\n`); };

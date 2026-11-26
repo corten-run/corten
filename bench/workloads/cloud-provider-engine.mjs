@@ -38,8 +38,12 @@ async function placementCatalog(call) {
         assert.ok(typeof slug === "string" && !seen.has(slug), "invalid fleet catalog slug");
         seen.add(slug);
         if (!fleetCatalogSlugs[kind].includes(slug)) continue;
-        assert.ok(typeof row.available === "boolean" && Array.isArray(row[membership])
-          && row[membership].every((value) => typeof value === "string"), "incomplete fleet catalog entry");
+        const valid = typeof row.available === "boolean" && Array.isArray(row[membership])
+          && row[membership].every((value) => typeof value === "string");
+        // A malformed opt-in offer cannot be selected, but must not stop c-8 or
+        // c-16 work. C-32 still requires both checked rows at placement selection.
+        if (kind === "sizes" && slug === "c-32" && !valid) continue;
+        assert.ok(valid, "incomplete fleet catalog entry");
         rows.push({ slug, available: row.available, [membership]: fleetCatalogSlugs[membership].filter((value) => row[membership].includes(value)) });
       }
       assert.ok(result.links === undefined || result.links && typeof result.links === "object" && !Array.isArray(result.links));

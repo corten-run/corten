@@ -13,7 +13,7 @@ import { isDeepStrictEqual } from "node:util";
 import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
 import { legacyProducerSchema, producerSourceNames, verifyProducer } from "./production.mjs";
 import { replayTimedRun } from "./evidence.mjs";
-import { c16Generator, c16Layout, recordedPlacement } from "./placement.mjs";
+import { describePlacement, recordedPlacement } from "./placement.mjs";
 
 function gitAtMeasuredCheckout(repo, args, options) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
@@ -97,7 +97,7 @@ function inspectReport(summary, { load, commit, verifySource }) {
       assert.ok(Number.isSafeInteger(summary.options[key]) && summary.options[key] >= 1 && summary.options[key] <= max, `invalid ${key}`);
     }
     // An unmarked summary is the default placement exactly as before; only an explicit
-    // json-c16-generator-v1 marker with its own recorded cold probe and sampler CPUs admits c-16.
+    // A named layout with its own recorded cold probe and sampler CPUs admits a wider generator.
     let placed;
     try { placed = recordedPlacement(summary.measurement); }
     catch { assert.fail("missing/wrong CPU quotas or placement"); }
@@ -311,9 +311,12 @@ export function renderJson(report) {
     const budget = config.measurement?.cpus?.[role]; lines.push(`| ${role} | ${budget?.quota ?? "missing"} | ${budget?.cpuset === null ? "unpinned" : budget?.cpuset ?? "missing"} |`);
   }
   // Fixed text from this checkout's layout, never the saved values; the configuration check validates those.
-  if (config.measurement?.loadLayout !== undefined) lines.push("", config.measurement.loadLayout === c16Layout
-    ? `Load layout ${c16Layout}: the untimed cold probe ran on CPUs ${c16Generator.coldProbe.cpuset} at quota ${c16Generator.coldProbe.quota}; load resource samples are bounded against k6's quota ${c16Generator.loadSampler.quota} on CPUs ${c16Generator.loadSampler.cpuset}. This is apparatus placement for a 16-CPU host, not a measured speedup.`
-    : "Load layout: unknown (see the configuration check).");
+  if (config.measurement?.loadLayout !== undefined) {
+    const layout = config.measurement.loadLayout, setting = describePlacement(layout);
+    lines.push("", setting
+      ? `Load layout ${layout}: the untimed cold probe ran on CPUs ${setting.coldProbe.cpuset} at quota ${setting.coldProbe.quota}; load resource samples are bounded against k6's quota ${setting.loadSampler.quota} on CPUs ${setting.loadSampler.cpuset}. This is apparatus placement for a ${setting.logicalCpus}-CPU host, not a measured speedup.`
+      : "Load layout: unknown (see the configuration check).");
+  }
   lines.push("", "## Limits", "", "CPU is whole-container cgroup usage. The upstream is a single Node process and can limit throughput independently. Cold time is Docker container-start to first complete 200, not process exec. No build, browser, instruction-count or deployment parity claim is made.");
   for (const warning of report.warnings) lines.push(`- ${warning.replace(/[\r\n]+/g, " ")}`);
   return `${lines.join("\n")}\n`;

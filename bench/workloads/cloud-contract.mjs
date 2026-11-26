@@ -12,15 +12,17 @@ export const catalogFleetPlacement = Object.freeze({
   loadLayout: "c16-generator-v1",
   cpuEnv: Object.freeze({ ...catalogCpuEnv, CATALOG_LOAD_CPUS: "4-15" }),
 });
-// Opt-in only (issue 2057): saved as an independent json-api fleet's single.loadLayout.
-// Fleets, reservations and jobs without that marker keep their exact bytes. The pins
-// equal bench/json-api/placement.mjs c16Env, which its test checks.
-export const jsonFleetPlacement = Object.freeze({
-  host: Object.freeze({ ...legacyHost, size: "c-16" }),
-  loadLayout: "json-c16-generator-v1",
-  cpuEnv: Object.freeze({ JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: "4-15" }),
+// Only these placements can be saved in an independent json-api fleet.
+const jsonPlacement = (logicalCpus, loadQuota, loadPins) => Object.freeze({
+  host: Object.freeze({ ...legacyHost, size: `c-${logicalCpus}` }),
+  loadLayout: `json-c${logicalCpus}-generator-v1`,
+  logicalCpus, loadQuota,
+  cpuEnv: Object.freeze({ JSON_API_APP_CPUS: "1", JSON_API_API_CPUS: "2-3", JSON_API_LOAD_CPUS: loadPins }),
 });
-const jsonWide = (fleet, group) => group === "json-api" && fleet?.single?.loadLayout === jsonFleetPlacement.loadLayout;
+export const jsonFleetPlacement = jsonPlacement(16, 12, "4-15");
+const jsonPlacements = [jsonFleetPlacement, jsonPlacement(32, 20, "4-23")];
+export const jsonFleetPlacementFor = (group, loadLayout) => group === "json-api"
+  ? jsonPlacements.find((placement) => placement.loadLayout === loadLayout) : undefined;
 const historicalFleetSchema = "benchmark-group-fleet/v1", uniformFleetSchema = "benchmark-group-fleet/v2",
   pinnedFleetSchema = "benchmark-group-fleet/v3", launchFleetSchema = "benchmark-group-fleet/v4";
 const stagedFleetSchema = "benchmark-group-fleet/v5";
@@ -28,7 +30,7 @@ export const alternateFleetMode = "dedicated-sfo2";
 const pinnedFleetRegions = Object.freeze([host.region, legacyHost.region]);
 const fleetRegions = Object.freeze([...pinnedFleetRegions, "lon1", "blr1"]);
 export const fleetCatalogSlugs = Object.freeze({
-  sizes: Object.freeze([host.size, catalogFleetPlacement.host.size]),
+  sizes: Object.freeze([...new Set([host.size, catalogFleetPlacement.host.size, ...jsonPlacements.map((p) => p.host.size)])]),
   regions: fleetRegions,
 });
 export const fleetCatalogCommand = Object.freeze(["compute", "placement", "catalog", "--output", "json"]);
@@ -39,14 +41,16 @@ export const canSkipHostChromium = (group) =>
 const createMode = (region) => region === host.region ? "dedicated" : `dedicated-${region}`;
 export function fleetCreateMode(group, fleet, remainingRegion) {
   if (group === "catalog-page") return catalogFleetPlacement.loadLayout;
-  if (jsonWide(fleet, group)) return jsonFleetPlacement.loadLayout;
+  const json = jsonFleetPlacementFor(group, fleet?.single?.loadLayout);
+  if (json) return json.loadLayout;
   return createMode(stagedFleet(fleet) && !fleet.single ? fleetHost(remainingRegion).region : fleet.host.region);
 }
 export function providerCreateHost(mode) {
   if (mode === "legacy" || mode === alternateFleetMode) return legacyHost;
   if (mode === "dedicated") return host;
   if (mode === catalogFleetPlacement.loadLayout) return catalogFleetPlacement.host;
-  if (mode === jsonFleetPlacement.loadLayout) return jsonFleetPlacement.host;
+  const json = jsonFleetPlacementFor("json-api", mode);
+  if (json) return json.host;
   if (mode === "dedicated-lon1" || mode === "dedicated-blr1") return fleetHost(mode.slice("dedicated-".length));
   assert.equal(mode, null, "unknown provider create mode");
 }
@@ -104,11 +108,11 @@ function buildFleet(input, createdAt, schema, placement, selected, single) {
   const jobs = names.map((group) => {
     const ownership = full(tokens[group], /[a-f0-9]{16}/, "ownership token");
     const wide = [pinnedFleetSchema, launchFleetSchema, stagedFleetSchema].includes(schema) && group === "catalog-page";
-    const json = schema === stagedFleetSchema && jsonWide({ single }, group);
+    const json = schema === stagedFleetSchema && jsonFleetPlacementFor(group, single?.loadLayout);
     return { group, token: ownership, name: `corten-bench-groups-${round}-${ownership}`,
       tag: `corten-bench-groups-run-${ownership}`, ...(wide ? {
         host: { ...catalogFleetPlacement.host }, loadLayout: catalogFleetPlacement.loadLayout,
-      } : json ? { host: { ...jsonFleetPlacement.host }, loadLayout: jsonFleetPlacement.loadLayout } : {}) };
+      } : json ? { host: { ...json.host }, loadLayout: json.loadLayout } : {}) };
   });
   assert.equal(new Set([token, ...jobs.map((row) => row.token)]).size, jobs.length + 1, "unique fleet/host tokens required");
   const body = { schema, round, commit, token, createdAt,
@@ -125,7 +129,7 @@ function fleetSelection(single) {
   exact(single, ["group", "indexSha256", "checkout", ...["offlineHandoff", "loadLayout"].filter((key) => single[key] !== undefined)]);
   if (single.offlineHandoff !== undefined) assert.equal(single.offlineHandoff, true, "offline handoff marker");
   assert.ok(groupNames.includes(single.group), "unknown independent group");
-  if (single.loadLayout !== undefined) assert.ok(jsonWide({ single }, single.group), "unknown independent group load layout");
+  if (single.loadLayout !== undefined) assert.ok(jsonFleetPlacementFor(single.group, single.loadLayout), "unknown independent group load layout");
   full(single.indexSha256, /[a-f0-9]{64}/, "continuation index digest");
   full(single.checkout, /[^\r\n\0]{1,4096}/, "measured checkout");
   return { ...current, groups: current.groups.filter(({ group }) => group === single.group) };
@@ -177,7 +181,7 @@ export const savedLoadLayout = (s) => s.fleet?.jobs.find((job) => job.group === 
 export function savedPlacement(s) {
   if (s.fleet?.schema !== launchFleetSchema && !stagedFleet(s.fleet)) return;
   const mode = fleetCreateMode(s.group, s.fleet, s.remainingPlacement?.region);
-  if (!["dedicated", catalogFleetPlacement.loadLayout, jsonFleetPlacement.loadLayout].includes(mode)) return mode;
+  if (!["dedicated", catalogFleetPlacement.loadLayout].includes(mode) && !jsonFleetPlacementFor(s.group, mode)) return mode;
 }
 function reservationRegion(fleet, job, placement) {
   if (!stagedFleet(fleet) || job.host || fleet.single) {
@@ -211,14 +215,15 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
     assert.ok(inSize === inRegion, `fleet catalog listings disagree: ${size}/${region}`);
     return inSize && s.available && r.available;
   };
+  if (loadLayout !== undefined) {
+    const json = jsonFleetPlacementFor(group, loadLayout);
+    assert.ok(staged && json, "unknown independent group load layout");
+    assert.ok(available(json.host), `fleet placement not advertised: ${json.host.size}/${json.host.region}`);
+    return host.region; // The single job carries its own placement.
+  }
   if (group === "catalog-page") {
     assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
     return host.region; // The fixed catalog job carries its own c-16 placement.
-  }
-  if (loadLayout !== undefined) {
-    assert.ok(staged && jsonWide({ single: { loadLayout } }, group), "unknown independent group load layout");
-    assert.ok(available(jsonFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
-    return host.region; // The opted-in JSON API job carries its own c-16 placement.
   }
   if (remainingOnly || group !== undefined) assert.ok(staged || reservedRegion !== undefined, "remaining placement must already be reserved");
   else assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
@@ -887,7 +892,7 @@ git checkout --detach ${s.commit}
 test "$(git rev-parse HEAD)" = ${s.commit}
 test -z "$(git status --porcelain --untracked-files=all)"
 bootstrap_stage=host-capacity
-test "$(nproc)" -ge ${loadLayout ? 16 : 8}
+test "$(nproc)" -ge ${jsonFleetPlacementFor(s.group, loadLayout)?.logicalCpus ?? (loadLayout ? 16 : 8)}
 bootstrap_stage=root-dependencies
 timeout 900 npm ci --no-audit --no-fund
 ${s.benchPackage ? `bootstrap_stage=bench-dependencies
