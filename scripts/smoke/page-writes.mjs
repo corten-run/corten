@@ -96,7 +96,11 @@ export async function pageWrites(page, browser) {
       nav: (/** @type {string} */ body, /** @type {number} */ _at) => body,
       /** What a write's answer waits for, by the write's number. @type {(writes: number) => Promise<unknown> | undefined} */
       hold: (/** @type {number} */ _writes) => /** @type {Promise<unknown> | undefined} */ (undefined),
-      /** What the answer to any other request waits for, by its place in `asked`. @type {(at: number) => Promise<unknown> | undefined} */
+      /**
+       * What the answer to any other request waits for, by its place in `asked`: asked the moment the
+       * request reaches the stand-in, before its answer is fetched, which then waits for it.
+       * @type {(at: number) => Promise<unknown> | undefined}
+       */
       holdRead: (/** @type {number} */ _at) => /** @type {Promise<unknown> | undefined} */ (undefined),
     };
     // Closed here if the page, its route or its load fails: no case has the page to close yet.
@@ -118,6 +122,9 @@ export async function pageWrites(page, browser) {
             // Counted as the write is sent, so the writes are numbered in the order the page sent them.
             if (write) seen.writes += 1;
             const writes = seen.writes;
+            // A read is held from the moment it reaches the stand-in (`holdRead` decides then), its
+            // answer let go only once that hold is.
+            const holding = write ? undefined : seen.holdRead(at);
             // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
             const sent = { ...req.headers(), "accept-encoding": "identity" };
             if (write && !seen.draws) delete sent.prefer;
@@ -135,7 +142,7 @@ export async function pageWrites(page, browser) {
               return route.abort("failed");
             }
             if (write) await seen.hold(writes);
-            else await seen.holdRead(at);
+            else await holding;
             if (write) seen.settled[writes] = sinceNow(seen);
             await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
             if (write) seen.answers += 1;
@@ -631,9 +638,10 @@ export async function pageWrites(page, browser) {
   /**
    * Follows the link to /smoke/quoted, found and pressed in one page task, and whether that page
    * came in within 5 s counted from just before the press: the press task and the wait share those
-   * 5 s (`pressThen`). It came once its own markup is drawn (its `<output id="quoted">`, which no
-   * other page has) with no form and nothing busy in <main>: the address alone is not the page, and
-   * an empty <main> has no form and nothing busy either. A page that reads itself again swaps <main>
+   * 5 s (`pressThen`). It came once the address is `/smoke/quoted` and its <main> holds its
+   * `<output id="quoted">`, no form and nothing busy: the written page has that output too, inside its
+   * form, so the output alone is not the page, nor the address alone, and an empty <main> has no form
+   * and nothing busy either. A page that reads itself again swaps <main>
    * every second, so a Playwright click can find the link, then land once it is gone, and the page
    * never leaves (#2035).
    * @param {import("@playwright/test").Page} own

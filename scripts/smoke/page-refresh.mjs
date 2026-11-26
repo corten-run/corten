@@ -74,23 +74,33 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /**
      * The token each of `go`'s navigations gives the answer to its own fetch of the page, by the
      * page's address (path and query). The route that answers that fetch (`seedNavigation`,
-     * `wholeOnly`) puts it on the status line it draws (`markNav`), the first time only, so `go` can
-     * tell the navigation's own draw from the page it left, which may say `Saving...` at the same
-     * moment, and from a later read.
+     * `wholeOnly`) takes it as the request reaches the route (`claimNav`), the first request there
+     * only, and puts it on the status line that request's answer draws (`markNav`), so `go` can tell
+     * the navigation's own draw from the page it left, which may say `Saving...` at the same moment,
+     * and from a later read, even one whose answer is ready first.
      * @type {Map<string, string>}
      */
     const navTokens = new Map();
     /**
-     * `body`, the answer to the runtime navigation's fetch of `address`, with the token `go` gave that
-     * navigation on its status line (`data-smoke-nav`), once: the token is used up by the first fetch.
-     * @param {string} address @param {string} body
+     * The token `go` gave its navigation to `address`, taken by the request that reaches the route
+     * first, the moment it does: no other request at `address` gets it, whichever answer is ready
+     * first. Undefined when none is waiting. @param {string} address
      */
-    const markNav = (address, body) => {
+    const claimNav = (address) => {
       const token = navTokens.get(address);
-      if (token === undefined) return body;
       navTokens.delete(address);
-      return body.replace('<p id="alert-status"', `<p data-smoke-nav="${token}" id="alert-status"`);
+      return token;
     };
+    /**
+     * `body`, the answer to the request that took `token` (`claimNav`), with it on its status line
+     * (`data-smoke-nav`); `body` as it is without one. @param {string | undefined} token @param {string} body
+     */
+    const markNav = (token, body) => (token === undefined ? body : body.replace('<p id="alert-status"', `<p data-smoke-nav="${token}" id="alert-status"`));
+    /**
+     * Whether `request` is the runtime's prefetch of a link under the pointer (`purpose: prefetch`),
+     * which reads nothing and is no navigation's fetch. @param {import("@playwright/test").Request} request
+     */
+    const isPrefetch = (request) => request.headers()["purpose"] === "prefetch" || !!request.headers()["sec-purpose"]?.includes("prefetch");
     /**
      * Navigates the runtime's way to `url`, and says whether that navigation drew its own page there
      * still saving, in the same document. The page records it from before the navigation starts, the
@@ -100,9 +110,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * one `go` started in (the record is on its window, which a full load loses). A page left that
      * says `Saving...` too, a page drawn by another read, or a full load is not this navigation's
      * draw. Waits up to 5 s for it, then reads the record (`saving`, `sameDocument`), with where the
-     * page is and its status line, for a check's details.
+     * page is and its status line, for a check's details. The draw counts only if the page drew it
+     * within 5 s of starting the navigation, by the page's own clock (`performance.now()`), noted the
+     * moment it was drawn: one drawn after them, before the record is read, does not (`lateBy`, how
+     * long after).
      * @param {string} url
-     * @returns {Promise<{ token: string, saving: boolean, sameDocument: boolean, at: string, status: string | null }>}
+     * @returns {Promise<{ token: string, saving: boolean, lateBy: number | null, sameDocument: boolean, at: string, status: string | null }>}
      */
     const go = async (url) => {
       const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -112,11 +125,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await page.evaluate(
           ({ url, token }) => {
             const w = /** @type {any} */ (window);
-            const note = { token, saving: false, stop: () => seen.disconnect() };
+            /** @type {{ token: string, saving: boolean, drawnAt: number | null, by: number, stop: () => void }} */
+            const note = { token, saving: false, drawnAt: null, by: performance.now() + 5000, stop: () => seen.disconnect() };
             w.__smokeGo = note;
             const look = () => {
               const status = document.getElementById("alert-status");
               if (location.href === url && status?.getAttribute("data-smoke-nav") === token && status.textContent === "Saving...") {
+                note.drawnAt = performance.now();
                 note.saving = true;
                 seen.disconnect();
               }
@@ -144,7 +159,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             const note = (/** @type {any} */ (window)).__smokeGo;
             const sameDocument = note?.token === token;
             if (sameDocument) note.stop();
-            return { token, saving: sameDocument && note.saving === true, sameDocument, at: location.href, status: document.getElementById("alert-status")?.textContent ?? null };
+            const drawn = sameDocument && note.saving === true && typeof note.drawnAt === "number";
+            const saving = drawn && note.drawnAt <= note.by;
+            const lateBy = drawn && !saving ? Math.round(note.drawnAt - note.by) : null;
+            return { token, saving, lateBy, sameDocument, at: location.href, status: document.getElementById("alert-status")?.textContent ?? null };
           }, token),
         );
       } finally {
@@ -152,10 +170,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       }
     };
     /**
-     * What `go` saw, for a check's details. @param {{ saving: boolean, sameDocument: boolean, at: string, status: string | null }} nav
+     * What `go` saw, for a check's details. @param {{ saving: boolean, lateBy: number | null, sameDocument: boolean, at: string, status: string | null }} nav
      */
     const wentTo = (nav) =>
-      nav.saving ? "Saving... drawn by the navigation" : nav.sameDocument ? `no Saving... drawn by the navigation (the page at ${nav.at} says ${nav.status})` : `a new document loaded (at ${nav.at}, saying ${nav.status})`;
+      nav.saving
+        ? "Saving... drawn by the navigation"
+        : nav.lateBy !== null
+          ? `Saving... drawn by the navigation ${nav.lateBy} ms after its 5 s (the page at ${nav.at} says ${nav.status})`
+          : nav.sameDocument ? `no Saving... drawn by the navigation (the page at ${nav.at} says ${nav.status})` : `a new document loaded (at ${nav.at}, saying ${nav.status})`;
     const saved = () => page.textContent("#alert-status");
     /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
     const savedLine = '<p id="alert-status" role="status">Saved.</p>';
@@ -303,9 +325,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const address = asked.pathname + asked.search;
         const seconds = seeds.get(address);
         const mode = request.headers()["corten"];
-        // The runtime's navigation alone (`corten: nav`, or `page` for a whole read), once a page.
-        if (seconds === undefined || seeded.has(address) || request.method() !== "GET" || (mode !== "nav" && mode !== "page")) return route.fallback();
+        // The runtime's navigation alone (`corten: nav`, or `page` for a whole read; a prefetch
+        // aside), once a page: the first such request takes the seed and the navigation's token.
+        if (seconds === undefined || seeded.has(address) || request.method() !== "GET" || (mode !== "nav" && mode !== "page") || isPrefetch(request)) return route.fallback();
         seeded.set(address, "its fetch did not settle");
+        const token = claimNav(address);
         try {
           // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
           const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
@@ -316,7 +340,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const shows = body.includes(savedLine) ? "Saved." : body.includes(savingLine) ? "Saving..." : null;
           if (!res.ok() || shows === null) {
             seeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
-            await route.fulfill({ status: res.status(), headers, body });
+            await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
             return;
           }
           const tags = /<noscript data-corten-read-again[^>]*>[\s\S]*?<\/noscript>|<template data-corten-read-again[^>]*><\/template>/g;
@@ -326,7 +350,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const headed = bare.includes("</title>") ? bare.replace("</title>", `</title>${head}`) : `${head}${bare}`;
           const answer = headed.includes("</main>") ? headed.replace("</main>", `${tag}</main>`) : `${headed}${tag}`;
           seeded.set(address, `the stand-in, the server's saying ${shows}`);
-          await route.fulfill({ status: res.status(), headers, body: markNav(address, answer) });
+          await route.fulfill({ status: res.status(), headers, body: markNav(token, answer) });
         } catch (error) {
           seeded.set(address, `failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`);
           await route.abort().catch(() => {});
@@ -718,7 +742,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // Away before the read: the runtime's navigation reaches a page still saving whose part is
           // to be read `LEAVE_SECONDS` after its tag is drawn (the stand-in's answer, `seeds`), and
           // the page leaves by its header's link, pressed in the page, before that read is due. No
-          // part read of that page may be sent, then or later: leaving cancels a read the page has
+          // part read of the alerts page may be sent from when that attempt began, then or later, of
+          // that page's address or any other (a timer left to run asks with its own receipt, which
+          // need not be that page's): leaving cancels a read the page has
           // only scheduled, as well as the answer of one on its way (the check above). The page's
           // own clock (`performance.now()`) gives the order: a mutation observer notes the moment the
           // part's tag is drawn and the moment it leaves the page (the next page's `<main>` taking
@@ -740,8 +766,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             let past = null;
             /** How long the page's timer is: the part's wait and 1.2 s. */
             const pastBy = LEAVE_SECONDS * 1000 + 1200;
-            /** The part reads of an attempt's page sent since it began. @param {Leave} attempt */
-            const sentTo = (attempt) => log.slice(attempt.logFrom).filter((e) => e.kind === "part" && address(e) === attempt.address);
+            /** The part reads of the alerts page, at any address, sent since an attempt began. @param {Leave} attempt */
+            const sentTo = (attempt) => log.slice(attempt.logFrom).filter((e) => e.kind === "part");
             try {
               for (let tries = 0; tries < 3 && !counted; tries++) {
                 const to = await readWithin("the pending write's page", pending());
@@ -814,7 +840,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 "navigating away before a page's part is read sends no read",
                 !!leave && past !== null && sent.length === 0,
                 leave
-                  ? `the page at ${leave.address} (its navigation answered with ${seeded.get(leave.address) ?? "nothing seen"}) ${leave.said}${past === null ? `; the page's timer ${pastBy} ms after its tag left did not run within 5 s more` : ""}; ${sent.length} part reads of it sent after${sent.length ? ` (${sent.map((e) => address(e)).join(", ")})` : ""}${attempts.length > 1 ? `; attempts: ${tried}` : ""}`
+                  ? `the page at ${leave.address} (its navigation answered with ${seeded.get(leave.address) ?? "nothing seen"}) ${leave.said}${past === null ? `; the page's timer ${pastBy} ms after its tag left did not run within 5 s more` : ""}; ${sent.length} part reads of the alerts page sent after${sent.length ? ` (${sent.map((e) => address(e)).join(", ")})` : ""}${attempts.length > 1 ? `; attempts: ${tried}` : ""}`
                   : `no attempt left its page ${LEAVE_MARGIN_MS} ms before its part's read was due: ${tried}`,
               );
             } finally {
@@ -896,11 +922,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       if (mode === "action") return route.fallback();
       const asked = new URL(request.url());
       const address = asked.pathname + asked.search;
-      const prefetch = request.headers()["purpose"] === "prefetch" || !!request.headers()["sec-purpose"]?.includes("prefetch");
-      // The runtime's reads (`corten: nav`, or `page` for a whole read); `go`'s navigation's own
-      // fetch is the one that finds its token waiting.
-      const read = request.method() === "GET" && (mode === "nav" || mode === "page") && !prefetch;
-      const navigation = read && navTokens.has(address);
+      // The runtime's reads (`corten: nav`, or `page` for a whole read; a prefetch aside); `go`'s
+      // navigation's own fetch is the one that takes its token, as it reaches the route.
+      const read = request.method() === "GET" && (mode === "nav" || mode === "page") && !isPrefetch(request);
+      const token = read ? claimNav(address) : undefined;
+      const navigation = token !== undefined;
       if (read) wholeReads.push({ address, navigation });
       const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
       const headers = res.headers();
@@ -915,10 +941,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const shows = whole.includes(savedLine) ? "Saved." : whole.includes(savingLine) ? "Saving..." : null;
       if (!res.ok() || shows === null) {
         wholeSeeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
-        return route.fulfill({ status: res.status(), headers, body: markNav(address, whole) });
+        return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
       }
       wholeSeeded.set(address, `the stand-in, the server's saying ${shows}`);
-      await route.fulfill({ status: res.status(), headers, body: markNav(address, stillSaving(whole)) });
+      await route.fulfill({ status: res.status(), headers, body: markNav(token, stillSaving(whole)) });
     };
     await page.route("**/alerts?saved=*", wholeOnly);
     page.on("request", onSaved);

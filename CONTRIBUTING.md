@@ -415,9 +415,10 @@ returns after them, fails the press. A failed press names its step in the check'
 press task not returning in time, failing or finding nothing to press, or what it led to not
 coming in time. The link to `/smoke/quoted` these checks then follow is
 pressed the same way, and that page must come in within five seconds counted from just before the
-press, a budget the press task shares. It has come only once its own markup is drawn (its
-`<output id="quoted">`, which no other page has), so an empty or other `<main>` at that address
-does not count. The page that reads itself again swaps `<main>` about a
+press, a budget the press task shares. It has come only once the address is `/smoke/quoted` and its
+`<main>` holds an `<output id="quoted">`, no form and nothing busy: the written page draws that
+output too, inside its form, so neither the output nor the address alone shows that page, and an
+empty or other `<main>` at that address does not count. The page that reads itself again swaps `<main>` about a
 second after it loads and whenever its answer changes, so a click that found the button (or the
 link) before a swap can reach nothing and send nothing
 ([#2035 Five more Firefox smoke cases fail intermittently under load](https://github.com/corten-run/corten/issues/2035)).
