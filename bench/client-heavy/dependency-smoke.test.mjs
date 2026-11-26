@@ -90,7 +90,19 @@ test("Remix's private test tool and the benchmark's root bundler both work", () 
   }
 });
 
-const smokeTimeoutMs = 120000, witnessTimeoutMs = 16000;
+const smokeTimeoutMs = 120000, witnessTimeoutMs = 16000, cleanupReserveMs = 10000;
+function rendererWitnessBudget(deadline, now = performance.now()) {
+  const remainingMs = Math.floor(deadline - now - cleanupReserveMs);
+  assert.ok(remainingMs > 0, "no time remains for the renderer witness before cleanup");
+  return Math.min(witnessTimeoutMs, remainingMs);
+}
+
+test("renderer witness leaves time for smoke cleanup near the deadline", () => {
+  assert.equal(rendererWitnessBudget(120000, 80000), 16000);
+  assert.equal(rendererWitnessBudget(120000, 109750), 250);
+  assert.throws(() => rendererWitnessBudget(120000, 110000), /before cleanup/);
+});
+
 test("the locked JavaScript builds still pass the client-heavy browser oracle", { timeout: smokeTimeoutMs }, async (t) => {
   const smokeDeadline = performance.now() + smokeTimeoutMs;
   const out = await mkdtemp(join(tmpdir(), "client-dependency-smoke-"));
@@ -118,10 +130,7 @@ test("the locked JavaScript builds still pass the client-heavy browser oracle", 
         assert.equal(pass.actions, null, app);
       }
       if (process.platform === "linux") {
-        const remainingMs = Math.floor(smokeDeadline - performance.now());
-        assert.ok(remainingMs > 0, "no time remains for the renderer witness");
-        // Do not extend the enclosing test's deadline, including its cleanup.
-        await verifyLiveRenderer(launched, (line) => t.diagnostic(line), Math.min(witnessTimeoutMs, remainingMs));
+        await verifyLiveRenderer(launched, (line) => t.diagnostic(line), rendererWitnessBudget(smokeDeadline));
       }
     } finally {
       try { await launched?.close(); } finally { await server.close(); }
