@@ -1956,6 +1956,8 @@ builds against.
   benchmark families. The localized-marketplace selection reuses existing strict gates;
   native qualification and complete group measurements remain separate from source registration.
 
+- Benchmark cleanup can let proved udev workers settle on hosts where systemd-udevd uses `/usr/bin/udevadm`, without changing the cleanup checks. [#2127 JSON API r85 preparation rejects 32 udev workers without executable evidence](https://github.com/corten-run/corten/issues/2127).
+
 #### Added
 
 - `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
