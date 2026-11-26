@@ -287,7 +287,7 @@ for them.
 
 | File | What it holds |
 | --- | --- |
-| `requests.test.mjs` | Each case's request byte for byte and the answer it must get, splitting a connection's bytes into answers, the masking |
+| `requests.test.mjs` | Each case's request byte for byte, its `HOSTS`, and the answer it must get, splitting a connection's bytes into answers, the masking |
 | `figures.test.mjs` | The arithmetic of a count and of an idle reading, and when a window or a run is refused |
 | `allocations.test.mjs` | Reading a profile |
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
