@@ -227,8 +227,10 @@ export async function pageWrites(page, browser) {
   /**
    * Notes, from now on, each mark a case's stand-in put in an answer (`data-smoke-at`, the answer's
    * place in `seen.asked`) the moment the page draws it, so a draw that the next one replaces is
-   * seen too: the time of that draw (`Date.now()` in the page), and what the header said had failed
-   * at that moment (its `data-failed`, or null). `drawnBy` reads them. Set up within 5 s.
+   * seen too: the time of that draw (`Date.now()` in the page), what the header said had failed at
+   * that moment (its `data-failed`, or null), and the mark of the failure event that said it (its
+   * `data-failed-mark`, or null, where a case marks its failures). `drawnBy` reads them. Set up
+   * within 5 s.
    * @param {import("@playwright/test").Page} own
    */
   const watchMarks = (own) =>
@@ -236,14 +238,15 @@ export async function pageWrites(page, browser) {
       5000,
       "the page did not start noting its draws within 5 s",
       own.evaluate(() => {
-        /** @type {Record<string, { time: number, failed: string | null }>} */
+        /** @type {Record<string, { time: number, failed: string | null, mark: string | null }>} */
         const marks = Object.create(null);
         (/** @type {any} */ (window)).__marks = marks;
         const note = () => {
           const time = Date.now();
           for (const el of Array.from(document.querySelectorAll("[data-smoke-at]"))) {
             const at = /** @type {string} */ (el.getAttribute("data-smoke-at"));
-            marks[at] ??= { time, failed: document.querySelector("header")?.getAttribute("data-failed") ?? null };
+            const header = document.querySelector("header");
+            marks[at] ??= { time, failed: header?.getAttribute("data-failed") ?? null, mark: header?.getAttribute("data-failed-mark") ?? null };
           }
         };
         note();
@@ -259,7 +262,7 @@ export async function pageWrites(page, browser) {
    */
   const drawnBy = async (own, at, by) => {
     const look = () =>
-      own.evaluate((at) => /** @type {{ time: number, failed: string | null } | undefined} */ ((/** @type {any} */ (window)).__marks[String(at)]), at);
+      own.evaluate((at) => /** @type {{ time: number, failed: string | null, mark: string | null } | undefined} */ ((/** @type {any} */ (window)).__marks[String(at)]), at);
     const drawn =
       (await pollFor(Math.max(0, by - Date.now()), look)) ?? (await within(5000, "the page did not say what it drew within 5 s", look()).catch(() => undefined));
     return drawn && drawn.time <= by ? drawn : null;
@@ -326,17 +329,22 @@ export async function pageWrites(page, browser) {
    * (`readAsked`), and whether its answer is drawn within 5 s of that read reaching the stand-in
    * (`drawnBy`) with the header already saying `failure` had failed at that draw: the read's own
    * mark (`markNav`), not a request or a pause, is what shows the poll drew, and a poll drawn before
-   * the failure was shown is not a poll that kept it. `from` is taken at what the read follows (a
-   * write's `settled` moment, or a held body's release, its time recorded by the page), not once
-   * the check has seen that in the page, by when the read may already have been asked and its time
-   * run; without one (the write never answered) there is no such read.
+   * the failure was shown is not a poll that kept it. Given `mark`, the header must also say at that
+   * draw that the failure event marked `mark` said it (`data-failed-mark`), so another failure with
+   * the same status in its place does not do; a null `mark` (no such event) never does. `from` is
+   * taken at what the read follows (a write's `settled` moment, or a held body's release, its time
+   * recorded by the page), not once the check has seen that in the page, by when the read may
+   * already have been asked and its time run; without one (the write never answered) there is no
+   * such read.
    * @param {import("@playwright/test").Page} own @param {{ asked: string[], askedAt: number[] }} seen @param {Since | undefined} from @param {string} failure
+   * @param {string | null} [mark]
    */
-  const nextPollDrawn = async (own, seen, from, failure) => {
+  const nextPollDrawn = async (own, seen, from, failure, mark) => {
     if (from === undefined) return { again: null, drewAgain: false, drawn: null };
     const at = await readAsked(seen, from);
     const drawn = at === null ? null : await drawnBy(own, at, seen.askedAt[at] + 5000);
-    return { again: at === null ? null : seen.asked[at], drewAgain: !!drawn && drawn.failed === failure, drawn };
+    const marked = mark === undefined || (mark !== null && drawn?.mark === mark);
+    return { again: at === null ? null : seen.asked[at], drewAgain: !!drawn && drawn.failed === failure && marked, drawn };
   };
   {
     const { own, seen } = await writtenPage(brand);
@@ -790,6 +798,7 @@ export async function pageWrites(page, browser) {
           releasedAt: /** @type {number | null} */ (state.__releasedAt ?? null),
           bodyAt: /** @type {number | null} */ (state.__bodyAt ?? null),
           failedAt: /** @type {number | null} */ (state.__failedAt ?? null),
+          failedMark: /** @type {string | null} */ (state.__failedMark ?? null),
         };
       });
     /** By when the outcome had to come, as far as the page has said. */
@@ -802,7 +811,7 @@ export async function pageWrites(page, browser) {
       const left = last ? by + 5000 - lookedAt : by - lookedAt;
       const now = left > 0 ? await within(left, "the page did not say what became of the body in time", look()).catch(() => null) : null;
       if (now === null) {
-        if (last) return { releasedAt: null, bodyAt: null, failedAt: null, by: null };
+        if (last) return { releasedAt: null, bodyAt: null, failedAt: null, failedMark: null, by: null };
         continue;
       }
       by = (now.releasedAt ?? start) + 5000;
@@ -852,26 +861,33 @@ export async function pageWrites(page, browser) {
             addEventListener("submit", (event) => (state.__heldForm ??= event.target), { capture: true });
             // Each failure the page says, with what had become of the held body at that moment and
             // whether it was said on the form that sent the held write, so the check takes a failure as
-            // the body's only if it came after the body was cut (or given), on that form.
-            /** @type {{ status: number, body: string | null, onHeldForm: boolean, target: string, time: number }[]} */
+            // the body's only if it came after the body was cut (or given), on that form. Each has a mark
+            // of its own, which the header carries with its status (`data-failed-mark`), so a later
+            // look knows the failure it shows is that one, not another with the same status.
+            /** @type {{ status: number, body: string | null, onHeldForm: boolean, target: string, time: number, mark: string }[]} */
             const errors = [];
             state.__errors = errors;
             addEventListener("corten:error", (event) => {
               const failed = String((/** @type {CustomEvent} */ (event)).detail.status);
               const target = event.target;
+              const mark = `${errors.length}-${Math.random().toString(36).slice(2)}`;
               errors.push({
                 status: Number(failed),
                 body: state.__bodyAfterHeaders ?? null,
                 onHeldForm: target instanceof HTMLFormElement && target === state.__heldForm,
                 target: target instanceof Element ? `${target.localName}${target.id ? `#${target.id}` : ""}` : target === window ? "window" : String(target),
                 time: Date.now(),
+                mark,
               });
-              document.querySelector("header")?.setAttribute("data-failed", failed);
+              const header = document.querySelector("header");
+              header?.setAttribute("data-failed", failed);
+              header?.setAttribute("data-failed-mark", mark);
             });
             // The moment the expected failure is shown for the body, by the page's clock: the body cut
             // (or given), the page's first failure the expected one, said after that on the form that
-            // sent the held write, the header saying it and nothing busy. The check compares that
-            // moment with the body's release, however late it looks.
+            // sent the held write, the header saying it (by its mark) and nothing busy. The check
+            // compares that moment with the body's release, however late it looks, and takes that
+            // failure's mark (`__failedMark`) as the one the poll and the later look must still show.
             const expected = complete ? 503 : 0;
             const note = complete ? "completed" : "cut";
             new MutationObserver((_, observer) => {
@@ -882,11 +898,13 @@ export async function pageWrites(page, browser) {
                 first.body === note &&
                 first.onHeldForm &&
                 document.querySelector("header")?.getAttribute("data-failed") === String(expected) &&
+                document.querySelector("header")?.getAttribute("data-failed-mark") === first.mark &&
                 !document.querySelector("[aria-busy]");
               if (!shown) return;
               state.__failedAt = Date.now();
+              state.__failedMark = first.mark;
               observer.disconnect();
-            }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy", "data-failed"] });
+            }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy", "data-failed", "data-failed-mark"] });
             const fetch_ = window.fetch;
             let cut = false;
             window.fetch = async function (input, init) {
@@ -994,13 +1012,24 @@ export async function pageWrites(page, browser) {
         })),
       );
       const expected = String(complete ? 503 : 0);
-      const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, overlap ? releasedAt : seen.settled[first], expected);
+      // The poll must draw with the body's own failure shown: its status and the mark of the failure
+      // event the page took as the body's (`outcome.failedMark`).
+      const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, overlap ? releasedAt : seen.settled[first], expected, outcome.failedMark);
       // Looked at again at least 500 ms after the poll's draw, by the time the page recorded as it
       // drew it (a later look, not a watch through them): the failure then shown must still be the
-      // body's, not another that took its place.
+      // body's, by its status and its event's mark, not another that took its place, even with the
+      // same status.
       if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
-      const keptAs = drewAgain ? await readWithin("the failure shown 500 ms after the poll", own.evaluate(() => document.querySelector("header")?.getAttribute("data-failed") ?? null)) : null;
-      const kept = keptAs === expected;
+      const keptAs = drewAgain
+        ? await readWithin(
+            "the failure shown 500 ms after the poll",
+            own.evaluate(() => {
+              const header = document.querySelector("header");
+              return { failed: header?.getAttribute("data-failed") ?? null, mark: header?.getAttribute("data-failed-mark") ?? null };
+            }),
+          )
+        : null;
+      const kept = keptAs !== null && keptAs.failed === expected && outcome.failedMark !== null && keptAs.mark === outcome.failedMark;
       const arrived = await toQuoted(own);
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(

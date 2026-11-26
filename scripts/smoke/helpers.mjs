@@ -104,15 +104,28 @@ const watchBusy = (page, selector) =>
     }).observe(el, { attributes: true, attributeFilter: ["aria-busy"] });
   }, selector);
 /**
- * Settles as `work` does, or rejects with `what` once `ms` have passed. `work` is left to end on
- * its own (closing its page ends it); a rejection it brings later is already handled here.
+ * Settles as `work` does, or rejects with `what` once `ms` have passed by the monotonic clock
+ * (`performance.now()`, as `steps` counts): `work` that settles after that, though its timer has
+ * not yet run (a stalled event loop runs it late), rejects with `what` too, as a late result is no
+ * result. `work` is left to end on its own (closing its page ends it); a rejection it brings later
+ * is already handled here.
  * @template T @param {number} ms @param {string} what @param {Promise<T>} work @returns {Promise<T>}
  */
 const within = (ms, what, work) => {
+  const until = performance.now() + ms;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
-  const late = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(what)), ms)));
-  return /** @type {Promise<T>} */ (Promise.race([work, late])).finally(() => clearTimeout(timer));
+  const late = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(what)), Math.max(0, ms))));
+  const onTime = Promise.resolve(work).then(
+    (value) => {
+      if (performance.now() >= until) throw new Error(what);
+      return value;
+    },
+    (error) => {
+      throw performance.now() >= until ? new Error(what) : error;
+    },
+  );
+  return /** @type {Promise<T>} */ (Promise.race([onTime, late])).finally(() => clearTimeout(timer));
 };
 
 /**
@@ -211,8 +224,9 @@ const cleanUp = async (...undo) => {
 
 /**
  * `opening` (a context or page being made), within 30 s, Playwright's own timeout for an action: a
- * loaded browser can take seconds to start a process for one. One made only after them is closed
- * as it comes, so a case that gave up on it does not leave it open.
+ * loaded browser can take seconds to start a process for one. One made only after them (by the
+ * monotonic clock, as `within` counts, though before its timer ran) is closed as it comes, so a
+ * case that gave up on it does not leave it open.
  * @template {{ close: () => Promise<unknown> }} T @param {string} what @param {Promise<T>} opening @returns {Promise<T>}
  */
 const opened = (what, opening) =>
