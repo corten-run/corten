@@ -2235,31 +2235,9 @@ impl OwnConnection {
         // What the connection gave back, if it stopped at a request that is hyper's.
         let handed = 'own: {
             let mut conn = std::pin::pin!(crate::h1::serve(io, data.service(connection), head, &ending));
-            // Shutdown is waited for once. That poll leaves this task's waker with the channel
-            // (the future is the task's own, so its waker is the same at every poll, and the
-            // wait is polled outside the task's budget, which could put it off). After it, a
-            // wake asks only whether the channel's value has changed, one load, where polling
-            // the wait again would take a lock and compare the waker at every read and write of
-            // the connection.
-            let changed = stop.clone();
-            let closing = {
-                let mut stopping = std::pin::pin!(tokio::task::unconstrained(stop.wait_for(Option::is_some)));
-                let mut waits = false;
-                let stopped = std::future::poll_fn(|cx| {
-                    if let Poll::Ready(handed) = conn.as_mut().poll(cx) {
-                        return Poll::Ready(Err(handed));
-                    }
-                    // A channel whose sender is gone is asked too: the wait ends with it.
-                    if waits && !changed.has_changed().unwrap_or(true) {
-                        return Poll::Pending;
-                    }
-                    waits = true;
-                    stopping.as_mut().poll(cx).map(|closing| Ok(closing.ok().and_then(|closing| *closing)))
-                });
-                match stopped.await {
-                    Ok(closing) => closing,
-                    Err(handed) => break 'own handed,
-                }
+            let closing = match until_stopped(conn.as_mut(), &mut stop).await {
+                Ok(handed) => break 'own handed,
+                Err(closing) => closing,
             };
             ending.store(true, std::sync::atomic::Ordering::Relaxed);
             // The server gone without a shutdown: close now.
@@ -2291,6 +2269,37 @@ impl OwnConnection {
     }
 }
 
+/// `conn` polled until it ends (`Ok`) or shutdown begins (`Err`, with the closing, or `None` when
+/// the server is gone without a shutdown), by a task of its own: as `serve_listener` waits for
+/// hyper's connection, the wait for shutdown has a waker of its own ([`Heard`]) and is polled only
+/// when that waker has fired, and at first, so a wake of the task for the connection asks only
+/// whether it has. The task's waker is taken once: the caller is the task's own future, polled
+/// with the same waker for as long as it runs.
+async fn until_stopped<C: Future>(
+    mut conn: std::pin::Pin<&mut C>,
+    stop: &mut tokio::sync::watch::Receiver<Option<Closing>>,
+) -> Result<C::Output, Option<Closing>> {
+    use std::{sync::atomic::Ordering, task::Poll};
+    let task = std::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
+    let heard = Arc::new(Heard { woken: std::sync::atomic::AtomicBool::new(true), task });
+    let waker = std::task::Waker::from(heard.clone());
+    let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(done) = conn.as_mut().poll(cx) {
+            return Poll::Ready(Ok(done));
+        }
+        if !heard.woken.load(Ordering::Acquire) {
+            return Poll::Pending;
+        }
+        // Cleared before the poll, so a wake during it or after it is kept.
+        heard.woken.store(false, Ordering::Release);
+        let mut cx = std::task::Context::from_waker(&waker);
+        // A channel whose sender is gone is an error here, and ends the wait.
+        stopping.as_mut().poll(&mut cx).map(|closing| Err(closing.ok().and_then(|closing| *closing)))
+    })
+    .await
+}
+
 /// The rest of a connection Corten's own gave back at a request that is hyper's (one that may
 /// have a body or switch protocols; [`crate::h1::Rewound`]: that request's head and what the
 /// client sent behind it are read first). hyper serves it as `serve_listener` has it serve every
@@ -2308,13 +2317,9 @@ async fn handed_over<I, D>(
 {
     let service = hyper_util::service::TowerToHyperService::new(service);
     let mut conn = std::pin::pin!(http.serve_connection(hyper_util::rt::TokioIo::new(io), service).with_upgrades());
-    // The connection first: the request it was handed over at has arrived, and is answered
-    // though shutdown began before hyper read it.
-    let closing = tokio::select! {
-        biased;
-        _ = conn.as_mut() => return,
-        closing = stop.wait_for(Option::is_some) => closing.ok().and_then(|closing| *closing),
-    };
+    // The connection is polled first: the request it was handed over at has arrived, and is
+    // answered though shutdown began before hyper read it.
+    let Err(closing) = until_stopped(conn.as_mut(), stop).await else { return };
     conn.as_mut().graceful_shutdown();
     let Some(closing) = closing else {
         let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
