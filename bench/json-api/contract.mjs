@@ -10,10 +10,12 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const timedSchema = "json-api-results/v2";
+export const scheduledProducerSchema = "json-api-producer/v3";
+export const scheduledProducerMarker = "bench/json-api/load-resource-capture.mjs";
 export const timedReceiptSchema = "json-api-native-audit/v2";
 export const auditBundleSchemas = Object.freeze(["json-api-native-audits/v1", "json-api-native-audits/v2"]);
 export const receiptSchema = "json-api-native-audit/v1";
-export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
+export const nodeImage = "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067";
 export { k6Image } from "../load-tool.mjs";
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const payloads = Object.freeze({
@@ -113,8 +115,11 @@ export function runtimeContext(summary, profile) {
   return { checkout, runId: summary.runId, network: `${summary.runId}-net`, fixtureSource: `${checkout}/${p.fixture.slice(0, p.fixture.lastIndexOf("/"))}`,
     apiBase: `http://${summary.runId}-${p.path}-api:8080`, startupTimeout: summary.options.startupTimeout,
     nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId,
-    toolExecutions: summary.toolExecutions, ...(summary.schema === timedSchema ? { timed: true,
-      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt } : {}),
+    toolExecutions: summary.toolExecutions,
+    // The opt-in c-16 layout records the cold probe's own CPUs (report.mjs checks that record); the default has none.
+    ...(summary.measurement?.generatorPlacement === undefined ? {} : { coldProbe: summary.measurement.generatorPlacement.coldProbe }),
+    ...(summary.schema === timedSchema ? { timed: true,
+      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt, producerSchema: summary.producer?.schema } : {}),
     appExecutions: Object.fromEntries(Object.entries(summary.apps ?? {}).map(([app, entry]) => [app, entry.images?.[profile.payload]?.execution])) };
 }
 function observedConfiguration(info, expected, context, role) {
@@ -176,7 +181,7 @@ export function participantReceipt(info, expected, context, role) {
 function verifyParticipant(observed, expected, context, role) {
   assert.ok(["upstream", "load", "probe"].includes(role), "unknown participating runtime role");
   assert.match(observed?.containerId ?? "", /^[a-f0-9]{64}$/, "missing participating container identity");
-  const budget = expected.cpus[role === "upstream" ? "api" : "load"];
+  const budget = role === "probe" && context.coldProbe !== undefined ? context.coldProbe : expected.cpus[role === "upstream" ? "api" : "load"];
   assert.deepEqual(observed, { role, containerId: observed.containerId, imageId: role === "load" ? context.k6ImageId : context.nodeImageId,
     memoryBytes: role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
     quota: budget.quota, cpuset: budget.cpuset, configuration: expectedConfiguration(expected, context, role) }, "participating runtime image/CPU/memory/ownership differs");

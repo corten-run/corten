@@ -5,7 +5,9 @@ import { aggregate, phases } from "./contract.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { timingPlan } from "./group.mjs";
 
-export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid = 0, httpErrorType = true } = {}) {
+// `classes` adds the failure-class series (`catalog_failed_<class>`) a producer since the split
+// writes for each failed request; without it the summary is one with no failures classified.
+export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid = 0, httpErrorType = true, classes = {} } = {}) {
   const successes = 100 - timeouts - httpErrors - invalid, errors = timeouts + httpErrors + invalid;
   const typePasses = successes + (httpErrorType ? httpErrors : 0), checkPasses = successes + typePasses;
   return { metrics: {
@@ -16,6 +18,7 @@ export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid
       value: checkPasses / 200, thresholds: { "rate==1": errors > 0 } },
     dropped_iterations: { count: dropped, thresholds: { "count==0": dropped > 0 } },
     catalog_successes: { count: successes }, catalog_timeouts: { count: timeouts }, catalog_http_errors: { count: httpErrors }, catalog_invalid_responses: { count: invalid },
+    ...Object.fromEntries(Object.entries(classes).map(([name, value]) => [`catalog_failed_${name}`, { count: value }])),
   }, root_group: { checks: {
     "catalog status 200": { passes: successes, fails: errors },
     "catalog content type": { passes: typePasses, fails: 100 - typePasses },

@@ -1218,7 +1218,12 @@ folders':
 
 All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
 times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
-run them.
+run the `ab.mjs` rounds; one ran the floods and fault counts again for the thread cache's limit on
+2026-11-23, kept under the tag `evidence/thread-cache-1979-diagnostic`
+([design Choice 23](../../docs/design.md#choice-jemalloc-image)). From that change card-market's
+image, which `builds.mjs`, `cost-under-load.sh` and the commands below build, sets a 512 KiB thread
+cache where it set 64 KiB: a result recorded before it ran with 64 KiB, and a comparison across
+that change's merge changes the allocator's setting with the code.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
@@ -2132,7 +2137,39 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    connection cap (httpx's default keeps 20 idle and allows 100 in all), Phoenix's Req client uses
    a Finch pool of 1,024 connections to the item API, opened as needed (Req's own pool holds Finch's
    50 per host), and Drogon keeps one `HttpClient` (one connection) per request in flight on each
-   thread. Drogon also hands the fixture
+   thread. No app in this matrix reuses a pooled upstream connection idle for 5 s: the item API and
+   the catalog and marketplace fixtures are Node HTTP servers that answer `Keep-Alive: timeout=5`
+   and close an idle connection after those 5 s plus Node's 1 s buffer, and a request written to a
+   connection as it closes can be lost before the upstream sees it. Where a client's default keeps
+   idle connections longer, the app does not reuse one idle for 4 s: reqwest (Corten, axum + Maud,
+   topcoat, Leptos), Go's transport (Gin), httpx (FastAPI, whose default is the advertised 5 s),
+   .NET's `SocketsHttpHandler` (both ASP.NET apps) and Finch (Phoenix, `conn_max_idle_time`)
+   close it; urllib3 under `requests` (Django, which otherwise keeps a connection until it sees
+   the close) and Drogon's clients skip it when they next take a connection from the pool. The JDK
+   client (Spring) gets 1 s, since it drops an expired connection late (with 4 s set, it reused
+   connections idle 4.8 to 5.3 s in four of five runs of the check). Node's `fetch` (the JavaScript apps) and Rails' `Net::HTTP` (2 s by
+   default) already stay under 5 s, and Laravel's client opens a connection per request. None of
+   these adds a retry; Go's transport and the JDK client retry a request lost on a reused connection
+   on their own, which hides the loss without preventing it. The Express-on-Bun deployment
+   (`bench/deployments/express-bun`) is an exception: it runs the same Express handlers under Bun
+   1.4.5, whose `fetch` keeps an idle connection for 5 minutes unless told otherwise (the
+   pinned source's `arm_idle_timeout` in `src/http/HTTPContext.rs`). It is a functional
+   qualification with no timed load, and the shared Express source is left unchanged for it, so no
+   idle bound is claimed or checked there; a timed Bun run would need its own bound and this check
+   first. `node bench/fullstack/idle-close.mjs <image>` checks an image against an upstream that
+   resets any connection reused after 5 s idle: it probes each read once its warmed connections
+   are idle 4.5 s and fails a client that still reuses a connection, so it verifies that idle
+   connections are dropped by the probe, under the upstream's 5 s close, not the configured 4 s
+   itself, which a pool expiring between 4 s and the probe would also pass. The probe is judged at
+   the upstream: when each of its requests arrives, every connection that answered the read's
+   warm-up must have been idle 4.5 to below 4.75 s, or closed under 4.75 s idle before the probe;
+   when the app replies does not matter. A request arrives when the read that completes its head
+   reaches the upstream, before the upstream prepares its answer. A probe outside that window (a
+   late timer, an app that holds a request before sending it upstream, the still-open warmed
+   connections' answers spread over 250 ms or more), or after any upstream request between the
+   warm-up and the probe, is
+   inconclusive and fails the check (`--bound-ms` sets the bound; see the script's header). It also requires the
+   pool to reuse a connection before the idle, so Laravel's image needs `--no-reuse`. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
    item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
@@ -2190,9 +2227,73 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
     and stylesheets in every app, and r13 the first with all eighteen; in each, and in r15 and r16 (the
     round these tables come from), parity passed on 17 pages and `look.mjs` on 4 pages in 4 views,
     with no failures.
-13. Build times depend on the toolchain images' versions (`rust:1-bookworm`, `node:24-bookworm-slim`
-    and the rest move to their newest release) and, for dependencies, on the network and the
-    package registries at the time. The rebuild keeps each tool's cache, which favors the tools
+13. Build times depend on the toolchain images' versions (the rounds above built on `rust:1-bookworm`,
+    `node:24-bookworm-slim` and the rest at their newest release; later rounds record their own,
+    since 2026-11-24 `rust:1.100.0-trixie` and `node:26.13.1-trixie-slim` by digest, which are
+    different inputs, not a measured speedup) and, for dependencies, on the network and the
+    package registries at the time. Since
+    [#1763 Catalog CI: Spring image build could not resolve the pinned Maven parent POM](https://github.com/corten-run/corten/issues/1763),
+    Spring's Maven retries a 429 or 503 from Maven Central up to four times, waiting 10, 20, 30 and
+    40 seconds or the registry's Retry-After up to 40 seconds (a longer Retry-After ends the retries
+    at once; it is not shortened to 40), and a retryable I/O error up to four times
+    (`apps/spring/.mvn/maven.config`); one request waits at most 160 seconds between its
+    retries. The retries alone did not keep a hosted runner building: Central still answered its
+    dependency download with 429 after them
+    ([parity (spring) job, 2026-11-25](https://github.com/corten-run/corten/actions/runs/45688904356/job/139486660000)).
+    So Spring's Maven reaches Central through Google's public mirror of it,
+    `https://maven-central.storage-download.googleapis.com/maven2/`, which Maven's mirror guidance
+    lists (`apps/spring/.mvn/settings.xml`, a mirror of `central` only, which `maven.config`
+    names), with strict checksums (`--strict-checksums`): a download whose bytes do not match the
+    checksum the mirror serves, or that has none, fails instead of warning. This is a host change,
+    not a dependency change: the same coordinates and versions. A checksum from the same mirror
+    cannot catch a mirror that serves other bytes with a matching checksum. A cold local image
+    build on 2026-11-25 downloaded all 747 of its files (POMs and jars) from the mirror and none
+    from Central, in 63 seconds (measured once, on a workstation). Its image also bounds each
+    Maven run, the dependency download at 15 minutes and `package` at 3, and runs both without
+    `-q`, so a successful image build also logs differently: each transfer and Maven's progress. `package` stays online. Two cold local builds saw it make
+    no transfers after the download, in 41 and 59 seconds, so its 3-minute bound is provisional,
+    and its margin on a hosted runner is unverified: one request's 160 seconds of retries plus the
+    packaging could exceed it. Each Maven bound fits the deadline that directly contains it, which
+    `builds.test.mjs` checks: the image's two Maven runs (18m20s with their kill grace) inside each
+    shared runner's 60-minute image build, the native Spring test step's image build and 10-minute
+    `mvn test` inside its 30 minutes, the transport proof's two 270-second runs inside its
+    12-minute step, and the image's Maven runs inside each 20-minute measured build of the Docker
+    rebuild benchmark (`docker-rebuild.mjs`), a nominal 1m40s left for the rest, and in the image
+    builds of Mixed Production, the hardening evidence check (20 minutes each) and JSON API
+    (60 minutes). The setup step of a default or legacy Live round on a droplet (`droplet.mjs`)
+    builds every image inside one 90-minute limit that all of them share; it is not Spring's
+    own, and `builds.test.mjs` checks only that Spring's Maven runs alone fit in it. Two
+    enclosing limits are checked as sums: the Catalog parity job's 95 minutes cover the Spring
+    test and proof steps' own limits and the image's Maven runs in both shared runners' builds,
+    counting each step whose condition runs it for Spring (1h18m40s), which leaves 16m20s for
+    the rest of the job, which the sum does not reserve; and an unattended round's 90-minute
+    build call for an app (`round.mjs`), at which `run-all.mjs` stops it, covers one 20-minute
+    measured build when Spring opts into the Docker rebuild benchmark
+    (`BENCH_DOCKER_REBUILD_APPS`), a limit the call's other builds share.
+    The mirror, retries and bounds change Spring's build-cost inputs, the host it downloads
+    from, its retries when a download fails transiently and what a successful build logs, not its
+    dependency pins, what it downloads or the jar it builds; their performance effect was not
+    measured. Two timed paths see it differently: the Docker rebuild benchmark builds this Dockerfile, so it times the bounded,
+    verbose Maven runs, while the build-cost recipe in `builds.mjs` still runs quiet Maven without
+    the bound. Run directly, `build.mjs` stops a measured step at its two-hour per-command
+    deadline. In an unattended round `run-all.mjs` also stops the app's whole build call at its
+    90-minute limit and at 60 minutes without output; `build.mjs` prints a step's output only when
+    it returns, so a quiet step meets whichever of the three comes first, which a step started late
+    in the call can be the call limit. The two-hour deadline and the idle cutoff are longer than the
+    image's 18m20s of Maven, which `builds.test.mjs` checks; the call limit is shared by the call's
+    builds. It copies `.mvn`, so only its download host, checksum policy and retry policy change.
+    Hosted CI still downloads Spring's dependencies from Central, through the mirror, on each run:
+    both shared runners (`bench/catalog/run.mjs`, `bench/marketplace/run.mjs`) build with a
+    plain `docker build` that imports and exports no layer cache, so the first build on a fresh hosted runner starts cold.
+    Later builds in the same job, such as the second runner's or the Spring test stage's, may reuse
+    the layers that job's Docker already built. A CI-only Buildx invocation could keep a cache
+    across runs on a separate cache-capable builder without changing the official commands. We decline that as
+    a tradeoff: it adds a second builder and a cache store to CI, its cache would serve only that
+    invocation's build while the runners' builds stay cold, and the mirror, with the bounded
+    retries, is how a cold build avoids the throttling that issue reported. Within one CI job, the
+    transport proof reuses the Maven repository of the Spring tests before it and can still fetch
+    what that lacks, such as the dependencies its WebFlux POM adds, through the same mirror.
+    The rebuild keeps each tool's cache, which favors the tools
     that keep one; a Docker build without a cache mount starts each rebuild without it. Each
     rebuild runs in a new container, so a build server (.NET's, Gradle-style daemons) does not
     carry over, as on a fresh CI runner. Peak memory is anonymous memory only: the files rustc
@@ -2274,9 +2375,11 @@ node look.mjs [apps]        # every app's pages in Chromium against Corten's, bo
 node build.mjs legacy1 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 node docker-rebuild.mjs legacy1 [apps] [runs=3]   # the app's own docker build after the edit, BuildKit's cache warm
 node rust-analyzer.mjs legacy1 [apps] [runs=5]    # rust-analyzer's own latency (the Rust apps)
-# One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
+# One request's instructions by stage and crate (callgrind), from the repository root, items in memory,
+# in the Rust bench apps' builder (the committed tables ran in rust:1-bookworm, Debian 12; a run in
+# this Debian 13 image has a newer compiler, glibc and valgrind, so compare it with its own runs):
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
-  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
+  -e CARGO_TARGET_DIR=/target rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 bash bench/fullstack/cost-by-crate.sh
 node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.out /tmp/cg/cg-card-market-page-fixture-1300.out
 # The axum + Maud app the same way: add -e APP=axum-maud (dumps cg-axum-maud-*.out). Writing each
 # page with what it calls: INCLUSIVE='render_into|^item_page_axum_maud::pages::item$' before node
@@ -2286,7 +2389,7 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 # What each production default costs: card-market built as it is and with each ablate/ patch, then
 # measured; builds go to /tmp/defaults/bins and are reused, so a stopped run measures at once:
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
-  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
+  -e CARGO_TARGET_DIR=/target rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 # The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on pinned
 # cores; on a c-8, the app on CPU 1 and k6 on 2-7; without them the app gets --cpus 1 unpinned),
@@ -2307,9 +2410,15 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
    `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
-   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in
-   a round committed before this, `raw.txt` (below). Its raw output
-   (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
+   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and
+   `raw.txt` (below). Its raw output (each app's k6, CPU and startup files, every count) is one
+   archive beside them, `raw.tar.xz`, which Git ignores (`bench/fullstack/.gitignore`). Only
+   the packed archive is ignored: the loose raw files of a round not yet packed are not, so pack a
+   round before committing its summaries. A maintainer publishes the archive where it will be kept,
+   and the round's `raw.txt` records where it can be fetched and its SHA-256
+   ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
+   `node bench/fullstack/pack.mjs <round>` prints the archive's size and SHA-256; it does not
+   publish the archive or write `raw.txt`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
    hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
    and removes a file only when the listing has it. r14's raw output was 1,156 files and 1.64 MB,
@@ -2320,9 +2429,21 @@ node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next 
    the files back for a look at one run.
 3. The rounds committed before this (r1 to r14 and the side rounds) had their raw output removed
    from the tree. Each one's `raw.txt` names the commit that still has it and the command that
-   brings it back; remove it when a round brought back is packed again. The history is not
+   brings it back; when a round brought back is packed again, its `raw.txt` records where the
+   new archive can be fetched and its SHA-256 instead. The history is not
    rewritten, so their blobs stay in it and a clone still downloads them once (Git's pack was 41.7
    MiB); a checkout has 142 files of results (5.7 MB) instead of 11,150 (22.1 MB), and a new round
-   adds one archive instead of a thousand files.
-4. The raw output stays in the repository, not in a CI artifact (kept for 90 days at most) or a
-   release download, so the runs behind every table stay with the commit that reports them.
+   packs its raw output into one archive instead of a thousand files.
+4. The rounds packed before raw output left the tree (r15, r16, `cost-under-load` and the
+   `ab-jemalloc` rounds) keep their `raw.tar.xz` where it is, listed in `scripts/bench-size.allow`:
+   their paths are cited, and removing them at the tip would shrink no full clone, since their
+   blobs stay reachable in history. A new round's archive is not committed, because a normal full
+   clone fetches every version of a committed file still reachable in history; `npm run check` fails on a file under `bench/` with an archive suffix that the
+   base's list does not have, in any commit of the pull request, and the list only shrinks
+   ([#1719 Benchmark runs commit raw output and archives under bench/, so every clone grows with every run](https://github.com/corten-run/corten/issues/1719)).
+   A kept file is held to 256 KiB the same way: r16's log and summary, over it, are listed, and a
+   new round's over it fails the check until it is made smaller or its detail moves to the archive.
+   A dependency lock file is source input, not output: the size limit skips one at a path listed
+   in `LOCKS` in `scripts/bench-size.mjs` beside its manifest (Laravel's `composer.lock` with
+   `composer.json`, Nuxt's `package-lock.json` with `package.json`); a new one over the limit
+   is added there, for review.

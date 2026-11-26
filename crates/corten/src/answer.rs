@@ -2500,15 +2500,42 @@ pub trait Anonymous {
     ///     const KEYED: corten::answer::sealed::Keyed = corten::answer::sealed::Keyed(true);
     /// }
     /// ```
+    ///
+    /// Corten's own inputs are keyed only as Corten fills them: a `Form` of a type its extractor
+    /// cannot read, which only an extractor of the app's own could fill, is not one at all.
+    ///
+    /// ```
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// input::<corten::Form<String>>();
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// fn input<T: corten::answer::Anonymous>() {}
+    /// struct Raw;
+    /// input::<corten::Form<Raw>>();
+    /// ```
     #[doc(hidden)]
     const KEYED: sealed::Keyed = sealed::Keyed(false);
+
+    /// Whether it is keyed in a place before the handler's last, where Corten fills only what
+    /// reads the request's head (`FromRequestParts`): a `Form` there is the app's own.
+    #[doc(hidden)]
+    const KEYED_BEFORE_LAST: sealed::Keyed = Self::KEYED;
 }
 
-impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {
+// Each is keyed only with the bounds Corten's own extractor for it has, so a type that falls
+// outside them, which the app could fill with an extractor of its own for Corten's type, is not.
+impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R>
+where
+    R::Path: crate::route::__private::ReadPath,
+    R::Params: Send,
+{
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T> Anonymous for crate::Form<T> {
+impl<T: serde::de::DeserializeOwned> Anonymous for crate::Form<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
+    // Corten reads a form only as the last argument, from the body.
+    const KEYED_BEFORE_LAST: sealed::Keyed = sealed::Keyed(false);
 }
 impl<T> Anonymous for State<T> {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
@@ -2525,9 +2552,9 @@ impl Anonymous for Method {
 impl Anonymous for Uri {
     const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
-impl<T: Anonymous> Anonymous for Option<T> {
-    const KEYED: sealed::Keyed = T::KEYED;
-}
+// Corten fills an `Option` only through `OptionalFromRequestParts`, which none of its keyed
+// inputs implement, so an `Option` of one is filled by the app's own code: not keyed.
+impl<T: Anonymous> Anonymous for Option<T> {}
 // What these read is not in the key (a body, where a stream stopped): a page whose handler takes
 // one is not kept.
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -2615,6 +2642,13 @@ macro_rules! holds {
     };
 }
 
+/// Each argument keyed in its place: the last as Corten fills it there, the others as it fills
+/// one before the last.
+macro_rules! keyed {
+    ($last:ident) => { $last::KEYED.0 };
+    ($first:ident, $($rest:ident),+) => { $first::KEYED_BEFORE_LAST.0 && keyed!($($rest),+) };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -2627,7 +2661,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
-            const KEYED: bool = true $(&& $ty::KEYED.0)*;
+            const KEYED: bool = keyed!($($ty),*);
         }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
@@ -2720,14 +2754,23 @@ where
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
-        if !(self.shared && self.keyed) {
+        self.public()?.ok()
+    }
+
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        use crate::kept::{Shape, Verdict};
+        if !self.shared {
             return None;
         }
-        if O::PAGE {
-            Some(crate::kept::Shape::Page)
+        Some(if !self.keyed {
+            Err(Verdict::Unkeyed)
+        } else if O::PAGE {
+            Ok(Shape::Page)
+        } else if O::WHOLE.0 {
+            Ok(Shape::Body)
         } else {
-            O::WHOLE.0.then_some(crate::kept::Shape::Body)
-        }
+            Err(Verdict::NotWhole)
+        })
     }
 
     #[inline]

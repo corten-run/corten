@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { mock, test } from "node:test";
 import { remoteFiles, reservation } from "../cloud-contract.mjs";
+import { groupNames } from "../registry.mjs";
 
 let procFiles = null;
 mock.module("node:child_process", { namedExports: { execFileSync(command, args) {
@@ -110,12 +111,33 @@ test("a proved sleeping post-terminal udev worker can settle; the first after st
   assert.throws(() => verifySettledHostBoundary(baseline, first, settled, undefined), /terminal clock/);
 });
 
+test("an offline udev settle uses only its own bounded monotonic observations", () => {
+  const { baseline, first, settled, terminal } = udevBoundaries();
+  for (const observation of [baseline, first, settled]) {
+    observation.offlineMonoNs = observation.controlApparatus.sample.monoNs;
+    delete observation.controlApparatus;
+  }
+  assert.equal(udevSettleCandidates(baseline, first, terminal), null, "old replay cannot substitute offline clocks");
+  assert.deepEqual(verifySettledHostBoundary(baseline, first, settled, terminal, "post-terminal", true).settledUdevWorkers,
+    [{ pid: 62274, startTicks: "209603" }]);
+  settled.offlineMonoNs = first.offlineMonoNs;
+  assert.throws(() => verifySettledHostBoundary(baseline, first, settled, terminal, "post-terminal", true), /bounded monotonic interval/);
+});
+
+test("official timing selects the post-terminal proof for every registered group", () => {
+  for (const group of groupNames) {
+    assert.equal(udevSettlePolicy(group, "timing"), "post-terminal", group);
+    assert.equal(udevSettlePolicy(group, "prepare"), group === "json-api" ? "preparation" : null, group);
+  }
+  assert.equal(udevSettlePolicy("unknown", "timing"), null);
+  assert.equal(udevSettlePolicy("live-delivery", "other"), null);
+});
+
 test("only JSON preparation can settle a worker born before the terminal cutoff, strictly after the baseline", () => {
   const { baseline, first, settled, terminal } = udevBoundaries();
   const preparation = udevSettlePolicy("json-api", "prepare");
-  const timing = udevSettlePolicy("localized-marketplace", "timing");
-  assert.equal(udevSettlePolicy("json-api", "timing"), null);
-  assert.equal(udevSettlePolicy("catalog-page", "timing"), null);
+  const timing = udevSettlePolicy("live-delivery", "timing");
+  assert.equal(timing, "post-terminal");
   const bornAt = (ticks) => Object.assign(first.processes[1], { startTicks: ticks,
     stat: stat(62274, ticks, "4194624", "(udev-worker)", "846", "S") });
   bornAt("209500");

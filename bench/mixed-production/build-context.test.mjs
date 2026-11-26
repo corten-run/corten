@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +9,12 @@ import { executionMountArgs } from "./execution-inputs.mjs";
 import { sourceSnapshot } from "./source-audit.mjs";
 import { commands } from "../json-api/process.mjs";
 import { sha256 } from "./capture.mjs";
+import { fixtureGitCommands, fixtureGitEnv } from "../../scripts/fixture-git.mjs";
+
+// The same 30 s deadline io.command gave these fixture Git calls. The archives below run Git through
+// `io`, which fixtureGitCommands gives the same environment.
+const fixtureGit = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true,
+  stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv(), timeout: 30_000 }).trim();
 
 test("native archive arguments share a fixed tree timestamp without changing Corten commit archives", () => {
   const commit = "a".repeat(40), prefix = ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar"];
@@ -21,17 +28,17 @@ test("native archive arguments share a fixed tree timestamp without changing Cor
 });
 
 test("fresh Git extraction supplies only the empty mount point under the read-only source bind", async () => {
-  const root = mkdtempSync(join(tmpdir(), "corten-mixed-archive-")), io = commands(root);
+  const root = mkdtempSync(join(tmpdir(), "corten-mixed-archive-")), io = fixtureGitCommands(commands(root));
   try {
     const file = "bench/worker.mjs", body = 'import "playwright";\n';
     mkdirSync(join(root, "bench")); writeFileSync(join(root, file), body);
-    await io.command("git", ["init", "--quiet"]);
-    await io.command("git", ["-c", "core.autocrlf=false", "add", file]);
-    const commit = async () => {
-      await io.command("git", ["-c", "user.name=Archive Test", "-c", "user.email=archive@example.test", "commit", "--quiet", "-m", "archive fixture"]);
-      return io.command("git", ["rev-parse", "HEAD"]);
+    fixtureGit(root, "init", "--quiet");
+    fixtureGit(root, "-c", "core.autocrlf=false", "add", file);
+    const commit = () => {
+      fixtureGit(root, "-c", "user.name=Archive Test", "-c", "user.email=archive@example.test", "commit", "--quiet", "-m", "archive fixture");
+      return fixtureGit(root, "rev-parse", "HEAD");
     };
-    const clean = await commit(), out = join(root, "out"), dependencies = join(out, "execution/dependencies");
+    const clean = commit(), out = join(root, "out"), dependencies = join(out, "execution/dependencies");
     mkdirSync(dependencies, { recursive: true });
     const source = await extractNativeSource(io, out, clean), archive = join(out, "build-source.tar");
     assert.deepEqual((await io.command("tar", ["-tf", archive])).split(/\r?\n/), ["bench/", file]);
@@ -43,8 +50,8 @@ test("fresh Git extraction supplies only the empty mount point under the read-on
       "-v", `${out}:/out`, "-w", "/src"]);
 
     writeFileSync(join(root, "node_modules"), "tracked collision");
-    await io.command("git", ["add", "--force", "node_modules"]);
-    const collision = await commit(), other = join(root, "collision");
+    fixtureGit(root, "add", "--force", "node_modules");
+    const collision = commit(), other = join(root, "collision");
     mkdirSync(other);
     await assert.rejects(extractNativeSource(io, other, collision), { code: "EEXIST" });
     assert.equal(readFileSync(join(other, "build-source/node_modules"), "utf8"), "tracked collision");
@@ -56,7 +63,7 @@ test("fresh Git extraction supplies only the empty mount point under the read-on
 });
 
 test("Docker stdin context excludes ignored working-tree inputs and stays bound to the committed archive", async () => {
-  const root = mkdtempSync(join(tmpdir(), "corten-mixed-context-")), io = commands(root);
+  const root = mkdtempSync(join(tmpdir(), "corten-mixed-context-")), io = fixtureGitCommands(commands(root));
   const image = `corten-mixed-context-test-${process.pid}`;
   let built = false;
   try {
@@ -65,15 +72,15 @@ test("Docker stdin context excludes ignored working-tree inputs and stays bound 
     const file = "bench/fullstack/apps/express/server.mjs";
     writeFileSync(join(root, file), "export const actual = 'committed';\n");
     writeFileSync(join(app, "Dockerfile"), "FROM scratch\nCOPY server.mjs /server.mjs\n");
-    await io.command("git", ["init", "--quiet"]);
-    await io.command("git", ["add", "bench"]);
-    await io.command("git", ["-c", "user.name=Context Test", "-c", "user.email=context@example.test", "commit", "--quiet", "-m", "native context fixture"]);
-    const commit = await io.command("git", ["rev-parse", "HEAD"]);
-    const paths = (await io.command("git", ["ls-tree", "-r", "--name-only", commit, "--", "bench"])).split(/\r?\n/);
+    fixtureGit(root, "init", "--quiet");
+    fixtureGit(root, "add", "bench");
+    fixtureGit(root, "-c", "user.name=Context Test", "-c", "user.email=context@example.test", "commit", "--quiet", "-m", "native context fixture");
+    const commit = fixtureGit(root, "rev-parse", "HEAD");
+    const paths = fixtureGit(root, "ls-tree", "-r", "--name-only", commit, "--", "bench").split(/\r?\n/);
     const expected = sourceSnapshot(root, paths).sourceFiles;
     writeFileSync(join(root, ".git/info/exclude"), "Injected.cs\nevidence/\n");
     writeFileSync(join(app, "Injected.cs"), "ignored code that Docker COPY . . must never receive");
-    assert.equal(await io.command("git", ["status", "--porcelain"]), "");
+    assert.equal(fixtureGit(root, "status", "--porcelain"), "");
     const context = await nativeBuildContext(io, output, commit, "express", expected);
     assert.equal(context.sha256, sha256(context.input));
     assert.equal(context.dockerfile, "Dockerfile");

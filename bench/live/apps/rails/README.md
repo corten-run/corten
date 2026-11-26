@@ -11,7 +11,9 @@ RubyGems metadata and Docker image manifests: Ruby 4.0.9, Rails 8.1.4.1,
 Puma 8.0.3 and Bundler 4.0.24. The Ruby image is digest-pinned and the independent
 native lock was regenerated with Bundler's full index on that Ruby image. Rails'
 Active Storage dependency constrains Marcel to `~> 1.0`, retaining 1.2.1 rather
-than the incompatible latest major. No new library or
+than the incompatible latest major. On 2026-11-23 Ruby moved to 4.0.10 and Rack to
+3.2.9, both security releases ([#1376 bench/fullstack runs Rails, Phoenix, Gin and Nuxt on releases with published security fixes, so its production comparison is not each framework's supported configuration](https://github.com/corten-run/corten/issues/1376));
+runs measured before that keep the versions they recorded. No new library or
 broker is required. One Puma process uses
 Action Cable's native asynchronous adapter, in one container. Multiple application
 processes or instances are not supported by this synthetic in-memory store.

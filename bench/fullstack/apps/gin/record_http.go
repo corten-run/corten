@@ -30,9 +30,18 @@ func abortRecordPage(c *gin.Context, err error) {
 	render(c, status, sourceErrorPage(http.StatusText(status)))
 }
 
+// upstreamIdle is how long a connection to an upstream (the catalog, marketplace and item API
+// fixtures, all Node HTTP servers) may sit idle in the pool before a request opens a new one
+// instead. Each answers `Keep-Alive: timeout=5` and closes a connection idle for those 5 s plus
+// Node's 1 s buffer; a request written to a pooled connection as it closes is lost (the transport's
+// default keeps an idle connection 90 s). The pool drops one a second under what the upstream
+// advertises. It adds no retry: each read is still one upstream GET.
+const upstreamIdle = 4 * time.Second
+
 func newRecordHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = transport.MaxIdleConns
+	transport.IdleConnTimeout = upstreamIdle
 	return &http.Client{
 		Transport: transport,
 		// Bounds the entire read, including response headers and JSON body decoding.

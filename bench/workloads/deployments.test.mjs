@@ -121,8 +121,8 @@ test("server deployment descriptions match the refreshed production runtimes", (
   for (const [group, app, runtime] of [
     ["catalog-page", "fastapi", "CPython 3.15.2"],
     ["localized-marketplace", "django", "CPython 3.15.2"],
-    ["json-api", "spring", "Temurin 27.0.1.0.2+1 JRE"],
-    ["fullstack-browser", "rails", "CRuby 4.0.9"],
+    ["json-api", "spring", "Temurin 27.0.1.1+4 JRE"],
+    ["fullstack-browser", "rails", "CRuby 4.0.10"],
     ["fullstack-browser", "laravel", "PHP 8.5.12 ZTS"],
   ]) {
     assert.equal(manifest(group, app).configuration.runtime, runtime, `${app}: stale runtime description`);
@@ -213,7 +213,7 @@ test("live representatives use dispatched native ports and missing recovery port
 
 test("native live runtime descriptions match their checked-in build inputs", () => {
   const sources = [
-    ["rails", "CRuby 4.0.9", "ruby:4.0.9-slim@sha256:"],
+    ["rails", "CRuby 4.0.10", "ruby:4.0.10-slim@sha256:"],
     ["phoenix", "Elixir 1.20.5 / OTP 29.1.2 release", "elixir:1.20.5-otp-29@sha256:"],
     ["gin", "Go 1.27.4 native", "golang:1.27.4-alpine@sha256:"],
   ];
@@ -304,6 +304,21 @@ test("new descriptor binds exact commit/images/config/work/budgets and evidence 
   assert.throws(() => deploymentDescriptor("localized-marketplace", "django", alternative.id, binding({ ...alternative.configuration, framework: "Bun.serve" }, emptyEvidence(), "localized-marketplace")), /retain the native framework/);
   for (const path of ["../escape.json", "C:/escape.json", "/absolute.json", "https://example.com/receipt.json", "folder\\receipt.json", "receipt.json:stream", "folder/./receipt.json", "folder//receipt.json"]) {
     assert.throws(() => deploymentDescriptor(d.group, d.app, d.deployment, { ...b, evidence: { ...b.evidence, implementation: { path, sha256: "a".repeat(64) } } }), /relative local/);
+  }
+});
+
+test("Django's Granian ASGI deployment is declared only for Mixed Production and is not qualified", () => {
+  const id = "django-granian-asgi";
+  for (const group of groupNames) {
+    const row = deploymentPlan(group).apps.find((entry) => entry.app === "django"), asgi = row?.deployments.find((entry) => entry.id === id);
+    if (group !== "mixed-production") { assert.equal(asgi, undefined); continue; }
+    assert.equal(row.representative, "django-matched");
+    assert.equal(asgi.qualification, "pending");
+    assert.deepEqual(asgi.evidence, []);
+    assert.equal(asgi.configuration.builds.app.args.PROFILE, "matched-asgi");
+    assert.equal(asgi.configuration.environment.PROFILE, "matched");
+    assert.equal(asgi.configuration.environment.DJANGO_SETTINGS_MODULE, "itempage.mixed_asgi_settings");
+    assert.match(asgi.configuration.command.at(-1), /start_mixed_asgi\.py$/);
   }
 });
 

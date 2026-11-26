@@ -109,9 +109,8 @@ export async function openWatchlist(browser) {
   /** Every feed source the page has opened, oldest first: true while open. */
   const feedSources = () =>
     page.evaluate(() => (/** @type {any} */ (window)).__sources.filter((/** @type {EventSource} */ s) => s.url.includes("/feed/")).map((/** @type {EventSource} */ s) => s.readyState !== EventSource.CLOSED));
-  // The next /watch post waits this long, and for `holdWatch` to settle, before reaching the
-  // server, or fails as if offline.
-  const delayWatch = { value: 0 };
+  // The next /watch post waits for `holdWatch` to settle before reaching the server, or fails as
+  // if offline.
   /** @type {{ value: Promise<unknown> | null }} */
   const holdWatch = { value: null };
   const failWatch = { value: false };
@@ -120,18 +119,14 @@ export async function openWatchlist(browser) {
   /** The requests failed on purpose, which are not abandoned. */
   const offline = new Set();
   await page.route("**/watch", async (route) => {
-    const wait = delayWatch.value;
     const hold = holdWatch.value;
-    delayWatch.value = 0;
     holdWatch.value = null;
     if (failWatch.value) {
       failWatch.value = false;
-      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
       await hold;
       offline.add(route.request());
       return route.abort("internetdisconnected");
     }
-    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
     await hold;
     await route.continue().catch(() => {});
   });
@@ -315,5 +310,5 @@ export async function openWatchlist(browser) {
     check("a standalone patch with a missing target reports it without inserting the part", (await shared.locator("#shared-ref-part-2").count()) === 0);
     await shared.close();
   }
-  return { page, errors, swaps, noSwaps, live, feedSources, signsIn, failWatch, openFeeds, holdWatch, bug, cut, delayWatch, abandoned, openStreams, located, navRequests };
+  return { page, errors, swaps, noSwaps, live, feedSources, signsIn, failWatch, openFeeds, holdWatch, bug, cut, abandoned, openStreams, located, navRequests };
 }

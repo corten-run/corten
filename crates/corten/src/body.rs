@@ -29,6 +29,11 @@ trait Piece: http_body::Body<Data = Bytes, Error = BoxError> + Send + 'static {
     fn whole(self: Pin<&mut Self>) -> Option<Bytes> {
         None
     }
+
+    /// Whether it is held whole: read, it gives what it holds and cannot fail.
+    fn held(&self) -> bool {
+        false
+    }
 }
 
 /// The whole body, sent as one piece.
@@ -59,6 +64,10 @@ impl Piece for Whole {
     fn whole(self: Pin<&mut Self>) -> Option<Bytes> {
         Some(std::mem::take(&mut self.get_mut().0))
     }
+
+    fn held(&self) -> bool {
+        true
+    }
 }
 
 impl Body {
@@ -79,6 +88,12 @@ impl Body {
     /// A body with nothing in it.
     pub const fn empty() -> Self {
         Body(None)
+    }
+
+    /// Whether it is held whole (or empty), so reading it cannot fail or wait: under `corten dev`,
+    /// what a release build's read of an answer to keep finds (`crate::kept::tell_read`).
+    pub(crate) fn is_whole(&self) -> bool {
+        self.0.as_ref().is_none_or(|body| body.held())
     }
 
     /// A body sent as `stream` gives each piece; an error ends it, and the connection with it.

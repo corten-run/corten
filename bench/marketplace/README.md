@@ -40,6 +40,14 @@ See the [generated report](results/r20/report.md), [saved summary](results/r20/s
 [exact measured commit](results/r20/commit.txt) and [archive checksum receipt](results/r20/archive-sha256.txt).
 The original hash-verified archive remains outside Git; raw qualifications, browser checks,
 build logs, counted CPU, load summaries and sample streams are retained with these results.
+Those r20 files stay where they are; its `summary.json`, over 256 KiB, is listed in
+`scripts/bench-size.allow`. A new round commits its report, commit and provenance, small enough to
+diff, its summary only when that is within the limit and approved for public disclosure (else its
+SHA-256), and leaves its raw receipts in the archive
+([nightly procedure](nightly.md#finished-results)). A maintainer chooses
+where the archive is kept and publishes it there, and the committed provenance records where it
+can be fetched as well as its SHA-256: a checksum receipt alone says how to check a copy, not where
+to get one ([Benchmark results](../../CONTRIBUTING.md#benchmark-results)).
 
 Each admitted adapter completed 8 profiles in 3 rotated passes: pages in
 en-US, fr-FR, de-DE and locale-neutral JSON once per source/pass, using memory and uncached HTTP
@@ -262,6 +270,7 @@ npm run check:marketplace
 node bench/marketplace/run.mjs w1 --group production --build --check-only
 # From a clean, committed checkout, after reviewing conformance:
 node bench/marketplace/run.mjs w2 --group production --build --passes 3
+# From a checkout of the measured commit (this one, while it is still at that commit):
 node bench/marketplace/validate.mjs bench/marketplace/results/w2 w2 <measured-full-commit>
 node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
@@ -288,9 +297,15 @@ app's and profile's results; the report marks each stage that lost a pass
 than three passes only there; of two passes each number is the lower of its column's two
 values, not a median. The stop is the app's only when the container stopped after the phase
 began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
-containers, Docker recorded no kill, stop or restart of the app, and nothing failed that the
-stop does not explain (only docker stats errors stamped after the app finished); otherwise the
-run fails.
+containers, Docker recorded no kill, stop or restart of the app, and no phase step failed.
+An ordinary app exit does not require samples after the exit. When sampling was active, the
+client must return the expected shutdown status; a matching signal cannot establish who sent
+it before the client was reaped. A client exit observed before the stop request, any client
+stderr, an incomplete record, or a sampler deadline fails the phase. Replay refuses
+recorded faults and rechecks the Docker CPU and memory display format, finite values after unit
+conversion, and the matching sample summary even when the app stopped. A well-formed terminal
+zero (such as `0.00%` and `0B / 0B`) is allowed for a stopped phase. Only phases that did not
+start a sampler (warmup) need neither file.
 Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
@@ -305,6 +320,12 @@ The local `wN` commands do not create a droplet, collect c1, update nightly stat
 
 ### Saved raw evidence
 
+Marketplace uses Catalog's bounded runner for its Git, Docker and check
+commands. If one of those commands is stopped and a descendant holds its output
+pipes open, the runner releases the pipes after the stop grace and reports a
+failed command. Existing command deadlines, load settings and owned-container
+cleanup still apply. The separate Docker stats sampler does not use this runner.
+
 The browser gate observes native enhanced form transports without replacing them.
 Livewire alert updates must identify the same-origin marketplace alert component,
 item, locale, save call and submitted values. The complete rendered-page and
@@ -316,14 +337,46 @@ the same session when polling. A POST acknowledgement or changed message alone
 does not prove that save completed. Its continuing polls are not navigation:
 the correlated save and rendered message precede the full-page assertions, without
 requiring global network idle. Transport failures retain bounded diagnostics.
+A JavaScript-disabled page runs no animation-frame or timer callbacks, so the gate's alert
+message wait keeps its predicate (the first `.marketplace__message` has non-whitespace
+`textContent`) but has Playwright re-evaluate it from outside the page, through a `:root`
+locator, rather than an in-page poll that never ran again once it had seen the POST document
+before its message. That stall matches r19's symptom in [#1251](https://github.com/corten-run/corten/issues/1251),
+though r19's cause is not established.
+`alert-probe-run.mjs IMAGE [ITERATIONS] [RESULTS_DIR] [--budget SECONDS] [--deadline SECONDS]` repeats the three
+English phone alert cases without JavaScript against an image in both sources, laid out like
+the gate. It uses the gate's own submission wait, then requires one document POST answered
+200 without a redirect, that POST to be the last main-frame document request (a refresh or
+redirect to a GET at the same URL fails), the full expected page and the exact message, and
+keeps a bounded diagnostic (case, POST chain, document requests, ready state, message and
+document tail) for each failure. Its containers and network carry the run's owner label and
+are removed by the IDs their creation returned after confirming that label; a removal that
+fails or an owner that cannot be confirmed fails the run, and `cleanup.json` records the
+outcome. The app and upstream join the network by its ID. Extra `--label` keys may not be the
+owner key `run.corten.marketplace.alert-probe` or a key in its dot-delimited namespace
+(`run.corten.marketplace.alert-probe.*`); other keys, even with the same literal prefix, are
+ordinary. A create that returns no ID, whatever its error (a daemon error can follow a create
+the daemon already made), is looked for by a label of its own for up to 10 seconds at teardown,
+each lookup cut to the time left; if nothing appears, its cleanup is reported unconfirmed and
+the run fails, since Docker may still make it. A failed lookup is reported and does not stop
+the sweep by the owner label.
+`--deadline` bounds the whole run: work stops starting two minutes before it, leaving that
+time for the app logs, removal and `cleanup.json`. Catalog Contract runs it for React Router
+at 10 iterations per source, including after a failed marketplace gate that built the image,
+with a 240-second probe budget and an 840-second deadline inside the step's 15 minutes. It is
+a functional check, not a measurement.
 
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the
 `marketplace-results/v6` summary format. `validateSaved({ folder, round, commit })` from
 `validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
-above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
+above exits nonzero for invalid evidence. Run it from a checkout of the measured commit, such as
+`git worktree add --detach <dir> <measured-full-commit>`: it checks the retained image references
+against the pins of the checkout it loads, so a round measured before a pin moved fails from a
+newer checkout, with a message naming the pin it expected and the measured commit. A split round validates each native `dN` folder;
 the merged summary alone is not a producer folder. The historical summary reporter remains
-available, but its success is not raw-evidence validation. Old folders without the new
-receipts fail closed; do not backfill them with inferred observations.
+available, but its success is not raw-evidence validation. Newer validators may require
+receipt fields that an older producer did not write. Replay older folders from the producer's
+measured checkout, not the latest checkout; do not backfill receipts with inferred observations.
 Raw replay checks the profile, settings, app image label and qualification receipts under the
 same contract. V1 replay is offline only and still requires the original raw receipts.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual

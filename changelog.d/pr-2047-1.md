@@ -1,0 +1,1 @@
+- Official benchmark timing groups can retain a clean host boundary after a proved post-terminal udev settle; this does not qualify earlier results ([#2045 Live Delivery r68 aborts after observing two new udev workers at the host boundary](https://github.com/corten-run/corten/issues/2045)).

@@ -2,22 +2,27 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync,
+  renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
+  treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
+import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
-import { inspectCampaign } from "./cloud-validation.mjs";
+import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
-  settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
-  verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  handoffLocks, handoffRetirementPolicy, pinHandoffRetirement, verifyHandoffCustody,
+  exitOneEvidenceFingerprint, failedExitOneObservation, failedExitOnePolicy, verifyFailedExitOneCustody, verifyFailedExitOneRetirement,
+  interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+  verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
+  verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
+import { controlCheckpoint, controlResultFailure, pinnedHostOptions } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -28,10 +33,39 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
   return r;
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
+
+function acquireHandoffLock(path, bytes) {
+  const fd = openSync(path, "wx", 0o600);
+  let owned;
+  try {
+    writeFileSync(fd, bytes); fsyncSync(fd);
+    owned = fstatSync(fd, { bigint: true });
+  } finally { closeSync(fd); }
+  syncDirectory(dirname(path));
+  const matches = () => {
+    const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    return current?.isFile() && ["dev", "ino", "birthtimeNs", "ctimeNs", "nlink"].every(key => current[key] === owned[key]);
+  };
+  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "handoff operation lock changed; preserve custody");
+}
+
+const sameStateFile = (a, b) => ["dev", "ino", "birthtimeNs"].every(key => a[key] === b[key]);
+const sameStateVersion = (a, b) => sameStateFile(a, b)
+  && ["mode", "nlink", "size", "mtimeNs", "ctimeNs"].every(key => a[key] === b[key]);
+function handoffStateSnapshot(path) {
+  const stat = lstatSync(path, { bigint: true }), bytes = regular(path, 1024 * 1024);
+  assert.ok(sameStateVersion(stat, lstatSync(path, { bigint: true })), "handoff state changed during read");
+  return { stat, bytes };
+}
+
+const createErroredStop = () => Object.assign(new Error("provider create errored; exact allocation verified absent; no DELETE or replacement create"),
+  { providerDiagnostic: { code: "create-errored-absent" } });
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
-  renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now() } = {}) {
+  inspectPreCreateInventory, quarantineTargets = [],
+  renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
+  createReappearedIo = { durable, rename: renameSync } } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleetBytes = options.group === undefined ? undefined : regular(options.fleet, 1024 * 1024);
@@ -51,22 +85,76 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  const recoveryLock = "stream-recovery.lock", groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
+  const recoveryLock = "stream-recovery.lock", recheckLock = createRecheckLock, groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
+  const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
+  const groupedExitOne = recoveryApproval?.policy === failedExitOnePolicy, pinnedRetirement = groupedHandoff || groupedExitOne;
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
+  let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
+  let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
+  const assertHandoffState = () => {
+    try {
+      const current = handoffStateSnapshot(statePath);
+      assert.ok(current.bytes.equals(expectedHandoffState.bytes)
+        && sameStateVersion(current.stat, expectedHandoffState.stat));
+    } catch (cause) {
+      preserveOperationLock = true;
+      throw new Error("handoff reservation changed or unreadable; preserve custody", { cause });
+    }
+    handoffLocks(local, true);
+    assertHandoffLock();
+  };
+  const checkHandoffDelete = (includeTrees = true) => {
+    assertHandoffCustody(includeTrees);
+    if (handoffReceiptSha256 !== undefined)
+      assert.equal(digest(regular(join(local, "failed-native-host.json"))), handoffReceiptSha256, "failed-native retirement receipt changed");
+    assertHandoffState();
+  };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
   const stateStage = (kind) => kind ? `${statePath}.${kind}-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
+  const stateBytes = (value) => `${JSON.stringify(value, null, 2)}\n`;
   const writeState = (value, replace = renameSync, kind = value.control?.monitor?.phase === "invalid" ? "revoked" : undefined) => {
     controllerState(value, options.round);
     // An interrupted ordinary save can leave its exclusive staging file behind.
     // Never consume it or let it prevent a failure-only write under retained custody.
     const staging = stateStage(kind);
-    durable(staging, `${JSON.stringify(value, null, 2)}\n`);
-    replace(staging, statePath); syncDirectory(local);
+    const bytes = stateBytes(value);
+    if (!pinnedRetirement) {
+      durable(staging, bytes);
+      replace(staging, statePath); syncDirectory(local);
+      return;
+    }
+    // A terminal SSH acknowledgement still owns only the exact pending state
+    // we wrote, not whatever appeared at the same path while SSH was in flight.
+    try {
+      assertHandoffState();
+      const authored = Buffer.from(bytes);
+      durable(staging, authored);
+      const staged = handoffStateSnapshot(staging);
+      assert.ok(staged.bytes.equals(authored), "handoff state stage changed");
+      assertHandoffState();
+      assert.ok(sameStateVersion(staged.stat, lstatSync(staging, { bigint: true })), "handoff state stage changed");
+      replace(staging, statePath); syncDirectory(local);
+      const published = handoffStateSnapshot(statePath);
+      // Rename can advance ctime; the published file must still be our stage.
+      assert.ok(sameStateFile(staged.stat, published.stat) && published.bytes.equals(authored), "handoff state publication changed");
+      expectedHandoffState = { stat: published.stat, bytes: authored };
+    } catch (error) {
+      preserveOperationLock = true;
+      throw error;
+    }
   };
   const save = () => { check(); writeState(state); };
-  let launchPeers;
+  // The provider-errored outcome is published through its own fresh exclusive stage,
+  // like the monitor-ending publications: a fixed-name state.json.tmp left by an
+  // interrupted save is never read, promoted, removed or allowed to block it.
+  const publishCreateErrored = (posted, bytes) => {
+    check(); state.createErrored = { ...posted, evidenceSha256: digest(bytes) }; writeState(state, renameSync, "create-errored");
+  };
+  const offlineBootstrapAck = () => state.control.sealed.includes("bootstrap")
+    && acknowledgedBootstrapSeal(state.control.ledger.filter(({ request }) => request.epoch === "bootstrap"));
+  let launchPeers, recheckPriorRounds;
   // Cancellation forbids further work, not recording how the owned monitor ended.
   // Record only the ending and, if cancellation beat the live-state write,
   // the registration already received from this stream. Never adopt a file alone.
@@ -103,18 +191,34 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
     const invoke = async (argv, permittedFailure = false, expiry) => {
       check();
-      if (expiry !== undefined) {
+      const fresh = () => {
         const current = Date.now();
         assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
+        if (groupedExitOne) assert.ok(current >= exitOneFenceFinishedAtMs, "current retirement proof clock reversed");
+      };
+      const guardDispatch = pinnedRetirement && expiry !== undefined ? () => {
+        checkHandoffDelete();
+        if (prepareDelete?.onUnsent) {
+          const now = Date.now();
+          return now >= exitOneFenceFinishedAtMs && now < expiry;
+        }
+        fresh();
+      } : undefined;
+      if (expiry !== undefined) {
+        if (guardDispatch && !prepareDelete?.publishIntent) checkHandoffDelete(false);
+        fresh();
       }
       let r;
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
       if (prepareDelete && expiry !== undefined) {
         assert.ok(!state.deletionIntentAt);
-        prepareDelete.unchanged();
-        state.deletionIntentAt = new Date().toISOString(); save();
+        if (prepareDelete.publishIntent) prepareDelete.publishIntent();
+        else {
+          prepareDelete.unchanged();
+          state.deletionIntentAt = new Date().toISOString(); save();
+        }
       }
-      try { r = await run(binary, argv, limit, permittedFailure, expiry, registration); }
+      try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (registration?.stream && r.monitor) {
         monitor = r.monitor;
@@ -135,7 +239,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (prepareDelete && expiry !== undefined && r.status === 1 && r.deleteNotDispatched === true) {
         // The worker positively acknowledged that its request was never sent.
         // A missing result, timeout, HTTP error or lost acknowledgement cannot clear intent.
-        boundary(); delete state.deletionIntentAt; writeState(state); assert.fail("DELETE not dispatched; fresh collection approval required");
+        if (prepareDelete.onUnsent) prepareDelete.onUnsent();
+        else { boundary(); delete state.deletionIntentAt; writeState(state); }
+        assert.fail("DELETE not dispatched; fresh collection approval required");
       }
       check();
       if (remaining) remaining();
@@ -152,6 +258,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     if (args[0] === "compute" && args[1] === "droplet" && args[2] === "create") {
       // Check after the final account read, before recording or dispatching a create.
       launchPeers = checkFleetAdmission?.(true);
+      recheckPriorRounds?.();
       state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
     }
     const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
@@ -160,7 +267,224 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
   }
-  const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
+  const list = async () => {
+    const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout);
+    assert.ok(Array.isArray(d)); return d;
+  };
+  // A provider-errored create retires only on positive absence: exact-ID 404, then a
+  // single-response census (the whole inventory in one provider response) whose every
+  // row has an inspectable ID, name and tags, none of them this create's. execute()
+  // brackets each command with the saved account. The result is { droplets } (absent),
+  // { witnessed } when the provider positively shows this create again (the exact GET
+  // returns the posted ID, or a census row carries its ID, name or tag), or undefined
+  // when the reads settle nothing. Only absence can record or keep a failure receipt.
+  const providerAbsence = async ({ dropletId }) => {
+    const exact = await execute("doctl", ["compute", "droplet", "get", dropletId, "--output", "json"], 60000, true);
+    const diagnostic = providerFailure(exact);
+    if (exact.status === 0 && !exact.error) {
+      let rows;
+      try { rows = JSON.parse(exact.stdout); } catch { return undefined; }
+      return Array.isArray(rows) && rows.length === 1 && String(rows[0]?.id) === dropletId ? { witnessed: { via: "exact-get", droplet: rows[0] } } : undefined;
+    }
+    if (!(exact.status === 1 && !exact.error && diagnostic?.code === "get-http" && diagnostic.httpStatus === 404)) return undefined;
+    const rows = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--single-response", "--output", "json"])).stdout);
+    const text = (value) => typeof value === "string" && value.length > 0;
+    assert.ok(Array.isArray(rows) && rows.every((d) => Number.isSafeInteger(d?.id) && d.id > 0 && text(d.name) && Array.isArray(d.tags) && d.tags.every(text)),
+      "inventory row cannot be checked for this create; preserve reservation");
+    const match = rows.find((d) => String(d.id) === dropletId || d.name === state.name || d.tags.includes(state.tag));
+    return match ? { witnessed: { via: "inventory", droplet: match } } : { droplets: rows.length };
+  };
+  // A recorded failure whose posted droplet the provider shows again is contradicted.
+  // Record that durably (cancellation does not skip it): the receipt can then never
+  // be accepted again, so no later collect, fleet verification, launch or continuation
+  // successor treats the attempt as settled. The witness file goes first; then the
+  // state through its own stage. If either write fails, this collect keeps its
+  // operation lock and every later reader sees the contradiction (createContradiction).
+  const witness = join(local, createReappearedWitness);
+  const unpublishedContradiction = (cause) => {
+    preserveOperationLock = true;
+    return Object.assign(new Error("provider-errored create contradiction not published; operation lock kept; preserve reservation", { cause }),
+      { controllerStage: "create-contradiction-unpublished" });
+  };
+  const writeWitness = (reappeared) => {
+    try {
+      boundary();
+      if (!lstatSync(witness, { throwIfNoEntry: false })) createReappearedIo.durable(witness, `${JSON.stringify(reappeared)}\n`);
+    } catch (error) { throw unpublishedContradiction(error); }
+  };
+  const recordReappeared = ({ via, droplet }) => {
+    const reappeared = { at: new Date().toISOString(), via, dropletId: String(droplet.id) };
+    writeWitness(reappeared);
+    try {
+      boundary();
+      const value = { ...state, createErrored: { ...state.createErrored, reappeared } };
+      controllerState(value, options.round);
+      const staging = stateStage("create-reappeared");
+      createReappearedIo.durable(staging, `${JSON.stringify(value, null, 2)}\n`);
+      createReappearedIo.rename(staging, statePath); syncDirectory(local);
+      state = value;
+    } catch (error) { throw unpublishedContradiction(error); }
+    return reappeared;
+  };
+  const contradicted = () => Object.assign(new Error(createReappeared), { controllerStage: "create-errored-contradicted" });
+  // The only route for a contradicted receipt (published, unpublished or witnessed):
+  // its exact posted droplet, read by exact GET, carrying its saved name, ownership tags,
+  // size and region and exactly one public IPv4. That droplet is bound, never provisioned,
+  // and retires only by the pinned unused-host collection, under the never-started and
+  // fresh-deletion fences. Anything else refuses and names that route.
+  const ownedPosted = (droplet, posted) => {
+    try {
+      assert.equal(String(droplet?.id), posted.dropletId);
+      const d = ownedDroplet([droplet], state);
+      assert.equal(d.networks?.v4?.filter((n) => n.type === "public").length, 1);
+      return d;
+    } catch { return undefined; }
+  };
+  // The bind records its own exact read of the posted droplet. The first observation (an
+  // exact GET or a census alias with another ID) stays in the witness file, which is
+  // written first, so a later read failure cannot lose it, and bound by hash. A receipt
+  // that is not the published hash or the canonical unpublished record is kept as an
+  // unverified artifact, never as verified evidence. A reappearance stage left by a
+  // failed publication is bound by name and bytes, so the pinned retirement can admit it.
+  // So is a create-errored stage left by an interrupted receipt publication, but only if
+  // its bytes are this reservation's publication of this receipt (or a prefix of it, a
+  // write cut short): it is never read as state. Other bytes bind nothing.
+  const bindContradicted = (d, posted) => {
+    const reappeared = { at: new Date().toISOString(), via: "exact-get", dropletId: posted.dropletId };
+    writeWitness(reappeared);
+    const witnessed = regular(witness, 64 * 1024), receipt = regular(join(local, createErroredReceipt), 64 * 1024);
+    let receiptVerified = true;
+    if (state.createErrored) assert.equal(digest(receipt), state.createErrored.evidenceSha256, "create failure receipt changed; preserve reservation");
+    else try { pendingCreateErroredReceipt(receipt, state, posted); } catch { receiptVerified = false; }
+    const { createErrored: _published, ...unpublished } = state;
+    const publication = Buffer.from(`${JSON.stringify({ ...unpublished,
+      createErrored: { dropletId: posted.dropletId, actionId: posted.actionId, evidenceSha256: digest(receipt) } }, null, 2)}\n`);
+    const published = publicationStages(local).map((name) => {
+      const bytes = regular(join(local, name), 1024 * 1024);
+      assert.ok(bytes.length <= publication.length && publication.subarray(0, bytes.length).equals(bytes),
+        "a create-errored stage beside the contradicted receipt is not this reservation's publication; nothing bound;"
+        + " account for it by the custody step (CLOUD.md); preserve reservation");
+      return { name, sha256: digest(bytes) };
+    });
+    const stages = [...contradictionStages(local).map((name) => ({ name, sha256: digest(regular(join(local, name), 1024 * 1024)) })), ...published]
+      .sort((a, b) => a.name < b.name ? -1 : 1);
+    state.createContradicted = { dropletId: posted.dropletId, actionId: posted.actionId, evidenceSha256: digest(receipt), receiptVerified, reappeared,
+      witnessSha256: digest(witnessed), ...(stages.length ? { stages } : {}) };
+    delete state.createErrored;
+    bind(d);
+    return 3;
+  };
+  // The one read that can bind a posted create: the account-bracketed exact GET of its
+  // posted droplet ID, positively owned. Undefined for anything else. A census row never
+  // binds; it can only record a contradiction.
+  const exactPosted = async (posted) => {
+    const exact = await execute("doctl", ["compute", "droplet", "get", posted.dropletId, "--output", "json"], 60000, true);
+    let rows;
+    try { rows = exact.status === 0 && !exact.error ? JSON.parse(exact.stdout) : undefined; } catch { rows = undefined; }
+    return Array.isArray(rows) && rows.length === 1 ? ownedPosted(rows[0], posted) : undefined;
+  };
+  // The same rule for a providerAbsence result that did not prove absence.
+  const witnessedPosted = (census) => {
+    assert.ok(census?.witnessed?.via === "exact-get", census?.witnessed
+      ? "provider-errored allocation not verified absent and not the exact posted droplet; preserve reservation without binding"
+      : "provider-errored allocation not verified absent; preserve reservation without binding");
+    const d = ownedDroplet([census.witnessed.droplet], state);
+    assert.equal(d.networks?.v4?.filter((n) => n.type === "public").length, 1, "ambiguous public host address");
+    return d;
+  };
+  const contradictedCreate = async (posted) => {
+    assert.ok(lstatSync(join(local, createErroredReceipt), { throwIfNoEntry: false }), "contradiction without its receipt; preserve reservation");
+    const d = await exactPosted(posted);
+    if (!d) throw contradicted();
+    return bindContradicted(d, posted);
+  };
+  // A launch that stopped while its accepted create was unsettled kept the POST's IDs
+  // and, normally, its own locks. Those locks stay until the operator's custody step:
+  // a dead PID in a lock record does not prove that the original controller, provider
+  // worker and their descendants are gone (see CLOUD.md, retained locks), so this
+  // recheck never runs while either remains and never removes one. Afterwards it reads
+  // that exact action under the ordinary operation lock. Only a terminal errored action
+  // bound to the posted droplet, with the droplet proved absent on the saved account,
+  // records the provider-errored outcome. A completed create bound to the posted droplet
+  // is bound to that exact allocation and stops there (3): a fresh collection then
+  // applies the unused-host and deletion fences with its own provider. An errored action
+  // whose posted droplet the exact GET still returns, under its saved name, tags and
+  // placement, is the same real allocation and takes the same bind-only checkpoint, as
+  // the in-deadline launch does. Any other answer preserves the reservation.
+  const launchCustody = "original launch custody retained: account for the original controller, provider worker and their descendants,"
+    + " then release its launch and operation locks by the custody step and collect again; preserve reservation";
+  const partialCustody = "partial launch custody (a lock left by an interrupted launch or collect): account for its owner by the custody step"
+    + " before collecting; preserve reservation";
+  async function settlePendingCreate(observed) {
+    const m = observed.control?.monitor;
+    assert.ok(!observed.deletionIntentAt && (!observed.control || !observed.control.ledger.length && !observed.control.sealed.length
+      && (!m || m.phase === "pending" && !m.registrationSha256)), "pending create has guest control; preserve reservation");
+    assert.ok(!readdirSync(local).some((name) => name.startsWith("monitor-") || name === "known_hosts" || name === recheckLock),
+      "pending create has guest or recheck artifacts; preserve reservation");
+    const launchLock = join(base, ".groups-launch.lock"), held = [join(local, "operation.lock"), launchLock].map((path) => existsSync(path));
+    assert.ok(!held[0] && !held[1], held[0] && held[1] ? launchCustody : partialCustody);
+    return locked(async () => {
+      assert.deepEqual(state, observed, "pending create reservation changed; preserve reservation");
+      assert.ok(!existsSync(launchLock), partialCustody);
+      const posted = state.createPending;
+      // Read-only: never a second create, a DELETE or a guest command.
+      const rows = JSON.parse((await execute("doctl", ["compute", "action", "get", posted.actionId, "--output", "json"])).stdout);
+      assert.ok(Array.isArray(rows) && rows.length === 1, "create action observation unavailable; preserve reservation");
+      const [action] = rows;
+      assert.ok(action?.id === Number(posted.actionId) && action.type === "create" && action.resource_type === "droplet",
+        "create action identity differs; preserve reservation");
+      // Still running: nothing has settled. Report pending without changing custody.
+      if (action.status === "in-progress" && [null, 0, Number(posted.dropletId)].includes(action.resource_id)) return 3;
+      // A receipt left by a stop between its write and the state publication claims
+      // absence; a witness left by a failed contradiction publication denies it.
+      const path = join(local, createErroredReceipt);
+      const unpublished = !!lstatSync(path, { throwIfNoEntry: false }), witnessed = createContradiction(local);
+      if (action.status === "completed" && action.resource_id === Number(posted.dropletId)) {
+        // A completed create contradicts an unpublished absence receipt: only the
+        // exact owned posted droplet is bound, keeping that receipt as evidence.
+        if (unpublished || witnessed) return contradictedCreate(posted);
+        // A real allocation is not this path's to settle. Bind it, only by the positive
+        // exact GET of the posted ID (never a census), and stop: this operation's provider
+        // closes when it returns, so the unused-allocation path runs in a fresh, separately
+        // approved collection.
+        const d = await exactPosted(posted);
+        assert.ok(d, "completed create's posted droplet is not a positive owned exact read; nothing bound; preserve reservation");
+        bind(d);
+        return 3;
+      }
+      assert.ok(action.status === "errored" && action.resource_id === Number(posted.dropletId),
+        "create action is not an errored create of the posted droplet; preserve reservation");
+      // A witnessed contradiction is never settled by a later absence.
+      if (witnessed) return contradictedCreate(posted);
+      const census = await providerAbsence(posted);
+      // An unpublished receipt is adopted only after this fresh action and absence
+      // proof, and only if its bytes are exactly the canonical record for this state.
+      if (census?.witnessed && unpublished) {
+        // Any reappearance that would contradict a published receipt (the exact GET, or a
+        // census row with its ID, name or tag after a 404) contradicts the unpublished one:
+        // the witness is written first, so a later absence can never adopt that receipt.
+        // Only the exact posted droplet, positively owned, is bound; anything else refuses.
+        const { via, droplet } = census.witnessed;
+        writeWitness({ at: new Date().toISOString(), via, dropletId: String(droplet.id) });
+        const d = via === "exact-get" && ownedPosted(droplet, posted);
+        if (d) return bindContradicted(d, posted);
+        throw contradicted();
+      }
+      if (census?.witnessed) {
+        // Only the exact GET of the posted ID, positively owned, can bind; a census
+        // match after a 404 or another ID stays unresolved.
+        bind(witnessedPosted(census));
+        return 3;
+      }
+      assert.ok(census?.droplets !== undefined, "provider-errored allocation not verified absent; preserve reservation");
+      check();
+      let bytes;
+      if (unpublished) bytes = pendingCreateErroredReceipt(regular(path, 64 * 1024), state, posted);
+      else { bytes = createErroredBytes(createErroredRecord(state, posted, census.droplets, new Date().toISOString())); durable(path, bytes); }
+      publishCreateErrored(posted, bytes);
+      return 1;
+    });
+  }
   const exactHost = async (remaining) => {
     const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true, undefined, remaining);
     if (result.status === 1 && providerFailure(result)?.code === "get-http" && providerFailure(result)?.httpStatus === 404) return undefined;
@@ -196,16 +520,34 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const bind = (d) => {
     assert.ok(!state.id || state.id === String(d.id), "host ID changed");
+    // A create whose accepted POST named its droplet binds only that droplet, never
+    // another allocation that happens to carry the same name or tags.
+    assert.ok(!state.createPending || state.createPending.dropletId === String(d.id),
+      "found allocation differs from the posted create; preserve reservation without binding");
     state.id = String(d.id); state.ip = d.networks.v4.find((n) => n.type === "public").ip_address;
     state.status = state.status === "creating" ? "preparing" : state.status; save();
   };
   const sshLimits = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"];
   const sshOptions = ["-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`, ...sshLimits];
   const launchSshOptions = [...sshOptions, "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no"];
-  async function withHostKeySnapshot(key, prefix, fn) {
+  async function withHostKeySnapshot(key, prefix, fn, deferCleanup) {
     const sha256 = digest(key), dir = mkdtempSync(join(base, prefix)), path = join(dir, "known_hosts");
     const identity = lstatSync(dir, { bigint: true });
     let fileIdentity;
+    const removeSnapshot = () => {
+      physical(dir);
+      const current = lstatSync(dir, { bigint: true });
+      assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
+      const files = readdirSync(dir);
+      if (files.length) {
+        assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
+        const file = lstatSync(path, { bigint: true });
+        assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
+          && digest(regular(path, 1024 * 1024)) === sha256, "private host-key snapshot changed; preserve");
+        unlinkSync(path);
+      }
+      rmdirSync(dir);
+    };
     try {
       durable(path, key);
       fileIdentity = lstatSync(path, { bigint: true });
@@ -213,28 +555,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(digest(regular(path, 1024 * 1024)), sha256, "private host-key snapshot changed");
       return result;
     } finally {
-      if (!preserveOperationLock) {
-        physical(dir);
-        const current = lstatSync(dir, { bigint: true });
-        assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
-        const files = readdirSync(dir);
-        if (files.length) {
-          assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
-          const file = lstatSync(path, { bigint: true });
-          assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
-            && digest(regular(path, 1024 * 1024)) === sha256, "private host-key snapshot changed; preserve");
-          unlinkSync(path);
-        }
-        rmdirSync(dir);
-      }
+      if (!preserveOperationLock) removeSnapshot();
+      else deferCleanup?.(removeSnapshot);
     }
   }
-  async function usingLaunchHostKey(fn) {
-    const result = await withHostKeySnapshot(launchHostKey(local, state), ".launch-host-key-", fn);
+  async function usingLaunchHostKey(fn, deferCleanup) {
+    const result = await withHostKeySnapshot(launchHostKey(local, state), ".launch-host-key-", fn, deferCleanup);
     launchHostKey(local, state);
     return result;
   }
-  const transport = async (binary, args, timeout, allowFail) => {
+  const transport = async (binary, args, timeout, allowFail, deferCleanup) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative && !groupedPreplan);
     const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
@@ -253,12 +583,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       startedAtMs = Date.now();
       return execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
     };
-    const result = !pinnedKey && state.launchHostKeySha256 ? await usingLaunchHostKey(invoke)
+    const result = !pinnedKey && state.launchHostKeySha256 ? await usingLaunchHostKey(invoke, deferCleanup)
       : await invoke(pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions);
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
     return { ...result, startedAtMs };
   };
-  const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
+  const ssh = (script, timeout = 60000, allowFail = false, deferCleanup) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail, deferCleanup);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
   async function waitForSsh() {
     const windowMs = 120000, spacingMs = 5000, attempts = windowMs / spacingMs;
@@ -293,6 +623,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const requireActiveStartup = async (message) => {
     const { stdout } = await ssh(unitQuery(state));
     if (!terminalUnit(stdout, state)) return;
+    if (state.fleet?.single?.offlineHandoff) assert.fail(message);
     // An acknowledged start and positive terminal observation, not an SSH
     // failure or missing monitor. Keep the original output and its ledger row.
     state.preBootstrapTerminal = { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
@@ -354,13 +685,36 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(controlEpoch, epoch);
     const rows = state.control.ledger.filter((r) => r.request.epoch === epoch);
     assert.ok(rows.length > 0 && rows.every((r) => r.localTerminal), "unsettled local control ledger");
+    const offlineBootstrap = epoch === "bootstrap" && state.fleet?.single?.offlineHandoff;
+    const previous = preserveOperationLock;
+    let removeSealSnapshot;
+    if (offlineBootstrap) preserveOperationLock = true;
     sealing = rows.map((r) => r.request.invocation);
-    try { await ssh(":"); } finally { sealing = undefined; }
-    if (epoch === "bootstrap" && renameBootstrapSeal) await publishBootstrapSeal(remaining);
+    try { await ssh(":", undefined, false, offlineBootstrap ? (remove) => { removeSealSnapshot = remove; } : undefined); }
+    catch (error) {
+      if (offlineBootstrap) throw Object.assign(new Error("offline bootstrap seal unacknowledged; preserve host and custody", { cause: error }),
+        { controlTreeUncertain: true });
+      throw error;
+    } finally { sealing = undefined; }
+    if (offlineBootstrap) {
+      // There is no foreground monitor that could resolve a publication gap.
+      // A host may already be progressing; do not release custody until the
+      // exact successful final request and the published local seal agree.
+      try {
+        assert.ok(acknowledgedBootstrapSeal(state.control.ledger), "explicit successful bootstrap seal required");
+        state.control.sealed.push(epoch); save();
+        if (!previous) removeSealSnapshot();
+      } catch (error) {
+        throw Object.assign(new Error("offline bootstrap seal publication uncertain; preserve host and custody", { cause: error }),
+          { controlTreeUncertain: true });
+      }
+      preserveOperationLock = previous;
+    } else if (epoch === "bootstrap" && renameBootstrapSeal) await publishBootstrapSeal(remaining);
     else { state.control.sealed.push(epoch); save(); }
     controlEpoch = "collection";
   }
   async function commonBootstrap() {
+    const markerFailure = (error, detail) => Object.assign(error, { providerDiagnostic: { code: "bootstrap-marker", detail } });
     const deadline = now() + 45 * 60000; let previous = deadline - 45 * 60000;
     const remaining = () => {
       const current = now();
@@ -370,13 +724,28 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     for (;;) {
       remaining();
       await requireActiveStartup("first group ended before common bootstrap admission; collect its evidence");
-      const result = await ssh(bootstrapReadScript, Math.min(30000, remaining()), true);
+      const offline = state.fleet?.single?.offlineHandoff;
+      const observation = offline ? bootstrapReadScript + "\ncat /proc/sys/kernel/random/boot_id" : bootstrapReadScript;
+      let result;
+      try { result = await ssh(observation, Math.min(30000, remaining()), true); }
+      catch (error) {
+        const detail = controlResultFailure(error);
+        throw detail ? markerFailure(error, detail) : error;
+      }
       remaining();
       if (result.status === 0 && !result.error) {
-        assert.ok(Buffer.byteLength(result.stdout) <= 1024, "bounded bootstrap marker required");
-        assert.deepEqual(JSON.parse(result.stdout), bootstrapMarker(state), "common bootstrap identity differs");
+        let marker = result.stdout, bootId;
+        try {
+          assert.ok(Buffer.byteLength(marker) <= 1024, "bounded bootstrap marker required");
+          if (offline) {
+            const parts = /^(.*\n)([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\n$/.exec(marker);
+            assert.ok(parts, "bootstrap marker and host boot identity required");
+            [, marker, bootId] = parts;
+          }
+          assert.deepEqual(JSON.parse(marker), bootstrapMarker(state), "common bootstrap identity differs");
+        } catch (error) { throw markerFailure(error, "marker-invalid"); }
         if (state.group !== undefined && state.group === state.fleet.jobs[0].group) {
-          state.bootstrapReady = { sha256: digest(result.stdout), observedAt: new Date().toISOString() }; save();
+          state.bootstrapReady = { sha256: digest(marker), observedAt: new Date().toISOString(), ...(offline ? { bootId } : {}) }; save();
         }
         if (state.control?.monitor) {
           assert.equal(state.control.monitor.phase, "pending");
@@ -392,16 +761,20 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         await sealControl("bootstrap", remaining); return;
       }
-      assert.equal(result.status, 3, "common bootstrap marker observation failed");
+      try { assert.equal(result.status, 3, "common bootstrap marker observation failed"); }
+      catch (error) { throw markerFailure(error, "acknowledged-exit-refused"); }
       await sleep(Math.min(30000, remaining()));
     }
   }
   async function locked(fn, recovery = false, name = recovery ? recoveryLock : "operation.lock") {
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
-    durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
+    const lockBytes = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
+    if (pinnedRetirement) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
+    else durable(lock, lockBytes);
     preserveOperationLock = false;
     try {
+      assertHandoffLock?.();
       state = read(); check();
       // A closed reservation can have no retained launch owner. Competing
       // ordinary operations must still exclude its explicit stream recovery.
@@ -418,7 +791,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         throw Object.assign(new Error("control teardown uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true, controlUncertain: true },
           diagnostic ? { providerDiagnostic: diagnostic } : {});
       }
-      finally { if (!preserveOperationLock) { unlinkSync(lock); syncDirectory(local); } }
+      finally {
+        if (!preserveOperationLock) {
+          if (afterSettle) afterSettle();
+          else if (expectedHandoffState !== undefined) assertHandoffState();
+          else assertHandoffLock?.();
+          unlinkSync(lock); syncDirectory(local);
+        }
+      }
     }
   }
   const verifyArchive = () => {
@@ -426,20 +806,32 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   async function validateEvidence() {
     state.fullGroupQualified = false;
-    const extracted = join(local, state.evidence); physical(extracted);
-    assert.equal(treeHash(extracted), state.evidenceSha256, "evidence changed; preserve host");
-    const markerBytes = regular(join(extracted, "exit-code"), 16);
-    assert.ok(markerBytes.every((b) => b < 128), "invalid exit marker bytes");
-    const marker = markerBytes.toString("ascii");
-    full(marker, /(?:0|[1-9]\d{0,2})\n/, "invalid exit marker");
-    const exitCode = Number(marker.trim()); assert.ok(exitCode <= 255);
+    let extracted, exitCode;
+    try {
+      extracted = join(local, state.evidence); physical(extracted);
+      assert.equal(treeHash(extracted), state.evidenceSha256, "evidence changed; preserve host");
+      const markerBytes = regular(join(extracted, "exit-code"), 16);
+      assert.ok(markerBytes.every((b) => b < 128), "invalid exit marker bytes");
+      const marker = markerBytes.toString("ascii");
+      full(marker, /(?:0|[1-9]\d{0,2})\n/, "invalid exit marker");
+      exitCode = Number(marker.trim()); assert.ok(exitCode <= 255);
+    } catch (error) {
+      // Keep the local error for in-process callers; the public boundary only emits the stage.
+      throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
+    }
     let report;
     let outcome;
     try {
-      report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-        ...(options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect }),
-        interrupted, preserveLock: () => { preserveOperationLock = true; },
-      });
+      if (state.fleet?.single?.offlineHandoff) assert.ok(offlineBootstrapAck(), "offline bootstrap acknowledgement missing");
+    } catch { throw collectRefusal("collect-native-report-refused"); }
+    let replay;
+    try {
+      replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect };
+    } catch { throw collectRefusal("collect-native-replay-start"); }
+    report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
+      ...replay, interrupted, preserveLock: () => { preserveOperationLock = true; },
+    });
+    try {
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
@@ -449,9 +841,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.equal(terminal.nativeTerminal, true); assert.equal(terminal.campaign, report.campaign);
         assert.equal(terminal.sealSha256, report.supervisedTerminal.sealSha256);
       }
-    } catch { throw new Error("native campaign validation unavailable or invalid; evidence/host preserved"); }
+    } catch { throw collectRefusal("collect-native-report-refused"); }
     // Never retain/print native assertion messages: they may contain private raw values.
-    assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
+    try {
+      assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
+    } catch (error) {
+      throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
+    }
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
@@ -479,14 +875,32 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     verifyRetirementRecord(bytes, state.retirement.kind);
   };
   const requireUnusedBootstrapCustody = () => {
-    const settled = settledBootstrap(state, local);
-    assert.ok(unusedBootstrapApproval && (settled || unusedBootstrap(state)), "exact approved unused bootstrap required");
+    const interrupted = interruptedFirstUpload(state, local), uploads = interrupted || settledBootstrap(state, local);
+    assert.ok(unusedBootstrapApproval && (uploads || unusedBootstrap(state)), "exact approved unused bootstrap required");
     assert.equal(digest(regular(statePath, 1024 * 1024)), unusedBootstrapApproval.reservationSha256, "locked unused bootstrap reservation changed");
     const present = (path) => lstatSync(path, { throwIfNoEntry: false });
     assert.ok(!present(join(base, ".groups-launch.lock")) && (!state.group || !present(join(dirname(base), ".fleet-operation.lock"))),
       "original launch custody remains; preserve locks and host");
+    if ((interrupted || offlineNeverStarted(state)) && state.fleet?.single) assert.ok(!present(join(dirname(dirname(base)), ".continuation-operation.lock")),
+      "continuation custody remains; preserve locks and host");
     const names = ["state.json", "operation.lock", "known_hosts", "unused-host.json"];
-    if (settled) {
+    if (state.createContradicted) {
+      // The contradicted receipt and its witness stay as evidence; nothing else is admitted.
+      assert.ok(!uploads, "a contradicted create has no bootstrap uploads; preserve host");
+      assert.equal(digest(regular(join(local, createErroredReceipt), 64 * 1024)), state.createContradicted.evidenceSha256,
+        "contradicted create receipt changed; preserve host");
+      assert.ok(lstatSync(join(local, createReappearedWitness), { throwIfNoEntry: false }), "contradiction witness missing; preserve host");
+      assert.equal(digest(regular(join(local, createReappearedWitness), 64 * 1024)), state.createContradicted.witnessSha256,
+        "contradiction witness changed; preserve host");
+      names.push(createErroredReceipt, createReappearedWitness);
+      // Only the reappearance stages bound at the bind, with their recorded bytes.
+      for (const { name, sha256 } of state.createContradicted.stages ?? []) {
+        assert.equal(digest(regular(join(local, name), 1024 * 1024)), sha256, "contradiction stage changed; preserve host");
+        names.push(name);
+      }
+    }
+    if (uploads) {
+      if (interrupted) assert.equal(state.launchHostKeySha256, unusedBootstrapApproval.knownHostsSha256, "verified key differs from launch");
       assert.equal(fileHash(join(local, "known_hosts"), 1024 * 1024), unusedBootstrapApproval.knownHostsSha256, "saved host key changed");
       const uploaded = Math.ceil((state.control.ledger.length - 2) / 2), entries = Object.entries(remoteFiles(state));
       // The launcher saves the next file before its provider read and SFTP dispatch.
@@ -499,7 +913,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
     assert.ok(readdirSync(local).every((name) => names.includes(name)
       || /^unused-host\.interrupted-[a-f0-9]{64}\.json$/.test(name)), "unexpected local bootstrap custody; preserve host");
-    return settled;
+    return uploads;
   };
   const retire = async (kind, evidence, finishedAtMs) => {
     const pinned = options.unusedBootstrapKnownHosts !== undefined;
@@ -597,8 +1011,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
     return retire("setup-failed", evidence, finishedAtMs);
   };
-  async function retireNativeFailure(controllerCommit, grouped) {
-    const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+  async function captureNativeFailure(controllerCommit, grouped) {
     const originalPath = join(local, "failed-native-reservation.json"), capturePath = join(local, "failed-native-capture.json"),
       custodyArchive = join(local, "failed-native-results.tgz");
     const present = grouped?.preplan ? (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined : existsSync;
@@ -646,16 +1059,31 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         evidence: basename(extracted), evidenceSha256: hash };
       verifyFailedNativeCustody(local, state, capture, grouped); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
     }
+    verifyFailedNativeCustody(local, state, capture, grouped); check();
+    return capture;
+  }
+  async function retireNativeFailure(controllerCommit, grouped, handoff) {
+    let capture;
+    if (handoff) ({ capture, grouped } = verifyHandoffCustody(local, state, handoff));
+    else {
+      const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+      capture = await captureNativeFailure(controllerCommit, grouped);
+      if (!retirementAllowed) return 3; // Ambiguous native outcome: retain both the data and the host.
+    }
     // Local custody verification precedes a fresh, full remote rehash and
     // current-quiescence proof. Neither is historical native qualification.
-    verifyFailedNativeCustody(local, state, capture, grouped); check();
-    if (!retirementAllowed) return 3; // Ambiguous native outcome: retain both the data and the host.
+    check();
+    if (handoff) { handoffLocks(local, true); assertHandoffLock(); }
     const rehashScript = failedNativeScript(state, capture.observation.snapshotSha256, null, grouped), rehashStarted = Date.now();
     const rehashRaw = (await ssh(rehashScript, 11 * 60000)).stdout, rehashFinished = Date.now();
     const rehashObservation = failedNativeObservation(rehashRaw, state, rehashStarted, rehashFinished, grouped);
     const withoutTime = ({ observedAtMs, ...rest }) => rest;
     assert.deepEqual(withoutTime(rehashObservation), withoutTime(capture.observation), "predelete custody differs");
-    verifyFailedNativeCustody(local, state, capture, grouped);
+    if (handoff) {
+      ({ assertCustody: assertHandoffCustody } = verifyHandoffCustody(local, state, handoff, true));
+      handoffLocks(local, true);
+      assertHandoffLock();
+    } else verifyFailedNativeCustody(local, state, capture, grouped);
     const receiptPath = join(local, "failed-native-host.json");
     let interruptedReceipt;
     if (existsSync(receiptPath)) {
@@ -674,11 +1102,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
     assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
     await own(); check();
+    if (handoff) checkHandoffDelete();
     // Bound the whole local fence operation, including SSH response delivery.
     // Its start precedes the observation without relying on remote clock skew.
     const deleteProofExpiresAtMs = startedAtMs + 60000;
     assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
-    const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
+    const receipt = { schema: `benchmark-failed-native-retirement/${handoff ? "v2" : "v1"}`,
+      ...(handoff ? { handoff } : {}), capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
       rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };
     const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
     if (interruptedReceipt !== undefined) {
@@ -686,10 +1116,124 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(digest(regular(receiptPath)), interruptedReceipt); unlinkSync(receiptPath); syncDirectory(local);
     }
     durable(receiptPath, bytes);
+    if (handoff) {
+      handoffReceiptSha256 = digest(bytes);
+      checkHandoffDelete(false);
+      assert.ok(Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
+    }
     Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
     await confirmDeleted();
+    if (handoff) checkHandoffDelete();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
+  }
+  async function retireFailedExitOne(controllerCommit, reservationSha256, original, recovery) {
+    const assertLaunch = ({ launchIntentSha256, fleetManifestSha256 }) => {
+      assert.equal(launchIntentSha256, recovery.intent.launch, "approved exit-one launch changed");
+      assert.equal(fleetManifestSha256, recovery.fleetManifestSha256, "approved exit-one fleet changed");
+    };
+    let absenceConfirmedAt;
+    const pin = (assertCustody, receiptSha256) => {
+      assertHandoffCustody = assertCustody;
+      handoffReceiptSha256 = receiptSha256;
+      afterSettle = () => {
+        checkHandoffDelete();
+        if (absenceConfirmedAt !== undefined && !state.destroyedAt) {
+          state.destroyedAt = absenceConfirmedAt;
+          save();
+        }
+      };
+    };
+    const settleAbsence = async (dispatch) => {
+      if (dispatch) await dispatch();
+      checkHandoffDelete();
+      await confirmDeleted();
+      checkHandoffDelete();
+      absenceConfirmedAt = new Date().toISOString();
+      return 1;
+    };
+    if (state.status === "retired") {
+      const { record, assertCustody } = verifyFailedExitOneRetirement(local, state, state.retirement.evidenceSha256, true);
+      assert.equal(record.controllerCommit, controllerCommit, "original exit-one retirement controller required");
+      assertLaunch(record);
+      pin(assertCustody, state.retirement.evidenceSha256);
+      return settleAbsence();
+    }
+    assert.notEqual(controllerCommit, state.commit, "repair source must be distinct from measured source");
+    const custody = verifyFailedExitOneCustody(local, state, { pin: true });
+    pin(custody.assertCustody);
+    assertLaunch(custody);
+    const { grouped, launchIntentSha256, fleetManifestSha256 } = custody;
+    const evidenceFingerprint = exitOneEvidenceFingerprint(local, state);
+    await verifyArchiveTree(archive, join(local, state.evidence), state.archiveSha256);
+    check(); checkHandoffDelete();
+    const probe = async (first) => {
+      const script = failedNativeScript(state, first?.snapshotSha256 ?? null, first ?? null, grouped);
+      const response = await ssh(script, first ? 60000 : 11 * 60000);
+      const startedAtMs = response.startedAtMs, finishedAtMs = Date.now();
+      return { startedAtMs, finishedAtMs, scriptSha256: digest(script),
+        proof: failedExitOneObservation(response.stdout, state, startedAtMs, finishedAtMs, custody) };
+    };
+    const observation = await probe();
+    checkHandoffDelete();
+    const fence = await probe(observation.proof);
+    const withoutTime = ({ observedAtMs, ...rest }) => rest;
+    assert.deepEqual(withoutTime(fence.proof), withoutTime(observation.proof), "exit-one proof changed before deletion");
+    await own(); check(); checkHandoffDelete();
+    const expiry = fence.startedAtMs + 60000;
+    exitOneFenceFinishedAtMs = fence.finishedAtMs;
+    const fresh = () => {
+      const current = Date.now();
+      assert.ok(current >= fence.finishedAtMs && current < expiry, "current exit-one retirement proof expired");
+      return new Date(current).toISOString();
+    };
+    fresh();
+    const originalPath = join(local, "failed-native-reservation.json");
+    const record = { schema: "benchmark-failed-native-retirement/v3", controllerCommit, reservationSha256, launchIntentSha256,
+      fleetManifestSha256, evidenceFingerprint, observation, fence };
+    const bytes = `${JSON.stringify(record, null, 2)}\n`;
+    assert.ok(Buffer.byteLength(bytes) <= 65536, "bounded exit-one retirement receipt required");
+    const receiptPath = join(local, "failed-native-host.json");
+    const pendingDeleteSha256 = digest(bytes);
+    const deletion = {
+      expiresAt: () => expiry,
+      publishIntent() {
+        // execute has finished the account preflight. Until here a failed
+        // read or an expired fence leaves neither intent nor retirement files.
+        checkHandoffDelete();
+        const deletionIntentAt = fresh();
+        durable(originalPath, original);
+        durable(receiptPath, bytes);
+        const originalSnapshot = handoffStateSnapshot(originalPath), receiptSnapshot = handoffStateSnapshot(receiptPath);
+        assert.ok(originalSnapshot.bytes.equals(original), "exit-one reservation copy changed");
+        pin((includeTree) => {
+          custody.assertCustody(includeTree, true);
+          const current = handoffStateSnapshot(originalPath);
+          assert.ok(current.bytes.equals(original) && sameStateVersion(current.stat, originalSnapshot.stat), "exit-one reservation copy changed");
+          assert.ok(sameStateVersion(lstatSync(receiptPath, { bigint: true }), receiptSnapshot.stat), "exit-one receipt replaced");
+        }, pendingDeleteSha256);
+        checkHandoffDelete(false);
+        Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: handoffReceiptSha256 }, deletionIntentAt });
+        writeState(state);
+      },
+      onUnsent() {
+        const alreadyUncertain = preserveOperationLock;
+        preserveOperationLock = true;
+        checkHandoffDelete();
+        // Keep the exact tentative files under their receipt hash. Restore the
+        // running state with its acknowledged collection ledger intact. An
+        // interruption partway through still leaves a lock or blocked custody.
+        durable(join(local, "failed-native-unsent-" + pendingDeleteSha256 + ".json"), bytes);
+        durable(join(local, "failed-native-unsent-reservation-" + pendingDeleteSha256 + ".json"), original);
+        state.status = "running"; delete state.retirement; delete state.deletionIntentAt;
+        writeState(state);
+        checkHandoffDelete(false);
+        unlinkSync(receiptPath); unlinkSync(originalPath); syncDirectory(local);
+        pin(custody.assertCustody);
+        preserveOperationLock = alreadyUncertain;
+      },
+    };
+    return settleAbsence(() => execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, true, deletion));
   }
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
@@ -738,20 +1282,47 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       durable(launchLock, `${JSON.stringify({ pid: process.pid, round: options.round })}\n`);
       try {
         assert.ok(!existsSync(local), "round already reserved; never relaunch");
+        // Every earlier provider-errored round's posted droplet is fenced by ID alone in
+        // this launch's pre-create census, whatever its name or tags now are.
+        // That includes a contradicted create retired by the pinned route: retirement
+        // removed the droplet it bound, not the record that the ID was posted and seen again.
+        const postedIds = new Set(), priors = [];
+        const admitPrior = (path, round) => {
+          const prior = read(path, round);
+          assert.ok(prior.destroyedAt || prior.createErrored && verifyCreateErrored(path, prior)
+            && !existsSync(join(path, "operation.lock")) && !existsSync(join(path, recheckLock)), "unresolved reservation blocks launch");
+          return prior;
+        };
         for (const entry of readdirSync(base)) if (entry.startsWith("groups-")) {
           const match = /^groups-(r[1-9]\d{0,8})$/.exec(entry); assert.ok(match, "unknown reservation");
-          assert.ok(read(join(base, entry), match[1]).destroyedAt, "unresolved reservation blocks launch");
+          const path = join(base, entry), prior = admitPrior(path, match[1]);
+          priors.push({ path, round: match[1], sha256: digest(regular(join(path, "state.json"), 1024 * 1024)) });
+          const posted = prior.createErrored ?? prior.createContradicted;
+          if (posted) {
+            assert.equal(prior.provider.accountId, options.accountId,
+              "an earlier provider-errored create is on another provider account; this census cannot fence its posted droplet; preserve reservation");
+            postedIds.add(posted.dropletId);
+          }
         }
+        // Again after the census, immediately before create intent: an earlier round that
+        // has since changed, taken custody or been contradicted refuses the create.
+        recheckPriorRounds = () => {
+          for (const { path, round, sha256 } of priors) {
+            try { admitPrior(path, round); assert.equal(digest(regular(join(path, "state.json"), 1024 * 1024)), sha256); }
+            catch (cause) { throw new Error("an earlier reservation in this root changed before this create; preserve reservation", { cause }); }
+          }
+        };
         checkFleetAdmission?.();
         mkdirSync(local, { mode: 0o700 }); syncDirectory(base);
         state = { ...reservation({ round: options.round, commit: options.commit,
           token: fleet ? fleet.jobs.find((row) => row.group === options.group).token : randomBytes(8).toString("hex"),
           ...(fleet ? { group: options.group, fleet } : {}),
           ...(remainingPlacement ? { remainingPlacement } : {}) }),
-          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true,
+          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true, gitSource: true, trixieUpstream: true,
           ...(fleet ? { quietBootstrap: "prelogin" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
-            monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } } };
+            ...(fleet?.single?.offlineHandoff ? {} :
+              { monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } }) } };
         controlEpoch = "bootstrap";
         durable(statePath, `${JSON.stringify(state, null, 2)}\n`);
         return await locked(async () => {
@@ -761,25 +1332,74 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await execute("git", ["merge-base", "--is-ancestor", state.commit, mergedHead]);
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
-          const existing = await list();
+          // With quarantine, both sightings and ordinary pre-create predicates use
+          // the same account-bracketed response. Only completeness can prove absence.
+          const quarantinePreCreate = quarantineTargets.length > 0;
+          const { rows: existing, complete } = quarantinePreCreate
+            ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", ...quarantineTargets, "--output", "json"])).stdout)
+            : { rows: await list(), complete: true };
+          assert.ok(Array.isArray(existing) && (!quarantinePreCreate
+            || existing.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)), "invalid pre-create census");
+          const completeInventory = complete === true && (!quarantinePreCreate || existing.length <= 200
+            && existing.every((d) => typeof d.name === "string" && Array.isArray(d.tags) && d.tags.length <= 256)
+            && new Set(existing.map(({ id }) => id)).size === existing.length);
+          try { inspectPreCreateInventory?.(existing, completeInventory); }
+          catch (error) { if (error.controlUncertain) preserveOperationLock = true; throw error; }
+          assert.ok(!existing.some((d) => postedIds.has(String(d.id))),
+            "an earlier provider-errored create's posted droplet is listed; never create beside it; preserve reservation");
+          assert.ok(completeInventory, "pre-create census incomplete; preserve reservation");
           if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region, fleet.single ? checkFleetAdmission("census") : []);
           else assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
           assert.ok(!existing.some((d) => d.name === state.name || d.tags?.includes(state.tag)), "this host already exists; never adopt/relaunch");
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);
           assert.equal(providerAccount(account), state.provider.accountId, "provider account identity changed; preserve uncertainty");
           const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
-          assert.ok(Number.isSafeInteger(limit) && existing.length < limit, "account capacity unavailable");
+          assert.ok(Number.isSafeInteger(limit) && limit >= 0, "account capacity unavailable");
+          if (existing.length >= limit) throw Object.assign(new Error("account capacity unavailable"),
+            { providerDiagnostic: { code: "account-capacity" } });
           if (fleet) {
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
             const catalog = fleetCatalogResult(await execute("doctl", fleetCatalogCommand, 60000, true));
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
-              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
+              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group,
+                ...(fleet.single?.loadLayout ? { loadLayout: fleet.single.loadLayout } : {}) });
           }
-          const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
-            "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
+          let created;
+          try {
+            created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
+              "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
+          } catch (error) {
+            // An accepted create still unsettled at its deadline keeps the POST's droplet and
+            // action IDs beside the preserved locks, so a later read can settle that exact action.
+            const posted = pendingCreate(error?.pendingCreate);
+            if (posted && (error.controlUncertain || error.controlTreeUncertain) && state.status === "creating" && !state.id) {
+              try { boundary(); state.createPending = posted; writeState(state); } catch { /* Preserve without the IDs. */ }
+            }
+            throw error;
+          }
+          // A provider-terminal create failure retires this attempt only with all four
+          // proofs: exact action/droplet identity and errored status (worker), the saved
+          // account and exact absence (providerAbsent). Otherwise preserve as before.
+          const errored = erroredCreate(created);
+          let census;
+          if (errored) {
+            // Save the posted IDs before any absence read: from here only that droplet can
+            // be bound, and a stop at any later point leaves a reservation whose exact
+            // action a later collect can recheck, not an orphan receipt.
+            check(); state.createPending = errored; save();
+            census = await providerAbsence(errored);
+            if (census?.droplets !== undefined) {
+              check();
+              const bytes = createErroredBytes(createErroredRecord(state, errored, census.droplets, new Date().toISOString()));
+              durable(join(local, createErroredReceipt), bytes);
+              publishCreateErrored(errored, bytes);
+              throw createErroredStop();
+            }
+          }
           // Lost acknowledgement permits only identity reconciliation, never another create.
-          try { bind(await own()); }
+          // An errored create named its droplet: only that ID's positive exact GET binds it.
+          try { bind(errored ? witnessedPosted(census) : await own()); }
           catch (error) {
             const diagnostic = providerFailure(created);
             if (diagnostic && !providerFailure(error)) error.providerDiagnostic = diagnostic;
@@ -850,12 +1470,42 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.collect, "collect options required");
       if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
         if (requireUnusedBootstrapCustody())
-          assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "settled uploads require the measured checkout");
+          assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "bootstrap uploads require the measured checkout");
         if (state.status === "preparing") return retireUnused();
         verifyRetirement(); await confirmDeleted();
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;
       });
       const observed = read();
+      if (observed.createPending && observed.status === "creating" && !observed.id && !observed.createErrored) return settlePendingCreate(observed);
+      // Any lock left beside a recorded failure keeps it unresolved (createErroredCustody).
+      // A recorded, witnessed or staged reappearance of its posted droplet contradicts
+      // the receipt for good: its only route is the exact owned posted droplet's bind.
+      if (observed.createErrored) {
+        createErroredCustody(local);
+        const custody = "provider-errored create still holds custody; account for the lock's owner by the custody step; preserve reservation";
+        if (observed.createErrored.reappeared || createContradiction(local)) return locked(async () => {
+          assert.ok(state.createErrored, "create failure record changed; preserve reservation");
+          assert.ok(!existsSync(join(local, recheckLock)) && !existsSync(join(base, ".groups-launch.lock")), custody);
+          return contradictedCreate(state.createErrored);
+        });
+        verifyCreateErrored(local, observed);
+        return locked(async () => {
+          // Read-only recheck of the receipt and absence. Never DELETE or create; only a
+          // contradicting exact owned posted droplet is bound (as above), never provisioned.
+          assert.ok(state.createErrored, "create failure record changed; preserve reservation");
+          assert.ok(!existsSync(join(local, recheckLock)) && !existsSync(join(base, ".groups-launch.lock")), custody);
+          verifyCreateErrored(local, state);
+          const posted = state.createErrored, census = await providerAbsence(posted);
+          if (census?.witnessed) {
+            recordReappeared(census.witnessed);
+            const d = census.witnessed.via === "exact-get" && ownedPosted(census.witnessed.droplet, posted);
+            if (d) return bindContradicted(d, posted);
+            throw contradicted();
+          }
+          assert.ok(census?.droplets !== undefined, "provider-errored allocation no longer verified absent; preserve reservation");
+          return 1;
+        });
+      }
       let failedMonitorRecovery = false;
       const neverProvisioned = (s) => s.control?.monitor?.phase === "pending" && !s.control.monitor.registrationSha256
         && s.id && s.ip && s.createIntentAt && !s.control.sealed.length
@@ -891,7 +1541,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (state.archiveSha256) assert.equal(state.archiveSha256, options.exitArchiveSha256);
           assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked r21 reservation changed");
         }
-        const sealed = state.control?.monitor?.phase === "closed";
+        const offline = state.fleet?.single?.offlineHandoff;
+        const offlineAck = offline && offlineBootstrapAck();
+        // Regular collection keeps this gate. A bound posted create that never started
+        // has its own separately approved route, named in the refusal.
+        if (offline && !offlineAck) {
+          if (offlineNeverStarted(state)) throw Object.assign(new Error("offline handoff never started: retire the bound posted create only by the approved"
+            + " pinned unused-host collection (--collect --unused-bootstrap-known-hosts); preserve host"), { controllerStage: "offline-never-started" });
+          assert.fail("offline handoff not acknowledged; preserve host");
+        }
+        const sealed = state.control?.monitor?.phase === "closed" || offlineAck;
         const groupedCandidate = !options.r21MeasuredCheckout && state.status === "running" && groupedFailureCandidate(state);
         if (groupedCandidate && failedMonitorRecovery) assert.ok(state.launchHostKeySha256, "no launch-established host key; preserve host");
         const grouped = groupedCandidate && state.launchHostKeySha256
@@ -900,13 +1559,25 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         const query = unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID";
         if (sealed || grouped) {
           if (sealed) assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
-          const { terminal, registration } = grouped ?? (await import("./cloud-control-stream.mjs")).sealedMonitor(local, state);
+          const { terminal, registration } = offline ? {} :
+            grouped ?? (await import("./cloud-control-stream.mjs")).sealedMonitor(local, state);
           if (options.r21MeasuredCheckout) {
             assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
           }
           const unitSha256 = digest(remoteFiles(state)[state.unit]);
-          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp, completedOnly: !!groupedCandidate });
+          idleScript = (pack, stamp) => idleArchiveScript(state, offline ? state.bootstrapReady.bootId : registration.host.bootId,
+            unitSha256, { pack, stamp, completedOnly: !!groupedCandidate || !!offline });
           inspectUnit = async () => {
+            if (offline) {
+              // An audit-wait unit permits logins but its guardian rejects
+              // collection while native ownership is live. Make one read-only,
+              // pinned precheck before creating any collection ledger row.
+              const probe = await usingLaunchHostKey((opts) =>
+                execute("ssh", [...opts, `root@${state.ip}`, query], 20000, true));
+              if (probe.status === 255 && !probe.error && !probe.signal) return false;
+              assert.ok(probe.status === 0 && !probe.error && !probe.signal, "unit query refused");
+              if (!sealedUnit(probe.stdout, state)) return false;
+            }
             const result = await ssh(query, 60000, true);
             assert.ok(result.status === 0 && !result.error, "unit query refused");
             return sealedUnit(result.stdout, state);
@@ -938,7 +1609,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
         if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
-        assert.ok(state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
+        assert.ok(offlineAck || state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
           "terminal status unavailable without SSH intrusion; preserve host; registered native collection needs an approved observation protocol");
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
@@ -1016,16 +1687,31 @@ else ${pack}; fi` : pack, 11 * 60000);
         assert.ok(recoveryApproval, "source-bound production recovery approval required");
         full(recoveryApproval.controllerCommit, /[a-f0-9]{40}/, "merged repair source required");
         let grouped;
-        if (groupedPreplan) {
+        if (groupedPreplan || pinnedRetirement) {
           assert.equal(typeof authorizeRecovery, "function", "locked production recovery approval required");
           const lockedApproval = await authorizeRecovery(); check();
           const { controllerCommit, reservationSha256, ...recovery } = recoveryApproval;
           assert.deepEqual({ controllerCommit: lockedApproval.controllerCommit, reservationSha256: lockedApproval.reservationSha256,
             recovery: lockedApproval.recovery }, { controllerCommit, reservationSha256, recovery }, "locked recovery approval changed");
-          const bytes = regular(statePath, 1024 * 1024);
+          const snapshot = pinnedRetirement ? handoffStateSnapshot(statePath) : undefined;
+          const bytes = snapshot?.bytes ?? regular(statePath, 1024 * 1024);
           assert.equal(digest(bytes), reservationSha256, "locked recovery reservation changed");
           state = controllerState(JSON.parse(bytes), options.round);
           assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group recovery required");
+          if (pinnedRetirement) {
+            expectedHandoffState = snapshot;
+            assertHandoffState();
+            if (groupedExitOne) return retireFailedExitOne(controllerCommit, reservationSha256, bytes, recovery);
+            const handoff = { controllerCommit, captureSha256: recovery.captureSha256, launchIntentSha256: recovery.intent.launch };
+            if (state.status !== "retired") return retireNativeFailure(controllerCommit, undefined, handoff);
+            assertHandoffCustody = pinHandoffRetirement(local, state, handoff);
+            handoffReceiptSha256 = state.retirement.evidenceSha256;
+            checkHandoffDelete(false);
+            await confirmDeleted();
+            checkHandoffDelete();
+            if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
+            return 1;
+          }
           grouped = groupedPreplanFailure(local, state);
           assert.equal(grouped.preplan, true);
           if (state.control.monitor.phase === "closed" && [join(local, "operation.lock"), join(base, ".groups-launch.lock")]
@@ -1093,11 +1779,21 @@ else ${pack}; fi` : pack, 11 * 60000);
       }
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
+        const offline = state.fleet?.single?.offlineHandoff;
+        let expectedDelivery;
+        if (offline) {
+          assert.ok(offlineBootstrapAck());
+          assert.equal(typeof authorizeAudit, "function", "offline audit publication requires locked approval");
+          const approved = await authorizeAudit(); check();
+          assert.equal(digest(regular(statePath, 1024 * 1024)), approved.reservationSha256, "locked audit reservation changed");
+          expectedDelivery = approved.deliverySha256;
+        }
         const { group, prefix } = auditProtocol(options.auditGroup);
         controlEpoch = `audit-${group}`;
         if (state.group !== undefined) assert.equal(group, state.group, "audit delivery belongs to a different group host");
         assert.ok(!state.auditIntents?.[group] && !(group === "json-api" && state.auditIntent), "audit delivery already attempted; inspect, never repeat");
         const bytes = regular(resolve(options.deliverAudit), 16 * 1024 ** 2), intent = auditDelivery(bytes, options);
+        if (offline) assert.equal(intent.sha256, expectedDelivery, "locked audit delivery changed");
         assert.equal(await unit(), false, "terminal campaign cannot accept delivery");
         assert.equal((await ssh(auditScript(state, intent))).stdout.trim(), intent.subjectSha256);
         durable(join(local, `${prefix}-audit-delivery.json`), bytes);
@@ -1122,9 +1818,23 @@ export function publicError(error) {
   const diagnostic = providerFailure(error), stage = controllerFailure(error);
   const detail = diagnostic?.httpStatus !== undefined ? ` (HTTP ${diagnostic.httpStatus})`
     : diagnostic?.detail !== undefined ? ` (${diagnostic.detail})` : "";
+  // Fixed text for each allowlisted refusal that has a supported operator route.
+  const route = stage === "offline-never-started"
+    ? " Recovery: retire the bound posted create only by the separately approved pinned unused-host collection, --collect --unused-bootstrap-known-hosts <operator-verified host key> (CLOUD.md)."
+    : stage === "create-errored-contradicted"
+      ? " Recovery: the provider-errored receipt is contradicted. Collect binds only its exact posted droplet with the saved name, tags, size, region and one public IPv4;"
+        + " then retire it only by --collect --unused-bootstrap-known-hosts <operator-verified host key>. Otherwise account for that droplet with the provider (CLOUD.md)."
+      : stage === "create-contradiction-unpublished"
+        ? " Recovery: the contradiction was not published and the operation lock is kept. Account for that collect by the custody step; if provider-create-reappeared"
+          + " is absent, write it beside the reservation before removing operation.lock, then collect again (CLOUD.md)."
+        : "";
+  if (diagnostic?.code === "create-errored-absent") return "Provider create errored before guest startup; the exact allocation was verified absent on the verified account."
+    + " No DELETE or replacement create was sent. Not a benchmark result; never relaunch this round."
+    + (stage ? ` Controller stage: ${stage}.` : "") + ` Provider failure: ${diagnostic.code}.`;
   return "Controller stopped; retained state/evidence requires inspection. Host/deletion state may be uncertain. Never relaunch."
-    + (stage ? ` Controller stage: ${stage}.` : "")
-    + (diagnostic ? ` Provider failure: ${diagnostic.code}${detail}.` : "");
+    + (stage ? ` Controller stage: ${stage}.` : "") + route
+    + (diagnostic?.code === "bootstrap-marker" ? ` Bootstrap marker: ${diagnostic.detail}.`
+      : diagnostic ? ` Provider failure: ${diagnostic.code}${detail}.` : "");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   import("./cloud-production.mjs").then((native) => native.productionCli(process.argv.slice(2)))

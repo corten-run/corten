@@ -15,7 +15,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -372,4 +372,236 @@ async fn api_json_deadline_covers_the_full_body_read() {
         assert_eq!(response.json::<Value>().await.unwrap(), value);
         assert_eq!(state.reads(payload, "recovery"), 1);
     }
+}
+
+/// How long the catalog and marketplace fixtures (`bench/catalog/upstream.mjs`,
+/// `bench/marketplace/upstream.mjs`, Node's HTTP server) say they keep an idle connection open:
+/// they answer with `Keep-Alive: timeout=5`.
+const FIXTURE_KEEP_ALIVE: Duration = Duration::from_secs(5);
+
+/// What the upstream did, in milliseconds from its start, on which of its connections.
+#[derive(Clone, Debug, PartialEq)]
+enum Seen {
+    Accepted,
+    Answered(String),
+    /// A request arrived on a connection idle this long, and the connection closed unanswered.
+    ClosedIdle(u128),
+    ClosedByClient,
+}
+
+type Log = Arc<Mutex<Vec<(u128, usize, Seen)>>>;
+
+/// The fixtures' idle close, made deterministic. A fixture closes a connection that has been idle
+/// for its keep-alive timeout; a request written to it in that instant never reaches its handler.
+/// Here every request that arrives on a connection idle for at least `keep_alive` meets that close:
+/// the connection is dropped with the request unread, which resets it, and nothing answers. A
+/// request on a fresh or recently used connection is answered with the body of the first
+/// `(path prefix, body)` its path starts with, and the connection kept open. Each answer is logged
+/// before it is written, and [`ClosingUpstream::stop`] joins every thread before the log is read,
+/// so the log is complete when the test inspects it. Dropping it (also when a test fails early)
+/// stops and joins every thread as well.
+struct ClosingUpstream {
+    at: String,
+    started: Instant,
+    stopping: Arc<AtomicBool>,
+    accepting: Option<std::thread::JoinHandle<()>>,
+    seen: Log,
+}
+
+impl ClosingUpstream {
+    fn start(bodies: Vec<(&'static str, String)>, keep_alive: Duration) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let (started, seen, bodies, stopping) = (Instant::now(), Log::default(), Arc::new(bodies), Arc::<AtomicBool>::default());
+        let (log, stop) = (seen.clone(), stopping.clone());
+        let accepting = std::thread::spawn(move || {
+            let (mut connections, mut failure) = (Vec::new(), None);
+            while !stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((socket, _)) => {
+                        let (log, bodies, stop, connection) = (log.clone(), bodies.clone(), stop.clone(), connections.len());
+                        connections.push(std::thread::spawn(move || {
+                            serve_until_idle(socket, connection, &bodies, keep_alive, started, &log, &stop)
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
+                    Err(error) => {
+                        failure = Some(format!("accept: {error}"));
+                        stop.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            let panicked = connections.into_iter().map(std::thread::JoinHandle::join).filter(Result::is_err).count();
+            assert!(failure.is_none() && panicked == 0, "{failure:?}; {panicked} connection threads panicked");
+        });
+        Self { at, started, stopping, accepting: Some(accepting), seen }
+    }
+
+    fn now(&self) -> u128 {
+        self.started.elapsed().as_millis()
+    }
+
+    /// Stops accepting and waits for every thread to end: each connection's thread checks within
+    /// [`POLL`] while it waits for a request, and a write gives up after [`WRITE`].
+    fn halt(&mut self) -> std::thread::Result<()> {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.accepting.take().map_or(Ok(()), std::thread::JoinHandle::join)
+    }
+
+    /// Stops, then returns everything the upstream did.
+    fn stop(mut self) -> Vec<(u128, usize, Seen)> {
+        self.halt().expect("an upstream thread panicked");
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Drop for ClosingUpstream {
+    fn drop(&mut self) {
+        // A panic here while a failed test unwinds would abort; that failure is already reported.
+        if self.halt().is_err() && !std::thread::panicking() {
+            panic!("an upstream thread panicked");
+        }
+    }
+}
+
+/// How often a connection's thread, waiting for a request, checks whether the upstream is stopping.
+const POLL: Duration = Duration::from_millis(20);
+/// How long a connection's thread waits to write an answer before it gives up.
+const WRITE: Duration = Duration::from_secs(2);
+
+/// The connections that answered a `line` request.
+fn connections(seen: &[(u128, usize, Seen)], line: &str) -> Vec<usize> {
+    let answered = Seen::Answered(line.into());
+    let mut found: Vec<usize> = seen.iter().filter_map(|(_, c, s)| (*s == answered).then_some(*c)).collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+/// The idle closes logged at or after `from` ms.
+fn closed_since(seen: &[(u128, usize, Seen)], from: u128) -> usize {
+    seen.iter().filter(|(at, _, s)| matches!(s, Seen::ClosedIdle(_)) && *at >= from).count()
+}
+
+fn serve_until_idle(
+    mut socket: std::net::TcpStream,
+    connection: usize,
+    bodies: &[(&str, String)],
+    keep_alive: Duration,
+    started: Instant,
+    log: &Log,
+    stopping: &AtomicBool,
+) {
+    use std::io::{ErrorKind, Read, Write};
+    let record = |seen| log.lock().unwrap().push((started.elapsed().as_millis(), connection, seen));
+    let waiting = |error: &std::io::Error| matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut);
+    let stopped = || stopping.load(Ordering::SeqCst);
+    record(Seen::Accepted);
+    socket.set_nonblocking(false).unwrap();
+    socket.set_read_timeout(Some(POLL)).unwrap();
+    socket.set_write_timeout(Some(WRITE)).unwrap();
+    let mut answered: Option<Instant> = None;
+    loop {
+        match socket.peek(&mut [0]) {
+            Ok(1) => {}
+            Err(error) if waiting(&error) && !stopped() => continue,
+            Err(error) if waiting(&error) => return,
+            _ => return record(Seen::ClosedByClient),
+        }
+        if let Some(idle) = answered.map(|at| at.elapsed()).filter(|idle| *idle >= keep_alive) {
+            return record(Seen::ClosedIdle(idle.as_millis()));
+        }
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            match socket.read(&mut byte) {
+                Ok(1) => head.push(byte[0]),
+                Err(error) if waiting(&error) && !stopped() => {}
+                Err(error) if waiting(&error) => return,
+                other => panic!("the request head ended early: {other:?}"),
+            }
+        }
+        let line = String::from_utf8(head).unwrap().lines().next().unwrap().to_string();
+        let path = line.split(' ').nth(1).unwrap();
+        let body = &bodies.iter().find(|(prefix, _)| path.starts_with(prefix)).unwrap().1;
+        let length = body.len();
+        record(Seen::Answered(line));
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}"
+        )
+        .unwrap();
+        answered = Some(Instant::now());
+    }
+}
+
+/// A catalog page, a marketplace item and an item page whose upstream connections sat idle past
+/// the upstreams' keep-alive are answered from new connections with one upstream request each, not
+/// failed with a 502 (#1570). The item API (`bench/fullstack/item-api/server.mjs`) is Node's HTTP
+/// server too, with the same 5 s. The control runs the same binary, handlers and clients against
+/// an upstream that closes at 3 s, under the app's 4 s bound, and sends after 3.5 s idle: the pool
+/// policy then outlasts the upstream's close, as reqwest's default 90 s did against the fixtures'
+/// 5 s, and the reads on reused connections fail. (The app is a separate process, so the test
+/// cannot give it the old policy without a setting the benchmark app does not have.)
+#[tokio::test]
+async fn api_reads_after_the_upstream_s_keep_alive_do_not_reuse_its_closed_connections() {
+    const SHORT_KEEP_ALIVE: Duration = Duration::from_secs(3);
+    let bodies = || {
+        vec![
+            ("/catalog/", expected("catalog").to_string()),
+            ("/marketplace/", expected("marketplace").to_string()),
+            ("/api/discovery/items/", r#"{"catalog_item_id":"item_1","title":"Item one","description":"An item"}"#.to_string()),
+        ]
+    };
+    assert!(record_http_bound() < FIXTURE_KEEP_ALIVE && SHORT_KEEP_ALIVE + Duration::from_millis(500) < record_http_bound());
+    let (upstream, short) =
+        (ClosingUpstream::start(bodies(), FIXTURE_KEEP_ALIVE), ClosingUpstream::start(bodies(), SHORT_KEEP_ALIVE));
+    let (app, unsafe_app) = (App::start(Some(&upstream.at)).await, App::start(Some(&short.at)).await);
+    let reads = [
+        ("/catalog/record_1", "GET /catalog/records/record_1 HTTP/1.1"),
+        ("/api/marketplace/item_1", "GET /marketplace/records/item_1 HTTP/1.1"),
+        ("/items/item_1", "GET /api/discovery/items/item_1 HTTP/1.1"),
+    ];
+    let read_all = async |app: &App| {
+        let mut statuses = Vec::new();
+        for (path, _) in reads {
+            statuses.push(app.request(reqwest::Method::GET, path).await.status());
+        }
+        statuses
+    };
+    assert_eq!(read_all(&app).await, [StatusCode::OK; 3]);
+    let warmed = Instant::now();
+    assert_eq!(read_all(&unsafe_app).await, [StatusCode::OK; 3]);
+    tokio::time::sleep(SHORT_KEEP_ALIVE + Duration::from_millis(500)).await;
+    let short_sent = short.now();
+    let failed = read_all(&unsafe_app).await;
+    tokio::time::sleep((warmed + FIXTURE_KEEP_ALIVE + Duration::from_millis(250)).saturating_duration_since(Instant::now()))
+        .await;
+    let sent = upstream.now();
+    let statuses = read_all(&app).await;
+    let (seen, short_seen) = (upstream.stop(), short.stop());
+    // The control: every read that met the close failed with a 502, and at least one did.
+    let lost = failed.iter().filter(|status| **status == StatusCode::BAD_GATEWAY).count();
+    assert!(failed.iter().all(|status| [StatusCode::OK, StatusCode::BAD_GATEWAY].contains(status)), "{failed:?}");
+    assert!(lost > 0 && closed_since(&short_seen, short_sent) == lost, "{failed:?}, sent at {short_sent} ms: {short_seen:?}");
+    assert_eq!(statuses, [StatusCode::OK; 3], "sent at {sent} ms; upstream: {seen:?}");
+    for (path, line) in reads {
+        assert_eq!(closed_since(&seen, sent), 0, "{path}: {seen:?}");
+        let answers = seen.iter().filter(|(_, _, s)| *s == Seen::Answered(line.into())).count();
+        assert_eq!(
+            (answers, connections(&seen, line).len()),
+            (2, 2),
+            "{path}: one upstream request each, on a new connection: {seen:?}"
+        );
+    }
+}
+
+/// The app's pool bound (`UPSTREAM_IDLE` in `src/record_http.rs`, also used by `src/items.rs`),
+/// which this integration test cannot import from the binary.
+fn record_http_bound() -> Duration {
+    let source = include_str!("../src/record_http.rs");
+    let line = source.lines().find(|line| line.starts_with("pub const UPSTREAM_IDLE")).expect("UPSTREAM_IDLE");
+    assert!(line.ends_with("Duration::from_secs(4);"), "{line}");
+    Duration::from_secs(4)
 }
