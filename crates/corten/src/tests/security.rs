@@ -460,6 +460,33 @@ async fn absolute_target_names_the_origin_of_a_write() {
     }
 }
 
+#[tokio::test]
+async fn an_absolute_form_write_over_a_connection_reaches_the_named_route() {
+    let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
+    let (addr, stop, server) = on_the_wire(App::new(Routes::from(routes))).await;
+    let mut wire = Wire::to(addr).await;
+    let (status, _, _) = wire
+        .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://localhost\r\nContent-Length: 0\r\n\r\n")
+        .await;
+    assert_eq!(status, 204);
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[test]
+fn an_authority_form_target_supplies_the_origin_comparisons_port() {
+    let policy = crate::security::Policy::new();
+    let req = Request::builder()
+        .method(http::Method::CONNECT)
+        .uri("shop.example:8443")
+        .header("origin", "https://shop.example:8443")
+        .header("host", "shop.example")
+        .body(())
+        .unwrap();
+    assert!(policy.same_origin(req.method(), req.uri(), req.headers()));
+}
+
 #[test]
 fn an_https_only_policy_checks_the_origin_against_the_supplied_target() {
     let policy = crate::security::Policy::new().hsts();

@@ -1160,7 +1160,11 @@ impl Answers {
         let count = count_of(req.uri().path().as_bytes());
         signal.writes(count);
         let host = crate::security::request_host(req.uri(), || req.headers().get(header::HOST));
-        Writing { answers: self, counted: Some((count, host.map(crate::security::RequestHost::into_header))), answered: false }
+        Writing {
+            answers: self,
+            counted: Some((count, host.and_then(crate::security::RequestHost::into_header))),
+            answered: false,
+        }
     }
 
     /// Counts a write to the paths `count` is for, so no page kept for them stands: every

@@ -227,7 +227,7 @@ give each a container of its own.
 writes sets (`tcache_max:524288`). That image also turns jemalloc's background thread on; here
 it is off, so what the allocator does is done by the thread that asked and is in its count. The
 probe refuses to start when jemalloc is not the allocator in use. With the 64 KiB cache of
-earlier images the nine cases count up to 22 instructions fewer (`get` 18,972 against 18,987,
+earlier images the nine cases measured then counted up to 22 instructions fewer (`get` 18,972 against 18,987,
 `unstaged` 12,838 against 12,860, `page-browser` the same).
 
 ## What a count is not

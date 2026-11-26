@@ -1611,6 +1611,8 @@ impl Policy {
     /// one is the scheme's default), and over `https`, or on loopback, when the app is HTTPS only
     /// ([`Policy::hsts`]). A request with neither header is not from a browser (a native app, an
     /// agent, a webhook); those authenticate with tokens, not ambient cookies, so it passes.
+    /// Pass the request's URI as received: a path-only URI compares `Origin` with `Host`
+    /// even if the original target had an authority.
     pub fn same_origin(&self, method: &Method, uri: &http::Uri, headers: &HeaderMap) -> bool {
         if !Origin::checks(method) {
             return true;
@@ -1917,10 +1919,10 @@ impl<'a> RequestHost<'a> {
         }
     }
 
-    pub(crate) fn into_header(self) -> HeaderValue {
+    pub(crate) fn into_header(self) -> Option<HeaderValue> {
         match self {
-            Self::Target(at) => HeaderValue::from_bytes(at.as_str().as_bytes()).expect("URI authority is a header value"),
-            Self::Line(line) => line.clone(),
+            Self::Target(at) => HeaderValue::from_bytes(at.as_str().as_bytes()).ok(),
+            Self::Line(line) => Some(line.clone()),
         }
     }
 }
@@ -1980,15 +1982,14 @@ fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, boo
     if more {
         return Asked::Malformed;
     }
-    match request_host(req.uri(), || host) {
-        // [`named`], with the choice between its two readers made here, so the one an app
-        // that answers to any host needs is in line.
-        Some(RequestHost::Line(host)) => match hosts {
+    // Keep the path-form check inline on unstaged routes; the choice of authority must agree with `request_host`.
+    match (req.uri().authority(), host) {
+        (None, Some(host)) => match hosts {
             Some(names) => among(host.as_bytes(), names),
             None => any(host.as_bytes()),
         },
-        None => unnamed(req),
-        Some(RequestHost::Target(target)) => targeted(target.as_str(), host, req, hosts),
+        (None, None) => unnamed(req),
+        (Some(target), host) => targeted(target.as_str(), host, req, hosts),
     }
 }
 
@@ -3303,6 +3304,27 @@ mod tests {
         let uri = http::Uri::from_static("https://shop.example:8443/items");
         let host = request_host(&uri, || panic!("absolute-form needs no header lookup"));
         assert_eq!(host.and_then(RequestHost::text), Some("shop.example:8443"));
+    }
+
+    #[test]
+    fn admission_and_request_host_agree_for_target_line_and_neither() {
+        for (uri, field, wanted) in [
+            ("http://listed.example/", Some("other.example"), Some("listed.example")),
+            ("/", Some("other.example"), Some("other.example")),
+            ("/", None, None),
+        ] {
+            let mut builder = http::Request::builder().uri(uri);
+            if let Some(host) = field {
+                builder = builder.header(header::HOST, host);
+            }
+            let mut req = builder.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut req);
+            let host = request_host(req.uri(), || req.headers().get(header::HOST)).and_then(RequestHost::text);
+            assert_eq!(host, wanted);
+            let names = [String::from("listed.example")];
+            let expected = host.map_or(Asked::Malformed, |name| named(name.as_bytes(), Some(&names)));
+            assert_eq!(read(&req, || host_lines(req.headers()), Some(&names)), expected, "{uri} {field:?}");
+        }
     }
 
     #[test]

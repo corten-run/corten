@@ -259,7 +259,10 @@ own authority (host and optional port), that authority takes precedence over `Ho
 [RFC 9112 section 3.2.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2.2) requires this
 for absolute-form targets; Corten also uses the authority of an authority-form target. A different
 but valid `Host` does not change the requested host or by itself cause a refusal. The header
-still has to pass the checks below.
+still has to pass the checks below. Without `Sec-Fetch-Site`, the write check compares
+`Origin` with the requested authority. If a proxy puts an internal address there, the
+check trusts that internal origin rather than the public one, and can refuse the app's own
+browsers. Forward a path with the public `Host`, or an absolute URL with the public authority.
 
 An app answers a request only when the requested host is `localhost` (or a name under it, such as
 `app.localhost`), an IP address, missing (HTTP/1.0, a test's `app().test()`), or a name the app lists.
@@ -1145,6 +1148,9 @@ They read the incoming request's mode, credentials and cache validators before m
 an API they do not read the mode: nothing there depends on it). Those
 decisions and the error page's saved request are not changed by middleware edits. A `Req` taken
 by middleware or the handler reads the headers there, including edits by an earlier extractor.
+The WebSocket origin check and the choice of notice cookie also use the URI at extraction.
+If middleware replaces a whole URL with a path, those two use `Host`, not the authority the
+stages used for admission. Preserve the authority when rewriting the path if these must agree.
 For an API or data request there is no HTML error snapshot: a session cookie can settle the cache
 decision without reading `Authorization`.
 

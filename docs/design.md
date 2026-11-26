@@ -9062,10 +9062,11 @@ rules something out.
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
     `Location` of a write that did not fail: RFC 9111 sections 4.2.1, 5.1 and 4.4; a recipient
-    counts an answer's lifetime less its `Age`, section 4.2.3; the store answers only origin-form
-    requests, whose target is a path and query and whose host comes from `Host`; for invalidation
-    a write with an absolute-form target takes its authority from that target, RFC 9112
-    section 3.2.2); reasoned (the inputs a kept page's handler may take read, of a whole
+    counts an answer's lifetime less its `Age`, section 4.2.3; for HTTP/1.1 an absolute-form target
+    supplies its own authority, RFC 9112 section 3.2.2); reasoned (the connection to the app
+    speaks HTTP/1.1 ([Limit 14](#limit-http1)); the store answers only origin-form requests,
+    whose target is a path and query and whose host comes from `Host`, and invalidates using the
+    authority the write requested; the inputs a kept page's handler may take read, of a whole
     document's `GET` without credentials, its URL, its `Host` and, for its language,
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
