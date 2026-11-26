@@ -2374,6 +2374,43 @@ async fn shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadl
     tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
 }
 
+/// A deadline that waits on its connection's timer when shutdown begins fires at its own time:
+/// the timer's wake reaches the connection's task after shutdown has begun as before it. The test
+/// above cannot tell: there the request's deadline and the time its connection is held to once
+/// shutdown has begun (shutdown's start and that deadline's length) are milliseconds apart, and the
+/// task's wait for that time wakes it and polls the connection, so a timer whose wake was lost
+/// would be answered 503 within the slack all the same. Here shutdown begins half a deadline after
+/// the request, so the connection is held to half a deadline after the request's own time, and an
+/// answer that came only with that wait would come a whole deadline after shutdown began, or
+/// later. Each half is [`SLACK`]; a machine so slow that the request's deadline has passed before
+/// shutdown begins fails the test, which could not have told.
+#[tokio::test]
+async fn a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const LONG: Duration = Duration::from_millis(1800);
+    let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let app = waiting(told).deadline(LONG).shutdown_grace(Duration::from_millis(20));
+    let (addr, stop, server) = listening(app).await;
+    let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+    for _ in 0..3 {
+        assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
+    }
+    assert_eq!(timers(), 1, "the connection has made its timer, and the next deadline to wait takes it");
+    let asked_never = std::time::Instant::now();
+    conn.write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    while heard.recv().await.expect("the app holds the sender") != Told::Began {}
+    tokio::time::sleep(SLACK.saturating_sub(asked_never.elapsed())).await;
+    let stopped = std::time::Instant::now();
+    stop.send(()).unwrap();
+    assert!(asked_never.elapsed() < LONG, "shutdown began after the deadline: {:?}", asked_never.elapsed());
+    let mut answer = String::new();
+    conn.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 503"), "the request has its deadline: {answer}");
+    assert!(asked_never.elapsed() >= LONG, "not before its deadline, shutdown or not: {:?}", asked_never.elapsed());
+    assert!(stopped.elapsed() < LONG, "at its deadline, not when its connection's time was up: {:?}", stopped.elapsed());
+    tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
+}
+
 /// A thread that serves one runtime and then another (a test's, or an app that builds its own)
 /// serves each as if it were the first: nothing a connection of the first runtime kept for its
 /// deadlines is used on the second, also when the first ended with its connections open.

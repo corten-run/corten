@@ -148,14 +148,17 @@ impl<C: Future> Future for Keeps<C> {
     type Output = C::Output;
 
     // Written for what a poll costs a connection that has made no timer, which is every
-    // connection fewer than two of whose requests have waited: 13 instructions (callgrind,
-    // keep-alive requests over TCP). The connection is polled in one place, so its poll is still
-    // compiled into its caller, and [`Polling`] owns nothing to drop and reads what it lent from
-    // the thread, so putting the thread back is compiled in here too. One that has made its
-    // timer lends it and takes it back in every poll, whatever it is serving: a request that
-    // does not wait then costs about 25 instructions more. A timer left set costs every
-    // connection of its runtime: about 190 instructions each time the runtime's driver parks,
-    // as a timer of the app's own does (`docs/design.md#choice-deadline-timer`, cost 1).
+    // connection fewer than two of whose requests have waited: 17 instructions (callgrind,
+    // keep-alive requests over TCP: this function's 386 a poll against 369 for the connection's
+    // own poll without it). The connection itself is polled in one place, here, so its poll is
+    // still compiled into its one caller, which is now this function (`serve_listener` polls
+    // the wrapper at three places: while it serves, to close now when the server is gone, and
+    // to drain at a shutdown). [`Polling`] owns nothing to drop and reads what it lent from the
+    // thread, so putting the thread back is compiled in here too. One that has made its timer
+    // lends it and takes it back in every poll, whatever it is serving: a request that does not
+    // wait then costs about 25 instructions more. A timer left set costs every connection of
+    // its runtime: about 190 instructions each time the runtime's driver parks, as a timer of
+    // the app's own does (`docs/design.md#choice-deadline-timer`, cost 1).
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<C::Output> {
         let this = self.project();
         // A connection that has made no timer tells the thread only how many of its deadlines
