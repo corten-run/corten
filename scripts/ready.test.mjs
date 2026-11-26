@@ -132,9 +132,11 @@ test("a refused connection is waited out until the app listens", async () => {
   // The port is picked below every default ephemeral range (Linux 32768, Windows and macOS 49152),
   // so no server another process starts on port 0 takes it. Before the app listens, the port must
   // be seen to refuse: on a clock that ends the budget after a second attempt, two refusals in a
-  // row are retried and the second is named, which no answer from another listener can give.
+  // row are retried and the second is named, which no answer from another listener can give. A port
+  // that is not free all the way through (it answers, the app cannot bind it, or another client's
+  // request reaches the app) proves nothing either way, so another is picked.
   for (let tries = 0; ; tries++) {
-    assert.ok(tries < 5, "five ports below the ephemeral range did not refuse a connection");
+    assert.ok(tries < 5, "five ports below the ephemeral range were not free for the whole test");
     const port = 20_000 + Math.floor(Math.random() * 10_000);
     const refusing = await ready(`http://127.0.0.1:${port}`, { now: jumps(5) }).then(
       () => "ready",
@@ -154,9 +156,8 @@ test("a refused connection is waited out until the app listens", async () => {
         () => "ready",
         (e) => String(e.message),
       );
-      assert.equal(await listened, undefined);
+      if ((await listened) !== undefined || asked !== 1) continue;
       assert.equal(outcome, "ready");
-      assert.equal(asked, 1);
       return;
     } finally {
       clearTimeout(later);
