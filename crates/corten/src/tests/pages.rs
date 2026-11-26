@@ -853,6 +853,32 @@ async fn an_absolute_target_chooses_the_notice_cookie_by_its_own_host() {
     }
 }
 
+#[tokio::test]
+async fn a_notice_after_an_absolute_target_is_rewritten_uses_the_handler_visible_host() {
+    struct PathOnly;
+    impl crate::Middleware for PathOnly {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
+            *req.uri_mut() = http::Uri::from_static("/");
+            next.run(req).await
+        }
+    }
+    let app = || {
+        let routes =
+            Table::new().route("/", crate::router::post(|req: Req| async move { req.redirect_with_notice(&Done, "Saved.") }));
+        App::new(Routes::from(routes)).policy(crate::security::Policy::new().host("desk.lan"))
+    };
+    for (router, cookie) in [(app().router(), "corten-notice"), (app().middleware(PathOnly).router(), "__Host-corten-notice")] {
+        let request = Request::post("http://desk.lan:3001/")
+            .header(header::HOST, "desk.lan:3002")
+            .header(header::ORIGIN, "http://desk.lan:3001")
+            .body(Body::empty())
+            .unwrap();
+        let res = router.oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers()[header::SET_COOKIE].to_str().unwrap().split_once('=').unwrap().0, cookie);
+    }
+}
+
 /// A write from a plain `http://` origin on the LAN, which a browser does not count as secure and so
 /// refuses a `Secure` (and `__Host-`) cookie from, gets its notice in a plain `corten-notice`
 /// cookie; the page reads that one only from a request without `Sec-Fetch-Site` (which a browser

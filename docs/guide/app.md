@@ -1150,7 +1150,8 @@ decisions and the error page's saved request are not changed by middleware edits
 by middleware or the handler reads the headers there, including edits by an earlier extractor.
 The WebSocket origin check and the choice of notice cookie also use the URI at extraction.
 If middleware replaces a whole URL with a path, those two use `Host`, not the authority the
-stages used for admission. Preserve the authority when rewriting the path if these must agree.
+stages used for admission. As before, an `Origin` matching that `Host` can pass the handshake
+check or match for the notice cookie even though admission never judged that name. Preserve the authority when rewriting the path if these must agree.
 For an API or data request there is no HTML error snapshot: a session cookie can settle the cache
 decision without reading `Authorization`.
 

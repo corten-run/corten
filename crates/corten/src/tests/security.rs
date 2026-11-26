@@ -469,6 +469,10 @@ async fn an_absolute_form_write_over_a_connection_reaches_the_named_route() {
         .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://localhost\r\nContent-Length: 0\r\n\r\n")
         .await;
     assert_eq!(status, 204);
+    let (status, _, _) = wire
+        .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://other.example\r\nContent-Length: 0\r\n\r\n")
+        .await;
+    assert_eq!(status, 403);
     drop(wire);
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();

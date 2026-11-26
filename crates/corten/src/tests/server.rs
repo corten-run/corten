@@ -1856,6 +1856,8 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
     impl crate::Middleware for PathOnly {
         async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
             *req.uri_mut() = http::Uri::from_static("/ws");
+            let host = crate::security::request_host(req.uri(), || req.headers().get(header::HOST));
+            assert_eq!(host.and_then(|h| h.text()), Some("proxy.example"), "authority available to the extractor");
             next.run(req).await
         }
     }

@@ -3310,6 +3310,7 @@ mod tests {
     fn admission_and_request_host_agree_for_target_line_and_neither() {
         for (uri, field, wanted) in [
             ("http://listed.example/", Some("other.example"), Some("listed.example")),
+            ("http://listed.example:bad/", Some("other.example"), Some("listed.example:bad")),
             ("/", Some("other.example"), Some("other.example")),
             ("/", None, None),
         ] {
@@ -3322,8 +3323,10 @@ mod tests {
             let host = request_host(req.uri(), || req.headers().get(header::HOST)).and_then(RequestHost::text);
             assert_eq!(host, wanted);
             let names = [String::from("listed.example")];
-            let expected = host.map_or(Asked::Malformed, |name| named(name.as_bytes(), Some(&names)));
-            assert_eq!(read(&req, || host_lines(req.headers()), Some(&names)), expected, "{uri} {field:?}");
+            for hosts in [Some(&names[..]), None] {
+                let expected = host.map_or(Asked::Malformed, |name| named(name.as_bytes(), hosts));
+                assert_eq!(read(&req, || host_lines(req.headers()), hosts), expected, "{uri} {field:?} {hosts:?}");
+            }
         }
     }
 
