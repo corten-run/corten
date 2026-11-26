@@ -25,6 +25,9 @@ async fn a_request_for_another_host_is_misdirected_in_every_mode() {
     for host in ["localhost:3917", "127.0.0.1:3917", "[::1]:3917", ""] {
         assert_eq!(for_host(&router, "/", host, &[]).await.0, StatusCode::OK, "{host:?}");
     }
+    // A `Host` that is no host, or a second one, is not a request HTTP allows: a 400 the same
+    // way, an app that answers to any host included. (A request the server read off a
+    // connection is the test below.)
     let named = App::new(Routes::from(Table::new().route("/", get(|| async { "home" }))))
         .policy(crate::security::Policy::new().host("shop.example"))
         .router();
@@ -34,6 +37,333 @@ async fn a_request_for_another_host_is_misdirected_in_every_mode() {
         .policy(crate::security::Policy::new().any_host())
         .router();
     assert_eq!(for_host(&any, "/", rebound, &[]).await.0, StatusCode::OK);
+    for uri in ["/", "/missing", "/api/rates", "/health/live"] {
+        for (host, extra) in [
+            ("localhost:3917/path", &[][..]),
+            ("user@localhost", &[][..]),
+            ("localhost, rebound.attacker.example", &[][..]),
+            ("localhost", &[("host", "localhost")][..]),
+            ("shop.example", &[("host", "shop.example"), ("accept", "text/html")][..]),
+        ] {
+            for router in [&router, &named, &any] {
+                let (status, body) = for_host(router, uri, host, extra).await;
+                assert_eq!((status, body.as_str()), (StatusCode::BAD_REQUEST, "Bad request."), "{uri} {host:?} {extra:?}");
+            }
+        }
+    }
+}
+
+/// A route through the stages that takes any one segment, as a path with a byte outside ASCII
+/// would be, and one outside the stages.
+#[crate::routes]
+mod wire_url {
+    #[route("/{word}", get = wire_word)]
+    pub struct Word<'a> {
+        pub word: &'a str,
+    }
+
+    #[route("/lane/{word}", get = wire_lane, unstaged)]
+    pub struct Lane<'a> {
+        pub word: &'a str,
+    }
+}
+
+/// How many requests reached a handler of `wire_url`.
+static WIRE_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+async fn wire_word(at: crate::Params<wire_url::Word<'_>>) -> String {
+    WIRE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("word {}", at.word)
+}
+
+async fn wire_lane(at: crate::Params<wire_url::Lane<'_>>) -> String {
+    WIRE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("lane {}", at.word)
+}
+
+/// A connection to a server, for requests written out byte by byte.
+struct Wire {
+    stream: tokio::net::TcpStream,
+    unread: Vec<u8>,
+}
+
+impl Wire {
+    async fn to(addr: std::net::SocketAddr) -> Wire {
+        Wire { stream: tokio::net::TcpStream::connect(addr).await.unwrap(), unread: Vec::new() }
+    }
+
+    /// More of what the server sent, or `false` once it has closed the connection.
+    async fn more(&mut self) -> bool {
+        use tokio::io::AsyncReadExt;
+        let mut piece = [0; 4096];
+        let read = tokio::time::timeout(Duration::from_secs(10), self.stream.read(&mut piece));
+        let n = read.await.expect("the server neither answers nor closes").unwrap();
+        self.unread.extend_from_slice(&piece[..n]);
+        n > 0
+    }
+
+    /// Sends `request` as written and reads one answer on the same connection: its status, its
+    /// head, and the body its `Content-Length` says.
+    async fn ask(&mut self, request: &[u8]) -> (u16, String, String) {
+        use tokio::io::AsyncWriteExt;
+        let asked = String::from_utf8_lossy(request).into_owned();
+        self.stream.write_all(request).await.unwrap();
+        let end = loop {
+            match self.unread.windows(4).position(|window| window == b"\r\n\r\n") {
+                Some(at) => break at + 4,
+                None => assert!(self.more().await, "the connection closed with no answer to {asked:?}"),
+            }
+        };
+        let head = String::from_utf8(self.unread.drain(..end).collect()).unwrap();
+        let length = head.lines().find_map(|line| line.strip_prefix("content-length: ")).map_or(0, |n| n.parse().unwrap());
+        while self.unread.len() < length {
+            assert!(self.more().await, "the connection closed in the answer to {asked:?}");
+        }
+        let body = String::from_utf8_lossy(&self.unread.drain(..length).collect::<Vec<_>>()).into_owned();
+        (head[9..12].parse().unwrap(), head, body)
+    }
+}
+
+/// `app` served on a free port of `127.0.0.1` until its sender is used.
+async fn on_the_wire<M: crate::Middleware>(
+    app: App<M>,
+) -> (std::net::SocketAddr, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<std::io::Result<()>>) {
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    (addr, stop, server)
+}
+
+/// What RFC 9112 3.2 has a server answer `400`, sent over a connection byte for byte: an
+/// HTTP/1.1 request with no `Host` line, any with more than one, or with one that is not a host
+/// and maybe a port. Each is refused before anything of the app runs, at a route through the
+/// stages and at one outside them, and the connection answers the next request: the server
+/// read the whole message, so nothing asks it to close (9.3); where the message's body has not
+/// arrived, the connection ends after the answer. A request-target that names its own host is
+/// held to the same, by Corten's choice: its host and port are read where `Host` would be, and
+/// one with a user, a port that is no number or an address in brackets that is not IPv6 is
+/// refused. The rest of a request-target is let through as it was: one with a byte outside
+/// ASCII, and `*` with a method that is not `OPTIONS`, are answered by the routes.
+#[tokio::test]
+async fn a_request_http_does_not_allow_is_a_400_and_its_connection_goes_on() {
+    use std::sync::atomic::Ordering::Relaxed;
+    const GOOD: &[u8] = b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n";
+    let app = App::new(wire_url::router()).error_page(test_error_page, ());
+    let (addr, stop, server) = on_the_wire(app).await;
+    let refused: &[&[u8]] = &[
+        // No `Host` line; two that differ; two the same.
+        b"GET /spec HTTP/1.1\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nHost: other.example.com\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nHost: 127.0.0.1:8080\r\n\r\n",
+        // Not a host and maybe a port: a user, a path, nothing, a list.
+        b"GET /spec HTTP/1.1\r\nHost: user@127.0.0.1:8080\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080/path\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: \r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1:8080, other.example.com\r\n\r\n",
+        // The same at a route outside the stages.
+        b"GET /lane/spec HTTP/1.1\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nHost: other.example.com\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nHost: 127.0.0.1:8080\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: user@127.0.0.1:8080\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080/path\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: \r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080, other.example.com\r\n\r\n",
+        // More of each kind: a third line, a port that is no number, a second colon, an address
+        // that is not IPv6 in brackets, a second `Host` beside a target of its own kind, and a
+        // target that names the host with no `Host` line beside it, or with one that is no host.
+        b"GET /spec HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\nhost: localhost\r\nHOST: localhost\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: localhost:http\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: localhost:80:80\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: [localhost]\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: [::1\r\n\r\n",
+        b"GET /caf\xC3\xA9 HTTP/1.1\r\nHost: localhost\r\nHost: localhost\r\n\r\n",
+        b"DELETE * HTTP/1.1\r\n\r\n",
+        b"GET http://localhost/spec HTTP/1.1\r\n\r\n",
+        b"GET http://localhost/spec HTTP/1.1\r\nHost: localhost/spec\r\n\r\n",
+        b"GET http://user@localhost/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        // A target's own host and port are held to what a `Host` is, beside a `Host` that is
+        // one: a port that is no number, an address in brackets that is not IPv6, one with a
+        // zone, and a host alone that is none, at a route through the stages and outside them.
+        b"GET http://localhost:abc/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://[v1.x]/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://[fe80::1%25eth0]/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://localhost:abc/lane/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET http://[v1.x]/lane/spec HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"GET localhost:abc HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        // No `Host` among other lines, where the first line is not the place to look.
+        b"GET /spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\n\r\n",
+        // A body the server has read is left behind with its request.
+        b"GET /spec HTTP/1.1\r\nHost: a, b\r\nContent-Length: 5\r\n\r\nhello",
+    ];
+    let mut wire = Wire::to(addr).await;
+    for request in refused {
+        let asked = String::from_utf8_lossy(request);
+        let (status, head, body) = wire.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{asked:?}: {head}");
+        assert!(head.contains("\r\ncontent-type: text/plain; charset=utf-8\r\n"), "{asked:?}: {head}");
+        assert!(head.contains("\r\nx-content-type-options: nosniff\r\n"), "{asked:?}: {head}");
+        assert!(head.contains("\r\ncache-control: private, no-cache\r\n"), "{asked:?}: {head}");
+        assert!(!head.contains("\r\nconnection:"), "{asked:?}: {head}");
+        assert_eq!(WIRE_RUNS.load(Relaxed), 0, "{asked:?} reached a handler");
+        // The connection is open: the next request on it is answered, by its handler.
+        let (status, _, body) = wire.ask(GOOD).await;
+        assert_eq!((status, body.as_str()), (200, "word spec"), "after {asked:?}");
+        assert_eq!(WIRE_RUNS.swap(0, Relaxed), 1);
+    }
+    // HTTP/1.0 may leave `Host` out, but not send a wrong one or two; the server closes after an
+    // HTTP/1.0 answer, so each has a connection of its own.
+    for request in [
+        &b"GET /spec HTTP/1.0\r\nHost: 127.0.0.1:8080, other.example.com\r\n\r\n"[..],
+        b"GET /lane/spec HTTP/1.0\r\nHost: localhost\r\nHost: localhost\r\n\r\n",
+    ] {
+        let (status, head, body) = Wire::to(addr).await.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
+    }
+    assert_eq!(WIRE_RUNS.load(Relaxed), 0);
+    // A target that is not UTF-8 does not reach the app: hyper cannot parse the line, answers a
+    // `400` of its own and closes the connection, as before.
+    let mut unparsed = Wire::to(addr).await;
+    let (status, head, body) = unparsed.ask(b"GET /caf\xE9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n").await;
+    assert_eq!((status, body.as_str()), (400, ""), "{head}");
+    assert!(!unparsed.more().await, "open after a request-line that does not parse");
+
+    // What does not change. Each on the one connection, with the answer it had before.
+    let answered: &[(&[u8], u16, &str)] = &[
+        (GOOD, 200, "word spec"),
+        // `Host` after other lines, as some clients write it.
+        (b"GET /spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: localhost\r\n\r\n", 200, "word spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: localhost\r\n\r\n", 200, "lane spec"),
+        // And there it is held to the app's names as on the first line.
+        (b"GET /spec HTTP/1.1\r\nAccept: */*\r\nHost: other.example\r\n\r\n", 421, "Misdirected request."),
+        (
+            b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nUser-Agent: probe\r\nHost: other.example\r\n\r\n",
+            421,
+            "Misdirected request.",
+        ),
+        (b"GET /lane/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "lane spec"),
+        // The header's name in any case, the host's too; a port, none, or an empty one.
+        (b"GET /spec HTTP/1.1\r\nhOsT: LocalHost:8080\r\n\r\n", 200, "word spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nHOST: LOCALHOST\r\n\r\n", 200, "lane spec"),
+        (b"GET /spec HTTP/1.1\r\nHost: localhost\r\n\r\n", 200, "word spec"),
+        (b"GET /spec HTTP/1.1\r\nHost: localhost:\r\n\r\n", 200, "word spec"),
+        (b"GET /spec HTTP/1.1\r\nHost: app.localhost:8080\r\n\r\n", 200, "word spec"),
+        (b"GET /spec HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", 200, "word spec"),
+        // An IPv6 address, in brackets.
+        (b"GET /spec HTTP/1.1\r\nHost: [::1]:8080\r\n\r\n", 200, "word spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nHost: [::1]\r\n\r\n", 200, "lane spec"),
+        (b"GET /spec HTTP/1.1\r\nHost: [2001:db8::7]:8080\r\n\r\n", 200, "word spec"),
+        // A target that names the host: it is the one asked for, whatever `Host` names.
+        (b"GET http://127.0.0.1:8080/spec HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "word spec"),
+        (b"GET http://localhost/lane/spec HTTP/1.1\r\nHost: other.example.com\r\n\r\n", 200, "lane spec"),
+        (b"GET http://other.example.com/ HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 421, "Misdirected request."),
+        // A host that is one, and not the app's, is still the 421.
+        (b"GET /spec HTTP/1.1\r\nHost: rebound.attacker.example:8080\r\n\r\n", 421, "Misdirected request."),
+        (b"GET /lane/spec HTTP/1.1\r\nHost: rebound.attacker.example\r\n\r\n", 421, "Misdirected request."),
+        (b"GET /spec HTTP/1.1\r\nHost: a.example,b.example\r\n\r\n", 421, "Misdirected request."),
+        // A path percent-encoded, as a browser sends one.
+        (b"GET /caf%C3%A9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "word caf\u{e9}"),
+        // And with its bytes as they are, in a path or a query: let through to the routes, as
+        // before, though no URI holds them.
+        (b"GET /caf\xC3\xA9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "word caf\u{e9}"),
+        (b"GET /lane/caf\xC3\xA9 HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 200, "lane caf\u{e9}"),
+        (b"GET /spec?q=caf\xC3\xA9 HTTP/1.1\r\nHost: localhost\r\n\r\n", 200, "word spec"),
+        // `*` with any method, and `CONNECT`, are answered as they were: no route is at either.
+        (b"GET * HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 404, ""),
+        (b"DELETE * HTTP/1.1\r\nHost: localhost\r\n\r\n", 404, ""),
+        (b"OPTIONS * HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n", 404, ""),
+        (b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 421, "Misdirected request."),
+    ];
+    let mut runs = 0;
+    for (request, status, body) in answered {
+        let asked = String::from_utf8_lossy(request);
+        let (answered, head, text) = wire.ask(request).await;
+        assert_eq!(answered, *status, "{asked:?}: {head}{text}");
+        if !body.is_empty() {
+            assert_eq!(text, *body, "{asked:?}");
+        }
+        runs += usize::from(*status == 200);
+        assert_eq!(WIRE_RUNS.load(Relaxed), runs, "{asked:?}");
+    }
+    // HTTP/1.0 has no `Host` to send, and is answered as before, at both routes.
+    for (request, body) in [(&b"GET /spec HTTP/1.0\r\n\r\n"[..], "word spec"), (b"GET /lane/spec HTTP/1.0\r\n\r\n", "lane spec")]
+    {
+        let (status, head, text) = Wire::to(addr).await.ask(request).await;
+        assert_eq!((status, text.as_str()), (200, body), "{head}");
+    }
+    // A refused request whose body has not arrived: the server cannot tell where the next
+    // request starts, so after the `400` the connection ends, at both routes.
+    WIRE_RUNS.store(0, Relaxed);
+    for request in [
+        &b"GET /spec HTTP/1.1\r\nHost: a, b\r\nContent-Length: 5\r\n\r\n"[..],
+        b"POST /lane/spec HTTP/1.1\r\nContent-Length: 5\r\n\r\n",
+    ] {
+        let mut unread = Wire::to(addr).await;
+        let (status, head, body) = unread.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
+        assert!(!unread.more().await, "open after a refused request whose body did not arrive: {head}");
+    }
+    assert_eq!(WIRE_RUNS.load(Relaxed), 0);
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    // An app that answers to any host reads the same rules: what it gives up is the names.
+    WIRE_RUNS.store(0, Relaxed);
+    let any = App::new(wire_url::router()).policy(crate::security::Policy::new().any_host());
+    let (addr, stop, server) = on_the_wire(any).await;
+    let mut wire = Wire::to(addr).await;
+    for request in [
+        &b"GET /spec HTTP/1.1\r\n\r\n"[..],
+        b"GET /lane/spec HTTP/1.1\r\n\r\n",
+        b"GET /spec HTTP/1.1\r\nHost: shop.example\r\nHost: shop.example\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nHost: user@shop.example\r\n\r\n",
+        b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: shop.example/x\r\n\r\n",
+        b"GET http://shop.example:abc/spec HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+        b"GET http://[v1.x]/lane/spec HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+    ] {
+        let (status, head, body) = wire.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
+    }
+    assert_eq!(WIRE_RUNS.load(Relaxed), 0);
+    for (request, body) in [
+        (&b"GET /spec HTTP/1.1\r\nHost: shop.example:8443\r\n\r\n"[..], "word spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nHost: rebound.attacker.example\r\n\r\n", "lane spec"),
+        (b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\nHost: other.example\r\n\r\n", "lane spec"),
+        (b"GET /lane/caf\xC3\xA9 HTTP/1.1\r\nHost: shop.example\r\n\r\n", "lane caf\u{e9}"),
+    ] {
+        let (status, head, text) = wire.ask(request).await;
+        assert_eq!((status, text.as_str()), (200, body), "{head}");
+    }
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    // A layer of the app's that gives each request another body and runs it on a task of its
+    // own takes nothing from this: the server marked the request it read, and the mark goes
+    // where the request goes.
+    WIRE_RUNS.store(0, Relaxed);
+    let layered = App::new(wire_url::router()).layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
+        let req = req.map(|body| Body::new(http_body_util::Limited::new(body, 1 << 20)));
+        tokio::spawn(next.oneshot(req)).await.unwrap().unwrap()
+    }));
+    let (addr, stop, server) = on_the_wire(layered).await;
+    let mut wire = Wire::to(addr).await;
+    for request in [&b"GET /spec HTTP/1.1\r\n\r\n"[..], b"GET /lane/spec HTTP/1.1\r\nAccept: */*\r\n\r\n"] {
+        let (status, head, body) = wire.ask(request).await;
+        assert_eq!((status, body.as_str()), (400, "Bad request."), "{head}");
+    }
+    assert_eq!(WIRE_RUNS.load(Relaxed), 0);
+    let (status, head, body) = wire.ask(GOOD).await;
+    assert_eq!((status, body.as_str()), (200, "word spec"), "{head}");
+    let (status, head, body) = Wire::to(addr).await.ask(b"GET /lane/spec HTTP/1.0\r\n\r\n").await;
+    assert_eq!((status, body.as_str()), (200, "lane spec"), "{head}");
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
 }
 
 /// A layout with an inline script of its own, which takes the request's nonce.

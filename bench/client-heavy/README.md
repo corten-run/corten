@@ -291,6 +291,12 @@ PID and fixed launch options. Linux also checks `/proc/<pid>/exe`; the generic
 `chromium.executablePath()` full-browser default is not substituted for the
 headless-shell that actually ran. Shutdown closes the owned server/process, not
 merely the remote connection. Worker executable comparisons remain exact.
+The isolated Linux observer recognizes the renderer role in native argv or in
+Chromium's single rewritten process title: the exact executable path must be
+followed by the renderer switch as its first argument. An arbitrary embedded
+switch does not establish the role, and the verifier still requires the pinned
+browser executable, stable PID, and the measured cgroup and CPU window. The
+untimed Linux browser smoke checks this against Chromium's own process inventory.
 
 Opt-in real Linux apparatus controls (ordinary npm install, actual headless image,
 before/after closure and hostile links, not framework qualification):

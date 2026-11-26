@@ -11,7 +11,7 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { campaignRounds, definition, groupNames, nativeArtifactRoot, runnerFor, selectedApps } from "../registry.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
-import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
+import { composeHostProof, inspectLifetime, processIdentity, processRole, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor, participantExecutables } from "./participant-executables.mjs";
 import { jsonPhase, mixedPhase, productionRecipes } from "./campaign-contract.mjs";
 import { clientComparisonRecipe, nativeExecution } from "./contract.mjs";
@@ -22,6 +22,27 @@ import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { budgets } from "../../hardening/plan.mjs";
 import { comparisonProfile } from "../../client-heavy/contract.mjs";
 import { reserveCompilerTarget, withCompilerTarget } from "../../client-heavy/compiler.mjs";
+
+test("renderer role accepts Chromium's Linux process title without matching arbitrary embedded switches", () => {
+  const exe = "/pinned chrome/chrome-headless-shell";
+  let links = 0;
+  const getExe = () => { links++; return exe; };
+  assert.equal(processRole(`${exe}\0--type=renderer\0`, getExe), "--type=renderer");
+  assert.equal(processRole(`${exe}\0--type=utility\0`, getExe), "--type=utility");
+  assert.equal(links, 0);
+  assert.equal(processRole(`${exe} --type=renderer --lang=en\0\0`, getExe), "--type=renderer");
+  assert.equal(links, 1);
+  for (const text of [
+    `${exe}\0--flags=foo --type=renderer\0`,
+    `${exe} --flags=foo --type=renderer\0`,
+    `${exe} --type=renderer-extra\0`,
+    `${exe} --type=renderer\0--lang=en\0`,
+    `${exe} --type=renderer`,
+    `${exe}-foreign --type=renderer\0`,
+    `${exe} --type=renderer\t--lang=en\0`,
+  ]) assert.equal(processRole(text, getExe), null);
+  assert.equal(processRole(`${exe} --type=renderer\0`, () => `${exe} (deleted)`), null);
+});
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
 const binding = { request: { group: "client-heavy", round: "w17", commit: "a".repeat(40) }, resources: { app: null } };

@@ -2754,14 +2754,23 @@ where
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
-        if !(self.shared && self.keyed) {
+        self.public()?.ok()
+    }
+
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        use crate::kept::{Shape, Verdict};
+        if !self.shared {
             return None;
         }
-        if O::PAGE {
-            Some(crate::kept::Shape::Page)
+        Some(if !self.keyed {
+            Err(Verdict::Unkeyed)
+        } else if O::PAGE {
+            Ok(Shape::Page)
+        } else if O::WHOLE.0 {
+            Ok(Shape::Body)
         } else {
-            O::WHOLE.0.then_some(crate::kept::Shape::Body)
-        }
+            Err(Verdict::NotWhole)
+        })
     }
 
     #[inline]
