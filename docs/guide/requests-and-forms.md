@@ -2271,7 +2271,7 @@ newer press of the form between and nothing it did not start under way, it leave
 does. So does an answer to a press made before anything replaced the entry: a script's
 `history.replaceState` (one in a `currententrychange` listener as the runtime's own replace runs
 included), a navigation with `history: "replace"`, or another marked form's answer putting its
-address in. The press keeps the entry exactly (its Navigation API `id`, without the API its
+address in (other than the answer whose draw made the press, below). The press keeps the entry exactly (its Navigation API `id`, without the API its
 address and `history.state`, compared as `Object.is` does), and the answer puts its address in
 only if the entry is still that one; it is drawn under the address the entry has, which an older
 answer does not take back. So of two marked forms pressed before either answers, the first answer
@@ -2297,7 +2297,8 @@ made stale as the runtime marked the form busy (a customized button's
 runtime takes them, after the page's `submit` listeners and before its `formdata` listeners, so
 a press a `submit` listener makes as it hears another counts first, and the press it heard is
 drawn with its address; once an answer is drawing, a press its draw makes (an element's
-`connectedCallback`) does not stop its address going in; and pressing for the same scope again
+`connectedCallback`) does not stop its address going in, and is on the entry that address goes
+into, so that press's own answer, drawn, puts its address in over it; and pressing for the same scope again
 while its GET is on its way, before its answer has come, takes that GET over, whose answer then
 draws even if the page moved to another `#id` meanwhile (once the answer has come, or a
 navigation aborted the GET, the press sends its own). Give the form a

@@ -1107,6 +1107,8 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
   let skipped = false;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
+  // A press made by what it draws is this answer's ({@link drawingFor}).
+  drawingFor = done ?? null;
   patching = 1;
   try {
     for (const el of Array.from(content.children)) {
@@ -1164,6 +1166,7 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
       }
     } finally {
       patching = 0;
+      drawingFor = null;
     }
   }
   if (again) {
@@ -1635,6 +1638,8 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       parts.push([old, part]);
     }
   }
+  // A press made by what it draws is this answer's ({@link drawingFor}).
+  drawingFor = done ?? null;
   const title = content.querySelector("title");
   if (title) {
     document.title = textOf(title) ?? "";
@@ -1682,6 +1687,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   swappedWhole = "";
   shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
   done?.();
+  drawingFor = null;
   markCurrent(kept);
   readAgainLater();
   readPartsAgain(main);
@@ -2655,7 +2661,9 @@ let moves = 0;
  * in a listener heard before the runtime's is counted on the entry it is made on.
  */
 const look = () => void (where() !== entrySeen && ((entrySeen = where()), (moves += 1)));
-navigation ? navigation.addEventListener("currententrychange", look) : addEventListener("popstate", look);
+/** How many times the Navigation API said the entry on screen changed, a replace included. */
+let changes = 0;
+navigation ? navigation.addEventListener("currententrychange", () => ((changes += 1), look())) : addEventListener("popstate", look);
 /**
  * The history entry on screen and the page on it, by the moves since the page loaded
  * ({@link moves}). A page drawn in place on the entry (a form's answer, the page reading itself
@@ -2671,11 +2679,40 @@ const entry = () => (look(), moves);
  */
 const exact = () => (navigation ? [navigation.currentEntry?.id] : [location.href, history.state]);
 /**
- * Whether the entry on screen is exactly the one `seen` ({@link exact}) was taken on, each part
- * the same as `Object.is` compares it (a `NaN` state is itself).
+ * Whether two readings of the entry ({@link exact}) are of exactly the same one, each part the
+ * same as `Object.is` compares it (a `NaN` state is itself).
+ * @param {unknown[] | undefined} a @param {unknown[] | undefined} b
+ */
+const same = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+/**
+ * Whether the entry on screen is exactly the one `seen` ({@link exact}) was taken on.
  * @param {unknown[] | undefined} seen
  */
-const unreplaced = (seen) => !!seen && exact().every((v, i) => Object.is(v, seen[i]));
+const unreplaced = (seen) => same(seen, exact());
+/**
+ * The marked answer drawing now, by the call that puts its address in ({@link apply},
+ * {@link swapPage}): a press made by what it draws (a `connectedCallback` that presses the form it
+ * drew) is taken in that draw, before the address goes in, and keeps it ({@link Press}).
+ * @type {(() => void) | null}
+ */
+let drawingFor = null;
+/**
+ * The entry each marked answer's own replace found and the one it left ({@link exact}), by the
+ * call that made it, kept only where nothing else changed the entry inside that `replaceState`.
+ * @type {WeakMap<() => void, [unknown[], unknown[]]>}
+ */
+const replacedBy = new WeakMap();
+/**
+ * Whether a press's answer may put its address in the entry on screen: the entry is exactly the
+ * one the press was made on, or the press was made by the draw of a marked answer (`by`) on the
+ * entry that answer's own replace found, and the entry is exactly the one that replace left. Any
+ * other replace since the press leaves the address ({@link send}).
+ * @param {Press | undefined} press
+ */
+const onEntry = (press) => {
+  const by = press?.by ? replacedBy.get(press.by) : undefined;
+  return unreplaced(press?.seen) || (!!by && same(press?.seen, by[0]) && unreplaced(by[1]));
+};
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -3292,9 +3329,10 @@ const presses = new Map();
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
  * it was made on ({@link entry}), null while a visit of the runtime's was on its way, and that
- * entry exactly ({@link exact}). A marked form without an id cannot tell its latest press from an
- * older one, and is pressed as an unmarked form is: its answer leaves the address.
- * @typedef {{ id: string | null, at?: number | null, seen?: unknown[] }} Press
+ * entry exactly ({@link exact}), with the marked answer whose draw made it, if one did
+ * ({@link drawingFor}). A marked form without an id cannot tell its latest press from an older
+ * one, and is pressed as an unmarked form is: its answer leaves the address.
+ * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: (() => void) | null }} Press
  */
 
 /**
@@ -3308,7 +3346,7 @@ const presses = new Map();
 function pressed(form) {
   const id = idOf(form);
   const marked = id && hasAttr(form, "data-address");
-  const press = { id, at: marked ? (reading.size ? null : entry()) : undefined, seen: marked ? exact() : undefined };
+  const press = marked ? { id, at: reading.size ? null : entry(), seen: exact(), by: drawingFor } : { id };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3582,7 +3620,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // answer marked draws as an unmarked form's does, and leaves the address.
       const done =
         pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500
-          ? () => {
+          ? function replace() {
               const to = res.url + (res.redirected ? "" : url.href.replace(/^[^#]*/, ""));
               const path = location.pathname;
               // Not if what it drew began a visit or moved to another entry (a script that navigates
@@ -3594,9 +3632,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               // Nor once anything has replaced the entry since the press, keeping its key (a script's
               // `replaceState`, a navigation of the page's that replaced it, another marked answer's
               // own replace): the runtime does not tell whose it was, and the answer is drawn under
-              // the address put in then, as an unmarked form's is.
+              // the address put in then, as an unmarked form's is. The one exception is the replace
+              // of the marked answer whose draw made this press, which it came before ({@link onEntry}).
               const transition = navigation?.transition;
-              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !unreplaced(pending.here?.seen)) return;
+              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
+              const before = exact();
+              const seen = changes;
               try {
                 history.replaceState(history.state, "", to);
               } catch {
@@ -3609,6 +3650,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               if (location.href !== to) return;
               // The entry the answer was drawn on, at its new address, by this replace.
               entrySeen = where();
+              // What it left, for a press this draw made: only when the Navigation API saw no other
+              // change of the entry inside the call (a listener's own `replaceState`), which would
+              // be another's replace.
+              if (!navigation || changes === seen + 1) replacedBy.set(replace, [before, exact()]);
               // Read again at the new address, which without the Navigation API goes by the path.
               if (location.pathname !== path) readAgainLater();
             }

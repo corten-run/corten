@@ -11467,7 +11467,7 @@ rules something out.
     with no `#fragment`. The browser's own GET reaches the fragment the redirect's `Location`
     names, else the action's, and `fetch` shows neither (`Response.url` never carries one), so
     the runtime cannot know which, and does not guess; after such a redirect the address can
-    differ from the form's without JavaScript by its fragment alone, which only scrolls. A link
+    differ from the form's without JavaScript by its fragment. A link
     the runtime follows has the same limit, and Corten's own redirect to a place names it in
     `corten-location`. The same
     address calls nothing, and a nav link to the new address is marked current, as for a
@@ -11478,7 +11478,9 @@ rules something out.
     one of them sends goes as the page stood, so a form there without an `action` sends to the
     old address; a press of the marked form there is the next press, which does not stop the
     address of the answer already drawn from going in, as the browser's own load of that answer
-    would have put it in. Putting focus back only after the replace would cover the first of these, not the
+    would have put it in, and is taken as made on the entry that address goes into, so its own
+    answer, once drawn, puts its address in over it and the address names the panel the screen
+    shows. Putting focus back only after the replace would cover the first of these, not the
     others, and would put focus back for every patch only once all its elements are in. A page's
     own `navigate` listener can cancel that `replaceState`, which then changes nothing and throws
     nothing, perhaps for a navigation of its own; and a browser can refuse it, with an exception
@@ -11493,7 +11495,8 @@ rules something out.
     task the answer draws, that nothing it did not start is under way: the screen is still the
     entry and page the press was made on, no newer press of the form and no visit of its own came
     between, nothing replaced the entry since the press (a script's `replaceState`, a navigation
-    that replaced it, another marked answer's own replace, each of which keeps the entry's key),
+    that replaced it, another marked answer's own replace, each of which keeps the entry's key)
+    but the replace of the answer whose draw made the press,
     and the browser shows no navigation on its way (`navigation.transition`) but the
     page reading itself again, the runtime's own. Where it cannot tell, it leaves the address as it
     was, which is what the same form without the mark does, and never repairs what a page's script
@@ -11559,7 +11562,17 @@ rules something out.
     the entry (one to an `#id` of the page that the runtime leaves to it), one a page's
     `currententrychange` listener makes while the runtime's own replace is running, or another
     marked answer's own replace, is drawn under the address the entry has, as an unmarked form's
-    is, rather than taking it back with the older one. So of two marked forms pressed before either
+    is, rather than taking it back with the older one. The one replace a press is let past is the
+    one of the marked answer whose draw made it: the runtime notes the answer drawing as it puts
+    the elements in, a press made then keeps it, and that answer's replace keeps the entry it
+    found and the one it left. The press's answer puts its address in if the press was made on
+    the entry that replace found and the entry is still exactly the one it left. It keeps them
+    only when, with the Navigation API, the entry changed once inside its `replaceState`
+    (`currententrychange`), so a listener's own replace there, which changes it again, leaves the
+    press refused as before. A page's `navigate` listener that cancels the runtime's replace and
+    replaces the entry itself, to the same address, inside it, is taken for the runtime's replace;
+    the address is then the one the runtime meant to put in, and the press's answer puts its own
+    in over it. So of two marked forms pressed before either
     answers, the answer that draws first puts its address in and the second leaves that address.
     Tracking which replaces were the runtime's would let the second move it too, but a listener
     that replaces the entry, or presses a form, inside the runtime's `replaceState` makes any such
@@ -11783,8 +11796,8 @@ rules something out.
     - Putting the action's `#fragment` on a redirected answer's URL, as an earlier build did:
       `fetch` shows no fragment of the `Location`, so a 303 to `/result#server` from an action
       ending in `#button` put `/result#button` in, where the browser's own GET reaches
-      `/result#server`. A guess is wrong in one of the two cases; no fragment is wrong only by
-      the scroll position, and says nothing it does not know. Nor leaving the address for such an
+      `/result#server`. A guess is wrong in one of the two cases; no fragment differs from the
+      browser's address by its fragment too, but says nothing it does not know. Nor leaving the address for such an
       answer: the form without JavaScript reaches the redirect's address, and the page's other
       forms and a reload should too (README Value 3).
     - Loading such a redirected request in full in the entry's place (`navigation.navigate` with
@@ -11797,12 +11810,17 @@ rules something out.
       to reload, and a reload of a document a POST rendered sends that POST again. All that for a
       fragment, in a case a Corten app meets only through a
       redirect that is not Corten's own; Corten's own (`corten-location`) names the fragment.
+    - Refusing every replace since the press, as the build before this one did, the replace of
+      the answer whose draw made the press included: a press of Day that Week's drawn element made
+      as it connected kept the entry as it was before Week's replace, so Day's answer drew and left
+      Week's address, and the screen showed Day while a reload and a bookmark opened Week. The
+      runtime makes that replace itself, in the task the press was made in, so it is the one
+      replace it can tell is its own without tracking navigations.
 
-    What it costs: the runtime every page loads is 1,754 bytes larger raw (46,502 to 48,256), 706
-    with gzip (16,718 to 17,424) and 626 with brotli (15,106 to 15,732), paid once a release by
-    every user (280, 87 and 82 smaller than the build before this one, which loaded a
-    redirected request in full, stopped counting an abandoned visit before it cleared its busy
-    marks, and let an abandoned submit's press go only once its own code ended). A
+    What it costs: the runtime every page loads is 2,021 bytes larger raw (46,502 to 48,523), 835
+    with gzip (16,718 to 17,553) and 743 with brotli (15,106 to 15,849), paid once a release by
+    every user (267, 129 and 117 larger than the build before this one, which refused the answer
+    to a press an earlier marked answer's draw made). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -11814,7 +11832,11 @@ rules something out.
     again (kept as that read begins), compares the entry's id, or its address and state, with the
     press's by `Object.is`, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
     each `currententrychange` (`popstate` without the Navigation API) compares the key (the
-    address) with the last seen, and a visit the runtime begins adds one to a counter. On the
+    address) with the last seen, and adds one to a count of changes, and a visit the runtime
+    begins adds one to a counter. A patch or page drawn for a marked answer notes it as it draws,
+    a press made then keeps that note, and the answer's replace compares the count of changes
+    across its call and keeps the entry before and after it, in a weak map by the answer, so a
+    press of its draw compares those two readings as well as its own. On the
     server nothing runs that did not: `html!` writes the mark as an attribute and refuses a
     misplaced one when the markup compiles.
 
@@ -11827,7 +11849,8 @@ rules something out.
     the entry, by `replaceState` or by a navigation with `history: "replace"`, gives it a new
     Navigation API `id` and keeps its key, and `history.state` reads as the same object until it
     changes, measured once in each engine; `currententrychange` fires inside `replaceState`,
-    before it returns, so a listener's own `replaceState` there runs inside the runtime's, in the
+    before it returns, once for a replace nothing else changes the entry in, so a listener's own
+    `replaceState` there runs inside the runtime's, in the
     smoke's checks in each engine; `fetch` keeps an empty query (`?`) in its response's
     URL, where Chromium's `URL.search` setter drops it, measured once in each engine; a `fetch`
     that followed a redirect shows no `#fragment` in its response's URL, where the browser's own
@@ -11899,6 +11922,11 @@ rules something out.
     and a `NaN` state kept across reads without the Navigation API, in Playwright 1.65.1's
     Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, which the build before this one
     fails);
+    2026-11-26, a press a marked answer's drawn element makes as it connects, whose own answer
+    draws, with and without the Navigation API, and with a `currententrychange` listener's replace
+    inside the first answer's, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2
+    (the smoke's checks; the build before this one fails the first two in Chromium, leaving the
+    first answer's address under the second's panel, and passes the third);
     2026-11-26, a replace's `id` and key, by `replaceState` and by `navigation.navigate` with
     `history: "replace"`, `history.state`'s identity across reads, and the `search` setter and
     `fetch` on an empty query, in Playwright 1.65.1's
@@ -11907,7 +11935,10 @@ rules something out.
     names one and one that does not, against `Response.url` and `redirected` for the same request
     by `fetch`, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's
     checks, again on the build that draws such an answer and puts in its address without a
-    fragment, which the build before it, loading the request in full, fails in Chromium, with the
+    fragment, which the build before it, loading the request in full, fails in Chromium by the
+    extra request of the document it sent; neither address the smoke presses from is the
+    submitted request's own, so the reload that build made where the two differed by their
+    fragment alone is reasoned from its source, not reached; with the
     check for a press made as an abandoned visit clears its link's busy mark; an earlier build
     fails those for a press made as a visit marks its link busy, a removal with no id beside a
     drawn element and a press that never settles);

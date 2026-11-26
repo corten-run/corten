@@ -379,9 +379,10 @@ export async function dataAddress(browser) {
   // bare") that is the browser's own GET's address, and from one with an `#id` the browser's own
   // GET reaches the `Location`'s `#id` when it names one ("Moved, placed"), else the action's
   // ("Moved"), which the runtime cannot tell apart, and does not guess. Each from the screen at
-  // another query and, the same path's case, from the screen at the redirect's own address but for
-  // an `#id`, with and without the Navigation API; each beside the browser's own GET without
-  // JavaScript.
+  // another query and from the screen at the redirect's destination but for an `#id`, with and
+  // without the Navigation API; each beside the browser's own GET without JavaScript. Neither is
+  // the submitted request's own address (`/smoke/address-moved`), so this catches a request of the
+  // document after the answer, not a reload where the two differ by their `#id` alone.
   for (const plain of [false, true]) {
     const api = plain ? "without the Navigation API " : "";
     for (const from of ["/smoke/address", "/smoke/address?scope=day#smoke-address"]) {
@@ -586,6 +587,12 @@ export async function dataAddress(browser) {
       "without the Navigation API two marked forms pressed before either answers leave the later answer's address",
       twoPlain.daySent && twoPlain.weekSent && twoPlain.weekDrawn && twoPlain.dayDone && twoPlain.at === "?scope=week" && twoPlain.shown === "day",
       JSON.stringify(twoPlain),
+    );
+    const drawnPlain = await drawnPress(plain, false);
+    check(
+      "without the Navigation API a marked patch whose drawn element presses the form again as it connects leaves the address of that press's drawn answer",
+      drawnPlain.pressed && drawnPlain.answered && drawnPlain.drawn && drawnPlain.added === 0 && drawnPlain.shown === "day" && drawnPlain.at === "?scope=day",
+      JSON.stringify(drawnPlain),
     );
     // A replacement the browser refuses without a word leaves the address as it was.
     const silent = await silentRefusal(plain);
@@ -1829,6 +1836,21 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ connectedDay, dayEmptied, connectedDone, connected }),
   );
 
+  // The same press of Day, which the server now answers with its patch (`drawnPress`); and again
+  // with a `currententrychange` listener that replaces the entry inside Week's replace, which Day's
+  // answer then leaves, as any replace but Week's own.
+  for (const listener of [false, true]) {
+    const drawn = await drawnPress(page, listener);
+    check(
+      listener
+        ? "a marked patch whose drawn element presses the form again as it connects, and a currententrychange listener's replace during its own, leave the listener's address"
+        : "a marked patch whose drawn element presses the form again as it connects leaves the address of that press's drawn answer",
+      drawn.pressed && drawn.answered && drawn.drawn && drawn.added === 0 && drawn.shown === "day" &&
+        (listener ? drawn.at === "?scope=week" && drawn.state === "listener" : drawn.at === "?scope=day" && drawn.state === null),
+      JSON.stringify(drawn),
+    );
+  }
+
   // Week's patch draws an element whose `connectedCallback` begins a navigation to Month, which a
   // `navigate` listener of the page cancels: nothing took the screen's place, so Week's answer, drawn
   // whole, puts its address in the entry.
@@ -2236,6 +2258,66 @@ async function heldLoad(page, kind, marked) {
   const last = looks.filter(([t]) => t < releasedAt).at(-1);
   const drew = { at: last?.[1] ?? null, shown: last?.[2] ?? null, fresh: !!last && releasedAt - last[0] < 500 };
   return { sent, loading, cutOff, aborted, asked, drew, final: final.pathname + final.search };
+}
+
+/**
+ * Presses Week, whose patch draws an element whose `connectedCallback` presses Day on the form
+ * Week's answer drew, before Week's address goes in; the server answers both, and Day's answer
+ * draws. With `listener` (the Navigation API only), a `currententrychange` listener of the page
+ * replaces the entry again (the same address, another state) inside Week's replace. Says whether
+ * Day was pressed, answered and drawn, and where the page is then, with its state and how many
+ * entries were added.
+ * @param {import("@playwright/test").Page} page @param {boolean} listener
+ */
+async function drawnPress(page, listener) {
+  const home = `${base}/smoke/address`;
+  const week = `${home}?scope=week`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    // Uncompressed: Firefox's route.fetch reads a compressed body it was not sent as empty.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const body = (await res.text()).replace("</section>", "<smoke-presses-day></smoke-presses-day></section>");
+    await route.fulfill({ response: res, body });
+  });
+  const answered = page.waitForResponse((r) => r.url() === day && r.status() === 200, { timeout: 5000 }).then(() => true, () => false);
+  const length = await page.evaluate((listener) => {
+    Object.assign(window, { __pressedDay: false });
+    customElements.define(
+      "smoke-presses-day",
+      class extends HTMLElement {
+        connectedCallback() {
+          if (/** @type {any} */ (window).__pressedDay) return;
+          Object.assign(window, { __pressedDay: true });
+          const day = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+          day.form?.requestSubmit(day);
+        }
+      },
+    );
+    if (listener) {
+      let once = false;
+      /** @type {any} */ (window).navigation.addEventListener("currententrychange", (/** @type {any} */ event) => {
+        if (once || event.navigationType !== "replace") return;
+        once = true;
+        history.replaceState("listener", "", location.href);
+      });
+    }
+    return history.length;
+  }, listener);
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const pressed = await page.waitForFunction(() => /** @type {any} */ (window).__pressedDay, undefined, { timeout: 5000 }).then(() => true, () => false);
+  const came = await answered;
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  await page.unroute(week);
+  const end = await page.evaluate(
+    (length) => ({ at: location.search, state: history.state, shown: document.querySelector("#smoke-address output")?.textContent ?? null, added: history.length - length }),
+    length,
+  );
+  return { pressed, answered: came, drawn, ...end };
 }
 
 /**

@@ -174,7 +174,8 @@ division: end statements with `;` and keep a division on the line it continues.
    press's page and entry, with nothing it did not start under way and nothing having replaced
    the entry since the press (`replaceState`, a `history: "replace"` navigation, another marked
    answer's own replace, so of two marked forms pressed before either answers the second leaves
-   the first's address), it leaves the address: so an answer drawn while a navigation the page's
+   the first's address; a press an answer's draw makes is on the entry that answer's replace
+   leaves, and its answer moves the address again), it leaves the address: so an answer drawn while a navigation the page's
    own `navigate` listener took is on its way (`navigation.transition`, a `data-reload` link
    held before or after it commits) leaves it, and that navigation finishes. The browser shows no navigation for a load of another document on its
    way (the replace lets it go on) or one begun in `navigatesuccess` as another ends (the replace
