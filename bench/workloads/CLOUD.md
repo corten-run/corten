@@ -1412,6 +1412,14 @@ still needs a later sample with no remaining session member to prove drainage.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
+Fleet verification and retry admission replay the saved failed-setup receipt
+against its archive and extracted evidence. For a controlled receipt they also
+verify the final setup query and the original control files in the extraction.
+Verified setup retirement permits a retry; it does not qualify a result.
+The retry approval binds the prior retirement, and the child rechecks it and
+its custody before recording the create intent and again before provider dispatch.
+A local refusal before contacting the provider keeps the new reservation unused;
+a missing provider reply does not count as a local refusal.
 
 ### Failed Native Custody And Retirement
 

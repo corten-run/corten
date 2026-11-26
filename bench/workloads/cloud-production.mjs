@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentCreate, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -19,7 +19,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
-  recheckExternalFailedHost, recheckSetupAttempt } from "./fleet-verify.mjs";
+  recheckExternalFailedHost, recheckSetupAttempt, recheckSetupRetirement } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -257,10 +257,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   try {
   let checkHistoricalDispatch;
+  const setupDispatchRefusals = new WeakSet();
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
+    const creating = args[0] === "doctl" && args[1][0] === "compute" && args[1][1] === "droplet" && args[1][2] === "create";
     try { await controlCheckpoint(interrupted); } catch (error) {
       if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
+      if (creating) return unsentCreate;
       throw error;
     }
     const guardDispatch = args[6];
@@ -270,9 +273,15 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       // before the private worker receives the mutation.
       if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
-    if (args[0] === "doctl" && args[1][2] === "create") checkHistoricalDispatch?.();
+    if (creating && checkHistoricalDispatch) {
+      try { checkHistoricalDispatch(); } catch (error) {
+        if (!setupDispatchRefusals.has(error)) throw error;
+        return unsentCreate;
+      }
+    }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
+    if (creating && result === unsentCreate) return result;
     // Hand custody back before cancellation: take the stream handle, record
     // the acknowledged command exit, or clear a positively unsent DELETE.
     if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
@@ -318,6 +327,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   assert.ok(quarantined.every((row) => row.group !== options.group && row.accountId === manifest.provider.accountId),
     "create quarantine permits only other groups in the saved account");
   const exitOneRetirements = continuation?.exitOneRetirements ?? [];
+  const setupRetirements = continuation?.setupRetirements ?? [];
   const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
@@ -363,6 +373,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       }
       if (beforeCreate !== "census") {
         for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
+        const checkSetup = (check) => {
+          try { return check(); } catch (error) {
+            if (beforeCreate === "dispatch" && error instanceof Error) setupDispatchRefusals.add(error);
+            throw error;
+          }
+        };
+        const setupIdleChecks = checkSetup(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
@@ -373,11 +390,17 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
           const { state } = readGroup(readFleet(prior, "r78", { priorSelection: true }), "client-heavy");
           assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
         }
+        if (beforeCreate === "dispatch" && setupIdleChecks.length) {
+          checkSetup(() => {
+            recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+            for (const stillIdle of setupIdleChecks) stillIdle();
+          });
+        }
       }
       return currentPeers;
     }
   });
-  if (exitOneRetirements.length || externalFailures.length) checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
+  if (exitOneRetirements.length || externalFailures.length || setupRetirements.length) checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");

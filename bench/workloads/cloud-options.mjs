@@ -5,6 +5,8 @@ import { roundName, savedLoadLayout, savedPlacement, selection, terminalUnit, va
 
 // A disposition of one fenced DELETE, not a diagnostic or permission to retry.
 export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
+// In-process only: the controller refused before calling the provider worker.
+export const unsentCreate = Symbol("create not dispatched");
 export function quarantineCensusTargets(command) {
   assert.deepEqual(command.slice(0, 4), ["compute", "droplet", "list", "--pre-create-census"]);
   assert.deepEqual(command.slice(-2), ["--output", "json"]);

@@ -567,17 +567,26 @@ establish a general ranking.
       cycles and no plan. Points 2.2 to 2.4 ask of it what they ask of any change.
 
       **Measured.** Give the instruction count **and** cycles per request under equivalent load
-      on a quiet Linux bench host, as the rest of this point says. Plans, their addenda and
-      their notes belong to this way alone. A count that sends a change here stays in the
+      on a quiet Linux bench host, as the rest of this point says. A pull request's plans, their
+      addenda and their notes belong to this way alone (the trend's standing plan, below, is
+      not one of them). A count that sends a change here stays in the
       description. A pull request that declares a plan once this paragraph is on `main` is
       measured and stays so: it does not go from measured to counted.
 
-      **Trend.** `main` is to be read across placements against the last release on a schedule,
-      so that costs that each passed do not add up unseen.
-      [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
-      asks for that run, and none has been made: until one is, no reading sees what counted
-      changes add up to in cycles, and a release takes the kit's counts of its candidate
-      against the last release ([RELEASING.md](RELEASING.md#readiness-checkpoints)).
+      **Trend.** `main` is to be read across placements against the last release, weekly and
+      before each release, so that costs that each passed do not add up unseen
+      ([#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)).
+      One command of [`bench/placement`](bench/placement/README.md#the-trend) makes the run on
+      a quiet host and adds a row to [the trend's page](bench/placement/trend/README.md). A row
+      gates no pull request and no release. A run is past the threshold when the lower bound of
+      a workload's change, `main` against the release, is at or above +2% (a proposal); the
+      command then drafts an issue for whoever made the run, naming the pull requests merged
+      since the row before when the run's head descends from that row's commit, and since the
+      release otherwise, and opens nothing. A run that is not past it has not shown the cost
+      to be under +2%. No run has been made, so no reading sees what counted changes add up to
+      in cycles, and a release takes the kit's counts of its candidate against the last release
+      whenever no row reads that candidate
+      ([RELEASING.md](RELEASING.md#readiness-checkpoints) says which row does).
 
       A reading published under the rule as it stood before this paragraph was on `main` stays
       published, is never withdrawn and is read by the rule it was made under. One that was not
