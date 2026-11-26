@@ -3010,7 +3010,7 @@ rules something out.
     Last checked: 2026-11-25, the any-host reader at `b52f57475` against `fca4ccd58` and main
     `ba6a7fe56` built twice, callgrind over a socket on the same kind of bench app and in process
     with `tests/router_cost.rs`, rustc 1.100.0, valgrind 3.24.0 (no cycles under load measured
-    here either); before that 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
+    here either); 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
     `c46092aeb`, against main built again and against `68057e40d`, callgrind over a socket on a
     bench app the repository does not hold (the next check writes its own: one keep-alive
     connection, a `GET` to a route that says `unstaged` and to routes through the stages, with `Host: localhost` and its port first,
