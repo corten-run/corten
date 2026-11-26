@@ -10876,10 +10876,10 @@ rules something out.
     having been made); measured (the kit's repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
-    and 22 counts of four cases on a slower, loaded machine, none taken again here; one run
-    of the hosted job on a 4-CPU runner, with the same crates on both builds, where the six
-    counts of each of 13 rows spanned at most 1 instruction and the six runs of each idle
-    reading 1 to 4 bytes a connection; the
+    and 22 counts of four cases on a slower, loaded machine, none taken again here; two runs
+    of the hosted job, on 4-CPU runners of two CPU models, with the same crates on both
+    builds, where the twelve counts of each of 13 rows spanned at most 1 instruction and the
+    six runs a job of each idle reading 1 to 4 bytes a connection; the
     default band and the estimate of a reading across placements, which are
     [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
     not decide, so for a change this small the only cycles reading was across placements; a
@@ -10921,9 +10921,9 @@ rules something out.
     hours a reading across placements takes, the fourth run's 0.5% and the first run's reading
     of the kept answer's change; 2026-11-25, `crates` searched at `9e209a32f` for a test that
     sizes a future (`size_of_val`), `staged_page_future_sizes` alone found; 2026-11-26, the
-    hosted job's run on `651d61f71` against `1bef46229`, which have the same crates (valgrind
-    3.26.0, rustc 1.100.0): 62 runs of the kit, none refused, in a job of 5 minutes 19
-    seconds, read from its summary and its log.
+    hosted job's runs on `651d61f71` and on `28d9af174` against `1bef46229`, which have the
+    same crates (valgrind 3.26.0, rustc 1.100.0): 62 runs of the kit each, none refused, in
+    jobs of 5 minutes 19 seconds and 4 minutes 7, read from their summaries and their logs.
 
 ## Rules
 

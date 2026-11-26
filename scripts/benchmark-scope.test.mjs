@@ -454,7 +454,7 @@ test("Request Cost runs for pull requests alone, always scopes, counts only what
   // A fork's run has a token that reads and no secrets, and a description is whatever its author
   // typed: it is read from the event's file, never written into a script.
   assert.doesNotMatch(source, /secrets\.|github\.token|GITHUB_TOKEN/);
-  assert.deepEqual(source.match(/\$\{\{[^}]*\}\}/g).filter(expression => !/^\$\{\{ (github\.workflow|github\.ref|steps\.scope\.outputs\.run|runner\.temp) \}\}$/.test(expression)), []);
+  assert.deepEqual(source.match(/\$\{\{[^}]*\}\}/g).filter(expression => !/^\$\{\{ (github\.workflow|github\.ref|steps\.scope\.outputs\.run) \}\}$/.test(expression)), []);
   assert.ok(count.steps.some(step => step.run?.includes(`jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH"`)));
 });
 
