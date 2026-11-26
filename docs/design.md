@@ -11778,16 +11778,16 @@ rules something out.
     `main` with the switch off (10,567 and 10,572 on the shortest request, 43,216 and 43,227 on
     the page; allocations the same; of the bytes an idle connection holds, no median of three
     readings more than 2 bytes from `main`'s), 0.05% of a case's count at most, which is inside
-    the +0.5% [Choice 76](#choice-counted-or-measured) gives a counted change. The harness of
-    [Choice 60](#choice-connection-info), built again as that Choice's Last checked describes
-    it (an app of one route that answers six bytes, without the crate's default features, on
-    one thread and one connection, `GET /` with `host: localhost`, the difference between 1,200
-    requests and 200 over 1,000, three rounds in turn), reads the same of a plain request: with
-    glibc's allocator 16,974.2 instructions on `main` at `9afee60a8` (16,974.1 to 16,974.7) and
-    16,981.0 at this change with the switch off (16,980.8 to 16,981.6), 6.8 more, and with
-    jemalloc preloaded 15,411.8 (15,411.0 to 15,412.2) and 15,417.6 (15,417.2 to 15,417.6), 5.7
-    more. The commit that Choice's baseline names, `9060dfb2a`, read 17,557.6 (17,557.3 to
-    17,562.4) and 16,005.1 in the same rounds, 583 and 593 more than `main` reads now.
+    the +0.5% [Choice 76](#choice-counted-or-measured) gives a counted change. That budget is
+    also the line [Choice 60](#choice-connection-info) draws for a change to the connection
+    task, on the kit's `get`, `unstaged`, `pipeline` and `text`, one request at a time or 16,
+    and the branch for the switch is such a change. On those rows the switch off costs 2 to 6
+    instructions a request, where the budget is 42 to 92: `get` 18,333 on `main` and 18,339
+    here, `unstaged` 12,526 and 12,532, `pipeline` 10,567 and 10,572, `text` 17,174 and 17,179,
+    and 16 at a time 16,200 and 16,202, 10,323 and 10,326, 8,374 and 8,378, 15,051 and 15,053
+    (medians of three, `main` at `9afee60a8`), so that Choice is not reopened. The hosted
+    `Request Cost` job counts the same rows for each head of a pull request, with the switch
+    off as an app has it unless it asks.
     Where the 2 to 12 come
     from was read from the instructions that ran and is likely, not proven for each. At an
     earlier head (`f02d8511f`) the count was 3 to 48 more (0.26% at most), and `main` with that
@@ -11987,11 +11987,6 @@ rules something out.
     and never committed, three runs each way, read four times a second with the container's
     `memory.current` and `memory.stat`: the figures above are of the sample where the container
     held most; no cap on the buffer of answers was tried);
-    measured (a plain request on the harness of [Choice 60](#choice-connection-info) as that
-    Choice's Last checked built it again, the source of its app in the description of the pull
-    request that did, with `host: localhost`, callgrind 3.24.0 and rustc 1.100.0, three rounds
-    of each binary in turn, with glibc's allocator and with jemalloc preloaded, for `9060dfb2a`,
-    `9afee60a8` and `553b27040` with the switch off: the figures above);
     platform (hyper 1.12.0 reads a request's head with httparse 1.10.1 under the settings and
     constructors `crates/corten/src/h1/head.rs` copies, writes an answer's head as that file
     writes it and its `Date` with httpdate 1.0.3, reads 8,192 bytes at first, keeps a
@@ -12040,8 +12035,7 @@ rules something out.
     gate's long run and the suite on both connections at `553b27040`; 2026-11-26, the pipelining
     flood with `MDA2AV/HttpArena@3388e45` on `553b27040`, nine runs each way and three more
     with the probe, and 2026-11-25, the rest of that
-    attack list on `f02d8511f`; 2026-11-26, a plain request on Choice 60's harness, on
-    `9060dfb2a`, `9afee60a8` and `553b27040`; 2026-11-26, hyper 1.12.0, httparse 1.10.1 and
+    attack list on `f02d8511f`; 2026-11-26, hyper 1.12.0, httparse 1.10.1 and
     httpdate 1.0.3
     as `Cargo.lock` has them, hyper's server parse, encoder, read strategy, write queue and its
     look for a client's end read against `crates/corten/src/h1.rs` and
