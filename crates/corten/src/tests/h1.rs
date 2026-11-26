@@ -318,6 +318,32 @@ async fn a_head_that_is_not_http_is_refused_as_hyper_refuses_it() {
     own.stop().await;
 }
 
+/// What a request's `Host` gets is the app's host check's to say, and it says the same on both
+/// connections: Corten's own brings no rule for `Host`, and marks an HTTP/1.1 request that has
+/// none as hyper's connection's service does, for that check to answer.
+#[tokio::test]
+async fn a_request_s_host_is_answered_as_on_hypers_connection() {
+    let hyper = Served::start(App::new(routes()), false).await;
+    let own = Served::start(App::new(routes()), true).await;
+    let cases = [
+        ("no Host line in HTTP/1.1", "GET / HTTP/1.1\r\n\r\n".to_owned(), 400),
+        ("no Host line behind an answer", format!("{GET}GET /json HTTP/1.1\r\nx-a: 1\r\n\r\n"), 200),
+        ("two Host lines", format!("GET / HTTP/1.1\r\n{HOST}{HOST}\r\n"), 400),
+        ("a name the app does not answer to", "GET / HTTP/1.1\r\nhost: other.example\r\n\r\n".to_owned(), 421),
+        ("no Host line in HTTP/1.0", "GET / HTTP/1.0\r\n\r\n".to_owned(), 200),
+    ];
+    for (name, request, first) in cases {
+        let request = request + &last();
+        let (theirs, ours) = (hyper.closed(&request).await, own.closed(&request).await);
+        assert_eq!(statuses(&ours).first(), Some(&first), "{name}: {ours}");
+        assert_eq!(dateless(&ours), dateless(&theirs), "{name}");
+    }
+    let behind = format!("{GET}GET /json HTTP/1.1\r\nx-a: 1\r\n\r\n{}", last());
+    assert_eq!(statuses(&own.closed(&behind).await)[..2], [200, 400]);
+    hyper.stop().await;
+    own.stop().await;
+}
+
 /// `App::max_request_head` holds on both connections: a head over it and one with more than 100
 /// headers are 431, a head the client never ends is refused when it reaches the limit, and with
 /// the limit raised a target longer than a URL can be is 414, each as hyper's connection answers.

@@ -2448,7 +2448,11 @@ impl tower_service::Service<Request> for Connection {
         tower_service::Service::<Request>::poll_ready(&mut self.router, cx)
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    fn call(&mut self, mut req: Request) -> Self::Future {
+        // An HTTP/1.1 message with no `Host` line is marked here as it is for hyper's connection
+        // below, by the same function, whichever of the two read it: the host check then answers
+        // it alike on both.
+        crate::security::mark_unnamed(&mut req);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         // A `CONNECT` comes here from hyper alone, once the connection is its.
         let connect = req.method() == http::Method::CONNECT;
