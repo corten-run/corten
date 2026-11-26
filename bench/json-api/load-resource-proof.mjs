@@ -17,6 +17,13 @@ const fdPath = (fd) => `/proc/self/fd/${fd}`;
 const same = (actual, expected, message) => assert.ok(isDeepStrictEqual(actual, expected), message);
 export class LoadResourceLifetimeEnded extends Error {}
 export class LoadProcessAbsentBeforeRead extends LoadResourceLifetimeEnded {}
+export class LoadProcessExitedBeforeCounters extends LoadResourceLifetimeEnded {
+  constructor(processObject, startTicks) {
+    super("load process identity unavailable at exit");
+    this.processObject = processObject;
+    this.startTicks = startTicks;
+  }
+}
 
 function pathParts(path, id) {
   assert.ok(containerId(id) && typeof path === "string" && path.length <= 4096 && path.startsWith("/"), "invalid load cgroup path");
@@ -102,13 +109,16 @@ function readCount(text, field) {
   assert.ok(rows.length === 1 && /^\d{1,16}$/.test(value) && natural(Number(value)), `missing/malformed load kernel counter ${field}`);
   return Number(value);
 }
-function processSnapshot(proc, pid) {
+function processSnapshot(proc, pid, opening = false) {
   const processObject = proc.identity(), stat = proc.read("stat"), close = stat.lastIndexOf(")");
   // /proc/PID/stat's comm may contain spaces and parentheses; starttime is field 22.
   const fields = stat.slice(close + 2).trimEnd().split(" ");
   assert.ok(stat.startsWith(`${pid} (`) && close > 0 && stat[close + 1] === " "
     && /^[1-9]\d{0,19}$/.test(fields[19] ?? ""), "load process identity unavailable");
-  if (/^[ZXx]$/.test(fields[0])) throw new LoadResourceLifetimeEnded("load process identity unavailable at exit");
+  if (/^[ZXx]$/.test(fields[0])) {
+    if (opening) throw new LoadProcessExitedBeforeCounters(processObject, fields[19]);
+    throw new LoadResourceLifetimeEnded("load process identity unavailable at exit");
+  }
   assert.ok(/^[RSDTtIWPK]$/.test(fields[0]), "load process identity unavailable");
   const path = /^0::(\/[^\n]+)\n$/.exec(proc.read("cgroup"))?.[1];
   return { pid, processObject, startTicks: fields[19], path };
@@ -124,7 +134,7 @@ export function acquireLoadResources({ id, pid, sequence }, source = linux) {
   assert.ok(containerId(id) && positive(pid) && natural(sequence), "exact load container, live PID and sequence required");
   const begin = source.clock();
   const raw = source.withProcess(pid, (proc) => {
-    const processBefore = processSnapshot(proc, pid);
+    const processBefore = processSnapshot(proc, pid, true);
     return source.withGroup(pathParts(processBefore.path, id), (group) => {
       const before = { ...processBefore, ...groupSnapshot(group) };
       const usageUsec = readCount(group.read("cpu.stat"), "usage_usec");

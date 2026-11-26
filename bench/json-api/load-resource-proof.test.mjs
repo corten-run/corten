@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { inspect } from "node:util";
-import { acquireLoadResources, loadResourceCaptureSchema, loadResourceFirstSlot, replayLoadResources, replayScheduledLoadResources } from "./load-resource-proof.mjs";
+import { acquireLoadResources, LoadResourceLifetimeEnded, loadResourceCaptureSchema, loadResourceFirstSlot, replayLoadResources, replayScheduledLoadResources } from "./load-resource-proof.mjs";
 
 const id = "a".repeat(64), pid = 42, path = `/system.slice/docker-${id}.scope`;
 const mount = "36 27 0:29 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw";
@@ -155,6 +155,11 @@ test("missing, zero, at-budget, reset, and inconsistent clock evidence cannot qu
   assert.throws(() => replayLoadResources(rows, fixture()), /reset CPU counter/);
   const idle = samples(); idle.forEach((r) => { r.usageUsec = 1000; });
   assert.equal(replayLoadResources(idle, fixture()).cpuMaxPctUpper, 0, "zero CPU delta is a real idle interval");
+});
+
+test("a process exiting after counters were read is not an opening exit", () => {
+  assert.throws(() => capture(0, { statAfter: stat("1234", "Z") }), (error) =>
+    error.constructor === LoadResourceLifetimeEnded && error.message === "load process identity unavailable at exit");
 });
 
 test("refuses PID reuse, process movement, cgroup replacement and an unrelated container", () => {

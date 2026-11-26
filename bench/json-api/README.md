@@ -294,6 +294,10 @@ exact fixed-offer and zero-error checks. Current isolated campaigns require v2 e
 a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
 The current producer binds the load sampler and its replay source to the measured
 commit. That commit cannot fall back to the legacy Docker-stats load policy.
+If a final acquisition opens the same process already exiting, before reading
+any counters, the exact clean Docker terminal receipt can settle an optional
+tail without a sample. Full slots remain mandatory; an interrupted counter
+read or a changed process identity still refuses.
 The standalone `--require-complete` report and `inspectJson(summary, { load, commit })`
 read the measured Git commit in the repository they run from; an unavailable commit
 refuses strict reporting. Report-only inspection without a commit does not consult Git.
