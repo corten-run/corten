@@ -340,6 +340,15 @@ export function controllerState(s, round, options) {
   }
   return s;
 }
+export const absentCollectionPolicy = "collect-verified-absent-host-only";
+export function absentCollectionCandidate(options, s) {
+  return options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout
+    && s.status === "collected" && s.collectedAt && s.validation?.status === "verified" && s.exitCode === 0
+    && s.evidenceOutcome === "validated" && s.id && s.archiveSha256 && s.evidenceSha256
+    && s.control?.monitor?.phase === "closed" && !s.fleet?.single?.offlineHandoff
+    && s.deletionIntentAt && !s.destroyedAt;
+}
+
 export function campaignOutcome(report, s, exitCode) {
   assert.ok(report && ["verified", "failed", "blocked"].includes(report.status), "invalid/missing or unsupported native campaign validation; preserve host");
   assert.equal(report.schema, s.group === undefined ? "benchmark-isolated-campaign-inspection/v1" : "benchmark-isolated-group-campaign-inspection/v1");

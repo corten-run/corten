@@ -1920,6 +1920,17 @@ DELETE intent and a previously verified, monitored result, a fresh collect may
 use up to 25 minutes for replay only after a same-account exact 404. It checks
 absence again before recording cleanup and never sends another DELETE. This
 does not change any deadline before deletion.
+If ordinary collection at the measured commit cannot finish that replay, a
+reviewed merged successor can reconcile an already verified, successfully
+collected child with closed monitoring and a saved DELETE intent. Run the child
+`cloud-production.mjs --collect` preview from the successor; its approval must
+name `collect-verified-absent-host-only` and the original measured commit. The
+ancestor must supply the successor's complete replay source list. Replay reads
+the measured commit's blobs and verifies the same evidence again. Only the exact
+account and host may be read; a present host, changed reservation, or different
+replay result refuses. This route records only `destroyedAt`; it cannot connect
+to the guest or send another DELETE. Other collection paths keep their source
+requirements.
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider

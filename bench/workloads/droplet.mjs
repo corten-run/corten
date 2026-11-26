@@ -10,9 +10,10 @@ import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleet
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
+import { absentValidationTask } from "./cloud-validation-snapshot.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
@@ -493,7 +494,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.ok(Array.isArray(rows) && rows.length === 1 && String(rows[0]?.id) === state.id, "exact host identity differs");
     return rows[0];
   };
-  const confirmDeleted = async () => {
+  const confirmDeleted = async (poll = true) => {
     assert.ok(state.deletionIntentAt, "deletion intent required before absence confirmation");
     let previous = now(); const deadline = previous + 120000;
     const uncertain = "deletion not confirmed; outcome uncertain; no automatic repeated deletion; preserve intent without another DELETE";
@@ -507,6 +508,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     for (let attempt = 0; attempt < 121; attempt++) {
       remaining();
       if (await exactHost(remaining) === undefined) return;
+      assert.ok(poll, "host still present; absence not confirmed");
       await sleep(Math.min(1000, remaining()));
     }
     assert.fail(uncertain);
@@ -804,7 +806,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyArchive = () => {
     assert.equal(fileHash(archive), state.archiveSha256, "archive changed; preserve host");
   };
-  async function validateEvidence(confirmedAbsent = false) {
+  async function validateEvidence(confirmedAbsent = false, start) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
     try {
@@ -826,7 +828,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } catch { throw collectRefusal("collect-native-report-refused"); }
     let replay;
     try {
-      replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect };
+      replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect, start };
     } catch { throw collectRefusal("collect-native-replay-start"); }
     report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
       ...replay, interrupted, confirmedAbsent, preserveLock: () => { preserveOperationLock = true; },
@@ -1468,6 +1470,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
+      if (recoveryApproval?.policy === absentCollectionPolicy) return locked(async () => {
+        const original = () => {
+          assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked absence reservation changed");
+          assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
+        };
+        original();
+        assert.ok(absentCollectionCandidate(options, state), "verified absence reconciliation required");
+        assert.equal(state.commit, recoveryApproval.measuredCommit);
+        assert.equal(state.id, recoveryApproval.hostId);
+        const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+        sealedMonitor(local, state);
+        await confirmDeleted(false);
+        verifyArchive();
+        const beforeReplay = JSON.stringify(state);
+        await validateEvidence(true, (input) => absentValidationTask(input, recoveryApproval.controllerCommit));
+        assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
+        await confirmDeleted(false);
+        original();
+        state.destroyedAt = new Date().toISOString(); save(); return 0;
+      });
       if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
         if (requireUnusedBootstrapCustody())
           assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "bootstrap uploads require the measured checkout");

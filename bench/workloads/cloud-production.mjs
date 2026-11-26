@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -191,7 +191,12 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
           policy: failedNativePolicy(saved) };
       }
     } else {
-      assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+      if (saved.commit !== head) {
+        assert.ok(absentCollectionCandidate(options, saved), "current native verifier needs the measured integrated checkout");
+        await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+        recovery = { policy: absentCollectionPolicy, measuredCommit: saved.commit, hostId: saved.id,
+          archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256 };
+      }
       if (options.collect && saved.launchHostKeySha256 !== undefined) {
         launchHostKey(join(physicalRequest, `groups-${options.round}`), saved);
         launchHostKeySha256 = saved.launchHostKeySha256;
@@ -210,6 +215,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
       : options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
       : options.r21MeasuredCheckout ? "operator-approved-after-merged-independent-review-for-one-sealed-child-collection"
+      : recovery?.policy === absentCollectionPolicy ? "operator-approved-for-read-only-absence-and-measured-replay-only"
       : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
@@ -388,6 +394,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       requireStagedFleet(JSON.parse(bytes)), admission?.placement?.region) });
   }
   let entered = false;
+  const absenceOnly = plan.subject.recovery?.policy === absentCollectionPolicy ? plan.subject.recovery : undefined;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
     const locked = await productionPlan(options, { ...deps, holdingOperationLock: true });
@@ -399,6 +406,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
+    if (absenceOnly && binary !== "git") assert.ok(binary === "doctl" && !registration && deleteProofExpiresAtMs === undefined && guardDispatch === undefined
+      && (argv[0] === "account" && argv[1] === "get"
+        || argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "get" && argv[3] === absenceOnly.hostId), "absence reconciliation is read-only");
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
@@ -430,9 +440,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
-    } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
+    } }), ...(absenceOnly || options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
+        ...(absenceOnly || options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
           ? plan.subject.recovery : {}) },
     } : {}) });
   let result;
