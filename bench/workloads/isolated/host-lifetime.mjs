@@ -294,7 +294,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
     // Bind identity before the executable transaction commits: a rejected
     // capture must pin no executable.
     const capture = () => {
-      const record = readBrowserParticipant(id, executables, pending);
+      const record = readBrowserParticipant(id, executables, pending, !bound);
       if (bound) startupRecheck(record, bound, attempts);
       return record;
     };
@@ -319,16 +319,28 @@ const startupChurn = new WeakMap(), startupAttempts = new WeakMap(), startupRech
 // A changed name inside the census is already retried by the census itself
 // (`snapshot`, for every participant), so only an executable inode change reaches here.
 const startupCensusOperations = new Set(["executable-recheck-inode"]);
-function justStarted(startedAt) {
-  // Docker's RFC 3339 UTC start time, truncated to milliseconds. Anything else is not corroboration.
-  const match = typeof startedAt === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(startedAt);
-  if (!match) return false;
-  const at = Date.parse(`${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}Z`);
+function dockerUtcTime(value) {
+  const match = typeof value === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (!match) return null;
+  const time = `${match[1]}.${(match[2] ?? "").padEnd(9, "0")}Z`, at = Date.parse(time);
   // Date.parse normalizes an impossible calendar date (February 29 of a common
   // year becomes March 1); only a date that round-trips is evidence.
-  if (!Number.isFinite(at) || new Date(at).toISOString().slice(0, 19) !== match[1]) return false;
-  const age = Date.now() - at;
+  return Number.isFinite(at) && new Date(at).toISOString().slice(0, 19) === match[1] ? time : null;
+}
+function justStarted(startedAt) {
+  const time = dockerUtcTime(startedAt);
+  if (!time) return false;
+  const age = Date.now() - Date.parse(time);
   return age >= 0 && age <= startupWindowMs;
+}
+function stoppedDockerState(state, endedAt, earliest = -Infinity) {
+  if ((state.Status !== "exited" && state.Status !== "removing") || state.Pid !== 0
+    || ["Running", "Paused", "Restarting", "Dead"].some((key) => state[key] !== false)
+    || typeof state.OOMKilled !== "boolean" || !Number.isSafeInteger(state.ExitCode) || state.ExitCode < 0) return false;
+  const start = dockerUtcTime(state.StartedAt), finish = dockerUtcTime(state.FinishedAt);
+  if (!start || !finish || start <= "0001-01-01T00:00:00.000000000Z" || finish < start) return false;
+  const at = Date.parse(finish);
+  return at >= earliest && at <= endedAt;
 }
 function startupRecheck(record, bound, attempts) {
   try {
@@ -342,7 +354,7 @@ function startupRecheck(record, bound, attempts) {
     throw error;
   }
 }
-function readBrowserParticipant(id, executables, pending) {
+function readBrowserParticipant(id, executables, pending, allowExitRecheck) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
   const inspect = () => {
@@ -358,7 +370,24 @@ function readBrowserParticipant(id, executables, pending) {
     assert.ok(Number.isSafeInteger(pid) && pid > 0);
     stage = "process-identity-open";
     const at = `/proc/${pid}`;
-    stat = readFileSync(`${at}/stat`, "utf8"); identity = processIdentity(stat);
+    try { stat = readFileSync(`${at}/stat`, "utf8"); }
+    catch (error) {
+      // An exiting PID can vanish before Docker updates its running state.
+      // Only the opening stat read can take this path, before any kernel evidence.
+      const state = container.state;
+      if (allowExitRecheck && error?.code === "ENOENT" && state.Running === true && state.Status === "running"
+        && state.Paused === false && state.Restarting === false && state.Dead === false
+        && Number.isSafeInteger(container.restartCount) && container.restartCount >= 0) {
+        let terminal;
+        try { terminal = inspect(); } catch { /* Keep the original gap diagnostic. */ }
+        const endedAt = Date.now();
+        if (terminal && terminal.imageId === container.imageId && terminal.restartCount === container.restartCount
+          && terminal.state.StartedAt === state.StartedAt && stoppedDockerState(terminal.state, endedAt, startedAt))
+          return { startedAt, endedAt, container: terminal, kernel: null };
+      }
+      throw error;
+    }
+    identity = processIdentity(stat);
     assert.equal(identity.pid, pid);
     stage = "process-cgroup-open";
     const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
@@ -908,7 +937,9 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       }
       assert.equal(c.state.StartedAt, p.terminal.state.StartedAt);
       if (!r.kernel) {
-        assert.equal(c.state.Status, "exited"); assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0);
+        if (c.state.Status === "removing") assert.ok(stoppedDockerState(c.state, r.endedAt));
+        else assert.equal(c.state.Status, "exited");
+        assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0);
         if (phase === 0 || p.terminal.state.Running && r.startedAt <= endedAt) return false;
         phase = 2;
         if (r.endedAt < endedAt - maximumSampleGapMs) return false;

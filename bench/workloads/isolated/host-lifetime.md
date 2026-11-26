@@ -92,6 +92,13 @@ for every participant, within its own deadline. A sealed terminal record counts 
 is of captures, including those in a sample the collector later rejects for another
 reason, so it can exceed the retained Docker participant captures.
 
+Separately, if the opening `/proc/PID/stat` read returns `ENOENT` after a
+running inspect, one exact-ID re-observation can record the container as stopped.
+It must show the same image, start and restart generation, PID zero and an
+`exited` or `removing` state with a valid finish time in that capture. The
+stopped row has no kernel evidence. Failed confirmation retains the original
+gap; later proc reads and startup retries do not use this path.
+
 ## Fault Shutdown
 
 The first irrecoverable interval observation or storage failure requests command-local
