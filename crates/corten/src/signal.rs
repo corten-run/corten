@@ -130,8 +130,11 @@ struct Inner {
     #[cfg(feature = "zones")]
     zone: Option<crate::client::ZoneName>,
     /// What the request's answer drew ([`NOTICE_DRAWN`], [`KEY_DRAWN`]): one byte for both, so
-    /// the signal stays the size it was. Each is set with an `or`: a render on any thread sets
-    /// either, and the route's answer sets the key on whatever thread a middleware polled it
+    /// the signal stays the size it was. Without `zones` its one- and two-byte fields fill one
+    /// word exactly (eight bytes beside fields of eight), so a byte of the key's own would make
+    /// every request's signal eight bytes larger. Each is set with an `or`, as nothing orders
+    /// the two: a render sets either on whatever task renders with a clone of the request, and
+    /// the route's answer sets the key on whatever thread a middleware polled it
     /// (`middleware::Keyed`), so a plain store of one bit could clear the other.
     drawn: AtomicU8,
     /// The request's locale: its index in the app's locales plus one (0 until it is known), with
