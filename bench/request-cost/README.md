@@ -29,7 +29,10 @@ item 2 asks for cycles under load as well, which this kit does not give.
 ## The cases
 
 Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
-API and no pages, and `pages`, an app without an API. Both keep every `App` default.
+API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
+to the names an app answers to by default (`localhost` and IP addresses) but in the four cases
+that end `-any` or `-any-last`, where the probe is started with `HOSTS=*` and answers to any
+host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 
 | Case | Configuration | Request | Answer |
 | --- | --- | --- | --- |
@@ -40,12 +43,16 @@ API and no pages, and `pages`, an app without an API. Both keep every `App` defa
 | `text` | `pages` | `GET /text` | `ok` |
 | `page` | `pages` | `GET /page` | A page of about 12 KB |
 | `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
+| `get-any`, `unstaged-any` | `api`, `HOSTS=*` | As `get` and `unstaged` | `3` |
+| `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
 refuses it), so that one reads none.
 
-Every request has a `Host` line and nothing else it does not need. Every answer is checked
+Every request has a `Host` line and nothing else it does not need. An app that answers to any host
+reads its `Host` by itself and not against names, and finds it on a later line by other searches
+than on the first: the four cases of `HOSTS=*` count those reads, with `Host` first and last. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16
@@ -284,10 +291,10 @@ for them.
 | `figures.test.mjs` | The arithmetic of a count and of an idle reading, and when a window or a run is refused |
 | `allocations.test.mjs` | Reading a profile |
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
-| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
+| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
 
 `run.test.mjs` (but its refusals of an option) and `build.test.mjs` need Linux with `sh` and
-`git`, and are skipped elsewhere: on Windows 30 of the 46 tests run. The hosted check runs on
+`git`, and are skipped elsewhere: on Windows 30 of the 48 tests run. The hosted check runs on
 Linux. What no test covers is checked by running the kit: the probe itself, callgrind's own
 dumps, and a real build.
