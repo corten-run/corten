@@ -1257,6 +1257,132 @@ async function markedPatchVisits(browser, errors) {
       invalid.shown === "Invalid",
     JSON.stringify({ failed, invalid }),
   );
+
+  // Week, held on its way, then a link to an #id of the page (another entry), then Week again: the
+  // same request as the one on its way, which can no longer draw on the entry it was pressed on. The
+  // newer press is not dropped as a repeat of it: its answer draws and puts its address in the entry.
+  await page.goto(home);
+  const twin = await hold(week, "action");
+  await trackForm();
+  await press("Week");
+  const twinSent = await twin.sent;
+  const twinHash = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        addEventListener("hashchange", () => resolve(location.hash), { once: true });
+        location.hash = "smoke-address";
+      }),
+  );
+  await press("Week");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve)));
+  twin.release();
+  const twinDrawn = await wait(
+    () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+  );
+  await twin.clear();
+  const twinEnd = await state();
+  check(
+    "a press of a marked form the same as one on its way that can no longer draw draws its answer and puts its address in the entry",
+    twinSent && twinHash === "#smoke-address" && twinDrawn && twinEnd.at === "?scope=week" && twinEnd.shown === "week",
+    JSON.stringify({ twinSent, twinHash, twinDrawn, twinEnd }),
+  );
+
+  // A `formdata` listener of the page that, as Week's press reads the form, draws the form again
+  // and presses Day on the one it drew: Day was pressed after Week, so Day's answer is the one drawn,
+  // whichever comes first.
+  await page.goto(home);
+  await page.evaluate(() => {
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    form.addEventListener(
+      "formdata",
+      () => {
+        const again = /** @type {HTMLFormElement} */ (form.cloneNode(true));
+        form.replaceWith(again);
+        again.requestSubmit(/** @type {HTMLButtonElement} */ (again.querySelector('button[value="day"]')));
+      },
+      { once: true },
+    );
+  });
+  await press("Week");
+  const reentrantDrawn = await wait(
+    () => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+  );
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300))));
+  const reentrant = await state();
+  check(
+    "a marked GET pressed by a formdata listener as another press of the form reads it is the newer press, and its answer is drawn",
+    reentrantDrawn && reentrant.at === "?scope=day" && reentrant.shown === "day",
+    JSON.stringify({ reentrantDrawn, reentrant }),
+  );
+
+  // Week's patch draws an element whose `connectedCallback` presses Day, which the server answers
+  // with a 204 that draws nothing: Week's answer has drawn whole, so its address is in the entry, as
+  // the browser's own load of it would be.
+  await page.goto(home);
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    // Uncompressed: Firefox's route.fetch reads a compressed body it was not sent as empty.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const body = (await res.text()).replace("</section>", "<smoke-presses-day></smoke-presses-day></section>");
+    await route.fulfill({ response: res, body });
+  });
+  const dayEmpty = `${home}?scope=day`;
+  await page.route(dayEmpty, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill({ status: 204 }) : route.continue()));
+  const dayAnswered = page.waitForResponse((r) => r.url() === dayEmpty && r.status() === 204, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => {
+    Object.assign(window, { __pressedDay: false });
+    customElements.define(
+      "smoke-presses-day",
+      class extends HTMLElement {
+        connectedCallback() {
+          if (/** @type {any} */ (window).__pressedDay) return;
+          Object.assign(window, { __pressedDay: true });
+          const day = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+          day.form?.requestSubmit(day);
+        }
+      },
+    );
+  });
+  await trackForm();
+  await press("Week");
+  const connectedDay = await wait(() => /** @type {any} */ (window).__pressedDay);
+  const dayEmptied = await dayAnswered;
+  const connectedDone = await wait(() => !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(week);
+  await page.unroute(dayEmpty);
+  const connected = await state();
+  check(
+    "a marked patch whose drawn element presses the form again as it connects puts its address in the entry",
+    connectedDay && dayEmptied && connectedDone && connected.at === "?scope=week" && connected.shown === "week",
+    JSON.stringify({ connectedDay, dayEmptied, connectedDone, connected }),
+  );
+
+  // A page's own `navigate` listener that cancels the replacement, begins a navigation to Month in its
+  // place, and cancels that one too: no navigation takes the page's place, so the entry's own page is
+  // read again, whole.
+  await page.goto(home);
+  await page.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav.addEventListener("navigate", (/** @type {any} */ event) => {
+      const search = new URL(event.destination.url).search;
+      if (search === "?scope=month") return event.preventDefault();
+      if (event.navigationType !== "replace" || search !== "?scope=week") return;
+      event.preventDefault();
+      const next = nav.navigate(url);
+      next.committed.catch(() => {});
+      next.finished.catch(() => {});
+    });
+  }, month);
+  const twiceRead = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
+  const twiceLoaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const twice = { read: await twiceRead, loaded: await twiceLoaded, ...(await state()) };
+  check(
+    "a marked patch whose replacement a navigate listener cancels for a navigation it cancels too reads the entry's own page again",
+    twice.read && twice.loaded && twice.at === "" && twice.shown === "all",
+    JSON.stringify(twice),
+  );
   await page.close();
 }
 

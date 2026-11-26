@@ -11150,12 +11150,16 @@ rules something out.
     before the replace and sees the old address: a `focus` handler as focus is put back on a
     control the patch drew, a dialog it opens again, an element's `connectedCallback`. A submit
     one of them sends goes as the page stood, so a form there without an `action` sends to the
-    old address. Putting focus back only after the replace would cover the first of these, not the
+    old address; a press of the marked form there is the next press, which does not stop the
+    address of the answer already drawn from going in, as the browser's own load of that answer
+    would have put it in. Putting focus back only after the replace would cover the first of these, not the
     others, and would put focus back for every patch only once all its elements are in. A page's own `navigate` listener can
     cancel that `replaceState`, which then changes nothing and throws nothing: the runtime reads
     the address after the call, and when it is not the one asked for, reloads the entry's own
     page, so what the screen shows is the page at the address the entry has, unless the listener
-    began a navigation of its own in its place, which then starts another visit and goes on. A browser can refuse
+    began a navigation of its own in its place that is still going: the last navigation the
+    runtime heard begin, if it heard it during the call, and its signal is not aborted (one the
+    listener cancels too is, and the page is read again). A browser can refuse
     it with an exception (WebKit past its limit of history updates), which is the same refusal. The
     reload begins to leave the page, so another marked answer on its way draws nothing.
 
@@ -11200,10 +11204,16 @@ rules something out.
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
     navigation, its submits are ordered as any form's are, and each press of a form counts against
-    its id, which the form a patch draws in its place keeps (a patch requires one): a read draws,
-    or is sent once the write it waited for is answered, only while it is the latest press of that
-    id, so a newer press of the form, or of the one drawn in its place, drops it wherever it is
-    (on its way, waiting for a write, about to be sent again); and two marked
+    its id, which the form a patch draws in its place keeps (a patch requires one), as the press is
+    made, before anything of the page runs for it (a `formdata` listener), so presses count in the
+    order they were made. Until it draws, a read draws, or is sent once the write it waited for is
+    answered, only while it is the latest press of that id, so a newer press of the form, or of the
+    one drawn in its place, drops it wherever it is (on its way, waiting for a write, about to be
+    sent again); once it draws, a press its draw makes does not stop it. A press that asks for what
+    a read of the form on its way asks for (the same method, address and values) takes that read
+    over, as the runtime sends the same request once for any form: its answer is drawn as this
+    press's, on this press's visit, so a press is never lost as a repeat of one that can no longer
+    draw. Two marked
     forms' answers are drawn as they come, the address that of the last one that moved it. The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
@@ -11288,9 +11298,21 @@ rules something out.
       `navigatesuccess` listener that begins a navigation as one ends leaves it empty while the new
       navigation is on its way, in all three engines (the smoke's chained case caught it), so a
       marked answer drew and aborted that navigation.
+    - Mending each order of events a review found where it showed, as the build before this one
+      did, which left four more: a press counted only after a `formdata` listener of the page ran,
+      which could press the form again first, so the press made first was counted the newer; a press the same as a read on
+      its way, made once the page had moved to another `#id` entry, was dropped as a repeat of a
+      read that could no longer draw, so neither drew; a press the answer's own draw made (a
+      `connectedCallback`) stopped that drawn answer's address, which a 204 for the press then
+      left under the old address; and the repair of a refused replace was skipped whenever the
+      visit count had moved, though a navigation a listener began in its place and cancelled as
+      well moved it too, so nothing took the page's place. Each is now ruled out by when a check is
+      made, not by another case: a press counts as it is made, a repeat takes the read on its way
+      over, a read that is drawing is not dropped, and the repair asks whether a navigation is
+      going rather than whether one began.
 
-    What it costs: the runtime every page loads is 1,123 bytes larger raw (46,502 to 47,625), 432
-    with gzip (16,718 to 17,150) and 364 with brotli (15,106 to 15,470), paid once a release by
+    What it costs: the runtime every page loads is 1,221 bytes larger raw (46,502 to 47,723), 479
+    with gzip (16,718 to 17,197) and 422 with brotli (15,106 to 15,528), paid once a release by
     every user. A `data-patch` submit reads one attribute and its form's id, and adds one to that
     id's count in a map that keeps a number for each id pressed; a read keeps the count it was
     pressed at and compares it where it could draw or be sent again. Only a marked GET captures its
@@ -11298,7 +11320,9 @@ rules something out.
     once after the replace. A patch tracks whether it placed every element as it walks them,
     without a separate scan; a `navigate` to another document or entry, the runtime's visit as it
     starts, a `popstate`, a `hashchange` and a reload the runtime starts each add one to a counter,
-    and a marked answer reads the size of the set of visits on their way the runtime keeps already.
+    and a marked answer reads the size of the set of visits on their way the runtime keeps already;
+    the runtime's `navigate` listener keeps the last navigation it heard, which only a refused
+    replace reads.
     On the server nothing runs that did not: `html!` writes the mark as
     an attribute and refuses a misplaced one when the markup compiles.
 
@@ -11311,7 +11335,10 @@ rules something out.
     API; a navigation begun as a `navigate` is dispatched aborts that one first, whose signal the
     runtime's listener then sees aborted, a `NavigateEvent` a script dispatches is not trusted,
     `navigation.transition` is left empty while a navigation a `navigatesuccess` listener began is
-    on its way, and the entry changes only when a navigation whose address waits for its page commits; in Chromium,
+    on its way, and the entry changes only when a navigation whose address waits for its page commits;
+    a `navigate` a listener cancels has its signal aborted once it is dispatched; `new FormData`
+    fires `formdata` before it returns, and a custom element a patch puts in runs its
+    `connectedCallback` before the insertion returns; in Chromium,
     Firefox and WebKit; the smoke's checks in all three; WebKit's throw past its limit of history
     updates is simulated there, not reached);
     reasoned (the form's mark says which answers are the page at their address, which neither the
@@ -11330,9 +11357,10 @@ rules something out.
     draws the part for its address, when `html!` could refuse marking a form whose route
     appends, which the guide only asks today; or `replaceState` stops keeping the entry's key or
     stops aborting a navigation under way in one of the engines, or a traversal between `#id`
-    entries stops firing `popstate` in one.
+    entries stops firing `popstate` in one, or a `navigate` a listener cancels stops having its
+    signal aborted in one.
 
-    Last checked: 2026-11-25, the runtime's size with this change on main `153d10e9c` against
+    Last checked: 2026-11-25, the runtime's size with this change on main `3d84f7de4` against
     that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.

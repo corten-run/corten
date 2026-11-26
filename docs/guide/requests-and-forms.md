@@ -2249,12 +2249,15 @@ the page whose `navigate` listener cancels the replace refuses the address, as d
 that throws for it (WebKit past its limit of history updates): the runtime then reloads the page
 at the entry's address rather than leave the answer under it, and another marked answer on its
 way draws nothing; a listener that cancels it to begin a navigation of its own has that
-navigation go on instead. A GET pressed
+navigation go on instead, unless it cancels that one too. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page. A newer press
 of the form, or of the one a patch drew in its place (found by the form's id), drops an older
 GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
-drawn; give the form a
+drawn. Presses count as they are made, before a `formdata` listener of the page runs; once an
+answer is drawing, a press its draw makes (an element's `connectedCallback`) does not stop its
+address going in; and pressing for the same scope again while its GET is on its way takes that
+GET over, whose answer then draws even if the page moved to another `#id` meanwhile. Give the form a
 `#[derive(Id)]` id, as below. Two marked forms are not ordered against each other: their answers are drawn
 as they come.
 
