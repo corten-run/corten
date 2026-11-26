@@ -1288,10 +1288,12 @@ impl<M: Middleware> App<M> {
     /// answer whose body fails after more than a buffer of it was ready is cut short where hyper
     /// would have sent none of it; behind a long body its handler left unread, a connection may
     /// be kept where hyper alone would have closed it, or closed where it would have been kept;
-    /// and a client that pipelines requests and reads no answer holds more of the server's
-    /// memory than it does with hyper, which is why this is off unless an app asks
-    /// (`docs/design.md#choice-own-http1`, with what was measured and what would make it the
-    /// default). Behind a proxy that does not pipeline, that last does not arise.
+    /// a body type of the app's own that panics where it is asked its length or whether it has
+    /// ended, or as it is dropped, takes with its connection the answers before it that had
+    /// not been sent; and a client that pipelines requests and reads no answer holds more of
+    /// the server's memory than it does with hyper, which is why this is off unless an app
+    /// asks (`docs/design.md#choice-own-http1`, with what was measured and what would make it
+    /// the default). Behind a proxy that does not pipeline, that last does not arise.
     pub fn own_http1(mut self, enabled: bool) -> Self {
         self.connections.own = enabled;
         self

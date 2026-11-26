@@ -267,6 +267,13 @@ answers any other ([below](#host-names)). What differs:
    not pipeline to the app it does not arise. And a connection that has been handed to hyper
    holds about 1.6 KiB more while it waits than one hyper served from the start (10,083 bytes
    against 8,469), so an app whose connections mostly carry bodies gains nothing in memory.
+7. A body type of the app's own that panics. A panic where a body is asked for its next piece
+   ends its answer as a failure does (item 4), with either connection. A body that panics where
+   it is asked how long it is or whether it has ended (`size_hint` and `is_end_stream` of
+   `http_body::Body`), or as it is dropped, ends its connection with either; with the switch on,
+   the answers to the requests that arrived with its own and had not yet been sent are lost with
+   it, where hyper had written each as it was made. Those two questions are answered by the
+   app's code only for a body type the app wrote and gave to `Body::new`.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
 connection, at `2764ce975`): the shortest request the counting kit sends, to a route that says
