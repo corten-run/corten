@@ -2951,20 +2951,28 @@ impl Local {
 /// or `~` (`%61`, `%2e`), which a browser may ask for as the plain character while its
 /// `location.pathname` keeps the escape (WebKit does). No link Corten writes has one: a typed route
 /// writes those characters as they are, [`Local::parse`] refuses a path with one, and a nav entry's
-/// other address with one is left out ([`crate::NavTo::also`]).
-#[inline]
+/// other address with one, once its `.` and `..` segments are resolved, is left out
+/// ([`crate::NavTo::also`]).
+#[inline(always)]
 pub(crate) fn escapes_unreserved(path: &str) -> bool {
-    let unreserved = |pair: &[u8]| {
-        let hex = |b: u8| (b as char).to_digit(16);
-        match (hex(pair[0]), hex(pair[1])) {
-            (Some(high), Some(low)) => {
+    // A loop over the bytes, always inlined, not `split` and `any`: shared, those adapters were left
+    // out of line and `Local::parse` measured about 18 instructions a call more than with them
+    // written in it, and this measured about 17 fewer than that.
+    let bytes = path.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16);
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            if let (Some(high), Some(low)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
                 let b = (high * 16 + low) as u8;
-                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+                if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                    return true;
+                }
             }
-            _ => false,
         }
-    };
-    path.as_bytes().split(|&b| b == b'%').skip(1).any(|after| after.len() >= 2 && unreserved(&after[..2]))
+        i += 1;
+    }
+    false
 }
 
 impl std::fmt::Display for Local {

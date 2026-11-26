@@ -544,6 +544,66 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
     for typed in ["/old/%73ettings", "/old/%7%33ettings", "/old/%7%73ettings", "/old/%73%65ttings"] {
         assert!(!marked(typed, "/old/settings"), "{typed}");
     }
+    // The check is made once the `.` and `..` segments are resolved, escaped or not, as every
+    // engine resolves them: `/old/%2e%2e/x` is `/x`, and kept.
+    assert!(
+        drawn("/x", "/old/%2e%2e/x").ends_with(r#"+" data-nav-also="/x" aria-current="page""#),
+        "{}",
+        drawn("/x", "/old/%2e%2e/x")
+    );
+}
+
+/// A URL whose path is its own comparison key, as every typed route's without an escape is, is kept
+/// as written in a nav with other addresses rather than keyed: the text is the key `pathname` makes
+/// of it, and every URL that is not, it leaves to `pathname` (#2119).
+#[test]
+fn a_url_is_its_own_key_only_when_the_key_is_the_url() {
+    use crate::page::own_key_for_tests as own_key;
+    #[derive(crate::Route)]
+    #[route("/p/{name}")]
+    struct P {
+        name: String,
+    }
+    let mut typed = Vec::new();
+    for name in ["plain", "a.b", "...", "-._~!$&'()*+,;=:@", "a b", "a|b", "caf\u{e9}", "%41", "a/b"] {
+        let mut out = String::new();
+        crate::Route::write_href(&P { name: name.into() }, &mut out, false);
+        typed.push(out);
+    }
+    let own = ["/", "/a", "/a/", "//a", "/a?b=c", "/a#f", "/a?b#c", "/a.b", "/...", "/a/.../b", "/-._~!$&'()*+,;=:@", "/A1/z9"];
+    let not = [
+        "",
+        "a",
+        "?a",
+        "/%41",
+        "/%7c",
+        "/a|b",
+        "/a\\b",
+        "/a b",
+        " /a",
+        "/a\tb",
+        "/.",
+        "/..",
+        "/a/./b",
+        "/a/../b",
+        "/a/.",
+        "/a/..?x",
+        "/a/.#x",
+        "/caf\u{e9}",
+        "/a^b",
+        "/a[b]",
+        "/a\"b",
+        "/a`b",
+        "/a{b}",
+        "/a<b>",
+    ];
+    for url in own.iter().copied().chain(not).chain(typed.iter().map(String::as_str)) {
+        let (end, key) = own_key(url);
+        if let Some(end) = end {
+            assert_eq!(&url[..end], key, "{url:?}");
+        }
+        assert_eq!(end.is_some(), own.contains(&url) || (typed.iter().any(|t| t == url) && !url.contains('%')), "{url:?}");
+    }
 }
 
 /// In a nav with other addresses the entries' own URLs are compared by the same key as the other

@@ -612,7 +612,9 @@ The nav's group name ends in `+` when an entry has other addresses, so the runti
 WebKit asks for an escape of a letter, a digit, `-`, `.`, `_` or `~` decoded (`/old/%2e%2ex` as
 `/old/..x`) while its `location.pathname` keeps it, so Corten never writes one: a typed route writes
 those characters as they are, `Local::parse` refuses a path with one, and `also` leaves out an
-address with one, which only a route implemented by hand can write. An address typed by hand with
+address with one, which only a route implemented by hand can write. `also` checks the path once its
+`.` and `..` segments are resolved, as every engine resolves them, escaped or not: `/old/%2e%2e/x` is
+`/x` and kept. An address typed by hand with
 such an escape is compared as written, so it is never the address with the plain character, as
 Corten's router matches a route's fixed text as sent (`/%73ettings` is not the route `/settings`).
 That leaves one limit, in any nav: WebKit asks for `/%73ettings` as `/settings`, so its server

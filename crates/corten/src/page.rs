@@ -518,8 +518,14 @@ pub struct NavTo<'a> {
     /// them is one word larger than before they existed.
     // Boxed, not a `Vec` in place: an eight-entry nav without aliases measured about 60 instructions
     // a request more with the `Vec`.
-    #[allow(clippy::box_collection)]
-    also: Option<Box<Vec<&'a dyn NavTarget>>>,
+    also: Option<Box<Others<'a>>>,
+}
+
+/// An entry's other addresses ([`NavTo::also`]): the first in the box, so an entry with one costs
+/// one allocation, and any more after it.
+struct Others<'a> {
+    first: &'a dyn NavTarget,
+    rest: Vec<&'a dyn NavTarget>,
 }
 
 impl<'a> NavTo<'a> {
@@ -547,10 +553,12 @@ impl<'a> NavTo<'a> {
     /// plain text, so for every address Corten writes they mark the same link at first render and
     /// after a client navigation in Chromium, Firefox and WebKit.
     ///
-    /// An address whose path has a percent escape of a letter, a digit, `-`, `.`, `_` or `~`
-    /// (`/old/%41`, `/old/%2e%2ex`) is left out, on the server and so in the runtime: WebKit asks for
-    /// it decoded while its `location.pathname` keeps the escape, so the two would mark different
-    /// links. A typed route never writes one and a [`crate::Local`] cannot hold one; only a route
+    /// An address whose path, once its `.` and `..` segments are resolved, has a percent escape of
+    /// a letter, a digit, `-`, `.`, `_` or `~` (`/old/%41`, `/old/%2e%2ex`) is left out, on the
+    /// server and so in the runtime: WebKit asks for it decoded while its `location.pathname` keeps
+    /// the escape, so the two would mark different links. A dot segment written escaped is resolved
+    /// first, as every engine does, so `/old/%2e%2e/x` is `/x` and kept. A typed route never writes
+    /// such an escape and a [`crate::Local`] cannot hold one; only a route
     /// implemented by hand can. A path with such an escape typed by hand is compared as written, so
     /// it is never the address with the plain character. That is the one limit, in any nav: WebKit
     /// asks for `/%73ettings` as `/settings`, so its first render marks the entry at `/settings` and
@@ -603,7 +611,10 @@ impl<'a> NavTo<'a> {
     /// let link = html! { <a data-Nav-Also="/governance">"Settings"</a> };
     /// ```
     pub fn also(mut self, other: &'a (impl NavTarget + 'a)) -> Self {
-        self.also.get_or_insert_with(Box::default).push(other);
+        match &mut self.also {
+            Some(others) => others.rest.push(other),
+            None => self.also = Some(Box::new(Others { first: other, rest: Vec::new() })),
+        }
         self
     }
 }
@@ -726,39 +737,106 @@ fn holds(path: &str, url: &str, section: bool) -> Option<usize> {
     is_current(path, url, section).then(|| url.split(['?', '#']).next().unwrap_or(url).trim_end_matches('/').len())
 }
 
+/// [`holds`] for `href`, a path without a query or fragment, such as a comparison key, which it
+/// need not look for.
+fn holds_path(path: &str, href: &str, section: bool) -> Option<usize> {
+    let held =
+        path == href || (section && path.strip_prefix(href.trim_end_matches('/')).is_some_and(|rest| rest.starts_with('/')));
+    held.then(|| href.trim_end_matches('/').len())
+}
+
+/// Where the path of `url`, a URL on this site, ends when that path is its own comparison key
+/// ([`pathname`]), so the key need not be written: it starts with `/`, every character of it is one
+/// the URL Standard keeps in a path as it is and [`keyed`] does not rewrite (a letter, a digit,
+/// `/` or one of `` -._~!$&'()*+,;=:@ ``: no `%`, `|`, `\`, space or control character), and it has
+/// no `.` or `..` segment. Every typed route's URL without an escape is one.
+fn own_key(url: &str) -> Option<usize> {
+    // What each byte is in such a path: 1 a character kept as written, 2 `/`, 3 the `?` or `#`
+    // that ends it, 0 anything else. A table, so a byte costs one lookup.
+    const CLASS: [u8; 256] = {
+        let kept = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@";
+        let mut class = [0; 256];
+        let mut i = 0;
+        while i < kept.len() {
+            class[kept[i] as usize] = 1;
+            i += 1;
+        }
+        class[b'/' as usize] = 2;
+        class[b'?' as usize] = 3;
+        class[b'#' as usize] = 3;
+        class
+    };
+    let dots = |segment: &[u8]| matches!(segment, b"." | b"..");
+    let bytes = url.as_bytes();
+    if bytes.first() != Some(&b'/') {
+        return None;
+    }
+    // Where the segment being read starts.
+    let (mut segment, mut i) = (1, 1);
+    while i < bytes.len() {
+        match CLASS[bytes[i] as usize] {
+            1 => {}
+            2 if dots(&bytes[segment..i]) => return None,
+            2 => segment = i + 1,
+            3 => return (!dots(&bytes[segment..i])).then_some(i),
+            _ => return None,
+        }
+        i += 1;
+    }
+    (!dots(&bytes[segment..])).then_some(bytes.len())
+}
+
+#[cfg(test)]
+pub(crate) fn own_key_for_tests(url: &str) -> (Option<usize>, String) {
+    let mut key = String::new();
+    pathname(url, &mut key);
+    (own_key(url), key)
+}
+
 /// Writes the other addresses ([`NavTo::also`]) of the entry whose URL ends at `url_end` to
-/// `also`, separated by spaces, each as its comparison key ([`pathname`]), and leaves out one with
-/// an escaped unreserved character ([`crate::route::escapes_unreserved`]), which WebKit asks for in
-/// another spelling than its `location.pathname` shows. An entry left with none is written as one
-/// without them. Out of line, so a nav without them is drawn as it was before they existed.
+/// `also`, separated by spaces, each as its comparison key ([`pathname`]), and leaves out one whose
+/// key, its `.` and `..` segments resolved, has an escaped unreserved character
+/// ([`crate::route::escapes_unreserved`]), which WebKit asks for in another spelling than its
+/// `location.pathname` shows. An entry left with none is written as one without them. Each URL is
+/// written straight into the paths, and one that is its own key ([`own_key`]) is kept as written.
+/// Out of line, so a nav without them is drawn as it was before they existed.
 #[cold]
 #[inline(never)]
-fn other_addresses(others: &[&dyn NavTarget], url_end: usize, also: &mut Option<Box<Also>>) {
-    let (mut url, mut paths) = (String::new(), String::new());
-    for other in others {
-        url.clear();
-        other.write_url(&mut url);
+fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Also>>) {
+    let had = also.is_some();
+    let held = also.get_or_insert_with(|| Box::new(Also { paths: String::with_capacity(64), ends: Vec::with_capacity(4) }));
+    let paths = &mut held.paths;
+    let from = paths.len();
+    for other in std::iter::once(others.first).chain(others.rest.iter().copied()) {
         let start = paths.len();
-        if start > 0 {
+        if start > from {
             paths.push(' ');
         }
-        pathname(&url, &mut paths);
-        if crate::route::escapes_unreserved(&paths[start..]) {
-            paths.truncate(start);
+        let at = paths.len();
+        other.write_url(paths);
+        match own_key(&paths[at..]) {
+            Some(len) => paths.truncate(at + len),
+            None => {
+                let url = paths.split_off(at);
+                pathname(&url, paths);
+                if crate::route::escapes_unreserved(&paths[at..]) {
+                    paths.truncate(start);
+                }
+            }
         }
     }
-    if paths.is_empty() {
-        return;
+    let end = paths.len();
+    if end > from {
+        held.ends.push((url_end, end));
+    } else if !had {
+        *also = None;
     }
-    let also = also.get_or_insert_with(|| Box::new(Also { paths: String::new(), ends: Vec::new() }));
-    also.paths.push_str(&paths);
-    also.ends.push((url_end, also.paths.len()));
 }
 
 /// The comparison key of the page's path ([`keyed`]), which the runtime makes of
 /// `location.pathname` the same way.
 fn key(path: &str) -> std::borrow::Cow<'_, str> {
-    if !path.contains(['|', '%']) {
+    if !path.bytes().any(|b| b == b'|' || b == b'%') {
         return path.into();
     }
     let mut key = String::with_capacity(path.len());
@@ -770,24 +848,35 @@ fn key(path: &str) -> std::borrow::Cow<'_, str> {
 /// path's ([`key`]) with each entry's own URL's and each of its other addresses' ([`pathname`]), as
 /// the runtime does in a group named with a trailing `+`, so the server and the runtime mark the
 /// same entry whether an engine asks for and shows a `|` or an escape's hex digits in one case or
-/// another. Out of line, so a nav without them is ranked as it was before they existed, by the
-/// request path as written.
+/// another. An entry whose URL is its own key ([`own_key`]) on a page whose path is its own keeps
+/// the depth it was ranked with as written, which is the same. Out of line, so a nav without them
+/// is ranked as it was before they existed, by the request path as written.
 #[cold]
 #[inline(never)]
 fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<usize>, T, bool)], also: &Also) {
     let page = key(path);
+    let as_written = matches!(page, std::borrow::Cow::Borrowed(_));
     let (mut start, mut from, mut own) = (0, 0, String::new());
-    let mut ends = also.ends.iter().peekable();
+    let mut ends = also.ends.iter();
+    let mut next = ends.next();
     for entry in entries {
-        own.clear();
-        pathname(&urls[start..entry.0], &mut own);
+        let url = &urls[start..entry.0];
         start = entry.0;
-        let mut depth = holds(&page, &own, entry.1);
-        if let Some(&(_, end)) = ends.next_if(|&&(url_end, _)| url_end == entry.0) {
+        let mut depth = match own_key(url) {
+            Some(_) if as_written => entry.2,
+            Some(end) => holds_path(&page, &url[..end], entry.1),
+            None => {
+                own.clear();
+                pathname(url, &mut own);
+                holds_path(&page, &own, entry.1)
+            }
+        };
+        if let Some(&(_, end)) = next.filter(|&&(url_end, _)| url_end == entry.0) {
             for other in also.paths[from..end].split(' ') {
-                depth = depth.max(holds(&page, other, entry.1));
+                depth = depth.max(holds_path(&page, other, entry.1));
             }
             from = end;
+            next = ends.next();
         }
         entry.2 = depth;
     }
