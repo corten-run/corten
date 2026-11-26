@@ -12,7 +12,7 @@ import { createContradiction, createErroredCustody, createErroredReceipt, create
   exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
-  postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
+  postedContradiction, readExternalFailedHost, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckExternalFailedHost, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
@@ -59,11 +59,14 @@ async function measuredReplay(repo, checkout, commit) {
 }
 
 const setupCensusOutcome = "setup-failed-needs-census";
-const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", "create-errored", setupCensusOutcome].includes(row.outcome)
+const externalFailureOutcome = "external-failed-needs-census";
+const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", "create-errored", setupCensusOutcome, externalFailureOutcome].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
 export function requireSetupRetryCommit(attempts, commit) {
   assert.ok(!attempts.some((row) => row.outcome === setupCensusOutcome && row.commit === commit),
     "retry after failed setup requires a different measured commit");
+  assert.ok(!attempts.some((row) => row.outcome === externalFailureOutcome && row.commit === commit),
+    "retry after external failure requires a different measured commit");
 }
 const acceptable = (row) => ["missing", "prepared", "verified", "running", "quarantined-create"].includes(row.outcome) || retryable(row);
 const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-result" && !acceptable(row) && !row.cleanupUnconfirmed;
@@ -305,6 +308,17 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     }
   };
   const read = async (fleet, checkout, archives) => {
+    const external = readExternalFailedHost(fleet);
+    if (external) {
+      const { group, round, id, accountId, manifestSha256, stateSha256, launch } = external;
+      assert.ok(!archives && attempts.has(group), "external failure is not a retained result");
+      claim(id);
+      needsCensus.add(accountId); unconfirmed.push(external);
+      retainedLocks.push(() => recheckExternalFailedHost(root, external));
+      attempts.get(group).push({ group, round, commit: fleet.manifest.commit, id, manifestSha256, stateSha256, launch,
+        outcome: externalFailureOutcome, attemptRoot: fleet.root, cleanupUnconfirmed: true });
+      return;
+    }
     const quarantineOptions = { report: !admittedGroup };
     const quarantine = readCreateQuarantine(fleet, quarantineOptions);
     if (quarantine) {

@@ -422,11 +422,15 @@ mod tests {
             let res = router.clone().oneshot(req).await.unwrap();
             assert_eq!(res.status(), http::StatusCode::MISDIRECTED_REQUEST);
             sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
-            let res = access_call(router, "POST", "/items/7?token=secret", &[("sec-fetch-site", "cross-site")]).await;
+            let res = access_call(router.clone(), "POST", "/items/7?token=secret", &[("sec-fetch-site", "cross-site")]).await;
             assert_eq!(res.status(), http::StatusCode::FORBIDDEN);
             sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
+            // A second `Host` line: the host check's other refusal.
+            let res = access_call(router, "GET", "/items/7?token=secret", &[("host", "localhost")]).await;
+            assert_eq!(res.status(), http::StatusCode::BAD_REQUEST);
+            sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
         });
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
         for (line, size) in lines.iter().zip(sizes) {
             assert!(line.contains("path=\"/items/7\"") && line.contains("route=\"/items/{id}\""), "{line}");
             assert!(line.contains(&format!("bytes={size} ")) && line.contains("duration="), "{line}");
@@ -434,6 +438,54 @@ mod tests {
         }
         assert!(lines[0].contains("method=GET") && lines[0].contains("status=421"), "{}", lines[0]);
         assert!(lines[1].contains("method=POST") && lines[1].contains("status=403"), "{}", lines[1]);
+        assert!(lines[2].contains("method=GET") && lines[2].contains("status=400"), "{}", lines[2]);
+    }
+
+    #[crate::routes]
+    mod access_lane_url {
+        #[route("/lane/{id}", get = access_test_lane, unstaged)]
+        pub struct Lane {
+            pub id: u32,
+        }
+    }
+
+    async fn access_test_lane(_: crate::Params<access_lane_url::Lane>) -> &'static str {
+        "lane"
+    }
+
+    /// A route that says `unstaged` goes through none of the stages, and the line still sees
+    /// what the host check answers in their place there: its `400` and its `421`.
+    #[test]
+    fn access_log_sees_the_host_check_s_refusals_at_an_unstaged_route() {
+        let mut sizes = Vec::new();
+        let lines = access_lines(async {
+            use http_body_util::BodyExt;
+            use tower::ServiceExt;
+            let router = crate::App::new(access_lane_url::router()).access_log(true).router();
+            // A second `Host` line; a `Host` that is no host; another host's name; the app's own.
+            for (hosts, status) in [
+                (&["localhost", "localhost"][..], http::StatusCode::BAD_REQUEST),
+                (&["localhost/x"][..], http::StatusCode::BAD_REQUEST),
+                (&["rebound.attacker.example"][..], http::StatusCode::MISDIRECTED_REQUEST),
+                (&["localhost"][..], http::StatusCode::OK),
+            ] {
+                let mut req = crate::http::Request::builder().uri("/lane/7?token=secret");
+                for host in hosts {
+                    req = req.header("host", *host);
+                }
+                let res = router.clone().oneshot(req.body(crate::http::Body::empty()).unwrap()).await.unwrap();
+                assert_eq!(res.status(), status, "{hosts:?}");
+                // The lane's answer, not the stages': its own policy and none of the app's.
+                assert_eq!(res.headers()[http::header::CONTENT_SECURITY_POLICY], "sandbox", "{hosts:?}");
+                sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
+            }
+        });
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        for ((line, size), status) in lines.iter().zip(sizes).zip([400, 400, 421, 200]) {
+            assert!(line.contains("method=GET") && line.contains("path=\"/lane/7\""), "{line}");
+            assert!(line.contains(&format!("route=\"/lane/{{id}}\" status={status} bytes={size} ")), "{line}");
+            assert!(line.contains("duration=") && !line.contains("token") && !line.contains("secret"), "{line}");
+        }
     }
 
     #[test]

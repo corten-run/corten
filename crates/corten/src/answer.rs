@@ -1352,7 +1352,7 @@ impl JsonError {
             std::panic::Location::caller()
         );
         assert!(!strict, "corten: {message}");
-        JsonError::Error(Error::new(message))
+        JsonError::Error(Error::corten(message))
     }
 }
 
@@ -2369,12 +2369,14 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
-/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
-/// statement, a one-time code. `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's
-/// back/forward cache may not restore the page either. It applies to a failure the handler returns
-/// too: the error page that replaces it is `no-store`. A request refused before the handler runs
-/// (a path that does not parse), a handler that panics and one past its deadline never reach it,
-/// and get the default. In a routes module the route can say it instead,
+/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: private, no-store`,
+/// `private` for a CDN that ignores a bare `no-store`): a statement, a one-time code.
+/// `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's back/forward cache may not
+/// restore the page either. It applies to a failure the handler returns too: the error page that
+/// replaces it is `private, no-store`. A request refused before the handler runs
+/// (a path that does not parse), a handler that panics and one past its deadline never reach it:
+/// their error page is never shared either, but is `private, no-cache` unless a middleware's
+/// header named `no-store`. In a routes module the route can say it instead,
 /// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its
 /// `?`, and a request its extractors refuse is `no-store` too; `no_store(post)` covers only the
 /// methods it names (see [`crate::routes`]).
@@ -2754,14 +2756,23 @@ where
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
-        if !(self.shared && self.keyed) {
+        self.public()?.ok()
+    }
+
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        use crate::kept::{Shape, Verdict};
+        if !self.shared {
             return None;
         }
-        if O::PAGE {
-            Some(crate::kept::Shape::Page)
+        Some(if !self.keyed {
+            Err(Verdict::Unkeyed)
+        } else if O::PAGE {
+            Ok(Shape::Page)
+        } else if O::WHOLE.0 {
+            Ok(Shape::Body)
         } else {
-            O::WHOLE.0.then_some(crate::kept::Shape::Body)
-        }
+            Err(Verdict::NotWhole)
+        })
     }
 
     #[inline]
