@@ -33,13 +33,21 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 const readyBy = performance.now() + 120_000;
 /** Whole milliseconds left before the 120 s run out; none once they have. */
 const remaining = () => Math.max(0, Math.floor(readyBy - performance.now()));
-for (let last = "no answer"; ; ) {
-  if (remaining() === 0) throw new Error(`${base}/health/ready did not answer 200 within 120 s (last: ${last})`);
+const late = () => new Error(`${base}/health/ready did not answer 200 within 120 s (last: ${last})`);
+let last = "no answer";
+for (;;) {
+  const left = remaining();
+  if (left === 0) throw late();
   /** @type {number | undefined} */
   let status;
   let whole = false;
   try {
-    const res = await fetch(`${base}/health/ready`, { redirect: "manual", signal: AbortSignal.timeout(Math.min(5000, remaining() || 1)) });
+    const res = await fetch(`${base}/health/ready`, { redirect: "manual", signal: AbortSignal.timeout(Math.min(5000, left)) });
+    // Nothing that arrives once the 120 s are over is read as an answer.
+    if (remaining() === 0) {
+      await res.body?.cancel().catch(() => {});
+      throw late();
+    }
     status = res.status;
     if (status !== 200 && status !== 503) {
       await res.body?.cancel().catch(() => {});
@@ -48,15 +56,16 @@ for (let last = "no answer"; ; ) {
     await res.arrayBuffer();
     whole = true;
   } catch (/** @type {any} */ e) {
-    if (status !== undefined && status !== 200 && status !== 503) throw e;
+    if (e instanceof Error && e.message.startsWith(`${base}/health/ready`)) throw e;
     const cause = String(e.cause?.code ?? e.message);
     last = status === undefined ? cause : `${status}, then its body broke off (${cause})`;
   }
-  // An answer that came once the 120 s were over is not one in time.
-  if (remaining() === 0) continue;
+  if (remaining() === 0) throw late();
   if (whole && status === 200) break;
   if (whole) last = "503";
-  await new Promise((r) => setTimeout(r, Math.min(250, remaining())));
+  const pause = Math.min(250, remaining());
+  if (pause === 0) throw late();
+  await new Promise((r) => setTimeout(r, pause));
 }
 
 const browser = steady(await chromium.launch());
