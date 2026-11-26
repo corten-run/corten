@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, pause, exchange, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, pause, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -135,7 +135,7 @@ export async function pageWrites(page, browser) {
             const req = route.request();
             const mode = req.headers().corten;
             const write = req.method() === "POST" && ["/smoke/written", "/smoke/written/again"].includes(new URL(req.url()).pathname);
-            if (seen.over || (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav"))) return route.fallback();
+            if (seen.over || (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav"))) return letThrough(route);
             const at = seen.asked.length;
             seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
             seen.askedAt.push(Date.now());
@@ -1601,7 +1601,12 @@ export async function pageWrites(page, browser) {
       );
       await watchPatch();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      // The link is pressed only once the browser finished loading that exact write with its marked
+      // answer (its `smoke-write` mark), heard within 5 s, and the script its patch names is held: a
+      // fulfill that resolves need not have answered the write, and a request for the script does not
+      // say the write was answered.
+      const finished = (await pollFor(5000, async () => seen.finished[1] ?? false)) || null;
+      const stalled = await Promise.race([waiting, pause(5000).then(() => false)]);
       await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
       release();
       const arrived = await cameWithin(
@@ -1613,9 +1618,6 @@ export async function pageWrites(page, browser) {
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       const section = await sectionOf();
       const patch = await patchDrawn();
-      // The write's answer counts only once the browser finished loading that exact write with it
-      // (its `smoke-write` mark), heard within 5 s: a fulfill that resolves need not have answered it.
-      const finished = (await pollFor(5000, async () => seen.finished[1] ?? false)) || null;
       // The link's page read whole draws what the write changed: its brand, and the section the
       // write patched, drawn by that page (its own element), not by the patch left behind, which
       // never entered the page, not even for a moment before that page drew over it.

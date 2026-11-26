@@ -501,8 +501,9 @@ as it submitted that write, so a failure said at the headers, before the body, o
 window or on another form, does not count as the body's.
 The check that a navigation leaving a write's patch before it is drawn reads the next page whole
 requires the browser to have finished loading that write with the stand-in's answer for it (its
-`requestfinished`, with the answer's own `smoke-write` mark, heard within five seconds of the
-check's look), and that page to show what the write changed: its brand, and the section the patch draws,
+`requestfinished`, with the answer's own `smoke-write` mark, heard within five seconds of the press
+of the form's button), before the case presses the link, and that page to show what the write
+changed: its brand, and the section the patch draws,
 which every page after the write draws too, drawn by that page's own section element and not by the
 patch. The patch's element alone carries a mark, and a MutationObserver set before the write is sent
 records whether that element ever enters the page, however briefly; the check fails if it ever did,
@@ -565,13 +566,12 @@ before the page is loaded; the document it loads is told from them by its own re
 of the page sent before that load ends counts against "read again, not the page". Each part read
 takes its place among the stand-in's answers as it reaches it, and its answer's status line carries
 that place, so the check that the part stops counts only once the first answer to draw `Saved.`,
-noted the moment it is drawn with the time the page drew it, is one that does not ask again, drawn
-within five seconds counted from before the first check's wait for `Saved.`. It then requires no
-read of the page at all (a hover prefetch aside) in the log after the one whose answer drew it, as
-the log stands when the check looks, once 2.2 s have passed since that draw by the time the page
-recorded, not since the check saw it. A read sent after the 2.2 s that is in the log by then counts
-too: the log has a read's time as the check heard of it, after the page sent it, so cutting it at
-the 2.2 s could drop a read sent within them. Its route is
+noted the moment it is drawn, is one that does not ask again, read once the first check's wait for
+`Saved.` has seen it within its six seconds. It then requires no read of the page at all (a hover
+prefetch aside) in the log after the one whose answer drew it, as the log stands when the check
+looks, once 2.2 s have passed by the smoke's monotonic clock since the check read that note, so at
+least 2.2 s since the draw; no wall clock of the page's or the smoke's is compared. A read sent
+after the 2.2 s that is in the log by then counts too. Its route is
 set and removed each within five seconds, and its route, request listener and init script on the
 shared page are removed, and its observer in the page disconnected, however it ends, adding and
 removing the init script each bounded to five seconds; the init script then does nothing in the
@@ -580,9 +580,14 @@ clears once the removal is confirmed, in a later one, and the route lets each re
 case is over, so neither acts on later checks if its removal is not confirmed. Each answer the
 stand-in routes of these cases give (the part case's, the navigations', the reached page's part,
 the whole reads', the held-read case's load and the failing read's 502) is fetched, read and sent
-within five seconds a step by the smoke's clock, and none is sent once its case has ended, when the
-request is let through as it came; one that fails, runs out or is not confirmed aborts its request
-and fails the checks that rest on it, saying why. The check that a
+within five seconds a step by the smoke's clock (ten for the step that sets the leave-before-read
+case's waits, which parses the answer in the page up to three times), and none is sent once its
+case has ended, which the stand-in reads just before each step starts and again just before the
+answer itself is sent: the request is then let through as it came, bounded to five seconds, as is
+each request these routes let through without answering it. A step that fails or runs out aborts
+its request; a fulfill sent whose acknowledgement does not come within its five seconds cannot be
+taken back, and is reported as unconfirmed, not aborted. Either fails the checks that rest on it,
+saying why. The check that a
 page's part reached by the runtime's navigation is read again requires a part read of the reached
 page's own address, and `Saved.` drawn by an answer to one of those reads, which a route of its own
 marks as it answers them: a read of an earlier receipt's address draws the same `Saved.` in the
@@ -636,21 +641,25 @@ be the first, so a full load at any moment after the case's own, even one before
 returns, fails it. The init script and its count are removed however the case ends, each bounded to
 five seconds. The check that a page waiting for a write stops once it no longer asks, after a full
 load, marks each answer to a load or read of the receipt with its place, and an init script added
-before the load notes in the page's session storage the first of them the page draws `Saved.` from,
-with the time the page drew it: it requires that draw within the six seconds of the wait for
-`Saved.`, and no read of the alerts page after that answer's own request in the log of the page's
-requests, as the log stands 2.2 s after the draw by the page's time, so a read sent between the draw
-and the check's look counts against it. The check that navigating away stops the reads requires no
-fetch of `/alerts` the page started after its press of the News link, both noted in the page by its
-own monotonic clock (News can come from a prefetch sent before the press, so no request marks the
-moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
+before the write is sent (the write lands 1.5 s after it is sent, so a slow addition must not leave
+the load to find it landed) notes in the page's session storage the first of them the page draws
+`Saved.` from: it requires that note, read once the wait for `Saved.` has seen it within its six
+seconds, to name an answer to a read after the case's load, not the load's own, and no read of the
+alerts page after that answer's own request in the log of the page's requests, as the log stands
+once 2.2 s have passed by the smoke's monotonic clock since the check read the note, so a read sent
+between the draw and the check's look counts against it. The check that navigating away stops the
+reads requires no fetch of `/alerts` the page started after its press of the News link, both
+numbered in the page by one count in the order they happen, so a fetch started in the same instant
+as the press counts as after it (News can come from a prefetch sent before the press, so no request
+marks the moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
 document replaced meanwhile, which leaves no notes, fails it, and the page's `fetch` is put back
 however it ends. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
-for News are each bounded to 30 seconds by the smoke's clock, as is sending the alert until it says
-`Saving...` in the patch cases, so a driver that never answers ends the run with its reason rather
-than keeping the case from its cleanup. Every other driver action the cases of a page reading
+for News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
+`Saving...` in the patch cases shares one budget of 30 seconds, checked as each of its steps starts,
+so none starts once they have passed; a driver that never answers ends the run with its reason
+rather than keeping the case from its cleanup. Every other driver action the cases of a page reading
 itself again, of a patch's reads (its refusals included), of a write's own page and of the held slow
 part make before a check or its cleanup (a click, fill, key press or load) is bounded the same way
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
@@ -667,7 +676,10 @@ alert's own POST, itself heard from just before the check asks for the key press
 sent while the check fills or focuses the form is not taken for it. That read must be of the receipt
 the press's own POST answer asks to be read again from (its read-again template's `data-from`, in
 the answer at the end of the POST's redirects), so an earlier write's read answered 502 is not taken
-for it. It requires that read sent within
+for it. The answer is parsed in the page as the runtime parses a patch, its tag the last top-level
+element with `data-corten-read-again`, and the `data-from` resolved against the page's base URL: a
+tag in a comment is none, and the read's whole URL, origin included, must be the one resolved. It
+requires that read sent within
 five seconds of the press, counted from that same moment, and that read's own answer, with status
 502, received in full (the browser finished
 loading that exact request) within five seconds of that read being sent, each judged by the time

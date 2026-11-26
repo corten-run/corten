@@ -257,7 +257,8 @@ const cleanUp = async (...undo) => {
  * past them. Once a step fails or runs out, nothing more is sent for the request: it is aborted, once
  * (bounded to 5 s), and the step rejects, so the callback's later steps do not run and a fetch that
  * ends late answers nothing. The answer is sent only by `send`, and not once `ended()` says the case
- * is over: the request is then given `late()` instead (by default let through as it came,
+ * is over, as it reads just before a step starts and again just before the answer itself is sent:
+ * the request is then given `late()` instead, bounded to 5 s (by default let through as it came,
  * `fallback`, as the callback lets through a request that comes after its case; an abort where the
  * case's context is closing), so a stand-in's answer is never drawn once its case has ended.
  * `fault` is why the exchange did not answer the request as the stand-in meant (a step that failed
@@ -294,6 +295,14 @@ const exchange = (route, what, ended = () => false, late = () => route.fallback(
      */
     async step(ms, step, work) {
       if (fault) throw new Error(fault);
+      if (ended()) {
+        fault = `${what}: its case ended before ${step}, so nothing was sent`;
+        if (!sent) {
+          sent = true;
+          await within(5000, "", Promise.resolve().then(late)).catch(() => {});
+        }
+        throw new Error(fault);
+      }
       try {
         return await within(ms, `${step} did not settle within ${ms / 1000} s`, Promise.resolve().then(work));
       } catch (error) {
@@ -314,20 +323,34 @@ const exchange = (route, what, ended = () => false, late = () => route.fallback(
       if (fault) throw new Error(fault);
       if (sent) throw new Error(`${what}: ${step}: the request was already answered`);
       sent = true;
-      if (ended()) {
-        fault = `${what}: its case ended before ${step} was sent, so it was not sent`;
-        await within(ms, "", Promise.resolve().then(late)).catch(() => {});
-        throw new Error(fault);
-      }
+      // Read where the answer is sent, after the queue it waits in, not where it is asked for.
+      let after = false;
       try {
-        await within(ms, `${step} did not settle within ${ms / 1000} s`, Promise.resolve().then(answer));
+        await within(
+          ms,
+          `${step} did not settle within ${ms / 1000} s`,
+          Promise.resolve().then(() => (ended() ? ((after = true), late()) : answer())),
+        );
       } catch (error) {
-        fault ||= `${what}: ${reason(step, ms, error)}${/did not settle/.test(String(error)) ? ", so whether it answered the request is unconfirmed" : ""}`;
+        if (!after) {
+          fault ||= `${what}: ${reason(step, ms, error)}${/did not settle/.test(String(error)) ? ", so whether it answered the request is unconfirmed" : ""}`;
+          throw new Error(fault);
+        }
+      }
+      if (after) {
+        fault ||= `${what}: its case ended before ${step} was sent, so it was not sent`;
         throw new Error(fault);
       }
     },
   };
 };
+
+/**
+ * Lets `route`'s request through as it came, bounded to 5 s: a route callback that does not answer
+ * a request does not wait on a fallback that never settles.
+ * @param {import("@playwright/test").Route} route
+ */
+const letThrough = (route) => within(5000, "", route.fallback()).catch(() => {});
 
 /**
  * `opening` (a context or page being made), within `ms` (by default 30 s, Playwright's own timeout
@@ -529,4 +552,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, exchange, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, exchange, letThrough, opened, closeContext };
