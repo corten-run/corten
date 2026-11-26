@@ -84,6 +84,19 @@ function sent(name, port) {
   return cases[name].request(port).toString("latin1").replace(/\r\n\r\n$/, "");
 }
 
+/**
+ * Requires the line an idle run over 40 connections printed for `what` (`answered 1 pipeline`),
+ * whole: the readings the counted gate decides by, its growth after less before, and its figure
+ * that growth over the connections. @param {string} stdout @param {string} what @param {number} [page]
+ */
+function printedWhole(stdout, what, page = 4096) {
+  const line = new RegExp(`^(-?\\d+) bytes a connection \\(40 that ${what}, opened in \\d+\\.\\d s; (\\d+) before, (\\d+) after, (-?\\d+) grown, in ${page}-byte pages\\)$`, "m").exec(stdout);
+  assert.ok(line, stdout);
+  const [, figure, before, after, grown] = line.map(Number);
+  assert.equal(grown, after - before);
+  assert.equal(figure, Math.round(grown / 40));
+}
+
 /** A script of the kit run with the stand-ins. @param {string} script @param {string[]} args @param {Record<string, string>} [asked] */
 async function running(script, args, asked = {}) {
   const stand = standIns();
@@ -189,17 +202,13 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40"]);
   assert.equal(run.status, 0, run.stderr);
-  const line = /^(-?\d+) bytes a connection \(40 that answered 1 pipeline, opened in \d+\.\d s; (\d+) before, (\d+) after, (-?\d+) grown, in 4096-byte pages\)$/m.exec(run.stdout);
-  assert.ok(line, run.stdout);
-  const [, figure, before, after, grown] = line.map(Number);
-  assert.equal(grown, after - before);
-  assert.equal(figure, Math.round(grown / 40));
+  printedWhole(run.stdout, "answered 1 pipeline");
 });
 
 test("idle.mjs prints the case and the requests an active run sent", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40", "--case", "get-browser", "--requests", "3"]);
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that answered 3 get-browser, opened in /m);
+  printedWhole(run.stdout, "answered 3 get-browser");
   // The 50 warm connections sent the case once each, then the 40 sent it 3 times each.
   const request = sent("get-browser", run.port);
   assert.deepEqual(run.connections?.filter((heads) => heads.length), [...Array(50).fill([request]), ...Array(40).fill([request, request, request])]);
@@ -209,7 +218,7 @@ test("idle.mjs names the case a silent run's probe was set up and warmed for", {
   for (const name of ["text", "pipeline"]) {
     const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", name]);
     assert.equal(run.status, 0, run.stderr);
-    assert.match(run.stdout, new RegExp(`^-?\\d+ bytes a connection \\(40 that sent nothing to the probe for ${name}, opened in `, "m"));
+    printedWhole(run.stdout, `sent nothing to the probe for ${name}`);
     // The 50 warm connections sent the case once each, and the 40 nothing.
     assert.deepEqual(run.connections?.filter((heads) => heads.length), Array(50).fill([sent(name, run.port)]), name);
   }
@@ -218,7 +227,7 @@ test("idle.mjs names the case a silent run's probe was set up and warmed for", {
 test("idle.mjs prints the page size getconf gives, and starts nothing without a whole one", { skip }, async () => {
   const large = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: "65536" });
   assert.equal(large.status, 0, large.stderr);
-  assert.match(large.stdout, /grown, in 65536-byte pages\)$/m);
+  printedWhole(large.stdout, "answered 1 pipeline", 65536);
   for (const page of ["fail", "4096.5", "0", "4k", "9007199254740992", "9".repeat(310)]) {
     const run = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: page });
     assert.equal(run.status, 1, `page ${JSON.stringify(page)}`);
