@@ -2,6 +2,7 @@
 // environment/arguments, mutable doctl provider subprocesses, redirects or mutation retries.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { ClientRequest, IncomingMessage } from "node:http";
 import { Socket } from "node:net";
@@ -10,7 +11,7 @@ import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
 import { fleetCatalogCommand, fleetCatalogSlugs, preloginUserData, providerCreateHost } from "./cloud-contract.mjs";
-import { catalogClosureDetails, providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { catalogClosureDetails, providerDiagnostic, providerFailure, quarantineCensusTargets, unsentDelete } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
@@ -111,6 +112,7 @@ function restRequest({ method, path, credential, body, timeout, readDeadline = I
     let settled = false, informationSeen = false, connectEntered = false, sendEntered = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
     const readCode = account ? "account-request" : catalog ? "catalog-request" : undefined;
+    const diagnosticCode = method === "POST" && path === "/v2/droplets" ? "create-request" : readCode;
     const started = now(), expires = Math.min(started + timeout, readDeadline);
     if (readCode && !(started < expires)) {
       reject(stopped(true, { code: readCode, detail: "deadline" })); return;
@@ -133,7 +135,7 @@ function restRequest({ method, path, credential, body, timeout, readDeadline = I
       settled = true; clearTimeout(timer); clearInterval(cancellation); resources.notify.delete(closed);
       const { detail, result, reset } = outcome;
       if (detail) {
-        const error = stopped(true, readCode ? { code: readCode, detail } : undefined);
+        const error = stopped(true, diagnosticCode ? { code: diagnosticCode, detail } : undefined);
         if (deleteProofExpiresAtMs !== undefined && method === "DELETE" && !sendEntered && !record.responseSeen
           && (!connectEntered || req instanceof ClientRequest && req.destroyed && !req.headersSent)) unsentDeletes.add(error);
         if (proof) closedReads.set(error, { at: lastTime, reset });
@@ -347,8 +349,8 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       catch (error) {
         if (reportUnsent && unsentDeletes.has(error)) throw error;
         const observedRead = phase === "account" || phase === "catalog";
-        const diagnostic = observedRead ? providerFailure(error) : undefined;
-        const failure = stopped(true, observedRead && diagnostic?.code === `${phase}-request` ? diagnostic : undefined);
+        const diagnostic = observedRead || phase === "create" ? providerFailure(error) : undefined;
+        const failure = stopped(true, diagnostic?.code === `${phase}-request` ? diagnostic : undefined);
         if (observedRead && closedReads.has(error)) closedReads.set(failure, closedReads.get(error));
         throw failure;
       }
@@ -404,6 +406,48 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
           && word(action.resource_type) && word(action.status) && (action.resource_id === null || Number.isSafeInteger(action.resource_id) && action.resource_id >= 0)))
           throw stopped(false, { code });
         value = [{ id: action.id, type: action.type, resource_type: action.resource_type, resource_id: action.resource_id, status: action.status }];
+      } else if (command[2] === "list" && command[3] === "--pre-create-census") {
+        assert.ok(host, "pre-create census is not authorized for this mode");
+        const targets = quarantineCensusTargets(command);
+        const names = new Set(targets.map(([name]) => name)), tags = new Set(targets.map(([, tag]) => tag));
+        const digest = (text) => createHash("sha256").update(text).digest("hex");
+        const result = await call("list", "GET", "/v2/droplets?page=1&per_page=200");
+        const batch = result?.droplets, total = result?.meta?.total, links = result?.links, pages = links?.pages;
+        const object = (v) => v && typeof v === "object" && !Array.isArray(v);
+        const text = (v) => typeof v === "string" && v.length > 0 && v.length <= 255;
+        let complete = Array.isArray(batch) && batch.length <= 200 && total === batch.length
+          && (links === undefined || !!object(links)) && (pages === undefined || !!object(pages) && Object.keys(pages).length === 0);
+        const rows = [], seen = new Set(); let witness;
+        // A positive quarantine match is independent of census completeness and
+        // must cross IPC without depending on the size of the rest of the reply.
+        for (const d of Array.isArray(batch) ? batch : []) {
+          if (!positive(d?.id)) { complete = false; continue; }
+          if (text(d.name) && names.has(digest(d.name))) { witness = { id: d.id, name: d.name }; break; }
+          const tag = Array.isArray(d.tags) ? d.tags.find((tag) => text(tag) && tags.has(digest(tag))) : undefined;
+          if (tag !== undefined) { witness = { id: d.id, tags: [tag] }; break; }
+          if (!complete) continue;
+          if (seen.has(d.id)) complete = false;
+          seen.add(d.id);
+          if (!text(d.name) || !Array.isArray(d.tags) || d.tags.length > 256 || !d.tags.every(text)) {
+            complete = false; continue;
+          }
+          const row = { id: d.id, name: d.name, tags: d.tags }; rows.push(row);
+          // Preserve exactly the placement and public-address checks used by the
+          // ordinary pre-create census, not the provider's full droplet record.
+          const size = d.size_slug ?? d.size?.slug, region = d.region?.slug, v4 = d.networks?.v4;
+          if (size !== undefined && !text(size) || region !== undefined && !text(region)
+            || v4 !== undefined && !(Array.isArray(v4) && v4.length <= 256 && v4.every((n) => object(n)
+              && text(n.type) && (n.type !== "public" || text(n.ip_address))))) {
+            complete = false; continue;
+          }
+          if (size !== undefined) row.size_slug = size;
+          if (region !== undefined) row.region = { slug: region };
+          if (v4 !== undefined) row.networks = { v4: v4.filter((n) => n.type === "public")
+            .map(({ type, ip_address }) => ({ type, ip_address })) };
+        }
+        const inventory = { complete: true, rows };
+        value = witness ? { complete: false, rows: [witness] }
+          : complete && Buffer.byteLength(JSON.stringify(inventory)) <= 16 * 1024 ** 2 ? inventory : { complete: false, rows: [] };
       } else if (command[2] === "list" && command[3] === "--single-response") {
         // Absence proof for a provider-errored create: one response is the whole
         // inventory. Offset pages are not a snapshot, so more than one page, a count

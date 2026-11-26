@@ -121,6 +121,73 @@ merged-controller recovery actions still have their exact eligibility and
 approval requirements. Do not rewrite a saved reservation or reuse its approval.
 Do not compare timings across placements.
 
+### JSON API c-16 Placement (Opt-In)
+
+[#2057 JSON API r67 has insufficient apparatus headroom during fast adapters' warmups](https://github.com/corten-run/corten/issues/2057)
+found that on a `c-8` the uncapped warmup drives k6 (quota 4, CPUs 4-7) to its
+headroom bound while one fast app core is not saturated.
+`bench/json-api/placement.mjs` defines an opt-in layout for a `c-16` host that
+gives only the load generator more CPUs. It reuses the pins of catalog's
+`c16-generator-v1` under JSON API's own name:
+
+| CPUs | Role | Budget |
+| --- | --- | --- |
+| 0 | host: driver, control apparatus | unpinned host work, as today |
+| 1 | app | quota 1, unchanged |
+| 2-3 | upstream (one Node process) | quota 2, unchanged |
+| 4-15 | k6 and the load resource sampler, which accounts for all twelve | quota 12 (default: 4 on CPUs 4-7) |
+| 4-7 | the untimed cold probe, a subset of the k6 CPUs as today | quota 4, unchanged |
+
+The selector is `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` together with exactly
+`JSON_API_APP_CPUS=1`, `JSON_API_API_CPUS=2-3` and `JSON_API_LOAD_CPUS=4-15`.
+Any other value, an empty value or another pin refuses, and the runner side refuses
+a host with fewer than 16 logical CPUs before any container starts. Without the
+selector the CPU settings are exactly the default contract's. Catalog's
+`--load-layout c16-generator-v1` stays catalog-only.
+
+A result records its placement explicitly: `measurement.cpus` keeps each
+role's quota and cpuset as it does today, and an opt-in result adds
+`measurement.loadLayout: "json-c16-generator-v1"` and
+`measurement.generatorPlacement`, with the cold probe at
+`{ "quota": 4, "cpuset": "4-7" }` and the load sampler at
+`{ "quota": 12, "cpuset": "4-15" }`. `recordedPlacement` accepts a quota-12 load only
+with the marker and both exact records, and refuses either with any other CPUs.
+Default results carry neither, so their saved bytes and replay do not change.
+
+No fence changes. The load headroom bound is already 80% of the k6 quota (320% on
+the default, 960% on `c-16`); the upstream bounds stay below 80% of one core, both
+sampled and counted. The Corten API warmups that failed on the upstream's sampled
+peak are a separate, open constraint: more k6 cores do not address it.
+
+To select it, add `--load-layout json-c16-generator-v1` to the single-group
+`--prepare` command with `--group json-api`; it is refused on any other group, on
+detach or without a continuation root. It may be combined with `--offline-handoff`.
+The prepared fleet saves the marker as `single.loadLayout`, and its one job carries
+`host: c-16/sfo2` and `loadLayout`, so the approvals, the reservation, the
+census, the create mode and the job (`nproc` at least 16 and
+`campaign-entry.mjs ... --group json-api --load-layout json-c16-generator-v1`) all
+follow from the saved fleet. Placement selection then requires `c-16/sfo2` to be
+advertised. The campaign binding requests the four `c16Env` variables and expects
+the c-16 CPUs. A fleet, reservation or job without the marker, including every
+saved one, keeps its exact bytes.
+
+`bench/json-api/run.mjs` reads the four variables the binding requests, records the
+layout, runs k6 at quota 12 on 4-15 and keeps the cold probe and CPU counter reader
+on 4-7. The isolated JSON evidence check (`isolated/evidence.mjs`) and JSON staging
+(`isolated/json-staging.mjs`) each require the recorded `measurement.loadLayout` to
+equal the layout the binding requested, so a default result cannot satisfy a c-16
+binding and a c-16 result cannot satisfy a default one. `bench/json-api/report.mjs`
+has no binding to compare with. It checks the summary against itself: a quota-12 load
+is accepted only with the marker, and the recorded CPUs and `generatorPlacement` must
+equal that layout's exact values. Native campaign replay captures
+`bench/json-api/placement.mjs` as a named member of the measured source closure. A
+measured commit that predates it replays under its own closure list, which never
+names the file.
+
+This is apparatus placement for future runs, not a measured speedup and not a fix for
+the upstream constraint above. Do not compare JSON API timings across the two
+placements, and do not rerun saved groups only to adopt it.
+
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
 ordering, correctness checks and measurement settings apart from the catalog
@@ -370,6 +437,12 @@ and credential material are never forwarded. Malformed worker messages still
 mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
+
+`create-request` records a finite local transport reason when available, such as
+`request-error`, `response-aborted`, `invalid-json` or `deadline`. A broken response
+or a missing response is still an uncertain POST: the controller does not infer
+that it was unsent, release custody or submit it again. Older receipts that lack
+a detail do not establish any of those reasons.
 
 `account-capacity` is a code-only launch refusal: the complete census for the
 verified account reached or exceeded its valid droplet limit. The direct CLI and
@@ -821,6 +894,51 @@ credential worker. Recovery can then reconcile the unique allocation under its
 durable create intent. Even if identity is found, provisioning cannot begin without
 the exact completed create-action proof. A timed-out or unsettled mutation remains
 uncertain, retains locks and cannot take this recovery shortcut.
+
+### Isolate an unacknowledged create
+
+A single group whose only create has an unacknowledged response and no saved
+droplet or action ID may be isolated in its existing continuation root. This
+does not settle the POST, record deletion, release the child or fleet locks, or
+allow the failed group to retry. Its row stays `quarantined-create`, not verified
+or retryable. Other groups can continue only in the same provider account, and
+their approved create uses one fresh, account-bracketed provider response for
+both the quarantine and historical ID checks and the ordinary pre-create
+census. Only a complete inventory with unique, checkable rows proves absence;
+there is no second read, page or retake. Nonempty pagination links, an inconsistent
+count, or an uncheckable row cannot prove absence. The worker matches the bound
+name and tag digests inside the bounded reply and returns only the sighting when
+it finds one. This works beyond the count limits for absence and when another
+field is malformed. If there is no match, only a complete, bounded projection
+can pass ordinary creation checks. In that complete inventory any earlier
+historical ID blocks the create even if renamed and untagged. This is not proof
+the original POST never succeeded. A validated
+name or tag match writes an exclusive `receipts/create-quarantine-witness.json` with the
+numeric droplet ID and the matching quarantine digest, without changing the
+original reservation. The witness blocks all subsequent creates in this root
+even if the droplet changes name or tags. Reconcile it before another create;
+there is no automatic clearance. A failed witness write retains operation
+custody. Read-only continuation reports show a valid witness as a blocked
+`quarantined-create-witnessed` attempt and still replay unrelated result
+evidence. Neither a sighting nor a quarantine report authorizes binding or
+cleanup.
+
+The operator must stop dispatch to the root and positively account for the
+original local controller, worker and their descendants. A stale PID, a missing
+droplet or a fleet failure receipt alone is not that proof. Keep that evidence
+and the unchanged outer lock outside all the state roots. Use
+`unacknowledgedCreateBinding(readFleet(attemptRoot, round, { priorSelection: true }))`
+from `fleet-verify.mjs` to get a read-only binding of the existing state, intent,
+diagnostic and three retained operation locks. Have a separate reviewer check
+the operator evidence, the binding and the provider observation. Save
+`receipts/create-quarantine.json` exclusively in that attempt with exactly
+`{ schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256 }`,
+where the digest names the retained proof. Only then archive and release the
+original outer continuation lock under the custody procedure below. Never clear
+the child locks through this route or copy the attempt to a fresh root. The
+binding and census do not replace the operator's process-tree proof.
+
+### Provider-errored create
 
 A create the provider accepts and then fails has its own terminal outcome
 ([#1689 Benchmark r21: catalog qualification droplet create errored before guest startup](https://github.com/corten-run/corten/issues/1689)).
@@ -1363,7 +1481,10 @@ empty boundary samples, with each recorded process in only one cgroup per
 sample. No pending native roots, validation, deletion intent or competing
 custody may remain. This checks the command lifecycle, not renderer or native
 qualification. It compares the original tar members to the bound extraction
-before contacting the host.
+before contacting the host. The verified extraction walk also computes the
+existing campaign, control and native subtree hashes from the same bytes.
+The collection manifest is still replayed separately, and the recheck after
+that replay requires unchanged extraction metadata.
 
 Both host observations use the launch-pinned key and the current same-account
 allocation. The read-only probe requires the original boot and job controls, an

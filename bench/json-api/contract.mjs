@@ -115,7 +115,10 @@ export function runtimeContext(summary, profile) {
   return { checkout, runId: summary.runId, network: `${summary.runId}-net`, fixtureSource: `${checkout}/${p.fixture.slice(0, p.fixture.lastIndexOf("/"))}`,
     apiBase: `http://${summary.runId}-${p.path}-api:8080`, startupTimeout: summary.options.startupTimeout,
     nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId,
-    toolExecutions: summary.toolExecutions, ...(summary.schema === timedSchema ? { timed: true,
+    toolExecutions: summary.toolExecutions,
+    // The opt-in c-16 layout records the cold probe's own CPUs (report.mjs checks that record); the default has none.
+    ...(summary.measurement?.generatorPlacement === undefined ? {} : { coldProbe: summary.measurement.generatorPlacement.coldProbe }),
+    ...(summary.schema === timedSchema ? { timed: true,
       runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt, producerSchema: summary.producer?.schema } : {}),
     appExecutions: Object.fromEntries(Object.entries(summary.apps ?? {}).map(([app, entry]) => [app, entry.images?.[profile.payload]?.execution])) };
 }
@@ -178,7 +181,7 @@ export function participantReceipt(info, expected, context, role) {
 function verifyParticipant(observed, expected, context, role) {
   assert.ok(["upstream", "load", "probe"].includes(role), "unknown participating runtime role");
   assert.match(observed?.containerId ?? "", /^[a-f0-9]{64}$/, "missing participating container identity");
-  const budget = expected.cpus[role === "upstream" ? "api" : "load"];
+  const budget = role === "probe" && context.coldProbe !== undefined ? context.coldProbe : expected.cpus[role === "upstream" ? "api" : "load"];
   assert.deepEqual(observed, { role, containerId: observed.containerId, imageId: role === "load" ? context.k6ImageId : context.nodeImageId,
     memoryBytes: role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
     quota: budget.quota, cpuset: budget.cpuset, configuration: expectedConfiguration(expected, context, role) }, "participating runtime image/CPU/memory/ownership differs");

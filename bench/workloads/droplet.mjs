@@ -63,6 +63,7 @@ const createErroredStop = () => Object.assign(new Error("provider create errored
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
+  inspectPreCreateInventory, quarantineTargets = [],
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
   createReappearedIo = { durable, rename: renameSync } } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
@@ -266,7 +267,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
   }
-  const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
+  const list = async () => {
+    const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout);
+    assert.ok(Array.isArray(d)); return d;
+  };
   // A provider-errored create retires only on positive absence: exact-ID 404, then a
   // single-response census (the whole inventory in one provider response) whose every
   // row has an inspectable ID, name and tags, none of them this create's. execute()
@@ -1328,9 +1332,22 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await execute("git", ["merge-base", "--is-ancestor", state.commit, mergedHead]);
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
-          const existing = await list();
+          // With quarantine, both sightings and ordinary pre-create predicates use
+          // the same account-bracketed response. Only completeness can prove absence.
+          const quarantinePreCreate = quarantineTargets.length > 0;
+          const { rows: existing, complete } = quarantinePreCreate
+            ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", ...quarantineTargets, "--output", "json"])).stdout)
+            : { rows: await list(), complete: true };
+          assert.ok(Array.isArray(existing) && (!quarantinePreCreate
+            || existing.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)), "invalid pre-create census");
+          const completeInventory = complete === true && (!quarantinePreCreate || existing.length <= 200
+            && existing.every((d) => typeof d.name === "string" && Array.isArray(d.tags) && d.tags.length <= 256)
+            && new Set(existing.map(({ id }) => id)).size === existing.length);
+          try { inspectPreCreateInventory?.(existing, completeInventory); }
+          catch (error) { if (error.controlUncertain) preserveOperationLock = true; throw error; }
           assert.ok(!existing.some((d) => postedIds.has(String(d.id))),
             "an earlier provider-errored create's posted droplet is listed; never create beside it; preserve reservation");
+          assert.ok(completeInventory, "pre-create census incomplete; preserve reservation");
           if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region, fleet.single ? checkFleetAdmission("census") : []);
           else assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
           assert.ok(!existing.some((d) => d.name === state.name || d.tags?.includes(state.tag)), "this host already exists; never adopt/relaunch");
@@ -1345,7 +1362,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
             const catalog = fleetCatalogResult(await execute("doctl", fleetCatalogCommand, 60000, true));
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
-              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
+              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group,
+                ...(fleet.single?.loadLayout ? { loadLayout: fleet.single.loadLayout } : {}) });
           }
           let created;
           try {

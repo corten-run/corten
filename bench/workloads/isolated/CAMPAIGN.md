@@ -31,6 +31,8 @@ node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 # The reviewed fleet reservation passes its named layout to the same entry:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
+# An independent json-api fleet saved with the opt-in JSON API c-16 layout passes it the same way:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --load-layout json-c16-generator-v1
 # For a non-catalog group only at the placement authorized by the fleet:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --placement dedicated-sfo2
 ```
@@ -42,9 +44,12 @@ The catalog job keeps its separate `c16-generator-v1` layout.
 The argument order and root are fixed. No selection, recipe, command, validator, image,
 environment, output-path, retry or resume argument is accepted. The parent provisions a
 private, same-UID `/bench/campaign` outside a clean checkout, a Linux host with Node 24+,
-at least eight available CPUs (16 for the named catalog layout), Docker and the
-actual native build/browser dependencies. Only the catalog group accepts the named
-layout. Without it the existing CPU binding is unchanged. The parent separately
+at least eight available CPUs (16 for either named layout), Docker and the
+actual native build/browser dependencies. Only the catalog group accepts
+`c16-generator-v1`, and only json-api accepts `json-c16-generator-v1`, whose binding
+requests `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` with CPUs 1, 2-3 and 4-15
+([JSON API c-16 placement](../CLOUD.md#json-api-c-16-placement-opt-in)). Without a layout
+the existing CPU binding is unchanged. The parent separately
 establishes the reserved host identity, authorized operator launch, unit/cgroup
 ownership and exclusive fresh-host use. This code does not authenticate a cloud size or
 prove host exclusivity from a receipt. The trusted parent launching this fixed CLI is the
