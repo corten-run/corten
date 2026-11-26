@@ -70,7 +70,7 @@ function auditDirectory(path) {
   physical(path);
 }
 
-function* journalFrames(path, requireComplete = false) {
+function* journalFrames(path, requireComplete = false, maxRowBytes = Infinity) {
   const before = lstatSync(path); assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
@@ -85,10 +85,16 @@ function* journalFrames(path, requireComplete = false) {
       const chunk = suffix.length ? Buffer.concat([bytes, suffix]) : bytes;
       let right = chunk.length;
       for (let left = chunk.lastIndexOf(10); left >= 0; left = left === 0 ? -1 : chunk.lastIndexOf(10, left - 1)) {
-        if (complete) yield JSON.parse(chunk.toString("utf8", left + 1, right));
+        if (complete) {
+          assert.ok(right - left - 1 <= maxRowBytes, "oversized monitor journal record");
+          yield JSON.parse(chunk.toString("utf8", left + 1, right));
+        }
         complete = true; right = left; // Ignore the possibly partial write at the snapshot's end.
       }
-      if (start === 0 && complete) yield JSON.parse(chunk.toString("utf8", 0, right));
+      if (start === 0 && complete) {
+        assert.ok(right <= maxRowBytes, "oversized monitor journal record");
+        yield JSON.parse(chunk.toString("utf8", 0, right));
+      }
       assert.ok(right <= chunkBytes, "oversized monitor journal record");
       suffix = chunk.subarray(0, right); end = start;
     }
@@ -162,13 +168,13 @@ export function requireOrphanedAuditMonitor(local, state) {
   assert.ok(host.hostname === state.name, "monitor hostname differs");
   const requireJournal = (value) => assert.ok(value, "monitor journal requires reconciliation");
   const now = Date.now(), audit = [];
-  let registered = false, active = false, sequence = Infinity, leaseAt = now + 1, lastLease;
+  let registered = false, leaseNeedsEarlierActive = false, sequence = Infinity, leaseAt = now, lastLease;
   // Journal records are read newest first. Raw audit parts are not journaled.
-  for (const frame of journalFrames(join(local, "monitor-journal.jsonl"), true)) {
+  for (const frame of journalFrames(join(local, "monitor-journal.jsonl"), true, streamLimits.frameBytes)) {
     requireJournal(!registered && frame?.id === id);
     if (frame.kind === "peer-lease") {
       requireJournal(Number.isSafeInteger(frame.atMs) && frame.atMs > 0 && frame.atMs <= now && frame.atMs <= leaseAt);
-      lastLease ??= frame.atMs; leaseAt = frame.atMs;
+      lastLease ??= frame.atMs; leaseAt = frame.atMs; leaseNeedsEarlierActive = true;
       continue;
     }
     const { kind, payload } = frame;
@@ -180,22 +186,22 @@ export function requireOrphanedAuditMonitor(local, state) {
       registered = true;
     } else if (kind === "progress") {
       requireJournal(payload.round === round);
-      active ||= payload.state === "active";
+      if (payload.state === "active") leaseNeedsEarlierActive = false;
     } else {
       requireJournal(audit.length < 3 && kind === ["delivery-sealed", "audit-end", "audit-begin"][audit.length]
         && payload.group === group && typeof payload.subjectSha256 === "string" && /^[a-f0-9]{64}$/.test(payload.subjectSha256));
       audit.push(payload);
     }
   }
-  requireJournal(registered && active && audit.length === 3);
+  requireJournal(registered && !leaseNeedsEarlierActive && audit.length === 3);
   assert.ok(lastLease && now - lastLease >= 2 * streamLimits.leaseMs, "expired peer lease required");
   const [delivery, end, begin] = audit, { campaign, subjectSha256 } = begin;
   requireJournal(typeof campaign === "string" && campaign.startsWith(round + "-") && /^[a-f0-9]{16}$/.test(campaign.slice(round.length + 1))
     && delivery.campaign === campaign && [end, delivery].every((p) => p.subjectSha256 === subjectSha256));
-  const ready = JSON.parse(regular(join(local, `monitor-audit-${group}-ready.json`), 8192));
   const queued = regular(join(local, `monitor-delivery-${group}.json`), streamLimits.deliveryBytes);
-  assert.ok(ready?.group === group && ready.campaign === campaign && ready.subjectSha256 === subjectSha256
-    && delivery.bytes === queued.length && delivery.sha256 === digest(queued), "saved audit delivery differs");
+  assert.ok(delivery.bytes === queued.length && delivery.sha256 === digest(queued), "saved audit delivery differs");
+  try { checkedAuditDelivery(local, state, queued, { campaign, auditGroup: group, approveSubject: subjectSha256 }); }
+  catch { throw new Error("saved audit delivery differs"); }
 }
 
 // A stream can journal a terminal frame before SSH fails and revokes publication.
@@ -219,13 +225,7 @@ export function sealedMonitor(local, state) {
   return { registration, terminal };
 }
 
-export function queueStreamAudit(local, state, options, approvedDeliverySha256) {
-  assert.ok(state.control.monitor.phase === "live" && existsSync(join(local, "operation.lock")), "foreground monitor required");
-  assert.ok(existsSync(join(local, "audit-delivery.lock")), "exclusive audit publisher required");
-  monitorRegistration(local, state);
-  assert.equal(localStreamStatus(local).kind, "progress");
-  const bytes = regular(resolve(options.deliverAudit), streamLimits.deliveryBytes);
-  assert.equal(digest(bytes), approvedDeliverySha256, "locked audit delivery changed");
+function checkedAuditDelivery(local, state, bytes, options) {
   const intent = auditDelivery(bytes, options);
   if (state.group !== undefined) assert.equal(state.group, intent.group);
   const ready = JSON.parse(regular(join(local, "monitor-audit-" + intent.group + "-ready.json")));
@@ -238,6 +238,17 @@ export function queueStreamAudit(local, state, options, approvedDeliverySha256) 
     const wanted = expected.find((value) => value.app === receipt.identity.app && value.key === receipt.identity.key);
     assert.ok(wanted); assert.equal(deploymentSha256(receipt.identity), deploymentSha256(wanted));
   }
+  return intent;
+}
+
+export function queueStreamAudit(local, state, options, approvedDeliverySha256) {
+  assert.ok(state.control.monitor.phase === "live" && existsSync(join(local, "operation.lock")), "foreground monitor required");
+  assert.ok(existsSync(join(local, "audit-delivery.lock")), "exclusive audit publisher required");
+  monitorRegistration(local, state);
+  assert.equal(localStreamStatus(local).kind, "progress");
+  const bytes = regular(resolve(options.deliverAudit), streamLimits.deliveryBytes);
+  assert.equal(digest(bytes), approvedDeliverySha256, "locked audit delivery changed");
+  const intent = checkedAuditDelivery(local, state, bytes, options);
   assert.ok(!existsSync(join(local, "monitor-invalid.json")) && !existsSync(join(local, "monitor-terminal.json")));
   const target = join(local, "monitor-delivery-" + intent.group + ".json"), pending = target + ".pending";
   assert.equal(lstatSync(target, { throwIfNoEntry: false }), undefined, "audit delivery already queued; never repeat");

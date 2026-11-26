@@ -500,7 +500,8 @@ export function externalFailedHostBinding(fleet, { orphaned = false } = {}) {
   const journal = join(local, "monitor-journal.jsonl");
   const monitor = () => {
     if (orphaned) physical(join(local, auditDir));
-    return [...(orphaned ? [capture(ready, 8192), fileHash(join(local, delivery), streamLimits.deliveryBytes)]
+    const subject = join(auditDir, (group === "json-api" ? "json" : "mixed") + "-audit-subject.json");
+    return [...(orphaned ? [capture(ready, 8192), fileHash(join(local, delivery), streamLimits.deliveryBytes), capture(subject, streamLimits.deliveryBytes)]
       : [capture("monitor-invalid.json", 8192), capture("monitor-local-closed.json", 8192)]),
     capture("monitor-registration.json", 131072), fileHash(journal, streamLimits.journalBytes)];
   };

@@ -10,7 +10,7 @@ import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticDelivery, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, durable, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
@@ -28,6 +28,7 @@ import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 import { controller, publicError } from "./droplet.mjs";
+import { deploymentSha256 } from "./deployments.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
@@ -661,12 +662,19 @@ function externalFailureFixture(p) {
       if (orphaned) {
         const journal = path.join(local, "monitor-journal.jsonl");
         const frame = (kind, sequence, payload) => ({ schema: "benchmark-control-frame/v1", id: monitorId, kind, sequence, payload });
-        const ready = { campaign: `${round}-0123456789abcdef`, group, subjectSha256: "b".repeat(64) }, queued = "{}";
+        const audit = syntheticDelivery(group), identities = audit.bundle.receipts.map((r) => r.identity);
+        const prefix = group === "json-api" ? "json" : "mixed";
+        const subject = { schema: `benchmark-${prefix}-audit-subject/v1`, commit, campaignSha256: "f".repeat(64),
+          ...(group === "json-api" ? { identities } : { requests: identities.map((identity) => ({ identity })) }) };
+        const ready = { campaign: `${round}-0123456789abcdef`, group, subjectSha256: deploymentSha256(subject) };
+        audit.subjectSha256 = audit.review.subjectSha256 = ready.subjectSha256;
+        const queued = JSON.stringify(audit);
         const frames = [frame("progress", 4, { round, state: "active" }), frame("audit-begin", 8, ready),
           frame("audit-end", 9, { group, subjectSha256: ready.subjectSha256 }),
           frame("delivery-sealed", 10, { ...ready, bytes: Buffer.byteLength(queued), sha256: digest(queued) })];
         fs.appendFileSync(journal, [...frames, { kind: "peer-lease", id: monitorId, atMs: closedAtMs }].map((row) => JSON.stringify(row)).join("\n") + "\n");
         fs.mkdirSync(path.join(local, "monitor-audit-" + group));
+        fs.writeFileSync(path.join(local, `monitor-audit-${group}`, `${prefix}-audit-subject.json`), JSON.stringify({ ...subject, subjectSha256: ready.subjectSha256 }));
         fs.writeFileSync(path.join(local, "monitor-audit-" + group + "-ready.json"), JSON.stringify(ready));
         fs.writeFileSync(path.join(local, "monitor-delivery-" + group + ".json"), queued);
       }
@@ -703,6 +711,25 @@ function externalFailureFixture(p) {
       fs.writeFileSync(delivered, "{ }");
       assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /saved audit delivery differs/);
       fs.writeFileSync(delivered, delivery);
+      const rows = original.toString("utf8").trimEnd().split("\n").map((row) => JSON.parse(row));
+      const writeJournal = (entries) => fs.writeFileSync(journal, entries.map((row) => JSON.stringify(row)).join("\n") + "\n");
+      for (const bad of ["", "{", "{}"]) {
+        fs.writeFileSync(delivered, bad);
+        writeJournal(rows.map((row) => row.kind === "delivery-sealed"
+          ? { ...row, payload: { ...row.payload, bytes: Buffer.byteLength(bad), sha256: digest(bad) } } : row));
+        assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /saved audit delivery differs/);
+      }
+      fs.writeFileSync(delivered, delivery);
+      const subject = path.join(local, `monitor-audit-${group}`, "json-audit-subject.json"), subjectBytes = fs.readFileSync(subject);
+      fs.writeFileSync(journal, original);
+      fs.unlinkSync(subject);
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }));
+      fs.writeFileSync(subject, subjectBytes);
+      writeJournal([rows[0], rows.at(-1), ...rows.slice(1, -1)]);
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /monitor journal requires reconciliation/);
+      writeJournal(rows.map((row) => row.kind === "progress" ? { ...row, extra: "x".repeat(streamLimits.frameBytes) } : row));
+      assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /oversized monitor journal record/);
+      fs.writeFileSync(journal, original);
       const conflicting = path.join(local, "results.tgz");
       fs.writeFileSync(conflicting, "not a replay candidate");
       assert.throws(() => externalFailedHostBinding(fleet, { orphaned }), /cannot supersede other evidence/);
