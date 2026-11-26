@@ -547,6 +547,14 @@ test("the expected difference: it ends with one bodies line with the SHA-256s in
     assert.ok(r.stderr.includes(`expect.txt, the workload's expected difference: ${why}`) && r.stderr.includes("record the difference again with this kit"), `${work}: ${r.stderr}`);
     assert.equal(existsSync(join(dir, work)), false);
   }
+  // A "bodies same" line alone is one turns.sh never writes: it writes that line only after the
+  // headers' diff, and nothing when neither the headers nor the bodies differ.
+  for (const [work, text] of [["same-alone", `${same}\n`], ["same-after-blank", `\n${same}\n`]]) {
+    const r = resolve_(text, work);
+    assert.equal(r.status, 1, `${work}: ${r.stderr}`);
+    assert.ok(r.stderr.includes(`expect.txt, the workload's expected difference: is a "bodies same" line alone, which turns.sh writes only after the headers' diff`) && r.stderr.includes("record the difference again with this kit"), `${work}: ${r.stderr}`);
+    assert.equal(existsSync(join(dir, work)), false);
+  }
 });
 
 test("the inputs: a file name the list cannot hold and a symbolic link are refused, each in its own words", () => {

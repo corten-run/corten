@@ -802,6 +802,21 @@ test("the answers check on real servers: a diff.txt that cannot be written fails
   assert.ok(r.said.includes("answers/diff.txt cannot be written") && !r.said.includes("answers: same"), r.said);
 });
 
+test("the answers check on real servers: a difference diff or cmp reported that diff.txt does not hold fails it as missing evidence, and does not read as the same answers", LINUX, () => {
+  // A stand-in for cmp makes diff.txt a link to /dev/null, just before turns.sh writes it: every
+  // write to it succeeds and it stays empty, so only diff's and cmp's own statuses say the answers differ.
+  const first = stand("swallowed", "cmp", 'case "$3" in */A-again.body) ln -s /dev/null "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+  for (const [name, base, head] of [["answers-swallowed-headers", serve("aaaa", "a"), serve("aaaa", "b")], ["answers-swallowed-bodies", serve("aaaa"), serve("bbbb")]]) {
+    const r = answers(name, base, head, 60, { first });
+    assert.equal(r.status, 1, `${name}: ${r.said}`);
+    assert.ok(r.said.includes("reported a difference that") && r.said.includes("answers/diff.txt does not hold: missing evidence") && !r.said.includes("answers: same"), `${name}: ${r.said}`);
+  }
+  // The same answers through the same stand-in: nothing differs, so the empty diff.txt is right.
+  const same = answers("answers-swallowed-same", serve("aaaa"), serve("aaaa"), 60, { first });
+  assert.equal(same.status, 0, same.said);
+  assert.ok(same.said.includes("answers: same"), same.said);
+});
+
 test("the answers check on real servers: a diff that cannot compare (status 2) fails it, and does not read as a difference or the same answers", LINUX, () => {
   const r = answers("answers-troubled", serve("aaaa"), serve("aaaa"), 60, { first: stand("troubled", "diff", 'echo "diff: a stand-in that cannot compare" >&2\nexit 2') });
   assert.equal(r.status, 1, r.said);

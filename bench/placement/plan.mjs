@@ -193,11 +193,16 @@ export const BODIES = /^bodies (differ: \d+ and \d+ bytes, sha256 [0-9a-f]{64} a
  * diff, if any, and then exactly one bodies line as BODIES gives it, ended by a newline: a
  * difference without one (in the headers alone, written before the kit bound the shared body)
  * would hold a placement to no body, and one of another form, such as the lengths alone or a
- * digest cut short, can never be matched, so the placement would fail after its build.
+ * digest cut short, can never be matched, so the placement would fail after its build. A
+ * "bodies same" line follows the headers' diff alone: turns.sh writes nothing when neither the
+ * headers nor the bodies differ, so one standing by itself can never be matched either.
  */
 export function expectProblem(text) {
   const lines = text.split("\n"), last = lines.at(-2) ?? "";
-  if (text.endsWith("\n") && BODIES.test(last) && lines.filter((l) => l.startsWith("bodies ")).length === 1) return null;
+  if (text.endsWith("\n") && BODIES.test(last) && lines.filter((l) => l.startsWith("bodies ")).length === 1) {
+    if (last.startsWith("bodies same: ") && !lines.slice(0, -2).some((l) => l !== "")) return `is a "bodies same" line alone, which turns.sh writes only after the headers' diff (when neither the headers nor the bodies differ, it writes nothing, and no expected difference is needed): record the difference again with this kit`;
+    return null;
+  }
   const odd = lines.find((l) => l.startsWith("bodies ") && !BODIES.test(l));
   return `does not end with one bodies line as turns.sh writes it, "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>" or "bodies same: <N> bytes, sha256 <its>", each SHA-256 in full (${odd !== undefined ? `its line "${odd.slice(0, 120)}" is neither` : text === "" ? "it is empty" : !lines.some((l) => l.startsWith("bodies ")) ? "it has no bodies line" : "its bodies line is not its only one, or not its last line ended by a newline"}): record the difference again with this kit`;
 }

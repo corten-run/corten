@@ -31,9 +31,10 @@
 # missing, not a number, zero or under 100%, fails the placement and records nothing.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
 # raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log. A diff.txt
-# that cannot be written, or a diff or cmp that cannot compare (status 2), fails the placement.
+# that cannot be written or does not hold the difference diff or cmp reported, or a diff or cmp
+# that cannot compare (status 2), fails the placement.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,32p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,35p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -97,23 +98,35 @@ cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in the
 # the shell without the reason); diff and cmp say 0 for the same, 1 for different and 2 for trouble.
 diffs=$ans/diff.txt
 printf '' >"$diffs" || fail "$diffs cannot be written"
-st=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || st=$?
-[ $st -le 1 ] || fail "diff could not compare the two answers' headers (status $st)"
+hst=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || hst=$?
+[ $hst -le 1 ] || fail "diff could not compare the two answers' headers (status $hst)"
 na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
 da=$(sha256sum <"$ans/A.body"); da=${da%% *}; db=$(sha256sum <"$ans/B.body"); db=${db%% *}
-st=0; cmp -s "$ans/A.body" "$ans/B.body" || st=$?
-# Any difference ends with the bodies line, so an expected one names the bodies as well.
-case $st in
-    0) [ ! -s "$diffs" ] || echo "bodies same: $na bytes, sha256 $da" >>"$diffs" || fail "$diffs cannot be written" ;;
-    1) echo "bodies differ: $na and $nb bytes, sha256 $da and $db" >>"$diffs" || fail "$diffs cannot be written" ;;
-    *) fail "cmp could not compare the two answers' bodies (status $st)" ;;
+bst=0; cmp -s "$ans/A.body" "$ans/B.body" || bst=$?
+case $bst in
+    0) line="bodies same: $na bytes, sha256 $da" ;;
+    1) line="bodies differ: $na and $nb bytes, sha256 $da and $db" ;;
+    *) fail "cmp could not compare the two answers' bodies (status $bst)" ;;
 esac
+# Whether the two differ is what diff and cmp said, not what diff.txt holds: a difference either
+# reported must be in diff.txt, which then ends with the bodies line (so an expected one names
+# the bodies as well) and holds the headers' diff before it when the headers differ, and when
+# neither reported one diff.txt is empty. A diff.txt that does not hold what they said (one that
+# took no writes, say) is missing evidence, and fails the placement rather than reading as the same.
+if [ $hst = 1 ] || [ $bst = 1 ]; then
+    echo "$line" >>"$diffs" || fail "$diffs cannot be written"
+    n=$(wc -l <"$diffs")
+    { if [ $hst = 1 ]; then [ "$n" -gt 1 ]; else [ "$n" -eq 1 ]; fi; } && [ "$(tail -n 1 "$diffs")" = "$line" ] \
+        || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence"
+else
+    [ ! -s "$diffs" ] || fail "$diffs holds a difference that neither diff nor cmp reported"
+fi
 echo "body $na bytes as received, sha256 $(printf %.16s "$da") A and $(printf %.16s "$db") B" >"$ans/bodies.txt"
 if [ -n "${EXPECT:-}" ]; then
     cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
     echo "answers: differ only as the plan's expected difference says" | tee "$ans/verdict.txt"
 else
-    [ ! -s "$diffs" ] || { cat "$diffs" >&2; fail "A and B answer differently"; }
+    [ $hst = 0 ] && [ $bst = 0 ] || { cat "$diffs" >&2; fail "A and B answer differently"; }
     echo "answers: same" | tee "$ans/verdict.txt"
 fi
 
