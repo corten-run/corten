@@ -14,6 +14,7 @@ import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { counted } from "./probe.mjs";
+import { cases } from "./requests.mjs";
 
 const kit = dirname(fileURLToPath(import.meta.url));
 const linux = process.platform === "linux" && spawnSync("sh", ["-c", "true"]).status === 0;
@@ -78,15 +79,21 @@ async function counting(name, depth, asked = {}) {
   }
 }
 
+/** The head of the case's request to `port`, as the stand-in notes it. @param {string} name @param {number} port */
+function sent(name, port) {
+  return cases[name].request(port).toString("latin1").replace(/\r\n\r\n$/, "");
+}
+
 /** A script of the kit run with the stand-ins. @param {string} script @param {string[]} args @param {Record<string, string>} [asked] */
 async function running(script, args, asked = {}) {
   const stand = standIns();
   try {
-    const run = spawnSync(process.execPath, [join(kit, script), stand.probe, "--cpu", "3", "--port", String(await free()), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
-    // The requests the probe was sent, which the stand-in notes as it stops.
-    const noted = join(stand.directory, "parts.json");
-    const served = existsSync(noted) ? /** @type {{ requests: number }[]} */ (JSON.parse(readFileSync(noted, "utf8"))).reduce((sum, part) => sum + part.requests, 0) : null;
-    return { ...run, started: existsSync(join(stand.directory, "started.json")), served };
+    const port = await free();
+    const run = spawnSync(process.execPath, [join(kit, script), stand.probe, "--cpu", "3", "--port", String(port), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
+    // The request heads each connection to the probe sent, which the stand-in notes as it stops.
+    const noted = join(stand.directory, "connections.json");
+    const connections = existsSync(noted) ? /** @type {string[][]} */ (JSON.parse(readFileSync(noted, "utf8"))) : null;
+    return { ...run, port, started: existsSync(join(stand.directory, "started.json")), connections };
   } finally {
     stand.remove();
   }
@@ -193,8 +200,9 @@ test("idle.mjs prints the case and the requests an active run sent", { skip }, a
   const run = await running("idle.mjs", ["--connections", "40", "--case", "get-browser", "--requests", "3"]);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that answered 3 get-browser, opened in /m);
-  // The 50 warm requests, then 3 on each of the 40 connections.
-  assert.equal(run.served, 50 + 40 * 3);
+  // The 50 warm connections sent the case once each, then the 40 sent it 3 times each.
+  const request = sent("get-browser", run.port);
+  assert.deepEqual(run.connections?.filter((heads) => heads.length), [...Array(50).fill([request]), ...Array(40).fill([request, request, request])]);
 });
 
 test("idle.mjs names the case a silent run's probe was set up and warmed for", { skip }, async () => {
@@ -202,8 +210,8 @@ test("idle.mjs names the case a silent run's probe was set up and warmed for", {
     const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", name]);
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, new RegExp(`^-?\\d+ bytes a connection \\(40 that sent nothing to the probe for ${name}, opened in `, "m"));
-    // The 50 warm requests alone.
-    assert.equal(run.served, 50, name);
+    // The 50 warm connections sent the case once each, and the 40 nothing.
+    assert.deepEqual(run.connections?.filter((heads) => heads.length), Array(50).fill([sent(name, run.port)]), name);
   }
 });
 
