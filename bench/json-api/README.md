@@ -149,8 +149,23 @@ allocated core, which is 320% on the default and 960% on c-16. The single-proces
 upstream bounds stay below 80% of one core, sampled and counted. The layout changes
 apparatus placement for future runs only. It does not by itself resolve the separate
 upstream peak seen in the Corten API warmups, it is not a measured speedup, and
-timings from the two placements are not comparable. How a fleet selects it is in
+timings across placements are not comparable. How a fleet selects it is in
 [CLOUD.md](../workloads/CLOUD.md#json-api-c-16-placement-opt-in).
+
+#### Opt-in c-32 load placement
+
+The preserved r93 c-16 fixture warmups for Corten and axum reached k6 CPU upper
+bounds of 983.13% and 974.46%, respectively, against the 960% fence. The apps
+counted 94% and 95% of their one-core budgets, with no failed HTTP requests in
+those warmups. `JSON_API_LOAD_LAYOUT=json-c32-generator-v1` requires at least
+32 available logical CPUs and the same app and upstream pins as c-16, with
+`JSON_API_LOAD_CPUS=4-23` for k6 at quota 20. CPU 0 remains for host work and CPUs
+24-31 are not assigned to benchmark containers. The cold probe and counter reader
+stay on 4-7. The sampler accounts for all 20 load CPUs; the same 80%-per-core
+fence now requires below 1600%. Upstream bounds, rates, warmups and scenarios are
+unchanged. Replay requires the exact marker and its CPU and generator records.
+This is apparatus calibration, not a qualified result or a speedup.
+See [CLOUD.md](../workloads/CLOUD.md#json-api-c-32-placement-opt-in) for selection.
 
 #### Load resource acquisition
 

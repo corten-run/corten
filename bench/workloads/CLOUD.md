@@ -191,8 +191,26 @@ measured commit that predates it replays under its own closure list, which never
 names the file.
 
 This is apparatus placement for future runs, not a measured speedup and not a fix for
-the upstream constraint above. Do not compare JSON API timings across the two
+the upstream constraint above. Do not compare JSON API timings across
 placements, and do not rerun saved groups only to adopt it.
+
+### JSON API c-32 Placement (Opt-In)
+
+For a future JSON API calibration, use `--load-layout json-c32-generator-v1` at
+the same single-group `--prepare` step, not on detach. The saved fleet job
+selects only `c-32/sfo2`. Prepare, approval preview, detach and the locked
+pre-create check require that pair to be offered in both directions of the
+provider catalog; there is no fallback. The job requires `nproc` of at least 32.
+
+Only k6 widens: quota 20 on CPUs 4-23, with the load resource sampler accounting
+for all 20. CPU 0 stays for host work, the app and upstream remain on 1 and 2-3,
+the untimed cold probe and counter reader stay on 4-7, and CPUs 24-31 are not
+assigned to benchmark containers. The same load fence is below 1600%; upstream
+fences are unchanged. The binding and replay require the saved layout and its
+exact placement, not merely the host size. A default or c-16 reservation
+continues to regenerate its original bytes. See the
+[JSON API runner guide](../json-api/README.md#opt-in-c-32-load-placement) for the
+r93 calibration evidence and its limits.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native

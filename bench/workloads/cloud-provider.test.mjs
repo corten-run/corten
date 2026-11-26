@@ -88,11 +88,12 @@ test("placement catalog retains both directions for supported candidates and dro
   const sizes = [
     { slug: "c-8", available: true, regions: ["nyc1", "blr1", "lon1"] },
     { slug: "c-16", available: true, regions: ["sfo2"] },
+    { slug: "c-32", available: true, regions: ["sfo2"] },
     { slug: "c-4", available: true, regions: ["lon1"] },
   ];
   const regions = [
     { slug: "sfo3", available: true, sizes: [] },
-    { slug: "sfo2", available: true, sizes: ["c-16"] },
+    { slug: "sfo2", available: true, sizes: ["c-16", "c-32"] },
     { slug: "lon1", available: true, sizes: ["c-8", "c-4"] },
     { slug: "blr1", available: true, sizes: ["c-8"] },
     { slug: "nyc1", available: true, sizes: ["c-8"] },
@@ -106,7 +107,7 @@ test("placement catalog retains both directions for supported candidates and dro
   } });
   const result = await run([...fleetCatalogCommand, "--context", context]);
   assert.deepEqual(JSON.parse(result.stdout), {
-    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1]],
+    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1], sizes[2]],
     regions: [regions[0], regions[1], { ...regions[2], sizes: ["c-8"] }, regions[3]],
   });
   assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200", "/v2/regions?page=1&per_page=200"]);
