@@ -55,7 +55,7 @@ requests at a time, as a client that pipelines does; the rows read that way have
 ## Running it
 
 On Linux, with the Rust toolchain, Node (the repository's `.node-version`; 22.15 at least, for
-zstd), `git`, `taskset`, valgrind, jemalloc (`libjemalloc.so.2`), `pkg-config` and libzstd's
+zstd), `git`, `taskset`, `getconf`, valgrind, jemalloc (`libjemalloc.so.2`), `pkg-config` and libzstd's
 headers. On Debian 13, or in the `rust:1-trixie` container with Node added:
 
 ```sh
@@ -113,8 +113,8 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    many they were (`243 in 1`). [How a number is read](#how-a-number-is-read) says what each
    is for.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
-4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), and what that
-   figure is read to (Idle memory, below). One client
+4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), and the growth
+   in bytes and the page size it is read from (Idle memory, below). One client
    address has ports for about 28,000: for more, `--addresses` spreads them over that many
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
@@ -203,10 +203,12 @@ allocates for each request, so it is not a profile of them.
 client then opens the connections one after another, sends what the case says on each and reads
 the answers, and waits a second. The growth of the process's `VmRSS` over those connections,
 divided by their number, is the figure. The kernel's socket buffers are not the process's and
-are not in it. Resident memory moves a page at a time, so the figure is read to one page
-(`getconf PAGESIZE`, 4,096 bytes on x86-64 Linux) over the connections, rounded up to a whole
-byte, which the run prints beside it: 1 byte for 5,000 connections. Two readings within that of
-each other may differ by one page and nothing else.
+are not in it. Resident memory moves a page at a time (`getconf PAGESIZE`, 4,096 bytes on
+x86-64 Linux), so two readings differ by whole pages, and one page, under a byte a connection
+over 5,000, is the least they can differ by. The run prints the growth in bytes and the page
+size beside the figure, and CONTRIBUTING's gate compares the growths, not the figures, which are
+rounded: two pages more can round to one byte a connection more. [`idleRise`](figures.mjs) is
+that comparison.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as

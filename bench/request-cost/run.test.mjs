@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -30,6 +30,9 @@ function standIns() {
     valgrind: `${run} "$@"`,
     callgrind_control: `${run} control "$@"`,
     probe: `${run} "$@"`,
+    // getconf PAGESIZE: the page size a test asks for (4096 unless STAND_IN_PAGE says), or none
+    // when STAND_IN_PAGE is "fail".
+    getconf: '[ "$STAND_IN_PAGE" = fail ] && exit 1\nprintf \'%s\\n\' "${STAND_IN_PAGE:-4096}"',
   };
   for (const [name, script] of Object.entries(scripts)) {
     writeFileSync(join(directory, name), `#!/bin/sh\n${script}\n`);
@@ -79,7 +82,8 @@ async function counting(name, depth, asked = {}) {
 async function running(script, args, asked = {}) {
   const stand = standIns();
   try {
-    return spawnSync(process.execPath, [join(kit, script), stand.probe, "--cpu", "3", "--port", String(await free()), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
+    const run = spawnSync(process.execPath, [join(kit, script), stand.probe, "--cpu", "3", "--port", String(await free()), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
+    return { ...run, started: existsSync(join(stand.directory, "started.json")) };
   } finally {
     stand.remove();
   }
@@ -175,7 +179,24 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40"]);
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^-?\d+ bytes a connection, read to \d+ \(one \d+-byte page over 40 that answered 1 pipeline, opened in \d+\.\d s; \d+ before, \d+ after\)$/m);
+  const line = /^(-?\d+) bytes a connection \(40 that answered 1 pipeline, opened in \d+\.\d s; (\d+) before, (\d+) after, (-?\d+) grown, in 4096-byte pages\)$/m.exec(run.stdout);
+  assert.ok(line, run.stdout);
+  const [, figure, before, after, grown] = line.map(Number);
+  assert.equal(grown, after - before);
+  assert.equal(figure, Math.round(grown / 40));
+});
+
+test("idle.mjs prints the page size getconf gives, and starts nothing without a whole one", { skip }, async () => {
+  const large = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: "65536" });
+  assert.equal(large.status, 0, large.stderr);
+  assert.match(large.stdout, /grown, in 65536-byte pages\)$/m);
+  for (const page of ["fail", "4096.5", "0", "4k"]) {
+    const run = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: page });
+    assert.equal(run.status, 1, `page ${JSON.stringify(page)}`);
+    assert.match(run.stderr, /getconf PAGESIZE did not give the page size/);
+    assert.doesNotMatch(run.stdout, /bytes a connection/);
+    assert.equal(run.started, false, `page ${JSON.stringify(page)} started the probe`);
+  }
 });
 
 test("idle.mjs prints no figure when a connection's answer is not the case's", { skip }, async () => {

@@ -1,7 +1,7 @@
 // node --test bench/request-cost/figures.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { COUNTED, TICK, WARM, alone, each, held, median, resident, resolution, sent, ticks } from "./figures.mjs";
+import { COUNTED, TICK, WARM, alone, each, held, idleRise, median, resident, sent, ticks } from "./figures.mjs";
 
 test("a connection answers 240 requests before the 1,000 that are counted", () => {
   assert.deepEqual([WARM, COUNTED], [240, 1000]);
@@ -67,12 +67,23 @@ test("an idle reading is the growth over the connections, and only of a run that
   assert.throws(() => held({ ...run, accepted: 5001 }), /held 5001 more open files/);
 });
 
-test("an idle reading is read to one page over its connections, rounded up to a whole byte", () => {
-  assert.equal(resolution({ connections: 5000, page: 4096 }), 1);
-  assert.equal(resolution({ connections: 4096, page: 4096 }), 1);
-  assert.equal(resolution({ connections: 4095, page: 4096 }), 2);
-  assert.equal(resolution({ connections: 40, page: 4096 }), 103);
-  assert.equal(resolution({ connections: 5000, page: 65536 }), 14);
-  assert.throws(() => resolution({ connections: 5000, page: 0 }), /not one/);
-  assert.throws(() => resolution({ connections: 5000, page: NaN }), /not one/);
+test("head's idle memory rises past base's by its growths in bytes, beyond base's span and one page", () => {
+  const page = 4096;
+  const grew = (/** @type {number} */ pages) => pages * page;
+  // Base's three readings agree: one page more passes, two do not.
+  assert.deepEqual(idleRise({ base: [grew(15335), grew(15335), grew(15335)], head: [grew(15336), grew(15336), grew(15335)], page }), { rise: page, allowed: page, rose: false });
+  assert.deepEqual(idleRise({ base: [grew(15335), grew(15335), grew(15335)], head: [grew(15337), grew(15337), grew(15337)], page }), { rise: 2 * page, allowed: page, rose: true });
+  // The case #2136's review found: 5,000 connections, two pages more, the same figure a connection
+  // once rounded (12,562 and 12,563), and still a rise.
+  const base = grew(15334), head = grew(15336);
+  const run = { connections: 5000, before: 0, closed: 0, accepted: 5000 };
+  assert.deepEqual([held({ ...run, after: base }), held({ ...run, after: head })], [12562, 12563]);
+  assert.equal(idleRise({ base: [base, base, base], head: [head, head, head], page }).rose, true);
+  // A wider span allows more than a page; a fall is no rise.
+  assert.deepEqual(idleRise({ base: [grew(10), grew(13), grew(11)], head: [grew(14), grew(14), grew(14)], page }), { rise: 3 * page, allowed: 3 * page, rose: false });
+  assert.equal(idleRise({ base: [grew(10), grew(10), grew(10)], head: [grew(4), grew(4), grew(4)], page }).rose, false);
+  assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1], page: 0 }), /not one/);
+  assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1], page: 4096.5 }), /not one/);
+  assert.throws(() => idleRise({ base: [1, 1], head: [1, 1, 1], page }), /base has 2 idle readings, not three/);
+  assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1.5], page }), /head's growth of 1.5 bytes is not a whole number/);
 });
