@@ -27,6 +27,19 @@ function observing(operation, action) {
   }
 }
 export { processIdentity, processRecordKey };
+export function processRole(cmdline, executablePath) {
+  const argv = cmdline.split("\0");
+  const role = argv.find((arg) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(arg));
+  if (role) return role;
+  // Chromium's Linux zygote rewrites its child's argv as one space-joined
+  // title beginning with the exact /proc/self/exe target (then NUL padding).
+  // Recognize only the renderer switch in the first argument position.
+  const title = argv[0];
+  if (argv.length < 2 || argv.slice(1).some(Boolean) || !/ --type=renderer(?: |$)/.test(title)) return null;
+  const path = executablePath();
+  if (!posix.isAbsolute(path) || path.endsWith(" (deleted)") || !title.startsWith(path + " ")) return null;
+  return /^--type=renderer(?: |$)/.test(title.slice(path.length + 1)) ? "--type=renderer" : null;
+}
 function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
@@ -145,7 +158,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
       const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
       observing("process-membership", () => assert.equal(groupPath(cgroup), current));
-      const type = observing("process-cmdline", () => readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null);
+      const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`).toString("utf8"), () => readlinkSync(`${at}/exe`)));
       const closingStat = observing("process-stat-recheck", () => readFileSync(`${at}/stat`, "utf8"));
       const rechecked = observing("process-stat-recheck", () => processIdentity(closingStat));
       if (successor?.parent && identity.pid === successor.identity.pid) observing("executable-recheck-successor", () => {
