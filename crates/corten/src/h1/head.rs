@@ -541,10 +541,18 @@ thread_local! {
 }
 
 impl Dated {
+    /// Written by `httpdate`, as hyper writes its own: an IMF-fixdate (RFC 9110, 5.6.7), always
+    /// 29 bytes. That crate takes no time before 1970 or from the year 10000, so a clock that
+    /// says one is read as the nearest time it takes.
     fn at(now: SystemTime) -> Dated {
+        const LAST: u64 = 253_402_300_799;
         let since = now.duration_since(UNIX_EPOCH).unwrap_or_default();
         let until = now + Duration::new(1, 0) - Duration::from_nanos(u64::from(since.subsec_nanos()));
-        Dated { text: imf_fixdate(since.as_secs()), until }
+        let whole = UNIX_EPOCH + Duration::from_secs(since.as_secs().min(LAST));
+        let mut text = [b' '; 29];
+        let written = std::io::Write::write_fmt(&mut &mut text[..], format_args!("{}", httpdate::HttpDate::from(whole)));
+        debug_assert!(written.is_ok(), "a date is 29 bytes");
+        Dated { text, until }
     }
 }
 
@@ -564,68 +572,26 @@ fn date(out: &mut Vec<u8>) {
     DATED.with(|dated| out.extend_from_slice(&dated.borrow().text));
 }
 
-/// `seconds` since 1970 as an IMF-fixdate (RFC 9110, 5.6.7): `Sun, 06 Nov 1994 08:49:37 GMT`.
-fn imf_fixdate(seconds: u64) -> [u8; 29] {
-    let (days, of_day) = (seconds / 86400, seconds % 86400);
-    // The civil date of a day count (Howard Hinnant's `civil_from_days`), for years from 1970.
-    let shifted = days + 719_468;
-    let (era, day_of_era) = (shifted / 146_097, shifted % 146_097);
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 };
-    let year = year_of_era + era * 400 + u64::from(month <= 2);
-    let mut text = *b"ddd, 00 mmm 0000 00:00:00 GMT";
-    // 1970-01-01 was a Thursday.
-    text[..3].copy_from_slice(&b"ThuFriSatSunMonTueWed"[(days % 7) as usize * 3..][..3]);
-    text[8..11].copy_from_slice(&b"JanFebMarAprMayJunJulAugSepOctNovDec"[(month - 1) as usize * 3..][..3]);
-    let mut put = |at: usize, width: usize, mut value: u64| {
-        for place in (at..at + width).rev() {
-            text[place] = b'0' + (value % 10) as u8;
-            value /= 10;
-        }
-    };
-    put(5, 2, day);
-    put(12, 4, year);
-    put(17, 2, of_day / 3600);
-    put(20, 2, of_day % 3600 / 60);
-    put(23, 2, of_day % 60);
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_date_is_written_as_rfc_9110_gives_it() {
-        let text = |seconds| String::from_utf8(imf_fixdate(seconds).to_vec()).unwrap();
-        assert_eq!(text(0), "Thu, 01 Jan 1970 00:00:00 GMT");
-        // RFC 9110's own example.
-        assert_eq!(text(784_111_777), "Sun, 06 Nov 1994 08:49:37 GMT");
-        // A leap day, the day after it, and the last second of a year.
-        assert_eq!(text(1_709_164_800), "Thu, 29 Feb 2024 00:00:00 GMT");
-        assert_eq!(text(1_709_251_200), "Fri, 01 Mar 2024 00:00:00 GMT");
-        assert_eq!(text(1_798_761_599), "Thu, 31 Dec 2026 23:59:59 GMT");
-        assert_eq!(text(4_102_444_800), "Fri, 01 Jan 2100 00:00:00 GMT");
-    }
-
-    /// The same text as `httpdate` writes, the crate hyper writes its `Date` with: for a time of
-    /// each day from 1970 to 2200, at a different second of each, and for every second of the
-    /// four days around a leap day and of the two around a year's end.
-    #[test]
-    fn a_date_is_written_as_hypers_formatter_writes_it() {
-        let days = (0..7_260_000_000u64).step_by(86_413);
-        let leap = 1_709_078_400..1_709_078_400 + 4 * 86_400;
-        let years_end = 1_798_675_200..1_798_675_200 + 2 * 86_400;
-        let mut compared = 0;
-        for seconds in days.chain(leap).chain(years_end) {
-            let theirs = httpdate::fmt_http_date(UNIX_EPOCH + Duration::from_secs(seconds));
-            assert_eq!(imf_fixdate(seconds).as_slice(), theirs.as_bytes(), "{seconds} seconds since 1970");
-            compared += 1;
-        }
-        assert!(compared > 600_000, "{compared} times compared");
+        let text = |at: SystemTime| String::from_utf8(Dated::at(at).text.to_vec()).unwrap();
+        let since = |seconds: u64, nanos: u32| UNIX_EPOCH + Duration::new(seconds, nanos);
+        assert_eq!(text(since(0, 0)), "Thu, 01 Jan 1970 00:00:00 GMT");
+        // RFC 9110's own example, and the same second at its end.
+        assert_eq!(text(since(784_111_777, 0)), "Sun, 06 Nov 1994 08:49:37 GMT");
+        assert_eq!(text(since(784_111_777, 999_999_999)), "Sun, 06 Nov 1994 08:49:37 GMT");
+        // A leap day, and the last second of a year.
+        assert_eq!(text(since(1_709_164_800, 0)), "Thu, 29 Feb 2024 00:00:00 GMT");
+        assert_eq!(text(since(1_798_761_599, 0)), "Thu, 31 Dec 2026 23:59:59 GMT");
+        // A clock outside what the formatter takes: the nearest time it does.
+        assert_eq!(text(UNIX_EPOCH - Duration::from_secs(5)), "Thu, 01 Jan 1970 00:00:00 GMT");
+        assert_eq!(text(since(300_000_000_000, 0)), "Fri, 31 Dec 9999 23:59:59 GMT");
+        // The text is good until the next whole second.
+        assert_eq!(Dated::at(since(784_111_777, 250_000_000)).until, since(784_111_778, 0));
     }
 
     #[test]

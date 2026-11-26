@@ -43,6 +43,10 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # HTTP/1.1 connection (`App::own_http1`) reads heads with it too, so the two refuse the same ones
 # (docs/design.md#choice-own-http1).
 httparse = "1.9"
+# The formatter hyper writes an answer's `Date` with, already in its tree at this version: Corten's
+# own connection writes its `Date` with it too, once a second a thread, and has no calendar code
+# of its own.
+httpdate = "1"
 # The layer and service traits `App::layer` takes and `corten::Router` implements, so a tower
 # layer (a rate limit, a trace span) goes around the app.
 tower-layer = "0.3"
@@ -119,6 +123,3 @@ tower = { version = "0.5", features = ["util"] }
 serde = { version = "1", features = ["derive", "rc"] }
 # The tests compare src/log.rs's lines, colors included, with this crate's.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
-# The tests compare the `Date` Corten's own HTTP/1.1 connection writes (src/h1/head.rs) with this
-# crate's, which hyper writes its own with and has in its tree at this version.
-httpdate = "1"
