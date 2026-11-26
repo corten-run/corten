@@ -1,10 +1,21 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { publicOriginForHost } from "../marketplace-origin";
 import { alertCookie, alertLifetime, appendAlert, ensureSession, readAlerts } from "./alerts.server";
-import { alertMessage, marketplacePath, targetMinor, type Locale, type MarketplaceRecord } from "./marketplace";
+import { alertMessage, marketplacePath, sameOrigin, targetMinor, type Locale, type MarketplaceRecord } from "./marketplace";
+
+export function marketplaceFormIsSameOrigin(req: IncomingMessage, requestUrl: URL | string) {
+  const headers = new Headers();
+  for (const name of ["origin", "sec-fetch-site"]) {
+    const value = req.headers[name];
+    if (typeof value === "string") headers.set(name, value);
+  }
+  return sameOrigin(new Request(requestUrl, { headers }), publicOriginForHost(req.headers.host)?.origin);
+}
 
 type RequestWithCookies = IncomingMessage & { cookies: Partial<Record<string, string>> };
 function setCookie(req: RequestWithCookies, res: ServerResponse, token: string) {
-  const secure = (req.socket as { encrypted?: boolean }).encrypted ? "; Secure" : "";
+  const tls = (req.socket as { encrypted?: boolean }).encrypted || publicOriginForHost(req.headers.host)?.protocol === "https:";
+  const secure = tls ? "; Secure" : "";
   res.appendHeader("Set-Cookie", `${alertCookie}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${alertLifetime}${secure}`);
 }
 export function alertsFor(req: RequestWithCookies, res: ServerResponse) {
