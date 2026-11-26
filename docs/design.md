@@ -8547,7 +8547,8 @@ rules something out.
     the store does (none kept, `corten dev`, a body route that leaves the store out, a build
     without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
     caching, so one whose handler drew a key is made `private, no-cache` there, with no caching
-    header a CDN reads first and no tag, as one that sets a cookie is (the lane's pass over one
+    header a CDN reads first and no tag, as one that sets a cookie is, and it carries a mark of
+    that as such a one does, for an app that relays it inline (the lane's pass over one
     that sets a cookie keeps a plain `private` beside its `no-store`, so the watch's
     `private, no-store` stays as written); any other unstaged handler is routed
     as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the

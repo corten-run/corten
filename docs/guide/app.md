@@ -1374,8 +1374,9 @@ staged answer does: another app of Corten's whose staged middleware relays it in
 the cookie off still sends it as that visitor's ([Caching](#caching)).
 A `Public` answer, or one of an answer type of the app's own, whose handler drew a form's new
 submit key ([Caching](#caching)), in `NoStore` or a tuple of headers too, goes out as one that
-sets a cookie does, and also loses a tag (`ETag`) it was given: its handler is watched for one,
-as a staged route's is, and any other unstaged handler runs with nothing around it.
+sets a cookie does, carrying that with it to an app that relays it inline as that one does, and
+also loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is,
+and any other unstaged handler runs with nothing around it.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,

@@ -1041,3 +1041,34 @@ async fn an_unstaged_keyed_answer_that_sets_a_cookie_stays_private_no_store() {
     assert_eq!(headers["set-cookie"], "seen=1");
     assert!(body.contains("data-submit value="));
 }
+
+/// An unstaged answer whose handler drew a submit key carries that with it, as one that sets a
+/// cookie does: another app of Corten's whose staged middleware relays it inline and writes a
+/// CDN's lifetime on it still sends it `private` (`private, no-store` where the middleware named
+/// `no-store`), with none of the caching headers a CDN reads first, as a staged keyed answer
+/// relayed that way goes out. A `Public` answer with no key, relayed the same way, keeps what the
+/// middleware wrote (the control).
+#[tokio::test]
+async fn an_unstaged_keyed_answer_relayed_inline_by_another_app_is_still_not_shared() {
+    use super::cache::{kept_from_cdns, CdnRecaches, RelaysAnotherApp};
+    let other = App::new(unstaged_shared_url::router()).router();
+    let home = || get(|| async { "home" });
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(Table::new().route("/shared-keyed", home()).route("/shared-plain", home())))
+            .middleware((CdnRecaches(cache), RelaysAnotherApp(other.clone())))
+            .router();
+        let (status, headers, body) = call_with(router.clone(), "GET", "/shared-keyed", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{cache:?}");
+        assert!(body.contains("data-submit value="), "{cache:?}: the other app's answer: {body}");
+        for what in kept_from_cdns(&headers, sent) {
+            wrong.push(format!("{cache:?}: {what}"));
+        }
+        let (status, headers, body) = call_with(router.clone(), "GET", "/shared-plain", None, None).await;
+        assert!(status == StatusCode::OK && body == "plain", "{cache:?}: {status} {body}");
+        assert_eq!(headers["surrogate-control"], "public, max-age=60", "{cache:?}: nothing made it personal");
+    }
+    assert!(wrong.is_empty(), "another app's unstaged keyed answer relayed inline, open to a CDN: {wrong:#?}");
+}

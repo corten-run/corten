@@ -2424,7 +2424,7 @@ async fn a_refusal_made_around_another_app_s_answer_is_still_not_shared() {
 /// method, URI and headers), asked inline on the same poll, as one that consults a second router of
 /// the app's own does: as it is, turned into a `200` with `x-ok`, or discarded for the route's own
 /// answer with `x-discard`.
-struct RelaysAnotherApp(Router);
+pub(super) struct RelaysAnotherApp(pub(super) Router);
 
 impl crate::Middleware for RelaysAnotherApp {
     async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {

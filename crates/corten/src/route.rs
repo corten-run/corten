@@ -4725,13 +4725,17 @@ impl<F: std::future::Future<Output = crate::response::Response>> std::future::Fu
 }
 
 /// An unstaged answer whose handler drew a form's new submit key, made the browser's alone, with
-/// no tag it was given (`crate::cache::drop_keyed_reuse`).
+/// no tag it was given (`crate::cache::drop_keyed_reuse`), and marked so
+/// ([`crate::cache::Unrepeatable`]), as a staged one is, for an app that relays it inline: that
+/// app's stages keep it from shared caches whatever its middleware writes on it, as they do one
+/// that sets a cookie.
 #[cold]
 #[inline(never)]
 fn drew_key(res: &mut crate::response::Response) {
     let headers = res.headers_mut();
     unshared(headers, false);
     headers.remove(http::header::ETAG);
+    crate::cache::unrepeatable(res);
 }
 
 /// The crate's tests build routes by hand, to test what `App` does with any response.
