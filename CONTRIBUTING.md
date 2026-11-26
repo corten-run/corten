@@ -550,7 +550,14 @@ establish a general ranking.
          cannot count (Counted, below).
       7. A change whose reason is a win in cycles, time or requests a second.
 
-      **Counted.** Build base and head with
+      **Counted.** The hosted `Request Cost` job takes these counts for a pull request that
+      changes what a request is built from, base and head on one runner, and writes every
+      figure and its verdict to its summary, to copy into the description, so the author
+      prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
+      green check is evidence for a reviewer to read, not an attestation: the counts are of
+      the pull request's own tree, by its own workflow, scope, kit and comparison, so a pull
+      request that changes any of those has that change reviewed for what it does to the
+      verdict. On a host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no
