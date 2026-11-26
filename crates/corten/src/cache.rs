@@ -380,16 +380,23 @@ fn sets_cookie(headers: &HeaderMap) -> bool {
 /// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
 /// out `private, no-store` whatever a middleware made of its header.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    settle_drawn(res, seen, path, false);
+}
+
+/// [`settle`], for the stages, which know from their signal whether the answer drew a form's new
+/// submit key (`drew_key`) and have marked it so ([`unrepeatable`]): one that did is not looked
+/// up for the mark again.
+pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key: bool) {
     // An answer marked as no handler's own ([`Unshared`]): never shared, whatever it says and
     // whatever status it goes out with. The usual answer has no extensions, so this is a null check.
     if res.extensions().get::<Unshared>().is_some() {
-        settle_unshared(res);
+        settle_unshared(res, drew_key);
         return;
     }
     // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
     // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays,
     // and no tag either.
-    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    let drew_key = drew_key || res.extensions().get::<Unrepeatable>().is_some();
     if drew_key {
         drop_keyed_reuse(res.headers_mut());
     }
@@ -594,9 +601,24 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
 /// caching headers a CDN reads first ([`drop_cdn_caching`]) and a tag, whoever set it (the app, a
 /// middleware, an upstream it relays). Corten makes no tag for one ([`tag`]); one it was given
 /// names a body whose key a browser may already have sent, and a `304` to it would keep that body.
+/// One pass over the names finds both, as [`drop_cdn_caching`]'s does: the usual answer has none.
 pub(crate) fn drop_keyed_reuse(headers: &mut HeaderMap) {
-    drop_cdn_caching(headers);
-    headers.remove(header::ETAG);
+    let (mut cdn, mut tag) = (false, false);
+    for name in headers.keys() {
+        if *name == header::ETAG {
+            tag = true;
+        } else if CDN_CACHING.contains(&name.as_str()) {
+            cdn = true;
+        }
+    }
+    if cdn {
+        for name in &CDN_HEADERS {
+            headers.remove(name);
+        }
+    }
+    if tag {
+        headers.remove(header::ETAG);
+    }
 }
 
 /// The mark of an answer that is no handler's own: every failure or refusal Corten makes itself,
@@ -681,9 +703,9 @@ impl Marks {
 /// One that drew a submit key ([`Unrepeatable`], an error page with a form) loses a tag it was
 /// given too ([`drop_keyed_reuse`]).
 #[cold]
-fn settle_unshared(res: &mut Response) {
+fn settle_unshared(res: &mut Response, drew_key: bool) {
     let kept_out = Typed::is_no_store(res);
-    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    let drew_key = drew_key || res.extensions().get::<Unrepeatable>().is_some();
     let headers = res.headers_mut();
     if drew_key {
         drop_keyed_reuse(headers);
@@ -698,7 +720,7 @@ fn settle_unshared(res: &mut Response) {
 /// an [`Unshared`] one: an app that relays it inline settles it the same way.
 pub(crate) fn settle_refused(res: &mut Response) {
     res.extensions_mut().insert(Unshared);
-    settle_unshared(res);
+    settle_unshared(res, false);
 }
 
 /// The empty answer sent in place of one whose exact-size body failed as it was read after the
@@ -775,7 +797,7 @@ pub(crate) fn unrepeatable(res: &mut Response) {
 /// whose mark another Corten app that relays the answer inline reads, as it reads [`Personal`]).
 /// A render also marks the request's signal ([`crate::Signal::mark_key_drawn`]); the watch marks
 /// the answer alone. The route's answer, with the mark, marks the signal the stages hold as it
-/// comes back past the app's middleware (`middleware::handle`), which they read before
+/// comes back past the app's middleware (`middleware::passing`), which they read before
 /// [`settle`]: so a middleware that rebuilds the response, and the request it gives `next` too,
 /// does not take the mark away.
 #[derive(Clone, Copy)]

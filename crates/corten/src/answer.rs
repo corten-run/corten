@@ -2821,7 +2821,7 @@ pin_project_lite::pin_project! {
     /// not keep it. A page's render marks a key it drew itself; this sees the rest. The answer is
     /// marked where it is polled to, and the watch is held beside the handler's work, so neither
     /// is moved again. The answer alone is marked: it comes back to the stages past the route's
-    /// side of the chain (`middleware::handle`), which marks the signal they hold
+    /// side of the chain (`middleware::passing`), which marks the signal they hold
     /// ([`crate::Signal::mark_key_drawn`]) before any middleware sees the answer, so a middleware
     /// that makes a new response of this one does not take the mark away.
     pub(crate) struct Made<F, O> {

@@ -222,36 +222,29 @@ impl<M: Middleware> Erased for M {
 pub(crate) type Stack = Arc<[Arc<dyn Erased>]>;
 
 /// The rest of the request after the app's middleware: the area's or API's middleware still to
-/// run (none for most routes), then the route. `signal` is the request's as the stages hold it,
-/// for the route's answer ([`handle`]): a middleware passes on only the request, which may be
-/// one it made.
+/// run (none for most routes), then the route.
 pub(crate) struct Rest<'a> {
     pub(crate) stack: &'a [Arc<dyn Erased>],
     pub(crate) route: Option<crate::router::Route>,
-    pub(crate) signal: &'a crate::Signal,
 }
 
 impl Next for Rest<'_> {
     #[inline]
     fn run(self, req: Request) -> impl Future<Output = Response> + Send {
         match self.stack.split_first() {
-            Some((first, stack)) => Either::Left(first.call_boxed(req, Rest { stack, route: self.route, signal: self.signal })),
-            None => Either::Right(handle(self.route, self.signal, req)),
+            Some((first, stack)) => Either::Left(first.call_boxed(req, Rest { stack, route: self.route })),
+            None => Either::Right(handle(self.route, req)),
         }
     }
 }
 
-/// The route alone, after the app's middleware, for a request in no area or API with middleware,
-/// with the request's signal as the stages hold it ([`Rest`]).
-pub(crate) struct Handle<'a> {
-    pub(crate) route: Option<crate::router::Route>,
-    pub(crate) signal: &'a crate::Signal,
-}
+/// The route alone, after the app's middleware, for a request in no area or API with middleware.
+pub(crate) struct Handle(pub(crate) Option<crate::router::Route>);
 
-impl Next for Handle<'_> {
+impl Next for Handle {
     #[inline]
     fn run(self, req: Request) -> impl Future<Output = Response> + Send {
-        handle(self.route, self.signal, req)
+        handle(self.0, req)
     }
 }
 
@@ -261,11 +254,7 @@ impl Next for Handle<'_> {
 /// own `404` is (`crate::cache::Unshared`). The answer is read for a form's new submit key as it
 /// comes back ([`Keyed`]), before any middleware sees it.
 #[inline]
-fn handle<'a>(
-    route: Option<crate::router::Route>,
-    signal: &'a crate::Signal,
-    req: Request,
-) -> impl Future<Output = Response> + Send + 'a {
+fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it.
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
@@ -275,53 +264,81 @@ fn handle<'a>(
             Either::Right(std::future::ready(crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND))))
         }
     };
-    let answer = match here {
-        None => Either::Left(answer),
-        Some(here) => Either::Right(filled(here, answer)),
-    };
-    Keyed { answer, signal }
-}
-
-/// `answer` with its page filled by the layout reads `here` started. Boxed, so a request in an app
-/// without layout reads carries none of the fill's state.
-fn filled(
-    here: crate::layout::StartHere,
-    answer: impl Future<Output = Response> + Send + 'static,
-) -> Pin<Box<dyn Future<Output = Response> + Send>> {
-    Box::pin(async move { here.fill(answer.await).await })
+    let answer =
+        match here {
+            None => Either::Left(answer),
+            // Boxed, so a request in an app without layout reads carries none of the fill's state.
+            Some(here) => Either::Right(Box::pin(async move { here.fill(answer.await).await })
+                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
+        };
+    Keyed { answer }
 }
 
 pin_project_lite::pin_project! {
-    /// The route's answer (its page filled), which marks the request's signal as the stages hold
-    /// it when the answer drew a form's new submit key (`crate::cache::Unrepeatable`, put on by the
-    /// render that drew it or the watch around a `Public` handler, which marks only the answer). A
-    /// render marks the signal its request carries too, and a middleware may have given it one it
-    /// made, with no signal or another
-    /// one: the stages read theirs before they settle the answer, so a middleware that then makes a
-    /// new response of this one, without its extensions, takes the mark away no more than one that
-    /// passed the request on as it was. The usual answer has no extensions, so the look is a null
-    /// check.
-    struct Keyed<'a, F> {
+    /// The route's answer (its page filled), which tells the stages when it drew a form's new
+    /// submit key (`crate::cache::Unrepeatable`, put on by the render that drew it or the watch
+    /// around a `Public` handler, which marks only the answer): they mark their own signal for it
+    /// ([`passing`]). A render marks the signal its request carries too, and a middleware may have
+    /// given it one it made, with no signal or another one: the stages read theirs before they
+    /// settle the answer, so a middleware that then makes a new response of this one, without its
+    /// extensions, takes the mark away no more than one that passed the request on as it was. It
+    /// holds nothing but the answer and is polled as part of the poll around it, so the route's
+    /// future is the size it would be without it and is moved no more; the usual answer has no
+    /// extensions, so the look is a null check.
+    struct Keyed<F> {
         #[pin]
         answer: F,
-        signal: &'a crate::Signal,
     }
 }
 
-impl<F: Future<Output = Response>> Future for Keyed<'_, F> {
+impl<F: Future<Output = Response>> Future for Keyed<F> {
     type Output = Response;
 
-    #[inline]
+    // Always: a call of its own moved the answer it returns three times more (memcpy, about 87
+    // instructions a request) and cost 66 instructions more of its own (callgrind, the settle
+    // test's public page).
+    #[inline(always)]
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
-        let this = self.project();
-        let polled = this.answer.poll(cx);
+        let polled = self.project().answer.poll(cx);
         if let std::task::Poll::Ready(res) = &polled {
             if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
-                this.signal.mark_key_drawn();
+                keyed();
             }
         }
         polled
     }
+}
+
+thread_local! {
+    /// A route's answer that drew a form's new submit key came back past the app's middleware
+    /// ([`Keyed`]) in the poll of the stages' chain this thread is making ([`passing`]).
+    static KEYED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cold]
+#[inline(never)]
+fn keyed() {
+    KEYED.set(true);
+}
+
+/// One poll of the stages' chain (the app's middleware, then the route), `poll`, which must not
+/// unwind (it holds the panic catch), marking `signal`, the stages' own, when a route's answer that
+/// drew a form's new submit key came back in it ([`Keyed`]). The route's future is polled only
+/// within that poll: a middleware is given the rest of the chain as a [`Next`], which promises no
+/// `'static`, so it cannot hand that future to a task of its own. The thread's flag is cleared as
+/// the poll starts and put back as it ends, as a render's mark is (`crate::form::Drawing`), so a
+/// request answered in process within it (with stages of its own) leaves this one's as it was,
+/// and a flag another request left counts for no one. A route's answer that comes back on another
+/// thread during the poll (a middleware that polls `next` on a scoped thread of its own) is not
+/// seen, as a key a handler draws on one is not (`crate::form::KeyWatch`).
+#[inline]
+pub(crate) fn passing<T>(signal: &crate::Signal, poll: impl FnOnce() -> T) -> T {
+    let outer = KEYED.replace(false);
+    let polled = poll();
+    if KEYED.replace(outer) {
+        signal.mark_key_drawn();
+    }
+    polled
 }
 
 refs!(A);
