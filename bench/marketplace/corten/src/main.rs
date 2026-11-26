@@ -5,8 +5,11 @@ mod text;
 mod trace;
 mod views;
 
-use corten::i18n::Locale;
-use corten::prelude::*;
+use corten::{
+    http::{HeaderMap, header},
+    i18n::Locale,
+    prelude::*,
+};
 use model::Record;
 use source::Source;
 use std::sync::Arc;
@@ -17,6 +20,42 @@ use trace::TraceParent;
 struct AppState {
     source: Source,
     alerts: alerts::Store,
+    public_origin: Option<PublicOrigin>,
+}
+
+#[derive(Clone)]
+struct PublicOrigin {
+    origin: Arc<str>,
+    authority: Arc<str>,
+}
+
+impl PublicOrigin {
+    fn new(origin: &str) -> Self {
+        let uri: corten::http::Uri = origin.parse().expect("MARKETPLACE_PUBLIC_ORIGIN must be an HTTP(S) origin");
+        let scheme = uri.scheme_str().filter(|scheme| matches!(*scheme, "http" | "https"));
+        let authority = uri.authority().map(|authority| authority.as_str());
+        let (Some(scheme), Some(authority)) = (scheme, authority) else {
+            panic!("MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin");
+        };
+        assert!(
+            origin == format!("{scheme}://{authority}") && !authority.contains('@'),
+            "MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin"
+        );
+        Self { origin: origin.into(), authority: authority.into() }
+    }
+
+    fn allows(&self, headers: &HeaderMap) -> bool {
+        let mut host = headers.get_all(header::HOST).iter();
+        let first = host.next();
+        if host.next().is_some() {
+            return false;
+        }
+        if !first.is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(self.authority.as_bytes())) {
+            return true; // The app's separate direct listener keeps Corten's native check.
+        }
+        let mut origin = headers.get_all(header::ORIGIN).iter();
+        origin.next().is_some_and(|value| value.as_bytes() == self.origin.as_bytes()) && origin.next().is_none()
+    }
 }
 
 #[corten::routes(state = AppState)]
@@ -92,8 +131,12 @@ async fn create_alert(
     Params(at): Params<routes::Marketplace<'_>>,
     session: alerts::Session,
     trace: TraceParent,
+    headers: HeaderMap,
     Form(form): Form<AlertForm>,
 ) -> HtmlResult {
+    if state.public_origin.as_ref().is_some_and(|origin| !origin.allows(&headers)) {
+        Err(Refused::forbidden())?;
+    }
     req.set_locale(at.locale);
     let record = state.source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?;
     let (message, accepted) = match text::alert(req.t(), &record, &form) {
@@ -116,8 +159,8 @@ async fn read_alerts(State(alerts): State<alerts::Store>, session: alerts::Sessi
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>, trace: TraceParent) -> JsonResult<Arc<Record>> {
     Ok(Json(source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?))
 }
-fn app(source: Source) -> App {
-    let state = AppState { source, alerts: Default::default() };
+fn app(source: Source, public_origin: Option<PublicOrigin>) -> App {
+    let state = AppState { source, alerts: Default::default(), public_origin };
     let app = App::new(routes::router(state.clone()))
         .api(|routes| api::api(routes, state))
         .assets(views::Static)
@@ -133,7 +176,13 @@ fn app(source: Source) -> App {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let source = Source::from_env().map_err(|error| std::io::Error::other(error.to_string()))?;
-    corten::serve(app(source)).await
+    let origin = std::env::var("MARKETPLACE_PUBLIC_ORIGIN");
+    let public_origin = match origin {
+        Ok(origin) => Some(PublicOrigin::new(&origin)),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("MARKETPLACE_PUBLIC_ORIGIN must be valid Unicode"),
+    };
+    corten::serve(app(source, public_origin)).await
 }
 
 #[cfg(test)]
@@ -144,11 +193,42 @@ mod tests {
         i18n::{Decimal, Messages, Minor},
     };
     fn client() -> corten::testing::Client {
+        client_with_origin(None)
+    }
+    fn client_with_origin(public_origin: Option<PublicOrigin>) -> corten::testing::Client {
         let record: Record = serde_json::from_str(include_str!("../tests/marketplace.json")).unwrap();
-        app(Source::Fixture(Arc::new(std::collections::HashMap::from([(record.id.clone(), Arc::new(record))])))).test()
+        app(Source::Fixture(Arc::new(std::collections::HashMap::from([(record.id.clone(), Arc::new(record))]))), public_origin)
+            .test()
     }
     fn at(tag: &str) -> routes::Marketplace<'static> {
         routes::Marketplace { locale: Locale::parse(tag).unwrap(), id: "item_1", query: Default::default() }
+    }
+    #[tokio::test]
+    async fn public_origin_pin_preserves_direct_alerts_and_requires_https_on_the_public_host() {
+        let public = "https://localhost:8080";
+        let app = client_with_origin(Some(PublicOrigin::new(public)));
+        let route = at("en-US");
+        let fields = AlertForm::FIELDS;
+        let post = |host: &str, origin: &str| {
+            app.post(&route)
+                .header(header::HOST, host)
+                .header(header::ORIGIN, origin)
+                .field(fields.email, "a@example.test")
+                .field(fields.target_price, "1")
+        };
+        let accepted = post("localhost:8080", public).await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let session = accepted.cookie(alerts::COOKIE).unwrap();
+        let read = || app.get(&api::Alerts).cookie(alerts::COOKIE, session);
+        let before = read().await;
+        assert_eq!(serde_json::from_str::<serde_json::Value>(before.text()).unwrap().as_array().unwrap().len(), 1);
+        let refused = post("localhost:8080", "http://localhost:8080").cookie(alerts::COOKIE, session).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert_eq!(read().await.text(), before.text());
+        let direct = post("127.0.0.1:8080", "http://127.0.0.1:8080").await;
+        assert_eq!(direct.status(), StatusCode::OK);
+        let cookie = direct.cookie(alerts::COOKIE).unwrap();
+        assert_ne!(app.get(&api::Alerts).cookie(alerts::COOKIE, cookie).await.text(), "[]");
     }
     #[tokio::test]
     async fn rich_page_is_localized_escaped_and_filtered() {

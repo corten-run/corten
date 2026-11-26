@@ -30,6 +30,12 @@ struct Session {
 }
 static SESSIONS: LazyLock<Mutex<HashMap<TokenHash, Session>>> = LazyLock::new(Mutex::default);
 
+fn secure_cookie(host: Option<&str>, origin: Option<&str>) -> bool {
+    origin
+        .and_then(|origin| origin.strip_prefix("https://"))
+        .is_some_and(|authority| host.is_some_and(|host| host.eq_ignore_ascii_case(authority)))
+}
+
 fn presented(cx: &Cx) -> Option<TokenHash> {
     let mut found = None;
     for value in request::headers(cx).get_all(header::COOKIE) {
@@ -57,8 +63,11 @@ pub fn append(cx: &Cx, row: Alert) -> Result<()> {
             }
             let token = Token::random();
             let hash = token.hash();
-            // The native listener is HTTP. A trusted TLS deployment can require Secure.
-            let secure = std::env::var("MARKETPLACE_PUBLIC_ORIGIN").is_ok_and(|origin| origin.starts_with("https://"));
+            // The public TLS authority and the HTTP preflight share this app instance.
+            let public_origin = std::env::var("MARKETPLACE_PUBLIC_ORIGIN").ok();
+            let mut hosts = request::original_headers(cx).get_all(header::HOST).iter();
+            let host = hosts.next().and_then(|value| value.to_str().ok()).filter(|_| hosts.next().is_none());
+            let secure = secure_cookie(host, public_origin.as_deref());
             let cookie =
                 Cookie::build((COOKIE, token.encode())).path("/").http_only(true).same_site(SameSite::Lax).secure(secure).build();
             response_headers(cx).append(header::SET_COOKIE, cookie.to_string().parse()?);
@@ -89,6 +98,16 @@ pub async fn read(cx: &Cx) -> Result<impl IntoResponse> {
 mod tests {
     use super::*;
     use topcoat::router::{Body, Router, request::Request, to_bytes};
+
+    #[test]
+    fn public_cookie_security_does_not_apply_to_the_direct_listener() {
+        let public = Some("https://localhost:8080");
+        assert!(secure_cookie(Some("localhost:8080"), public));
+        assert!(!secure_cookie(Some("127.0.0.1:8080"), public));
+        assert!(!secure_cookie(Some("localhost:8081"), public));
+        assert!(!secure_cookie(None, public));
+        assert!(!secure_cookie(Some("localhost:8080"), Some("http://localhost:8080")));
+    }
 
     #[route(POST "/append")]
     async fn append_route(cx: &Cx) -> Result<()> {

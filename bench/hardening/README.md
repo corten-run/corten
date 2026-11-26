@@ -41,6 +41,8 @@ preflight still reaches the app at `http://127.0.0.1:8080`. The proxy strips
 client-supplied forwarding metadata about the public authority and scheme. It
 does not translate `Origin` or provide the application's CSRF protection. This deployment
 differs from r96, where nginx forwarded its internal upstream name as `Host`.
+The Corten marketplace adapter also requires the exact configured origin on
+alert writes to the public authority; its direct listener retains the native check.
 
 Before a full rerun after a deployment change, a dedicated test host can exercise
 one fixture case per app against the real TLS edge with the same qualification gates:

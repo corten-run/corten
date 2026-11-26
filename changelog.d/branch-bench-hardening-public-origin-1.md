@@ -1,1 +1,0 @@
-- The Hardening benchmark's TLS edge now preserves the browser's host, and the marketplace adapters can check form origins against their configured public HTTPS origin. See [the Hardening benchmark issue](https://github.com/corten-run/corten/issues/1320).
