@@ -251,6 +251,85 @@ const cleanUp = async (...undo) => {
 };
 
 /**
+ * One exchange of a stand-in's route callback, named `what`: its steps for `route` (fetching the
+ * request's answer, reading it, then sending one) each within a bound of its own by the smoke's
+ * clock (`within`), so a fetch, read or answer that never settles does not keep the callback going
+ * past them. Once a step fails or runs out, nothing more is sent for the request: it is aborted, once
+ * (bounded to 5 s), and the step rejects, so the callback's later steps do not run and a fetch that
+ * ends late answers nothing. The answer is sent only by `send`, and not once `ended()` says the case
+ * is over: the request is then given `late()` instead (by default let through as it came,
+ * `fallback`, as the callback lets through a request that comes after its case; an abort where the
+ * case's context is closing), so a stand-in's answer is never drawn once its case has ended.
+ * `fault` is why the exchange did not answer the request as the stand-in meant (a step that failed
+ * or ran out, an answer not confirmed in time, or its case's end), "" while it has or may yet, for
+ * the check that rests on that answer. A hold the case controls (an answer kept until the case lets
+ * it go) is awaited between steps, outside their bounds: the case bounds its own release.
+ * @param {import("@playwright/test").Route} route @param {string} what @param {() => boolean} [ended]
+ * @param {() => Promise<unknown>} [late]
+ */
+const exchange = (route, what, ended = () => false, late = () => route.fallback()) => {
+  let fault = "";
+  /** Set once the request has been answered, aborted or let through: nothing else is sent for it. */
+  let sent = false;
+  /** @param {string} why */
+  const stop = async (why) => {
+    fault ||= `${what}: ${why}`;
+    if (sent) return;
+    sent = true;
+    await within(5000, "", route.abort()).catch(() => {});
+  };
+  /** Why a step named `step` with `ms` failed. @param {string} step @param {number} ms @param {unknown} error */
+  const reason = (step, ms, error) => {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    return message === `${step} did not settle within ${ms / 1000} s` ? message : `${step} failed: ${message}`;
+  };
+  return {
+    get fault() {
+      return fault;
+    },
+    /**
+     * `work()`, the exchange's step named `step`, within `ms`; one that fails or runs out stops the
+     * exchange (`stop`) and rejects, as does one started once it has stopped.
+     * @template T @param {number} ms @param {string} step @param {() => Promise<T>} work @returns {Promise<T>}
+     */
+    async step(ms, step, work) {
+      if (fault) throw new Error(fault);
+      try {
+        return await within(ms, `${step} did not settle within ${ms / 1000} s`, Promise.resolve().then(work));
+      } catch (error) {
+        await stop(reason(step, ms, error));
+        throw new Error(fault);
+      }
+    },
+    /**
+     * Sends the stand-in's answer, `answer()` (a fulfill, or the abort or fallback the stand-in means
+     * as its answer), within `ms`, unless the exchange has stopped, which rejects, or its case has
+     * ended, when the request is given `late()` instead, the exchange's `fault` says so and this
+     * rejects: it resolves only once the answer was sent and confirmed. An answer sent and not
+     * confirmed within `ms` cannot be taken back: the exchange's `fault` says it is unconfirmed, and
+     * this rejects.
+     * @param {number} ms @param {string} step @param {() => Promise<unknown>} answer
+     */
+    async send(ms, step, answer) {
+      if (fault) throw new Error(fault);
+      if (sent) throw new Error(`${what}: ${step}: the request was already answered`);
+      sent = true;
+      if (ended()) {
+        fault = `${what}: its case ended before ${step} was sent, so it was not sent`;
+        await within(ms, "", Promise.resolve().then(late)).catch(() => {});
+        throw new Error(fault);
+      }
+      try {
+        await within(ms, `${step} did not settle within ${ms / 1000} s`, Promise.resolve().then(answer));
+      } catch (error) {
+        fault ||= `${what}: ${reason(step, ms, error)}${/did not settle/.test(String(error)) ? ", so whether it answered the request is unconfirmed" : ""}`;
+        throw new Error(fault);
+      }
+    },
+  };
+};
+
+/**
  * `opening` (a context or page being made), within `ms` (by default 30 s, Playwright's own timeout
  * for an action: a loaded browser can take seconds to start a process for one). One made only after
  * them (by the monotonic clock, as `within` counts, though before its timer ran) is closed as it
@@ -450,4 +529,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, exchange, opened, closeContext };

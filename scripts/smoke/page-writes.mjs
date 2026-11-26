@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, pause, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, pause, exchange, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -74,6 +74,14 @@ export async function pageWrites(page, browser) {
    * from that time, not from when a check saw the outcome.
    * `delivered` holds, by its place in `asked`, the same for each read a case held (`holdRead`), the
    * moment the stand-in hands the page its answer once the hold is let go.
+   * Each answer's steps (its fetch, its body and its fulfill) have 5 s each (`exchange`), a hold the
+   * case controls aside, and none is sent once the case sets `over` (each case does as it ends, before
+   * it lets go of what it holds): the request is aborted instead, its context closing. Why an answer
+   * was not given as meant is in `faults`, and `answers` counts only the writes whose fulfill was
+   * confirmed. Each write's answer carries a mark of its own (its `smoke-write` header, unique to the
+   * page and the write's number), and `finished` holds, by the write's number, the length of `asked`
+   * and the time the check heard the browser finish loading that write with that answer (its
+   * `requestfinished`): a fulfill that resolves need not have answered the write.
    * Making the context and the page is bounded to 30 s, Playwright's own timeout, as their closing
    * is (`opened`, `closeContext`); setting its route and marking it are each bounded to 5 s (its
    * load has Playwright's own 30 s), and the page is closed (`closeContext`) if one of them fails.
@@ -82,7 +90,15 @@ export async function pageWrites(page, browser) {
    */
   const writtenPage = async (edit, before = (body) => body, path = "/smoke/written") => {
     const context = await opened("the write case's context", browser.newContext());
+    /** The mark of this page's write answers (`smoke-write`), with each write's number after it. */
+    const mark = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const seen = {
+      /** Set as the case ends: no answer under way is sent (`exchange`). */
+      over: false,
+      /** Why an answer was not given as meant (`exchange`), in the order they came. @type {string[]} */
+      faults: [],
+      /** By write number, the length of `asked` and the time the browser finished that write with its marked answer. @type {Record<number, Since>} */
+      finished: {},
       written: false,
       fail: false,
       draws: true,
@@ -119,7 +135,7 @@ export async function pageWrites(page, browser) {
             const req = route.request();
             const mode = req.headers().corten;
             const write = req.method() === "POST" && ["/smoke/written", "/smoke/written/again"].includes(new URL(req.url()).pathname);
-            if (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav")) return route.fallback();
+            if (seen.over || (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav"))) return route.fallback();
             const at = seen.asked.length;
             seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
             seen.askedAt.push(Date.now());
@@ -132,30 +148,56 @@ export async function pageWrites(page, browser) {
             // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
             const sent = { ...req.headers(), "accept-encoding": "identity" };
             if (write && !seen.draws) delete sent.prefer;
-            const res = await route.fetch({ headers: sent });
-            const headers = res.headers();
-            if (write) seen.answered = { ...headers };
-            delete headers["content-encoding"];
-            delete headers["content-length"];
-            const text = await res.text();
-            // A navigation's <main> has no layout to change: only `seen.nav` changes it.
-            const body = mode === "nav" ? seen.nav(text, at) : write || seen.written ? edit(text, writes, write ? headers : undefined, at) : before(text);
-            seen.written ||= write;
-            if (write && seen.fail) {
-              seen.settled[writes] = sinceNow(seen);
-              return route.abort("failed");
+            // Each step within 5 s, and nothing sent once the case is over, when the request is aborted
+            // (`exchange`); the holds are the case's, outside those bounds.
+            const ex = exchange(route, `the write case's answer to ${write ? `write ${writes}` : seen.asked[at]}`, () => seen.over, () => route.abort());
+            try {
+              const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: sent }));
+              const headers = res.headers();
+              if (write) seen.answered = { ...headers };
+              delete headers["content-encoding"];
+              delete headers["content-length"];
+              const text = await ex.step(5000, "reading its answer", () => res.text());
+              // A navigation's <main> has no layout to change: only `seen.nav` changes it.
+              const body = mode === "nav" ? seen.nav(text, at) : write || seen.written ? edit(text, writes, write ? headers : undefined, at) : before(text);
+              seen.written ||= write;
+              if (write && seen.fail) {
+                seen.settled[writes] = sinceNow(seen);
+                await ex.send(5000, "its abort", () => route.abort("failed"));
+                return;
+              }
+              if (write) await seen.hold(writes);
+              else if (holding) {
+                await holding;
+                seen.delivered[at] = sinceNow(seen);
+              }
+              if (write) {
+                seen.settled[writes] = sinceNow(seen);
+                headers["smoke-write"] = `${mark}:${writes}`;
+              }
+              await ex.send(5000, "its fulfill", () => route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }));
+              if (write) seen.answers += 1;
+            } catch {
+              // Its fault is the exchange's, recorded below.
+            } finally {
+              if (ex.fault) seen.faults.push(ex.fault);
             }
-            if (write) await seen.hold(writes);
-            else if (holding) {
-              await holding;
-              seen.delivered[at] = sinceNow(seen);
-            }
-            if (write) seen.settled[writes] = sinceNow(seen);
-            await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
-            if (write) seen.answers += 1;
           },
         ),
       );
+      // The browser's end of each write with its marked answer (`finished`): the response's mark is
+      // heard before the request's end, and only a write with this page's mark for its own number counts.
+      /** @type {WeakMap<import("@playwright/test").Request, string>} */
+      const marks = new WeakMap();
+      own.on("response", (res) => {
+        const written = res.headers()["smoke-write"];
+        if (written !== undefined) marks.set(res.request(), written);
+      });
+      own.on("requestfinished", (r) => {
+        const written = marks.get(r);
+        const writes = written?.startsWith(`${mark}:`) ? Number(written.slice(mark.length + 1)) : NaN;
+        if (r.method() === "POST" && Number.isInteger(writes) && writes > 0) seen.finished[writes] ??= sinceNow(seen);
+      });
       await actWithin("the write case's page load", own.goto(`${base}${path}`));
       await within(
         5000,
@@ -164,6 +206,7 @@ export async function pageWrites(page, browser) {
       );
       return { own, seen };
     } catch (error) {
+      seen.over = true;
       await closeContext(context, "the write case's context").catch(() => {});
       throw error;
     }
@@ -426,6 +469,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ first: first.brand, drawn, asked: seen.asked, page: seen.answered["corten-page"] ?? null, shown }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the whole write case's context");
     }
   }
@@ -451,7 +495,8 @@ export async function pageWrites(page, browser) {
         own.route("**/scripts/quoted.js", async (route) => {
           asked();
           await held;
-          await route.fallback().catch(() => {});
+          // Let through once let go, bounded, or aborted once the case is over.
+          await within(5000, "", seen.over ? route.abort() : route.fallback()).catch(() => {});
         }),
       );
       await actWithin("the press of the form's button", own.click("main form button"));
@@ -471,6 +516,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ stalled, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       release();
       await closeContext(own.context(), "the left write case's context");
     }
@@ -507,7 +553,8 @@ export async function pageWrites(page, browser) {
         own.route("**/scripts/quoted.js", async (route) => {
           asked();
           await held;
-          await route.fallback().catch(() => {});
+          // Let through once let go, bounded, or aborted once the case is over.
+          await within(5000, "", seen.over ? route.abort() : route.fallback()).catch(() => {});
         }),
       );
       await within(
@@ -541,6 +588,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ stalled, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       answerFirst();
       release();
       await closeContext(own.context(), "the two writes case's context");
@@ -593,6 +641,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ written, drewSecond, drewFirst, answers: seen.answers, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       answerFirst();
       await closeContext(own.context(), "the later write case's context");
     }
@@ -631,6 +680,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ written, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       release();
       await closeContext(own.context(), "the cut-off write case's context");
     }
@@ -735,6 +785,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ sent, failed, legacySent, legacyDrew, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the failed write case's context");
     }
   }
@@ -789,6 +840,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ patched, drewOver, answers: seen.answers, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       answerFirst();
       await closeContext(own.context(), "the patch order case's context");
     }
@@ -821,6 +873,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ drewFirst, patched, answers: seen.answers, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       answerSecond();
       await closeContext(own.context(), "the patch order case's context");
     }
@@ -1088,6 +1141,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ sent, sentSecond, bodyAsked, drewOver, released, failed, outcome, afterHeaders, errors, answers: seen.answers, again, drawn, drewAgain, kept, keptAs, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the cut body case's context");
     }
   }
@@ -1211,6 +1265,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ sentFirst, drew, wholeBefore, wholeDrawn, held, heldRead: heldAt === null ? null : seen.asked[heldAt], sentSecondAs, failed, again, drawn, drewAgain, kept, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       releaseHeld();
       await closeContext(own.context(), "the read-again failure case's context");
     }
@@ -1242,6 +1297,8 @@ export async function pageWrites(page, browser) {
       drawnNext: /** @type {{ time: number, failed: string | null } | null} */ (null),
       drewNext: false,
       kept: false,
+      /** Whether the held stylesheet's answer was sent and confirmed (`exchange`), or why not. */
+      styled: /** @type {true | string} */ ("not sent"),
     };
     try {
       await within(
@@ -1249,7 +1306,10 @@ export async function pageWrites(page, browser) {
         "the held stylesheet's route was not set within 5 s",
         own.route("**/assets/smoke-held-poll.css", async (route) => {
           await held;
-          await route.fulfill({ contentType: "text/css", body: "" }).catch(() => {});
+          // Sent within 5 s once let go, and not once the case is over (`exchange`).
+          const ex = exchange(route, "the held stylesheet's answer", () => seen.over, () => route.abort());
+          await ex.send(5000, "its fulfill", () => route.fulfill({ contentType: "text/css", body: "" })).catch(() => {});
+          got.styled = ex.fault || true;
         }),
       );
       await within(
@@ -1287,6 +1347,7 @@ export async function pageWrites(page, browser) {
         );
       }
     } finally {
+      seen.over = true;
       release();
       await cleanUp(
         () => within(5000, "the stylesheet case's routes were not removed within 5 s", own.unrouteAll({ behavior: "ignoreErrors" })),
@@ -1295,7 +1356,7 @@ export async function pageWrites(page, browser) {
     }
     check(
       waitingPollName,
-      !!got.sent?.ok && got.drew && got.waiting && !!got.sentFailing?.ok && got.failed && got.retry === "nav" && got.drewNext && got.kept,
+      !!got.sent?.ok && got.drew && got.waiting && !!got.sentFailing?.ok && got.failed && got.retry === "nav" && got.drewNext && got.kept && got.styled === true,
       JSON.stringify({ ...got, asked: seen.asked }),
     );
   }
@@ -1340,6 +1401,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ drawn, shown, entries, state }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the refused write case's context");
     }
   }
@@ -1356,7 +1418,7 @@ export async function pageWrites(page, browser) {
           ? `<form><input name="closest" type="hidden"><nav${attrs}>${content}</nav></form>`
           : `<form${attrs}><input name="parentElement" type="hidden">${content}</form>`;
       });
-    const { own } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
+    const { own, seen } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
     try {
       const first = await shownOf(own);
       await actWithin("the press of the form's button", own.click("main form button"));
@@ -1368,6 +1430,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ first: first.section, drawn, shown }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the other frame case's context");
     }
   }
@@ -1409,6 +1472,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ drawn, page: seen.answered["corten-page"] ?? null, between: between.brand, failed, arrived, asked: seen.asked, shown }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the old write case's context");
     }
   }
@@ -1435,6 +1499,7 @@ export async function pageWrites(page, browser) {
         JSON.stringify({ loaded, shown, writes: seen.writes, asked: seen.asked, refused }),
       );
     } finally {
+      seen.over = true;
       await closeContext(own.context(), "the shell key case's context");
     }
   }
@@ -1530,7 +1595,8 @@ export async function pageWrites(page, browser) {
         own.route("**/scripts/quoted.js", async (route) => {
           asked();
           await held;
-          await route.fallback().catch(() => {});
+          // Let through once let go, bounded, or aborted once the case is over.
+          await within(5000, "", seen.over ? route.abort() : route.fallback()).catch(() => {});
         }),
       );
       await watchPatch();
@@ -1547,12 +1613,16 @@ export async function pageWrites(page, browser) {
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       const section = await sectionOf();
       const patch = await patchDrawn();
+      // The write's answer counts only once the browser finished loading that exact write with it
+      // (its `smoke-write` mark), heard within 5 s: a fulfill that resolves need not have answered it.
+      const finished = (await pollFor(5000, async () => seen.finished[1] ?? false)) || null;
       // The link's page read whole draws what the write changed: its brand, and the section the
       // write patched, drawn by that page (its own element), not by the patch left behind, which
       // never entered the page, not even for a moment before that page drew over it.
       const leftWhole =
         stalled &&
         seen.answers === 1 &&
+        !!finished &&
         arrived &&
         shown.brand === "Watchlist, written" &&
         section.text === patchedSection &&
@@ -1561,7 +1631,7 @@ export async function pageWrites(page, browser) {
         patch.drawn === false &&
         shown.same &&
         seen.asked.includes("GET /smoke/quoted page");
-      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown, section, patch }));
+      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, finished, faults: seen.faults, arrived, asked: seen.asked, shown, section, patch }));
       // The patch was answered before that page was asked for, so the page's layout drew it: the
       // navigation after reads <main> alone, not the whole page again. Only its reads of
       // /smoke/written count: the pointer left on the link clicked above can make the page that comes
@@ -1573,7 +1643,7 @@ export async function pageWrites(page, browser) {
       // drawn, the patch's element still never in the page.
       const returnName = "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone";
       if (!leftWhole) {
-        check(returnName, false, `no write's patch held, left by a whole navigation and drawn by its page before the return: ${JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown, section, patch })}`);
+        check(returnName, false, `no write's patch held, left by a whole navigation and drawn by its page before the return: ${JSON.stringify({ stalled, answers: seen.answers, finished, faults: seen.faults, arrived, asked: seen.asked, shown, section, patch })}`);
       } else {
         const sinceReturn = seen.asked.length;
         await within(
@@ -1597,6 +1667,7 @@ export async function pageWrites(page, browser) {
         );
       }
     } finally {
+      seen.over = true;
       release();
       await cleanUp(
         () => within(5000, "the patch case's routes were not removed within 5 s", own.unrouteAll({ behavior: "ignoreErrors" })),

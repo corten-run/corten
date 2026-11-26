@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, exchange } from "./helpers.mjs";
 
 /**
  * The seconds the watchlist's alerts part waits before it reads itself again while a write lands
@@ -419,7 +419,29 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     };
     /** @type {string[]} */
     const reads = [];
-    const onSaved = (/** @type {import("@playwright/test").Request} */ r) => r.url().includes("/alerts") && reads.push(r.url());
+    /**
+     * Every request the page sends while the whole-read cases below listen, in the order the check
+     * heard them: a check that requires no read of the alerts page from some request on counts the
+     * ones after that request's own place here (`readsAfter`), not from when it looked.
+     * @type {import("@playwright/test").Request[]}
+     */
+    const pageLog = [];
+    const onSaved = (/** @type {import("@playwright/test").Request} */ r) => {
+      pageLog.push(r);
+      if (r.url().includes("/alerts")) reads.push(r.url());
+    };
+    /**
+     * The reads of the alerts page (a GET of `/alerts`, whatever its query or kind) logged after
+     * `request` in `pageLog`, each named, the hover prefetches apart (named, not counted); null when
+     * `request` is not in the log. @param {import("@playwright/test").Request | undefined} request
+     */
+    const readsAfter = (request) => {
+      const at = request === undefined ? -1 : pageLog.indexOf(request);
+      if (at < 0) return null;
+      const after = pageLog.slice(at + 1).filter((r) => r.method() === "GET" && new URL(r.url()).pathname === "/alerts");
+      const name = (/** @type {import("@playwright/test").Request} */ r) => `${r.isNavigationRequest() ? "load" : `corten: ${r.headers()["corten"] ?? "-"}`} ${new URL(r.url()).pathname}${new URL(r.url()).search}`;
+      return { reads: after.filter((r) => !isPrefetch(r)).map(name), prefetches: after.filter(isPrefetch).map(name) };
+    };
 
     // The alerts page asks for its status line and list to be read again (ReadAgain::from in the
     // page): with JavaScript only they are read, from their route as a patch, however the page was
@@ -495,21 +517,32 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** Whether the case has its baseline, and has let the first part read go. */
       let baselined = false;
       let documentStandIn = false;
+      /**
+       * Why an exchange of the route below did not answer its request as the stand-in meant (its
+       * fetch, its answer's body or its fulfill failing or not settling within 5 s each, or the case
+       * ending first, `exchange`): each fails the checks that rest on the stand-in's answers.
+       * @type {string[]}
+       */
+      const partFaults = [];
       const pendingDocument = async (/** @type {import("@playwright/test").Route} */ route) => {
         documentAnswered = true;
-        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
-        const headers = res.headers();
-        delete headers["content-encoding"];
-        delete headers["content-length"];
-        const body = await res.text();
-        documentStandIn = res.ok() && body.includes(savedLine) && !body.includes("data-corten-read-again");
-        const answer = documentStandIn
-          ? body
-              .replace(savedLine, savingLine)
-              .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>')
-              .replace("</main>", `<template data-corten-read-again="1" data-from="${from}"></template></main>`)
-          : body;
-        await route.fulfill({ status: res.status(), headers, body: answer });
+        const ex = exchange(route, "the stand-in's answer to the case's document", () => over);
+        try {
+          const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } }));
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const body = await ex.step(5000, "reading its answer", () => res.text());
+          documentStandIn = res.ok() && body.includes(savedLine) && !body.includes("data-corten-read-again");
+          const answer = documentStandIn
+            ? body
+                .replace(savedLine, savingLine)
+                .replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>')
+                .replace("</main>", `<template data-corten-read-again="1" data-from="${from}"></template></main>`)
+            : body;
+          await ex.send(5000, "its fulfill", () => route.fulfill({ status: res.status(), headers, body: answer }));
+        } catch {}
+        if (ex.fault) partFaults.push(ex.fault);
       };
       const partRead = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
@@ -525,18 +558,24 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           await firstHeld;
           if (over) return route.fallback();
         }
-        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-        const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
-        const headers = res.headers();
-        delete headers["content-encoding"];
-        delete headers["content-length"];
-        const body = await res.text();
-        const saving = body.replace('<p id="alert-status" role="status">Saved.</p>', '<p id="alert-status" role="status">Saving...</p>');
-        const standIn = at === 0 && res.ok() && saving !== body && !body.includes("data-corten-read-again");
-        const answer = standIn ? `${saving}<template data-corten-read-again="1" data-from="${from}"></template>` : body;
-        const marked = answer.replace('<p id="alert-status"', `<p data-smoke-read="${at}" id="alert-status"`);
-        answers[at] = { url: address, asks: answer.includes("data-corten-read-again"), standIn };
-        await route.fulfill({ status: res.status(), headers, body: marked });
+        // Each step of the answer within 5 s, counted once the hold above is let go, and none sent
+        // once the case is over (`exchange`).
+        const ex = exchange(route, `the stand-in's answer to part read ${at + 1}`, () => over);
+        try {
+          // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+          const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } }));
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const body = await ex.step(5000, "reading its answer", () => res.text());
+          const saving = body.replace('<p id="alert-status" role="status">Saved.</p>', '<p id="alert-status" role="status">Saving...</p>');
+          const standIn = at === 0 && res.ok() && saving !== body && !body.includes("data-corten-read-again");
+          const answer = standIn ? `${saving}<template data-corten-read-again="1" data-from="${from}"></template>` : body;
+          const marked = answer.replace('<p id="alert-status"', `<p data-smoke-read="${at}" id="alert-status"`);
+          answers[at] = { url: address, asks: answer.includes("data-corten-read-again"), standIn };
+          await ex.send(5000, "its fulfill", () => route.fulfill({ status: res.status(), headers, body: marked }));
+        } catch {}
+        if (ex.fault) partFaults.push(ex.fault);
       };
       // The runtime's navigations below reach a page still saving (#2035). The write lands 1.5 s
       // after it is sent, and a loaded browser's navigation can reach the server after that, when
@@ -561,6 +600,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** Why a navigation's answer failed its case, by address: the server's `Saving...` whose read-again tags are missing or wait other than `AGAIN_SECONDS`. @type {Map<string, string>} */
       const seedFaults = new Map();
       const seedReads = (/** @type {URL} */ u) => seeds.has(u.pathname + u.search);
+      /** Set as the cases below end: the route lets each request through, and an answer under way is not sent. */
+      let seedOver = false;
       const seedNavigation = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
         const asked = new URL(request.url());
@@ -569,48 +610,53 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const mode = request.headers()["corten"];
         // The runtime's navigation alone (`corten: nav`, or `page` for a whole read; a prefetch
         // aside), once a page: the first such request takes the seed and the navigation's token.
-        if (seconds === undefined || seeded.has(address) || request.method() !== "GET" || (mode !== "nav" && mode !== "page") || isPrefetch(request)) return route.fallback();
+        if (seedOver || seconds === undefined || seeded.has(address) || request.method() !== "GET" || (mode !== "nav" && mode !== "page") || isPrefetch(request)) return route.fallback();
         seeded.set(address, "its fetch did not settle");
         const token = claimNav(address);
+        // Each step within 5 s (`exchange`), and no answer sent once the cases are over: one that
+        // fails or runs out aborts the navigation's fetch and fails its case (`seedFaults`).
+        const ex = exchange(route, `the stand-in's answer to the navigation's fetch of ${address}`, () => seedOver);
+        /** Sends `body` as the answer, within 5 s. @param {number} status @param {Record<string, string>} headers @param {string} body */
+        const answer = (status, headers, body) => ex.send(5000, "its fulfill", () => route.fulfill({ status, headers, body }));
         try {
           // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-          const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+          const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } }));
           const headers = res.headers();
           delete headers["content-encoding"];
           delete headers["content-length"];
-          const body = await res.text();
+          const body = await ex.step(5000, "reading its answer", () => res.text());
           const shows = body.includes(savedLine) ? "Saved." : body.includes(savingLine) ? "Saving..." : null;
           if (!res.ok() || shows === null) {
             seeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
-            await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
+            await answer(res.status(), headers, markNav(token, body));
             return;
           }
           if (shows === "Saving...") {
-            const wrong = await tagFaults(body, address, mode === "page");
+            const wrong = await ex.step(5000, "reading its read-again tags", () => tagFaults(body, address, mode === "page"));
             if (wrong !== null) {
               const fault = `the server's own answer saying Saving... ${wrong}, passed on as the server wrote it`;
               seeded.set(address, fault);
               seedFaults.set(address, fault);
-              await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
+              await answer(res.status(), headers, markNav(token, body));
               return;
             }
             if (seconds === AGAIN_SECONDS) {
               seeded.set(address, "the server's own answer saying Saving..., with its read-again tags as the server wrote them");
-              await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
+              await answer(res.status(), headers, markNav(token, body));
               return;
             }
             // The leave-before-read case's longer wait, set only where `tagFaults` found it: the
             // head's tag, its refresh's content and the part's tag, each waiting `AGAIN_SECONDS`.
-            const set = await setWaits(body, address, seconds, mode === "page");
+            const set = await ex.step(10_000, "setting its waits", () => setWaits(body, address, seconds, mode === "page"));
             if ("refused" in set) {
               const fault = `the server's own answer saying Saving..., with its read-again tags waiting ${AGAIN_SECONDS} s that could not be set to ${seconds} s (${set.refused}), passed on as the server wrote it`;
               seeded.set(address, fault);
               seedFaults.set(address, fault);
-              await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
+              await answer(res.status(), headers, markNav(token, body));
               return;
             }
             seeded.set(address, `the server's own answer saying Saving..., with its read-again tags waiting ${AGAIN_SECONDS} s, set to ${seconds} s`);
-            await route.fulfill({ status: res.status(), headers, body: markNav(token, set.answer) });
+            await answer(res.status(), headers, markNav(token, set.answer));
             return;
           }
           // The write has landed: the stand-in answers as the server does while it lands.
@@ -619,12 +665,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const tag = `<template data-corten-read-again="${seconds}" data-from="${address}"></template>`;
           const bare = body.replace(tags, "").replace(savedLine, savingLine);
           const headed = bare.includes("</title>") ? bare.replace("</title>", `</title>${head}`) : `${head}${bare}`;
-          const answer = headed.includes("</main>") ? headed.replace("</main>", `${tag}</main>`) : `${headed}${tag}`;
+          const standIn = headed.includes("</main>") ? headed.replace("</main>", `${tag}</main>`) : `${headed}${tag}`;
           seeded.set(address, "the stand-in, the server's saying Saved.");
-          await route.fulfill({ status: res.status(), headers, body: markNav(token, answer) });
-        } catch (error) {
-          seeded.set(address, `failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`);
-          await route.abort().catch(() => {});
+          await answer(res.status(), headers, markNav(token, standIn));
+        } catch {}
+        if (ex.fault) {
+          seeded.set(address, `failed: ${ex.fault}`);
+          seedFaults.set(address, ex.fault);
         }
       };
       /** The init script below being added, removed with the route and listener. @type {Promise<import("@playwright/test").Disposable> | undefined} */
@@ -709,8 +756,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const status = await readWithin("the status line after the wait for Saved.", saved());
           check(
             "a page's part waiting for a write is read again after a full load, not the page",
-            waiting === "Saving..." && came && status === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url,
-            `${waiting} -> ${status}${came ? "" : " (Saved. not seen within 6 s)"} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}${documentStandIn ? " (the document found the write landed, and was answered as while it lands)" : ""}${firstWasHeld ? " (its first part read held until the baseline was read)" : ""}`,
+            waiting === "Saving..." && came && status === "Saved." && initial !== null && parts().length > 0 && whole().length === 0 && page.url() === url && partFaults.length === 0,
+            `${partFaults.length ? `${partFaults.join("; ")}; ` : ""}${waiting} -> ${status}${came ? "" : " (Saved. not seen within 6 s)"} after ${parts().length} part and ${whole().length} page reads${whole().length ? ` (${whole().map((e) => address(e)).join(", ")})` : ""}${prefetches().length ? `, and ${prefetches().length} prefetches not counted (${prefetches().map((e) => address(e)).join(", ")})` : ""}${initial ? "" : " (the document loaded not seen)"}${documentStandIn ? " (the document found the write landed, and was answered as while it lands)" : ""}${firstWasHeld ? " (its first part read held until the baseline was read)" : ""}`,
           );
           const kept = await readWithin(
             "what the page kept",
@@ -747,8 +794,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const lastPart = parts().at(-1)?.request.url();
           check(
             "a page part's answer that asks again takes the place of the tag that asked",
-            answers.some((a) => a.asks) && tags.length === 1 && tags[0] === lastPart && tagged.pageTag && tagged.pageTagGone && movedRead === movedFrom,
-            `${JSON.stringify({ ...tagged, movedRead, movedFrom, answers })} after ${lastPart}`,
+            answers.some((a) => a.asks) && tags.length === 1 && tags[0] === lastPart && tagged.pageTag && tagged.pageTagGone && movedRead === movedFrom && partFaults.length === 0,
+            `${JSON.stringify({ ...tagged, movedRead, movedFrom, answers, partFaults })} after ${lastPart}`,
           );
           // Quiet only once an answer that does not ask again has drawn `Saved.`, within 5 s from
           // before the wait for it above, by the time the page recorded as it drew it: reads that
@@ -777,12 +824,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const prefetched = afterTerminal.filter((e) => e.kind === "prefetch").map((e) => named(e, /** @type {{ time: number }} */ (drawn).time));
           check(
             "a page's part stops once its patch no longer asks",
-            quiet && terminal >= 0 && later.length === 0,
-            quiet
+            quiet && terminal >= 0 && later.length === 0 && partFaults.length === 0,
+            (partFaults.length ? `${partFaults.join("; ")}; ` : "") +
+              (quiet
               ? terminal < 0
                 ? `the read whose answer first drew Saved. (${drawn?.read}) is not in the page's reads`
                 : `${later.length} reads after the read whose answer first drew Saved. (${drawn?.read}), by the check's look at least 2.2 s after that draw: ${later.join(", ") || "none"}${prefetched.length ? `; prefetches not counted: ${prefetched.join(", ")}` : ""}`
-              : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ first, answers })})`,
+              : `no answer that does not ask again was the first to draw Saved., within 5 s (${JSON.stringify({ first, answers })})`),
           );
         } finally {
           over = true;
@@ -820,6 +868,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const reachedAt = new URL(reachedUrl).pathname + new URL(reachedUrl).search;
           /** Whether each part read of the reached page drew `Saved.`, by the order it came. @type {boolean[]} */
           const reachAnswers = [];
+          /** Why an answer of the route below was not given as meant (`exchange`). @type {string[]} */
+          const reachFaults = [];
           /** Set once the check is over: the route lets each read through, whether or not its removal is confirmed. */
           let reachOver = false;
           const reachReads = (/** @type {URL} */ u) => u.pathname + u.search === reachedAt;
@@ -828,18 +878,22 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             if (reachOver || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
             const at = reachAnswers.length;
             reachAnswers.push(false);
+            // Each step within 5 s, and no answer sent once the check is over (`exchange`): one that
+            // fails or runs out aborts the read and fails the check (`reachFaults`).
+            const ex = exchange(route, `the reached page's part route's answer to its read ${at + 1}`, () => reachOver);
             try {
               // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
-              const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+              const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } }));
               const headers = res.headers();
               delete headers["content-encoding"];
               delete headers["content-length"];
-              const body = await res.text();
+              const body = await ex.step(5000, "reading its answer", () => res.text());
               reachAnswers[at] = res.ok() && body.includes(savedLine);
-              await route.fulfill({ status: res.status(), headers, body: body.replace('<p id="alert-status"', `<p data-smoke-reach="${at}" id="alert-status"`) });
-            } catch {
+              await ex.send(5000, "its fulfill", () => route.fulfill({ status: res.status(), headers, body: body.replace('<p id="alert-status"', `<p data-smoke-reach="${at}" id="alert-status"`) }));
+            } catch {}
+            if (ex.fault) {
               reachAnswers[at] = false;
-              await route.abort().catch(() => {});
+              reachFaults.push(ex.fault);
             }
           };
           try {
@@ -878,8 +932,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             const drewOwn = inTime && reached.text === "Saved." && reached.read !== null && reachAnswers[Number(reached.read)] === true;
             check(
               "a page's part reached by the runtime's navigation is read again, not the page",
-              nav.saving && nav.sameDocument && kept && drewOwn && own.length > 0 && whole().length - wholeFrom === 1,
-              `${wentTo(nav)}, then ${reached.text}${reached.read === null ? " (not drawn by an answer to the reached page's own part read within 6 s)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
+              nav.saving && nav.sameDocument && kept && drewOwn && own.length > 0 && whole().length - wholeFrom === 1 && reachFaults.length === 0,
+              `${reachFaults.length ? `${reachFaults.join("; ")}; ` : ""}${wentTo(nav)}, then ${reached.text}${reached.read === null ? " (not drawn by an answer to the reached page's own part read within 6 s)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
             );
           } finally {
             reachOver = true;
@@ -1214,6 +1268,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         let removed = false;
         await cleanUp(
           () => page.off("request", onPart),
+          () => (seedOver = true),
           () => within(5000, "the navigations' stand-in route was not removed within 5 s", page.unroute(seedReads, seedNavigation)),
           () =>
             within(
@@ -1286,6 +1341,26 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /** Why a navigation's answer here failed its check, by address: the server's `Saving...` whose head's read-again tag is missing or waits other than `AGAIN_SECONDS`. @type {Map<string, string>} */
     const wholeFaults = new Map();
     /**
+     * Why an answer of the whole-read route was not given as meant (its fetch, its body, a read of
+     * its tags or its fulfill failing or not settling in time, or the cases ending first,
+     * `exchange`), in the order they came: each check here fails on one that came since it began.
+     * @type {string[]}
+     */
+    const wholeAnswerFaults = [];
+    /** Set as the cases below end: an answer of the whole-read route under way is not sent. */
+    let wholeOver = false;
+    /** The whole-read route's faults since `from` (a length of `wholeAnswerFaults`), for a check's detail. @param {number} from */
+    const faultsSince = (from) => (wholeAnswerFaults.length > from ? `${wholeAnswerFaults.slice(from).join("; ")}; ` : "");
+    /**
+     * The full-load case's receipt, while it runs, and each load or read of it the whole-read route
+     * answers, in the order they reached it: each answer's status line is marked with its place
+     * (`data-smoke-full`), so the case can tell which answer the page first drew `Saved.` from.
+     * @type {string | null}
+     */
+    let fullTarget = null;
+    /** @type {import("@playwright/test").Request[]} */
+    const fullReads = [];
+    /**
      * `body`, a whole page's answer, as the server writes it while its write lands: its status line
      * saying `Saving...` and its head asking to be read again after `AGAIN_SECONDS` (the alerts
      * page's own wait), for an answer the server gave once the write had landed. @param {string} body
@@ -1310,11 +1385,33 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const navigation = token !== undefined;
       const at = wholeReads.length;
       if (read) wholeReads.push({ address, navigation, load: placeLoad > 0, saved: null });
-      const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+      // Each step within 5 s, and no answer sent once the cases are over (`exchange`): one that fails
+      // or runs out aborts the request and fails the check it belongs to (`wholeAnswerFaults`).
+      const ex = exchange(route, `the whole-read route's answer to ${request.method()} ${address}${mode ? ` (corten: ${mode})` : ""}`, () => wholeOver);
+      // A load or read of the full-load case's receipt: its place among them (`fullReads`), marked on
+      // its answer's status line (`data-smoke-full`), else -1.
+      const full = fullTarget !== null && address === fullTarget ? fullReads.push(request) - 1 : -1;
+      /** Sends `body` as the answer, within 5 s. @param {number} status @param {Record<string, string>} headers @param {string} body */
+      const answer = (status, headers, body) =>
+        ex.send(5000, "its fulfill", () => route.fulfill({ status, headers, body: full < 0 ? body : body.replace('id="alert-status"', `data-smoke-full="${full}" id="alert-status"`) }));
+      try {
+        await answerWhole(route, ex, answer, { mode, address, placeLoad, read, token, navigation, at });
+      } catch {}
+      if (ex.fault) wholeAnswerFaults.push(ex.fault);
+    };
+    /**
+     * `wholeOnly`'s answer to `route`'s request, each step in `ex` and the answer sent by `answer`.
+     * @param {import("@playwright/test").Route} route @param {ReturnType<typeof exchange>} ex
+     * @param {(status: number, headers: Record<string, string>, body: string) => Promise<void>} answer
+     * @param {{ mode: string | undefined, address: string, placeLoad: number, read: boolean, token: string | undefined, navigation: boolean, at: number }} seen
+     */
+    const answerWhole = async (route, ex, answer, { mode, address, placeLoad, read, token, navigation, at }) => {
+      const request = route.request();
+      const res = await ex.step(5000, "its fetch", () => route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } }));
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
-      const whole = asWhole(await res.text());
+      const whole = asWhole(await ex.step(5000, "reading its answer", () => res.text()));
       if (read) wholeReads[at].saved = res.ok() && whole.includes(savedLine);
       // The fragment case's first load of its receipt: answered still saving, as `stillSaving` writes
       // the server's `Saved.` (one saying `Saving...` is passed on as written), so that case does not
@@ -1327,11 +1424,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             : loadShows === "Saving..."
               ? { saving: true, what: "the server's own answer saying Saving..." }
               : { saving: false, what: `the server's own answer (status ${res.status()}, no status line)` };
-        return route.fulfill({ status: res.status(), headers, body: loadShows === "Saved." ? stillSaving(whole) : whole });
+        return answer(res.status(), headers, loadShows === "Saved." ? stillSaving(whole) : whole);
       }
       if (!navigation) {
         const followed = read && address === pollTarget;
-        return route.fulfill({ status: res.status(), headers, body: followed ? whole.replace('<p id="alert-status"', `<p data-smoke-poll="${at}" id="alert-status"`) : whole });
+        return answer(res.status(), headers, followed ? whole.replace('<p id="alert-status"', `<p data-smoke-poll="${at}" id="alert-status"`) : whole);
       }
       // The write lands 1.5 s after it is sent, and a loaded browser's navigation can reach the
       // server after that, when the right answer is `Saved.` with nothing to read again, so the
@@ -1344,18 +1441,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const shows = whole.includes(savedLine) ? "Saved." : whole.includes(savingLine) ? "Saving..." : null;
       if (!res.ok() || shows === null) {
         wholeSeeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
-        return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
+        return answer(res.status(), headers, markNav(token, whole));
       }
       if (shows === "Saving...") {
-        const wrong = await tagFaults(whole, undefined, mode === "page").catch(
-          (error) => `whose read-again tags were not read (${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]})`,
-        );
+        const wrong = await ex.step(5000, "reading its read-again tags", () => tagFaults(whole, undefined, mode === "page"));
         if (wrong !== null) wholeFaults.set(address, `the server's own answer saying Saving... ${wrong}`);
         wholeSeeded.set(address, wrong === null ? "the server's own answer saying Saving..., with its head's read-again tag as the server wrote it" : `the server's own answer saying Saving... ${wrong}, passed on as the server wrote it`);
-        return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
+        return answer(res.status(), headers, markNav(token, whole));
       }
       wholeSeeded.set(address, "the stand-in, the server's saying Saved.");
-      await route.fulfill({ status: res.status(), headers, body: markNav(token, stillSaving(whole)) });
+      await answer(res.status(), headers, markNav(token, stillSaving(whole)));
     };
     // The whole-read route and its listener are removed however the cases below end, each within
     // 5 s, so a hung browser fails the run with a reason rather than leaving them in place; the
@@ -1363,17 +1458,83 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     try {
       await within(5000, "the whole-read route was not set within 5 s", page.route("**/alerts?saved=*", wholeOnly));
       page.on("request", onSaved);
-      await actWithin("the pending write's page load", page.goto(await readWithin("the pending write's page", pending())));
-      const waiting = await readWithin("the status line once the page loaded", saved());
-      await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 5)));
-      const came = await savedSoon();
-      const read = await readWithin("the status line after the wait for Saved.", saved());
-      check("a page waiting for a write reads itself again after a full load", waiting === "Saving..." && came && read === "Saved.", `${waiting} -> ${read}${came ? "" : " (Saved. not seen within 6 s)"}`);
-      if (swaps) check("reading again keeps the document", await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 5)));
-      else skip("reading again keeps the document", noSwaps);
-      const settled = reads.length;
-      await pause(2200);
-      check("it stops once the page no longer asks", reads.length === settled, `${reads.length - settled} more reads`);
+      // After a full load: every load or read of the receipt is answered with its place in
+      // `fullReads` on its status line, and an init script, added before the load, notes in the
+      // page's session storage (which a full load keeps) the first of those answers the page draws
+      // `Saved.` from, the moment it is drawn, with the time it drew it. The check that it stops then
+      // requires that draw within the 6 s of the wait for `Saved.`, counted from before it, and no read
+      // of the alerts page after that answer's own request in the log, as the log stands once 2.2 s
+      // have passed since the draw by the time the page recorded: a read sent between the draw and the
+      // check seeing it counts against it, as the part case's check counts one (above).
+      {
+        const target = await readWithin("the pending write's page", pending());
+        const faultsFrom = wholeAnswerFaults.length;
+        const firstKey = `smoke-full-first-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        fullTarget = new URL(target).pathname + new URL(target).search;
+        fullReads.length = 0;
+        const noting = page.addInitScript((key) => {
+          if (window !== window.top) return;
+          /** Whether the first `Saved.` is noted, noting it if the page shows it now. */
+          const look = () => {
+            try {
+              if (sessionStorage.getItem(key) !== null) return true;
+              const status = document.getElementById("alert-status");
+              const read = status?.getAttribute("data-smoke-full");
+              if (!status || read == null || status.textContent !== "Saved.") return false;
+              sessionStorage.setItem(key, JSON.stringify({ read, time: Date.now() }));
+              return true;
+            } catch {
+              return true;
+            }
+          };
+          const observer = new MutationObserver(() => look() && observer.disconnect());
+          observer.observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-full"] });
+        }, firstKey);
+        noting.catch(() => {});
+        try {
+          await within(5000, "the full-load case's note of its first Saved. was not added within 5 s", noting);
+          await actWithin("the pending write's page load", page.goto(target));
+          const waiting = await readWithin("the status line once the page loaded", saved());
+          await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 5)));
+          const savedBy = Date.now() + 6000;
+          const came = await savedSoon();
+          const read = await readWithin("the status line after the wait for Saved.", saved());
+          check(
+            "a page waiting for a write reads itself again after a full load",
+            waiting === "Saving..." && came && read === "Saved." && wholeAnswerFaults.length === faultsFrom,
+            `${faultsSince(faultsFrom)}${waiting} -> ${read}${came ? "" : " (Saved. not seen within 6 s)"}`,
+          );
+          if (swaps) check("reading again keeps the document", await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 5)));
+          else skip("reading again keeps the document", noSwaps);
+          const look = () =>
+            page.evaluate((key) => {
+              const noted = sessionStorage.getItem(key);
+              return noted === null ? undefined : /** @type {{ read: string, time: number }} */ (JSON.parse(noted));
+            }, firstKey);
+          const first = (await pollFor(Math.max(0, savedBy - Date.now()), look)) ?? (await within(5000, "the page did not say what it drew within 5 s", look()).catch(() => undefined));
+          const drawn = first && first.time <= savedBy ? first : null;
+          if (drawn) await pause(Math.max(0, drawn.time + 2200 - Date.now()));
+          const terminal = drawn ? fullReads[Number(drawn.read)] : undefined;
+          const after = readsAfter(terminal);
+          check(
+            "it stops once the page no longer asks",
+            !!drawn && after !== null && after.reads.length === 0 && wholeAnswerFaults.length === faultsFrom,
+            `${faultsSince(faultsFrom)}${
+              !drawn
+                ? `no answer to a load or read of the receipt drew Saved. within 6 s (${JSON.stringify(first ?? null)})`
+                : after === null
+                  ? `the request whose answer first drew Saved. (${drawn.read}) is not in the page's requests`
+                  : `${after.reads.length} reads after the one whose answer first drew Saved. (${drawn.read}), by the check's look at least 2.2 s after that draw: ${after.reads.join(", ") || "none"}${after.prefetches.length ? `; prefetches not counted: ${after.prefetches.join(", ")}` : ""}`
+            }`,
+          );
+        } finally {
+          fullTarget = null;
+          await cleanUp(
+            () => within(5000, "the full-load case's note of its first Saved. was not removed within 5 s", noting.then((s) => s.dispose())),
+            () => within(5000, "the full-load case's note was not cleared within 5 s", page.evaluate((key) => sessionStorage.removeItem(key), firstKey)),
+          );
+        }
+      }
       // At a place on the page (a write redirected to `route.at(..)`): read again all the same. The
       // page's first load of its receipt is answered still saving (`placeLoads`) whatever the store
       // says by then, so a write that landed before the load cannot pass the case; then `Saved.` must
@@ -1390,6 +1551,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const target = await readWithin("the pending write's page", pending());
         const address = new URL(target).pathname + new URL(target).search;
         const readFrom = wholeReads.length;
+        const faultsFrom = wholeAnswerFaults.length;
         loadAnswer = null;
         placeLoads = { address, count: 0 };
         pollTarget = address;
@@ -1449,11 +1611,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           ? "not drawn by an answer to a later read of the receipt within 6 s"
           : `drawn by read ${Number(poll) - readFrom + 1} of the case${by?.load ? " (a load)" : ""}${inPlace ? "" : ", a full load where the Navigation API reads in place"}`;
         const documents = sameDocument ? "" : `; document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`;
-        check("a page at a place (#id) reads itself again too", !!loadAnswer?.saving && ownRead, `${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${shown} at ${page.url()}, ${drawnBy}; ${later} reads of the receipt after its load${documents}`);
+        check("a page at a place (#id) reads itself again too", !!loadAnswer?.saving && ownRead && wholeAnswerFaults.length === faultsFrom, `${faultsSince(faultsFrom)}${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${shown} at ${page.url()}, ${drawnBy}; ${later} reads of the receipt after its load${documents}`);
       }
       // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
       // read again with the page, so the page read again draws what is on screen.
       {
+        const faultsFrom = wholeAnswerFaults.length;
         await actWithin("the pending write's page load", page.goto(await readWithin("the pending write's page", pending())));
         const from = reads.length;
         await readWithin(
@@ -1469,8 +1632,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const replaced = await readWithin("the status line after the wait for Saved.", saved());
         check(
           "a page reads itself again at the address a script replaced",
-          came && replaced === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1"),
-          `${replaced}${came ? "" : " (Saved. not seen within 6 s)"} ${again.join()}`,
+          came && replaced === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1") && wholeAnswerFaults.length === faultsFrom,
+          `${faultsSince(faultsFrom)}${replaced}${came ? "" : " (Saved. not seen within 6 s)"} ${again.join()}`,
         );
       }
       // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
@@ -1496,6 +1659,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         // route's setting and its removal are each bounded too, a bound that runs out ending the run
         // with its reason. The hold is let go and the route and listeners removed however the case ends.
         const name = "a read a script's replaceState cancels on its way is made again";
+        const faultsFrom = wholeAnswerFaults.length;
         /** A write, and the page the server draws for its receipt's address. */
         const capture = () =>
           page.evaluate(async () => {
@@ -1555,17 +1719,23 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         let holding = () => {};
         const isHeld = new Promise((resolve) => (holding = () => resolve(true)));
         let loaded = false;
+        /** Why the route's answer to the page's load was not given as meant (`exchange`), once it was not. */
+        let loadFault = "";
         const slow = async (/** @type {import("@playwright/test").Route} */ route) => {
           const request = route.request();
           if (!loaded && served && request.isNavigationRequest() && bare(request.url()) === address) {
             loaded = true;
-            return route.fulfill(served);
+            const ex = exchange(route, "the held-read route's answer to the page's load");
+            await ex.send(5000, "its fulfill", () => route.fulfill(/** @type {NonNullable<typeof served>} */ (served))).catch(() => {});
+            loadFault = ex.fault;
+            return;
           }
           if (heldRead || !isRead(request)) return route.fallback();
           heldRead = request;
           holding();
           await released;
-          await route.fallback().catch(() => {});
+          // Let through once the hold is let go, bounded as every answer here is.
+          await within(5000, "", route.fallback()).catch(() => {});
         };
         /** The status of each finished read of the address the next must read. @type {Promise<number>[]} */
         const answered = [];
@@ -1669,8 +1839,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             outcome.later.length > 0 &&
             outcome.later.every((url) => bare(url) === expected) &&
             outcome.statuses.some((code) => code >= 200 && code < 300) &&
-            outcome.at === expected,
-          `${stopped ? `${stopped}; ` : ""}${waiting || "(not loaded)"} -> ${outcome.status || "(not read)"} at ${outcome.at || "(not read)"}; reads after the held one ${outcome.later.join() || "none"}, wanted ${expected || "(none)"}; answered ${outcome.statuses.join() || "none"}`,
+            outcome.at === expected &&
+            wholeAnswerFaults.length === faultsFrom &&
+            !loadFault,
+          `${faultsSince(faultsFrom)}${loadFault ? `${loadFault}; ` : ""}${stopped ? `${stopped}; ` : ""}${waiting || "(not loaded)"} -> ${outcome.status || "(not read)"} at ${outcome.at || "(not read)"}; reads after the held one ${outcome.later.join() || "none"}, wanted ${expected || "(none)"}; answered ${outcome.statuses.join() || "none"}`,
         );
       } else {
         skip("a read a script's replaceState cancels on its way is made again", noSwaps);
@@ -1686,6 +1858,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const target = await readWithin("the pending write's page", pending());
         const address = new URL(target).pathname + new URL(target).search;
         const readFrom = wholeReads.length;
+        const faultsFrom = wholeAnswerFaults.length;
         pollTarget = address;
         /** @type {{ text: string | null, poll: string | null, at: string }} */
         let drawn;
@@ -1726,8 +1899,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         const drewBy = drawn.poll === null ? "no read of its own after the navigation's, within 6 s" : `read ${Number(drawn.poll) - readFrom + 1} of the case (${wholeReads[Number(drawn.poll)]?.address})`;
         check(
           "a page reached by the runtime's navigation reads itself again in place",
-          nav.saving && nav.sameDocument && ownPoll && kept && !wholeFaults.has(address),
-          `${wentTo(nav)} (answered with ${wholeSeeded.get(address) ?? "nothing seen"}) -> ${drawn.text} at ${drawn.at}, drawn by ${drewBy}${kept ? "" : ", the document not kept"}`,
+          nav.saving && nav.sameDocument && ownPoll && kept && !wholeFaults.has(address) && wholeAnswerFaults.length === faultsFrom,
+          `${faultsSince(faultsFrom)}${wentTo(nav)} (answered with ${wholeSeeded.get(address) ?? "nothing seen"}) -> ${drawn.text} at ${drawn.at}, drawn by ${drewBy}${kept ? "" : ", the document not kept"}`,
         );
         // The history length once the page's own read of its address after the navigation's fetch has
         // drawn `Saved.` (`ownPoll`): without such a read drawn, the length shows only that the
@@ -1749,10 +1922,74 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           await within(30_000, "the pending write's page was not drawn within 30 s", page.waitForFunction((url) => location.href === url && !document.querySelector("#alert-status[data-old]"), leaving));
           armed = await readWithin("whether the page armed its read again", page.evaluate(() => !!document.head.querySelector("noscript[data-corten-read-again]")));
         }
-        await leaveForNews();
-        const left = reads.length;
-        await pause(2200);
-        if (armed) check("navigating away stops the reads", reads.length === left, `${reads.length - left} more reads`);
+        // No read of the alerts page from the press on, by the page's own order of events: News can
+        // come from a prefetch sent while the pointer rested on its link, before the press, so no
+        // request marks the moment the page left. The page notes, by its monotonic clock, the press
+        // (a capture listener for a click on the News link) and the start of each fetch of `/alerts`
+        // (the runtime's reads are fetches), so a read started before the press, still on its way,
+        // is told from one started after it, however late the check hears either; a load of `/alerts`
+        // heard after the press counts too, as does a document that was replaced, which leaves no
+        // notes. The notes are read 2.2 s after News is drawn, and the page's fetch is put back however
+        // the check ends.
+        let leftAs = null;
+        if (armed) {
+          const pressFrom = pageLog.length;
+          await readWithin(
+            "the page's notes of its press and reads",
+            page.evaluate(() => {
+              const w = /** @type {any} */ (window);
+              const notes = { pressedAt: /** @type {number | null} */ (null), reads: /** @type {{ at: number, url: string, prefetch: boolean }[]} */ ([]) };
+              w.__smokeLeave = notes;
+              w.__smokeFetch ??= window.fetch;
+              const original = w.__smokeFetch;
+              window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
+                try {
+                  const at = new URL(input instanceof Request ? input.url : String(input), location.href);
+                  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+                  if (at.origin === location.origin && at.pathname === "/alerts")
+                    notes.reads.push({ at: performance.now(), url: at.pathname + at.search, prefetch: headers.get("purpose") === "prefetch" });
+                } catch {}
+                return original.apply(this, /** @type {any} */ (arguments));
+              };
+              document.addEventListener(
+                "click",
+                (e) => {
+                  if (notes.pressedAt === null && /** @type {Element} */ (e.target)?.closest?.('a[href="/news"]')) notes.pressedAt = performance.now();
+                },
+                true,
+              );
+            }),
+          );
+          try {
+            await leaveForNews();
+            await pause(2200);
+            const notes = await readWithin(
+              "the page's notes of its press and reads",
+              page.evaluate(() => /** @type {{ pressedAt: number | null, reads: { at: number, url: string, prefetch: boolean }[] } | undefined} */ ((/** @type {any} */ (window)).__smokeLeave)),
+            );
+            const loads = pageLog.slice(pressFrom).filter((r) => r.isNavigationRequest() && r.method() === "GET" && new URL(r.url()).pathname === "/alerts").map((r) => `load ${new URL(r.url()).pathname}${new URL(r.url()).search}`);
+            const after = notes?.pressedAt == null ? [] : notes.reads.filter((r) => r.at > /** @type {number} */ (notes.pressedAt));
+            leftAs = {
+              ok: !!notes && notes.pressedAt !== null && loads.length === 0 && after.every((r) => r.prefetch),
+              detail: !notes
+                ? "the document that pressed was replaced, so its notes are gone"
+                : notes.pressedAt === null
+                  ? "the page noted no press of the News link"
+                  : `${after.filter((r) => !r.prefetch).length + loads.length} reads after the press${after.length + loads.length ? ` (${[...after.map((r) => `${r.prefetch ? "prefetch, not counted, " : ""}${r.url} ${Math.round(r.at - /** @type {number} */ (notes.pressedAt))} ms after it`), ...loads].join(", ")})` : ""}`,
+            };
+          } finally {
+            await within(
+              5000,
+              "the page's fetch was not put back within 5 s",
+              page.evaluate(() => {
+                const w = /** @type {any} */ (window);
+                if (w.__smokeFetch) window.fetch = w.__smokeFetch;
+                delete w.__smokeLeave;
+              }),
+            ).catch(() => {});
+          }
+        }
+        if (leftAs) check("navigating away stops the reads", leftAs.ok, leftAs.detail);
         else skip("navigating away stops the reads", "each write landed before its page came in");
       } else {
         for (const name of ["a page reached by the runtime's navigation reads itself again in place", "each read replaces the history entry", "navigating away stops the reads"]) skip(name, noSwaps);
@@ -1760,6 +1997,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     } finally {
       await cleanUp(
         () => page.off("request", onSaved),
+        () => (wholeOver = true),
         () => within(5000, "the whole-read route was not removed within 5 s", page.unroute("**/alerts?saved=*", wholeOnly)),
       );
     }
@@ -1918,8 +2156,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // its way cannot pass for one that failed. The route and listeners are removed however the case
     // ends, each removal tried even if one before it fails.
     const errorsBefore = errors.length;
-    const failRead = (/** @type {import("@playwright/test").Route} */ route) =>
-      route.request().headers()["corten"] === "action" ? route.fulfill({ status: 502, contentType: "text/html", body: "<p>Bad gateway</p>" }) : route.fallback();
+    /** Why the route's 502 for a read was not given as meant (`exchange`). @type {string[]} */
+    const failFaults = [];
+    /** Set as the case ends: the route lets each read through, and a 502 under way is not sent. */
+    let failOver = false;
+    const failRead = async (/** @type {import("@playwright/test").Route} */ route) => {
+      if (failOver || route.request().headers()["corten"] !== "action") return route.fallback();
+      const asked = new URL(route.request().url());
+      const ex = exchange(route, `the failing read route's 502 for ${asked.pathname}${asked.search}`, () => failOver);
+      await ex.send(5000, "its fulfill", () => route.fulfill({ status: 502, contentType: "text/html", body: "<p>Bad gateway</p>" })).catch(() => {});
+      if (ex.fault) failFaults.push(ex.fault);
+    };
     /**
      * The alert's POSTs and the part reads the page sends while the case listens, in the order the
      * check heard them sent and when (`performance.now()` in the listener); each answer's status and
@@ -1931,29 +2178,57 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const statusOf = new Map();
     /** @type {Map<import("@playwright/test").Request, number>} */
     const doneAt = new Map();
+    // Every part read of the alerts page is heard, whatever its query (`?shown=2&saved=..` too), so
+    // a read of another receipt, or one sent again at another address, counts against the case.
     const onFailing = (/** @type {import("@playwright/test").Request} */ r) => {
-      const post = r.method() === "POST" && new URL(r.url()).pathname === "/alerts";
-      const read = r.method() === "GET" && r.url().includes("/alerts?saved=") && r.headers()["corten"] === "action";
+      const at = new URL(r.url());
+      const alerts = at.origin === new URL(base).origin && at.pathname === "/alerts";
+      const post = alerts && r.method() === "POST";
+      const read = alerts && r.method() === "GET" && r.headers()["corten"] === "action";
       if (post || read) heard.push({ request: r, at: performance.now(), post });
     };
     const onFailingAnswer = (/** @type {import("@playwright/test").Response} */ res) => statusOf.has(res.request()) || statusOf.set(res.request(), res.status());
     const onFailingDone = (/** @type {import("@playwright/test").Request} */ r) => doneAt.has(r) || doneAt.set(r, performance.now());
+    /** The press's POST: the first heard from `pressedAt` on, or undefined. */
+    const pressPost = () => heard.find((h) => h.post && h.at >= pressedAt);
     /** The press's read: the first part read heard after the first POST heard from `pressedAt` on, or null while there is none. */
     const pressRead = () => {
       const post = heard.findIndex((h) => h.post && h.at >= pressedAt);
       return post < 0 ? null : (heard.slice(post + 1).find((h) => !h.post) ?? null);
     };
+    /** A heard read's address (path and query). @param {{ request: import("@playwright/test").Request }} h */
+    const addressOf = (h) => new URL(h.request.url()).pathname + new URL(h.request.url()).search;
+    /**
+     * The receipt the press's POST answer asks to be read again from: its read-again template's
+     * `data-from`, resolved against the alerts page, as path and query; null if that answer was not
+     * read within 5 s or names none. @param {import("@playwright/test").Request | undefined} post
+     */
+    const receiptOf = async (post) => {
+      if (!post) return null;
+      const body = await readWithin(
+        "the press's POST answer",
+        post.response().then((res) => res?.text() ?? null),
+      ).catch(() => null);
+      const tag = body === null ? undefined : /<template\b[^>]*\sdata-corten-read-again(?=[\s=>])[^>]*>/.exec(body)?.[0];
+      const from = tag === undefined ? undefined : /\bdata-from="([^"]*)"/.exec(tag)?.[1];
+      if (from === undefined) return null;
+      const at = new URL(from.replaceAll("&amp;", "&"), `${base}/alerts`);
+      return at.pathname + at.search;
+    };
     try {
       await within(5000, "the failing read's route was not set within 5 s", page.route("**/alerts?saved=*", failRead));
       await within(30_000, "the alerts page was not loaded within 30 s", page.goto(`${base}/alerts`));
-      const readsBefore = again.length;
       page.on("request", onFailing);
       page.on("response", onFailingAnswer);
       page.on("requestfinished", onFailingDone);
       await submit();
       const sentBy = pressedAt + 5000;
       if (pressRead() === null) await pollFor(Math.max(0, sentBy - performance.now()), async () => pressRead() !== null);
-      const read = pressRead();
+      // The read must be of the receipt the press's own POST answer named, so a read of an older
+      // receipt (a timer of an earlier write's) answered 502 is not taken for it.
+      const receipt = await receiptOf(pressPost()?.request);
+      const first = pressRead();
+      const read = first !== null && receipt !== null && addressOf(first) === receipt ? first : null;
       const failing = read?.request ?? null;
       const failingAt = read?.at ?? 0;
       const sent = read !== null && failingAt > pressedAt && failingAt <= sentBy;
@@ -1964,14 +2239,21 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const finished = sent && failingDoneAt !== null && failingDoneAt <= finishedBy;
       const answered = finished && failingStatus === 502;
       const early = heard.filter((h) => !h.post && h.at < pressedAt).length;
-      const failedAt = again.length;
       if (answered) await pause(2200);
+      // Every part read of the alerts page heard from the press on, whatever its address, as the log
+      // stands once the 2.2 s have passed: the press's read must be the only one (one sent before the
+      // press is named apart, `early`).
+      const others = heard.filter((h) => !h.post && h.at >= pressedAt && h.request !== failing).map((h) => `${addressOf(h)} (${Math.round(h.at - pressedAt)} ms after the press)`);
       // The browser itself reports the 502 as a failed resource; Corten adds nothing.
       const logged = errors.slice(errorsBefore).filter((e) => !e.includes("502"));
       const late = (/** @type {number} */ at, /** @type {number} */ from) => `${Math.round(at - from)} ms after`;
       const failure =
-        failing === null
-          ? `no part read sent after the press's POST${heard.some((h) => h.post && h.at >= pressedAt) ? "" : " (no POST heard from the press on)"} within 5 s of the press`
+        receipt === null
+          ? `no receipt read from the press's POST answer${pressPost() ? "" : " (no POST heard from the press on)"}`
+          : failing === null
+          ? first !== null
+            ? `the first part read after the press's POST was of ${addressOf(first)}, not its receipt ${receipt}`
+            : `no part read sent after the press's POST${heard.some((h) => h.post && h.at >= pressedAt) ? "" : " (no POST heard from the press on)"} within 5 s of the press`
           : !sent
             ? `its part read sent ${late(failingAt, pressedAt)} the press, not within 5 s`
             : answered
@@ -1983,11 +2265,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                   : `its answer with status ${failingStatus}, not 502`;
       check(
         "a read the server fails stops the reads, without a console error",
-        answered && failedAt === readsBefore + 1 && again.length === failedAt && (await readWithin("the status line", saved())) === "Saving..." && logged.length === 0,
-        `${failure}; ${failedAt - readsBefore} then ${again.length - failedAt} reads${early ? `, ${early} sent before the press` : ""}, ${logged.join(" | ")}`,
+        answered && others.length === 0 && failFaults.length === 0 && (await readWithin("the status line", saved())) === "Saving..." && logged.length === 0,
+        `${failFaults.length ? `${failFaults.join("; ")}; ` : ""}${failure}; ${others.length} other part reads${others.length ? ` (${others.join(", ")})` : ""}${early ? `, ${early} sent before the press` : ""}, ${logged.join(" | ")}`,
       );
       errors.splice(errorsBefore);
     } finally {
+      failOver = true;
       await cleanUp(
         () => within(5000, "the failing read's route was not removed within 5 s", page.unroute("**/alerts?saved=*", failRead)),
         () => page.off("request", onFailing),

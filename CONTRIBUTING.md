@@ -359,7 +359,9 @@ patch whose top-level elements, as the page itself parses them the way the runti
 with a `ReadAgain::from` template that waits that one second and whose `data-from`, resolved
 against the base URL of the page it is delivered to (the page the case left for, which the
 runtime's fetch resolves it against), is the held read's own address. Without a held read it
-fails. Its holds are let go and its route removed in a `finally`, each bounded to five seconds. A
+fails. Its holds are let go in a `finally`, each release within its own five seconds and, for one
+whose fulfill was already sent, ten seconds more to hear what became of it (below), and its route is
+removed there too, bounded to five seconds. A
 release's five seconds are measured by the monotonic clock (`performance.now()`) from the release,
 and checked once its answer is fetched and again just before its fulfill is sent, so a timer that
 runs late does not stretch them: a release past them before its fulfill is sent aborts its read,
@@ -498,7 +500,9 @@ is recorded with the wrapper's state at that moment and its target, compared wit
 as it submitted that write, so a failure said at the headers, before the body, or said on the
 window or on another form, does not count as the body's.
 The check that a navigation leaving a write's patch before it is drawn reads the next page whole
-requires that page to show what the write changed: its brand, and the section the patch draws,
+requires the browser to have finished loading that write with the stand-in's answer for it (its
+`requestfinished`, with the answer's own `smoke-write` mark, heard within five seconds of the
+check's look), and that page to show what the write changed: its brand, and the section the patch draws,
 which every page after the write draws too, drawn by that page's own section element and not by the
 patch. The patch's element alone carries a mark, and a MutationObserver set before the write is sent
 records whether that element ever enters the page, however briefly; the check fails if it ever did,
@@ -522,7 +526,14 @@ before its page, so it holds the context to close even if making the page never 
 closing one of its pages closes that page alone: if the context's close is not confirmed in time,
 each of its pages is closed, bounded the same, and the case fails rather than waits. The page these
 checks make is closed by the helper that makes it if making it, its route, its load or its mark
-fails, before a case holds it.
+fails, before a case holds it. The stand-in in front of them fetches, reads and sends each answer
+within five seconds a step by the smoke's clock (a hold the case controls aside), and sends none
+once its case has ended, which each case marks before it lets go of what it holds: the request is
+aborted then, its context closing. A write counts as answered only once its fulfill is confirmed,
+and each write's answer carries a mark unique to the page and the write (its `smoke-write`
+header). A script or stylesheet a case holds is let through or answered within five seconds once let
+go, and aborted once the case has ended; the check that a whole poll waiting for its stylesheet does
+not replace the layout requires that stylesheet's answer sent and confirmed.
 That check counts only the
 reads of the page it goes back to, since the page that comes can prefetch the link left under the
 pointer, and goes back only once the step before it saw the write answered once with its scripts
@@ -566,7 +577,12 @@ shared page are removed, and its observer in the page disconnected, however it e
 removing the init script each bounded to five seconds; the init script then does nothing in the
 document it ran in, nor, by a switch the case sets in the page's session storage as it ends and
 clears once the removal is confirmed, in a later one, and the route lets each read through once the
-case is over, so neither acts on later checks if its removal is not confirmed. The check that a
+case is over, so neither acts on later checks if its removal is not confirmed. Each answer the
+stand-in routes of these cases give (the part case's, the navigations', the reached page's part,
+the whole reads', the held-read case's load and the failing read's 502) is fetched, read and sent
+within five seconds a step by the smoke's clock, and none is sent once its case has ended, when the
+request is let through as it came; one that fails, runs out or is not confirmed aborts its request
+and fails the checks that rest on it, saying why. The check that a
 page's part reached by the runtime's navigation is read again requires a part read of the reached
 page's own address, and `Saved.` drawn by an answer to one of those reads, which a route of its own
 marks as it answers them: a read of an earlier receipt's address draws the same `Saved.` in the
@@ -618,7 +634,18 @@ document the tab makes from then on in the order they are made (a count in the p
 storage, which a reload keeps): the document once the load returns and once the wait ends must both
 be the first, so a full load at any moment after the case's own, even one before Playwright's load
 returns, fails it. The init script and its count are removed however the case ends, each bounded to
-five seconds. Its route and request listener are
+five seconds. The check that a page waiting for a write stops once it no longer asks, after a full
+load, marks each answer to a load or read of the receipt with its place, and an init script added
+before the load notes in the page's session storage the first of them the page draws `Saved.` from,
+with the time the page drew it: it requires that draw within the six seconds of the wait for
+`Saved.`, and no read of the alerts page after that answer's own request in the log of the page's
+requests, as the log stands 2.2 s after the draw by the page's time, so a read sent between the draw
+and the check's look counts against it. The check that navigating away stops the reads requires no
+fetch of `/alerts` the page started after its press of the News link, both noted in the page by its
+own monotonic clock (News can come from a prefetch sent before the press, so no request marks the
+moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
+document replaced meanwhile, which leaves no notes, fails it, and the page's `fetch` is put back
+however it ends. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
 for News are each bounded to 30 seconds by the smoke's clock, as is sending the alert until it says
@@ -637,14 +664,17 @@ rests on what is read after them or on what the page or the route recorded: a na
 failed marks, read once each wait has come or run out. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
-sent while the check fills or focuses the form is not taken for it. It requires that read sent within
+sent while the check fills or focuses the form is not taken for it. That read must be of the receipt
+the press's own POST answer asks to be read again from (its read-again template's `data-from`), so
+an earlier write's read answered 502 is not taken for it. It requires that read sent within
 five seconds of the press, counted from that same moment, and that read's own answer, with status
 502, received in full (the browser finished
 loading that exact request) within five seconds of that read being sent, each judged by the time
 the check heard the browser's event (the request sent, and finished), not by when it looked, so a
 read or an answer heard after its five seconds fails it however soon the check then sees it; only
 then do its 2.2 s with no further read start, so a read still on its way cannot pass for one that
-failed. Its route and its listeners are removed however it ends, each removal tried even if one
+failed. Every same-origin part read of `/alerts` the check hears from the press on, whatever its
+query (`?shown=2&saved=..` too), other than that one fails it. Its route and its listeners are removed however it ends, each removal tried even if one
 before it fails. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
