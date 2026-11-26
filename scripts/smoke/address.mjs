@@ -444,6 +444,12 @@ export async function dataAddress(browser) {
       trip.out && trip.trip.join() === ",#smoke-address" && trip.done && trip.at === "#smoke-address" && trip.shown === "all",
       JSON.stringify(trip),
     );
+    const hashed = await hashThenPress(plain);
+    check(
+      "without the Navigation API a marked patch pressed in the task that moves the page to an #id of it draws and puts its address in that entry",
+      hashed.moved === "#smoke-address" && hashed.drawn && hashed.at === "?scope=week" && hashed.shown === "week",
+      JSON.stringify(hashed),
+    );
     // The page reading itself again (`ReadAgain`, a tag put in the screen's head) goes by the
     // page's path without the API: an answer whose address is on another path starts it there.
     const other = `${base}/smoke/address-other?scope=week`;
@@ -487,8 +493,8 @@ export async function dataAddress(browser) {
 }
 
 /**
- * A marked answer draws, and puts its address in the entry, only on the visit it was sent from,
- * and only when its patch draws whole and is not a server's failure.
+ * A marked answer draws, and puts its address in the entry, only on the entry and page it was sent
+ * from, and only when its patch draws whole and is not a server's failure.
  * @param {import("@playwright/test").Browser} browser @param {string[]} errors
  */
 async function markedPatchVisits(browser, errors) {
@@ -760,22 +766,28 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ weekOut, redrawn, dayOut, dayDrawn, weekEnded, latest }),
   );
 
-  // A page's own `navigate` listener that cancels the replacement refuses the address: the entry's
-  // own page is read again whole, so the answer is not left on screen under the entry's address.
+  // A page's own `navigate` listener that cancels the replacement, and puts a state of its own in
+  // the entry at the address it has, has taken the address over: the answer stays drawn under that
+  // address, and the runtime neither reads the page again nor touches the entry after it, in every
+  // engine (docs/design.md#choice-data-address).
   await page.goto(home);
   await page.evaluate(() =>
     /** @type {any} */ (window).navigation.addEventListener("navigate", (/** @type {any} */ event) => {
-      if (event.navigationType === "replace" && new URL(event.destination.url).search === "?scope=week") event.preventDefault();
+      if (event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+      event.preventDefault();
+      history.replaceState({ tab: 1 }, "", location.href);
     }),
   );
   const vetoStart = await state();
-  const vetoRead = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
-  const vetoLoaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  const vetoRead = page.waitForRequest((r) => r.resourceType() === "document", { timeout: 2000 }).then(() => true, () => false);
+  await trackForm();
   await press("Week");
-  const vetoed = { read: await vetoRead, loaded: await vetoLoaded, ...(await state()) };
+  const vetoDone = await finished();
+  const vetoReloaded = await vetoRead;
+  const vetoed = { done: vetoDone, reloaded: vetoReloaded, tab: await page.evaluate(() => history.state?.tab), ...(await state()) };
   check(
-    "a marked patch whose replacement a navigate listener cancels reads the entry's own page again",
-    vetoed.read && vetoed.loaded && vetoed.at === "" && vetoed.shown === "all" && vetoed.entries === vetoStart.entries,
+    "a marked patch whose replacement a navigate listener cancels stays drawn under the address the page keeps, and nothing reads the page again",
+    vetoed.done && !vetoed.reloaded && vetoed.at === "" && vetoed.shown === "week" && vetoed.tab === 1 && vetoed.entries === vetoStart.entries,
     JSON.stringify({ vetoStart, vetoed }),
   );
 
@@ -810,77 +822,6 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ listenerNavSent, listenerAnswered, listenerDone, listenerStill, listenerNav, listenerAfter }),
   );
 
-  // The page read again for a refused replacement is another visit as it begins: another marked
-  // answer, let go while that read is on its way, draws nothing and puts no address in the entry.
-  // What the page draws is said from the page as it happens: the page can be read from no more
-  // while its read is on its way.
-  /** @type {string[]} */
-  const drawnWhile = [];
-  /** @type {(value?: unknown) => void} */
-  let heldEnded = () => {};
-  const heldEnd = new Promise((resolve) => (heldEnded = resolve));
-  await page.exposeFunction("__addressSeen", (/** @type {string} */ seen) => (seen === "ended" ? heldEnded() : drawnWhile.push(seen)));
-  await page.goto(home);
-  const held = `${home}?scope=held`;
-  /** @type {() => void} */
-  let releaseHeld = () => {};
-  const heldAnswer = new Promise((resolve) => (releaseHeld = () => resolve(undefined)));
-  await page.route(held, async (route) => {
-    await heldAnswer;
-    await route.fulfill({ headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<section id="smoke-address"><output>held</output></section>' }).catch(() => {});
-  });
-  /** @type {() => void} */
-  let releaseReload = () => {};
-  const reloadHeld = new Promise((resolve) => (releaseReload = () => resolve(undefined)));
-  await page.route(home, async (route) => {
-    if (route.request().resourceType() !== "document") return route.fallback();
-    await reloadHeld;
-    await route.continue().catch(() => {});
-  });
-  const heldSent = page.waitForRequest((r) => r.url() === held, { timeout: 5000 }).then(() => true, () => false);
-  await page.evaluate((action) => {
-    const say = /** @type {(seen: string) => void} */ (/** @type {any} */ (window).__addressSeen);
-    /** @type {any} */ (window).navigation.addEventListener("navigate", (/** @type {any} */ event) => {
-      if (event.navigationType === "replace" && new URL(event.destination.url).search === "?scope=week") event.preventDefault();
-    });
-    const form = document.createElement("form");
-    form.action = action;
-    form.dataset.patch = "";
-    form.dataset.address = "";
-    const field = document.createElement("input");
-    field.name = "scope";
-    field.value = "held";
-    form.append(field);
-    document.body.append(form);
-    new MutationObserver(() => say(`${location.search} ${document.querySelector("#smoke-address output")?.textContent}`)).observe(
-      /** @type {Element} */ (document.querySelector("main")),
-      { childList: true, subtree: true },
-    );
-    let busy = false;
-    new MutationObserver(() => {
-      if (form.hasAttribute("aria-busy")) return void (busy = true);
-      if (busy) setTimeout(() => requestAnimationFrame(() => say("ended")));
-    }).observe(form, { attributes: true, attributeFilter: ["aria-busy"] });
-    form.requestSubmit();
-  }, home);
-  const heldOut = await heldSent;
-  const reloadSent = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
-  await press("Week");
-  const reloading = await reloadSent;
-  releaseHeld();
-  // WebKit stops the held request as the page is read again; nothing ends it the page can say.
-  await Promise.race([heldEnd, new Promise((resolve) => setTimeout(resolve, 3000))]);
-  const reloaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
-  releaseReload();
-  const reloadDone = await reloaded;
-  await page.unroute(home);
-  await page.unroute(held);
-  const afterReload = { heldOut, reloading, drawnWhile, done: reloadDone, ...(await state()) };
-  check(
-    "a marked patch let go while the page is read again for a refused replacement draws nothing and puts no address in the entry",
-    heldOut && reloading && drawnWhile.length > 0 && drawnWhile.every((seen) => seen === " week") && afterReload.done && afterReload.at === "" && afterReload.shown === "all",
-    JSON.stringify(afterReload),
-  );
   // A GET queued behind a write of the form is an older press than one of the form a read drew in
   // its place: Day, pressed there, is not dropped for Week when the write's answer comes.
   await page.goto(home);
@@ -1358,32 +1299,116 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ connectedDay, dayEmptied, connectedDone, connected }),
   );
 
-  // A page's own `navigate` listener that cancels the replacement, begins a navigation to Month in its
-  // place, and cancels that one too: no navigation takes the page's place, so the entry's own page is
-  // read again, whole.
+  // Week's patch draws an element whose `connectedCallback` begins a navigation to Month, which a
+  // `navigate` listener of the page cancels: nothing took the screen's place, so Week's answer, drawn
+  // whole, puts its address in the entry.
   await page.goto(home);
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const body = (await res.text()).replace("</section>", "<smoke-navigates></smoke-navigates></section>");
+    await route.fulfill({ response: res, body });
+  });
   await page.evaluate((url) => {
     const nav = /** @type {any} */ (window).navigation;
     nav.addEventListener("navigate", (/** @type {any} */ event) => {
-      const search = new URL(event.destination.url).search;
-      if (search === "?scope=month") return event.preventDefault();
-      if (event.navigationType !== "replace" || search !== "?scope=week") return;
-      event.preventDefault();
-      const next = nav.navigate(url);
-      next.committed.catch(() => {});
-      next.finished.catch(() => {});
+      if (new URL(event.destination.url).search === "?scope=month") event.preventDefault();
     });
+    customElements.define(
+      "smoke-navigates",
+      class extends HTMLElement {
+        connectedCallback() {
+          if (/** @type {any} */ (window).__navigated) return;
+          const next = nav.navigate(url);
+          next.committed.catch(() => {});
+          Object.assign(window, { __navigated: next.finished.then(() => "finished", (/** @type {Error} */ error) => error.name) });
+        }
+      },
+    );
   }, month);
-  const twiceRead = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
-  const twiceLoaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
   await press("Week");
-  const twice = { read: await twiceRead, loaded: await twiceLoaded, ...(await state()) };
+  const connectedNav = await page
+    .waitForFunction(() => /** @type {any} */ (window).__navigated, undefined, { timeout: 5000 })
+    .then(() => page.evaluate(() => /** @type {any} */ (window).__navigated))
+    .catch((/** @type {Error} */ e) => e.message);
+  const connectedDrawn = await wait(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(week);
+  const connectedNavEnd = await state();
   check(
-    "a marked patch whose replacement a navigate listener cancels for a navigation it cancels too reads the entry's own page again",
-    twice.read && twice.loaded && twice.at === "" && twice.shown === "all",
-    JSON.stringify(twice),
+    "a marked patch whose drawn element begins a navigation a navigate listener cancels puts its address in the entry",
+    connectedNav === "AbortError" && connectedDrawn && connectedNavEnd.at === "?scope=week" && connectedNavEnd.shown === "week",
+    JSON.stringify({ connectedNav, connectedDrawn, connectedNavEnd }),
+  );
+
+  // Week, held on its way, is aborted as the runtime takes a navigation to Month, which a later
+  // `navigate` listener of the page cancels; Week, pressed again in the same task, asks for what the
+  // aborted read asked for, which is over: it is sent again, and its answer is drawn.
+  await page.goto(home);
+  let weekReads = 0;
+  /** @type {() => void} */
+  let releaseAborted = () => {};
+  const abortedHeld = new Promise((resolve) => (releaseAborted = () => resolve(undefined)));
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    weekReads += 1;
+    if (weekReads === 1) await abortedHeld;
+    await route.continue().catch(() => {});
+  });
+  const abortedSent = page.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const abortedOut = await abortedSent;
+  await page.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (new URL(event.destination.url).search === "?scope=month") event.preventDefault();
+    });
+    const next = nav.navigate(url);
+    next.committed.catch(() => {});
+    next.finished.catch(() => {});
+    /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click();
+  }, month);
+  const pressedAgainDrawn = await wait(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"));
+  releaseAborted();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(week);
+  const pressedAgain = { reads: weekReads, ...(await state()) };
+  check(
+    "a marked GET pressed again as the read a cancelled navigation aborted is sent again and drawn",
+    abortedOut && pressedAgainDrawn && pressedAgain.reads === 2 && pressedAgain.at === "?scope=week" && pressedAgain.shown === "week",
+    JSON.stringify({ abortedOut, pressedAgainDrawn, pressedAgain }),
+  );
+
+  const hashed = await hashThenPress(page);
+  check(
+    "a marked patch pressed in the task that moves the page to an #id of it draws and puts its address in that entry",
+    hashed.moved === "#smoke-address" && hashed.drawn && hashed.at === "?scope=week" && hashed.shown === "week",
+    JSON.stringify(hashed),
   );
   await page.close();
+}
+
+/**
+ * Moves the page to an `#id` of it and presses Week in the same task, before the browser says it
+ * moved (`hashchange`), and says where the page is once Week's answer is drawn.
+ * @param {import("@playwright/test").Page} page
+ */
+async function hashThenPress(page) {
+  await page.goto(`${base}/smoke/address`);
+  const moved = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        location.hash = "smoke-address";
+        // Read as it moved: the answer may replace the address before the move's `hashchange` comes.
+        const moved = location.hash;
+        /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click();
+        addEventListener("hashchange", () => setTimeout(() => resolve(moved)), { once: true });
+      }),
+  );
+  const drawn = await page.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { moved, drawn, ...end };
 }
 
 /**

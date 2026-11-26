@@ -166,9 +166,9 @@ division: end statements with `;` and keep a division on the line it continues.
    goes to the page before the screen). An answer that comes after the user left the page (a
    link, Back or Forward, to another `#id` too) does not draw; an empty or incomplete patch or a
    drawn 5xx leaves the address, and a page answer drawn in place moves it as a patch does. A
-   `navigate` listener that cancels the replace (or a browser that throws for it) makes the
-   runtime reload the entry's page, and no other marked answer then draws, unless that listener
-   begins a navigation of its own, which goes on unless it cancels that too. Pick `data-keep-place`
+   browser that throws for the replace makes the runtime reload the entry's page; a `navigate`
+   listener that cancels it has taken the address over, so it sets the address it means itself
+   (or begins its own navigation): the runtime leaves the answer drawn. Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
    one part of a screen whose rest is costly to read. The patch draws everything the address
    changes, the form included, and any link or form that carries the scope (a `keep_query`
