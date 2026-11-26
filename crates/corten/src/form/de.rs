@@ -81,7 +81,23 @@ pub(crate) fn from_pairs<T: de::DeserializeOwned>(mut pairs: Vec<Pair<'_>>) -> R
 /// A query string's pairs sorted by key (the values of one key in the order sent), for
 /// [`field`] and [`prefixed`]: what `Params` reads a route's query parameters from.
 pub fn sorted_pairs(query: &str) -> Vec<Pair<'_>> {
-    let mut pairs: Vec<Pair<'_>> = form_urlencoded::parse(query.as_bytes()).collect();
+    // A query with no `%` and no `+` has nothing to decode, and a `&str` is UTF-8 already, so all
+    // that is left of `form_urlencoded::parse` is its splitting: fields at `&`, empty ones
+    // skipped, key and value at the first `=`. That is done here without the decoder's passes
+    // over each key and value (the links an app writes itself, `?a=1&b=2`, are such queries).
+    // Both characters are ASCII, so no byte of another character is taken for one.
+    let mut pairs: Vec<Pair<'_>> = if query.bytes().any(|b| b == b'%' || b == b'+') {
+        form_urlencoded::parse(query.as_bytes()).collect()
+    } else {
+        query
+            .split('&')
+            .filter(|field| !field.is_empty())
+            .map(|field| {
+                let (key, value) = field.split_once('=').unwrap_or((field, ""));
+                (Cow::Borrowed(key), Cow::Borrowed(value))
+            })
+            .collect()
+    };
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     pairs
 }
@@ -865,6 +881,106 @@ mod tests {
         assert!(from_bytes::<Filter>(b"sort=due_now").is_err());
     }
 
+    /// What the form decoder makes of `query`, sorted as [`sorted_pairs`] sorts.
+    fn decoded(query: &str) -> Vec<Pair<'_>> {
+        let mut pairs: Vec<Pair<'_>> = form_urlencoded::parse(query.as_bytes()).collect();
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs
+    }
+
+    fn pairs<'a>(list: &[(&'a str, &'a str)]) -> Vec<Pair<'a>> {
+        list.iter().map(|&(key, value)| (Cow::Borrowed(key), Cow::Borrowed(value))).collect()
+    }
+
+    #[test]
+    fn a_query_reads_as_the_form_decoder_reads_it() {
+        // Every key with every value, plain and escaped, among empty fields, a field with no `=`,
+        // one with no key and the key again.
+        for key in ["", "a", "猫", "%61", "+", "%ff", "%", "=", ";", "a;b"] {
+            for value in ["", "b", "é", "%26", "+", "=z", "%f0%9f", "c;d", "x=y=z"] {
+                let query = format!("&&{key}={value}&z&{key}&=v&{key}=last&&");
+                assert_eq!(sorted_pairs(&query), decoded(&query), "{query}");
+            }
+        }
+        let long = "k".repeat(70_000);
+        let (long, long_keys) = (long.as_str(), format!("{long}=v&a=1&{long}&{long}=w"));
+        let queries = [
+            "",
+            "&",
+            "&&&",
+            "=",
+            "==",
+            "&=&",
+            "=&=&&==&",
+            "a;b=c;d&e=f;g&;=;&h;",
+            "a=b=c&d==e&f=g=&=h=i",
+            "日本=語&ключ=значение&é=ü&🦀=🚀&猫",
+            "b=2&a=1&b=1&a=2&b=3&a&b=",
+            long_keys.as_str(),
+        ];
+        for query in queries {
+            assert_eq!(sorted_pairs(query), decoded(query), "{query}");
+        }
+        // And as written here, so the decoder is not the only word on it.
+        assert_eq!(sorted_pairs(""), pairs(&[]));
+        assert_eq!(sorted_pairs("&&&"), pairs(&[]), "empty fields are skipped");
+        assert_eq!(sorted_pairs("=&=&&==&"), pairs(&[("", ""), ("", ""), ("", "=")]), "a field of `=` alone is one");
+        assert_eq!(sorted_pairs("a;b=c;d&e=f;g&;=;&h;"), pairs(&[(";", ";"), ("a;b", "c;d"), ("e", "f;g"), ("h;", "")]));
+        assert_eq!(sorted_pairs("a=b=c&d==e&f=g=&=h=i"), pairs(&[("", "h=i"), ("a", "b=c"), ("d", "=e"), ("f", "g=")]));
+        assert_eq!(sorted_pairs("é=ü&猫&日本=語"), pairs(&[("é", "ü"), ("日本", "語"), ("猫", "")]));
+        assert_eq!(
+            sorted_pairs("b=2&a=1&b=1&a=2&b=3&a&b="),
+            pairs(&[("a", "1"), ("a", "2"), ("a", ""), ("b", "2"), ("b", "1"), ("b", "3"), ("b", "")]),
+            "the values of one key in the order sent"
+        );
+        assert_eq!(sorted_pairs(&long_keys), pairs(&[("a", "1"), (long, "v"), (long, ""), (long, "w")]));
+    }
+
+    #[test]
+    fn an_escaped_query_is_decoded_wherever_the_escape_is() {
+        let cases: [(&str, &[(&str, &str)]); 14] = [
+            // In a key, in a value, and in a field after ones that have none.
+            ("a%20b=1", &[("a b", "1")]),
+            ("a+b=1", &[("a b", "1")]),
+            ("a=1%202", &[("a", "1 2")]),
+            ("a=1+2", &[("a", "1 2")]),
+            ("a=1&b=2&c=x%26y", &[("a", "1"), ("b", "2"), ("c", "x&y")]),
+            ("a=1&b=2&c=x+y", &[("a", "1"), ("b", "2"), ("c", "x y")]),
+            ("a=1&b=2&c%3Dd=3", &[("a", "1"), ("b", "2"), ("c=d", "3")]),
+            ("a=1&b=2&c+d", &[("a", "1"), ("b", "2"), ("c d", "")]),
+            // Sorted by the key as decoded, not as written.
+            ("b=1&%61=2", &[("a", "2"), ("b", "1")]),
+            // An escaped `+` is a `+`, and an escaped separator is no separator.
+            ("a=1%2B2&b=%3D%26", &[("a", "1+2"), ("b", "=&")]),
+            ("%E7%8C%AB=%C3%A9", &[("猫", "é")]),
+            // What is no escape stays as written, and bytes that are not UTF-8 are replaced.
+            ("a=%&b=%zz&c=%4", &[("a", "%"), ("b", "%zz"), ("c", "%4")]),
+            ("a=%ff", &[("a", "\u{fffd}")]),
+            ("a=1&+", &[(" ", ""), ("a", "1")]),
+        ];
+        for (query, read) in cases {
+            assert_eq!(sorted_pairs(query), pairs(read), "{query}");
+            assert_eq!(sorted_pairs(query), decoded(query), "{query}");
+        }
+    }
+
+    #[test]
+    fn an_escape_at_any_place_in_a_query_keeps_it_from_the_direct_split() {
+        // Every kind of field, and long enough that the escape is also looked for well past the
+        // first bytes of the query.
+        let plain = "alpha=one&beta=two&&gamma&=delta&epsilon=猫=é;x&".repeat(4);
+        assert!(plain.len() > 128 && !plain.contains(['%', '+']));
+        for at in (0..=plain.len()).filter(|&at| plain.is_char_boundary(at)) {
+            for escape in ["+", "%2B", "%41"] {
+                let query = format!("{}{escape}{}", &plain[..at], &plain[at..]);
+                let read = sorted_pairs(&query);
+                // Split directly, the escape would be in a key or a value as it was written.
+                assert!(read.iter().all(|(key, value)| !key.contains(escape) && !value.contains(escape)), "{query}");
+                assert_eq!(read, decoded(&query), "{query}");
+            }
+        }
+    }
+
     #[test]
     fn repeated_keys_are_a_list_in_the_order_sent() {
         let form: Bulk =
@@ -970,6 +1086,20 @@ mod tests {
         for _ in 0..reads {
             let read: Sell = from_bytes(std::hint::black_box(body)).unwrap();
             std::hint::black_box(read);
+        }
+    }
+
+    /// What reading a route's query into its sorted pairs costs, for callgrind, counted as
+    /// [`what_reading_a_form_costs`] is: `QUERY_READS` (200) reads of `QUERY`, which is `a=1&b=2`
+    /// unless set. A query with an escape (`q=a+b&page=2`) is looked through for one before the
+    /// decoder reads it, which no case of `bench/request-cost` sends.
+    #[test]
+    #[ignore]
+    fn what_reading_a_query_costs() {
+        let reads: usize = std::env::var("QUERY_READS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let query = std::env::var("QUERY").unwrap_or_else(|_| "a=1&b=2".into());
+        for _ in 0..reads {
+            std::hint::black_box(sorted_pairs(std::hint::black_box(&query)));
         }
     }
 }
