@@ -11485,8 +11485,8 @@ rules something out.
     The guarantee is narrow on purpose: the address moves only when the runtime can tell, in the
     task the answer draws, that nothing it did not start is under way: the screen is still the
     entry and page the press was made on, no newer press of the form and no visit of its own came
-    between, nothing it did not do replaced the entry since the press (a script's `replaceState`,
-    a navigation of the page's that replaced it and is over, each of which keeps the entry's key),
+    between, nothing replaced the entry since the press (a script's `replaceState`, a navigation
+    that replaced it, another marked answer's own replace, each of which keeps the entry's key),
     and the browser shows no navigation on its way (`navigation.transition`) but the
     page reading itself again, the runtime's own. Where it cannot tell, it leaves the address as it
     was, which is what the same form without the mark does, and never repairs what a page's script
@@ -11498,10 +11498,13 @@ rules something out.
     `navigation.transition` in all three engines; the replace would cancel it, in all three. As
     the answer draws, before it replaces, the runtime reads `transition`, and while it shows a
     navigation that is not the page reading itself again it leaves the address, the answer drawn
-    under it, and the navigation finishes. One held after its address changed has moved the entry
-    already, so the answer draws nothing. Where the platform cannot tell, the runtime does not
-    track navigations to find out, and the limit stands. A load of another document on its way
-    shows no `transition`: the replace goes ahead, and in all three engines lets that load go on
+    under it, and the navigation finishes. One held after its address changed has committed, and
+    the two differ there: one that moved to another entry (a push, another key) has left the entry
+    the press was on, so the answer draws nothing; one that replaced the entry (`history:
+    "replace"`), keeping its key, leaves the press its entry, so the answer draws, and leaves the
+    address the navigation put in, as after any replace since the press (below). Where the
+    platform cannot tell, the runtime does not track navigations to find out, and the limit stands.
+    A load of another document on its way shows no `transition`: the replace goes ahead, and in all three engines lets that load go on
     and take the screen's place (Firefox and WebKit abort the page's requests, a submit's among
     them, as a load begun by a link starts, so there no answer comes while it is on its way). A navigation a page begins in a `navigatesuccess` listener, as
     another ends, shows none either (all three engines leave `transition` empty while it waits
@@ -11540,13 +11543,20 @@ rules something out.
     (`ReadAgain`) leave the press its entry; the read again, whose navigation the answer's
     `replaceState` cancels as a script's does, reads later at the new address, and an address on
     another path starts the read over there, since without the Navigation API the read follows the
-    path. The address goes by the entry exactly: as the press is made and again before the
-    replace, the runtime reads the entry's Navigation API `id`, which every replace of it changes
-    while the key stays, and without the API its address and `history.state`, and counts each
-    change it sees but its own replace. An answer to a press made before such a change, a script's
-    `replaceState` or a navigation of the page's that replaced the entry and is over (one to an
-    `#id` of the page that the runtime leaves to it), is drawn under the address the page put in,
-    as an unmarked form's is, rather than taking it back with the older one. A navigation of the
+    path. The address goes by the entry exactly: a press of a marked form keeps the entry's
+    Navigation API `id`, which every replace of it changes while the key stays, and without the
+    API its address and `history.state`; just before the replace the runtime reads them again, and
+    puts the address in only if each is the one the press kept, as `Object.is` compares them (so a
+    `NaN` state is the same state). It counts no replaces and does not tell whose a replace was:
+    an answer to a press made before any, a script's `replaceState`, a navigation that replaced
+    the entry (one to an `#id` of the page that the runtime leaves to it), one a page's
+    `currententrychange` listener makes while the runtime's own replace is running, or another
+    marked answer's own replace, is drawn under the address the entry has, as an unmarked form's
+    is, rather than taking it back with the older one. So of two marked forms pressed before either
+    answers, the answer that draws first puts its address in and the second leaves that address.
+    Tracking which replaces were the runtime's would let the second move it too, but a listener
+    that replaces the entry, or presses a form, inside the runtime's `replaceState` makes any such
+    count misattribute; where the runtime cannot tell, it leaves the address. A navigation of the
     page's still on its way is the `transition` above. Without the API a script's `replaceState`
     to the same address with another state is seen as such, one to the same address with the
     same state (`null` again) is not, and one to another address is a move, so the answer draws
@@ -11599,7 +11609,8 @@ rules something out.
     this press's, on this press's entry. Once an answer has come it may be drawing (it waits for
     its modules and stylesheets) under its own press, which no press changes, so a press then sends
     a read of its own. Two marked
-    forms' answers are drawn as they come, the address that of the last one that moved it. The route at each such address
+    forms' answers are drawn as they come, and one pressed before the other's answer replaced the
+    entry leaves the address that answer put in (above). The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
     drawn with); a route whose patch appends (Load more) is not one to mark. Without the Navigation
@@ -11741,23 +11752,30 @@ rules something out.
       the address too: a record of navigations heard, of the kind this Choice cut from the refusal
       and the visits, kept for a load the replace lets go on anyway and an ordering a page's script
       chooses, in the runtime every page loads (README Value 6).
-    - Letting a marked form without an id move the address, its presses not ordered, as the build
-      before this one did: a form without one that a `formdata` listener drew again and pressed
-      sent both presses, and the older answer, coming last, took the address.
+    - Letting a marked form without an id move the address, its presses not ordered, as an earlier
+      build did: a form without one that a `formdata` listener drew again and pressed sent both
+      presses, and the older answer, coming last, took the address.
+    - Counting the entry's replaces other than the runtime's own, as the build before this one
+      did, so that of two marked forms pressed before either answers the second would move the
+      address too: `currententrychange` fires inside `replaceState`, so a page's listener that
+      replaced the entry there was taken for the runtime's own replace, and the older answer wrote
+      over it; and a listener that pressed another form there made the runtime's own replace count
+      as the page's. Telling whose replace is running takes tracking of the kind this Choice has
+      cut; the press keeps the entry, and any replace since it leaves the address.
 
-    What it costs: the runtime every page loads is 1,522 bytes larger raw (46,502 to 48,024), 627
-    with gzip (16,718 to 17,345) and 558 with brotli (15,106 to 15,664), paid once a release by
-    every user (257, 94 and 90 larger than the build before this one, which went by the entry's key
-    alone, so missed a replace of the entry, and dropped an empty query and a bare `#`). A
+    What it costs: the runtime every page loads is 1,493 bytes larger raw (46,502 to 47,995), 619
+    with gzip (16,718 to 17,337) and 537 with brotli (15,106 to 15,643), paid once a release by
+    every user (29, 8 and 21 smaller than the build before this one, which counted the entry's
+    replaces other than its own). A
     `data-patch` submit reads one attribute and its form's id, and adds one to that id's count in a
     map that keeps a number for each id pressed; a press keeps the count it was made at, and a read
     compares it where it could draw or be sent again. Only a marked form's press looks at its entry
     (one key, or the address, compared with the last seen, and its id, or its address and state,
-    compared with the last seen exactly) and keeps both; a marked read compares them where it could
+    read as they are) and keeps both; a marked read compares them where it could
     draw, reads the size of the set of visits on their way the runtime keeps already, and builds an
     address, reads `navigation.transition` and compares it with the page's last read of itself
-    again (kept as that read begins), compares the entry exactly once more, and reads the address
-    back. A patch tracks whether it placed every element as it walks them, without a separate scan;
+    again (kept as that read begins), compares the entry's id, or its address and state, with the
+    press's by `Object.is`, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
     each `currententrychange` (`popstate` without the Navigation API) compares the key (the
     address) with the last seen, and a visit the runtime begins adds one to a counter. On the
     server nothing runs that did not: `html!` writes the mark as an attribute and refuses a
@@ -11771,7 +11789,9 @@ rules something out.
     of another document or a reload under way to go on, measured once in each engine; a replace of
     the entry, by `replaceState` or by a navigation with `history: "replace"`, gives it a new
     Navigation API `id` and keeps its key, and `history.state` reads as the same object until it
-    changes, measured once in each engine; `fetch` keeps an empty query (`?`) in its response's
+    changes, measured once in each engine; `currententrychange` fires inside `replaceState`,
+    before it returns, so a listener's own `replaceState` there runs inside the runtime's, in the
+    smoke's checks in each engine; `fetch` keeps an empty query (`?`) in its response's
     URL, where Chromium's `URL.search` setter drops it, measured once in each engine; a move to an
     `#id` of the page by `location.hash` fires `popstate` and gives the entry its new key before
     the assignment returns, and one by a link fires `popstate` as the address changes, in the same
@@ -11833,6 +11853,10 @@ rules something out.
     2026-11-26, a submit's fetch as a link begins a load of another document (aborted at once in
     Firefox and WebKit, answered in Chromium), in Playwright 1.65.1's Chromium 159, Firefox 159 and
     WebKit 27.2;
+    2026-11-26, a `currententrychange` listener's `replaceState` running inside the runtime's,
+    and a `NaN` state kept across reads without the Navigation API, in Playwright 1.65.1's
+    Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, which the build before this one
+    fails);
     2026-11-26, a replace's `id` and key, by `replaceState` and by `navigation.navigate` with
     `history: "replace"`, `history.state`'s identity across reads, and the `search` setter and
     `fetch` on an empty query, in Playwright 1.65.1's

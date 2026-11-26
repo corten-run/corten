@@ -855,9 +855,11 @@ fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
 
 /// Why `data-address` would never change the address: the runtime puts the address a `data-patch`
 /// form asked for by GET in the entry's place once its answer is drawn, so the mark goes on a
-/// `<form>` with `data-patch` whose `method` sends it as a GET (none, `get`, or one the browser
-/// reads as GET), and with an `id`, by which the runtime tells the latest press of the form from an
-/// older one (the form a patch draws in its place keeps it). A spread may write any of these, so a
+/// `<form>` with `data-patch` whose own `method` sends it as a GET (none, `get`, or one the
+/// browser reads as GET), and with an `id`, by which the runtime tells the latest press of the form
+/// from an older one (the form a patch draws in its place keeps it). The `method` is a rule of its
+/// own: a button's `formmethod="get"` would send a posting form as a GET, but a marked form is a
+/// GET form, and a button in it that posts says so with `formmethod="post"`. A spread may write any of these, so a
 /// form with one may lack `data-patch` or an `id` here, and a `method` or `id` after a spread may
 /// not be the one the browser keeps (the first); one before every spread is, so an empty `id` there
 /// is refused whatever a spread writes. A `method` written as an
@@ -885,7 +887,7 @@ fn address_unsent(is_form: bool, attrs: &[Attr]) -> Option<&'static str> {
     let not_get = |m: &str| m.eq_ignore_ascii_case("post") || m.eq_ignore_ascii_case("dialog");
     if attr_named(kept, "method").flatten().is_some_and(not_get) {
         return Some(
-            "data-address: only a GET form's answer is the page at the address it asked for; a form that posts, or closes its dialog, leaves the address as it is: give it method=\"get\", or remove data-address",
+            "data-address: a marked form's own method is GET, whose answer is the page at the address it asked for; one that posts, or closes its dialog, is refused even where a button's formmethod=\"get\" sends it as a GET: give the form method=\"get\" and a button that posts formmethod=\"post\", or remove data-address",
         );
     }
     None
@@ -3436,7 +3438,7 @@ mod tests {
             .is_some_and(|w| w.starts_with("a form without data-patch")));
         for posting in ["post", "POST", "dialog"] {
             let refused = why(true, vec![method(posting), id(), bare("data-patch"), bare("data-address")]);
-            assert!(refused.is_some_and(|w| w.starts_with("only a GET form")), "{posting}");
+            assert!(refused.is_some_and(|w| w.starts_with("a marked form's own method is GET")), "{posting}");
         }
         // A form without an id, or with an empty one, cannot tell its latest press from an older one.
         for mut attrs in [vec![], vec![bare("id")], vec![Attr::Static("id".into(), String::new())]] {
@@ -3449,7 +3451,7 @@ mod tests {
         assert_eq!(why(true, vec![bare("data-address"), spread()]), None);
         assert_eq!(why(true, vec![bare("data-patch"), bare("data-address"), spread(), method("post")]), None);
         let first = why(true, vec![method("post"), id(), bare("data-patch"), bare("data-address"), spread()]);
-        assert!(first.is_some_and(|w| w.starts_with("only a GET form")));
+        assert!(first.is_some_and(|w| w.starts_with("a marked form's own method is GET")));
         // So is an id before it: a spread cannot write over an empty one. One after it may not be
         // the one the browser keeps.
         for empty in [bare("id"), Attr::Static("id".into(), String::new())] {

@@ -520,6 +520,26 @@ export async function dataAddress(browser) {
         JSON.stringify({ marked, unmarked }),
       );
     }
+    // A `NaN` state is the same state each time the runtime reads it, so it does not stop the replace.
+    await plain.goto(home);
+    await plain.evaluate(() => history.replaceState(NaN, "", location.href));
+    await plain.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+    const nanDrawn = await plain
+      .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+      .then(() => true, () => false);
+    await plain.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+    const nan = { drawn: nanDrawn, ...(await plain.evaluate(() => ({ at: location.search, state: Number.isNaN(history.state) }))) };
+    check(
+      "without the Navigation API a marked patch on an entry whose state is NaN puts its address in, keeping the state",
+      nan.drawn && nan.at === "?scope=week" && nan.state,
+      JSON.stringify(nan),
+    );
+    const twoPlain = await twoMarked(plain, false);
+    check(
+      "without the Navigation API two marked forms pressed before either answers leave the later answer's address",
+      twoPlain.daySent && twoPlain.weekSent && twoPlain.weekDrawn && twoPlain.dayDone && twoPlain.at === "?scope=week" && twoPlain.shown === "day",
+      JSON.stringify(twoPlain),
+    );
     // A replacement the browser refuses without a word leaves the address as it was.
     const silent = await silentRefusal(plain);
     check(
@@ -1581,6 +1601,21 @@ async function markedPatchVisits(browser, errors) {
     );
   }
 
+  // Two marked forms pressed before either answers, Week's answer first: Week's replace is a replace
+  // of the entry since Day's press, so Day's answer is drawn under Week's address, as an unmarked
+  // form's is. So it is when a `currententrychange` listener of the page replaces the entry again
+  // (another state) while Week's replace is running: the runtime does not tell its own replace from
+  // the page's, and the address and state the page put in stay.
+  for (const listener of [false, true]) {
+    const two = await twoMarked(page, listener);
+    check(
+      `two marked forms pressed before either answers leave the later answer's address${listener ? ", and a currententrychange listener's replace during the first answer's" : ""}`,
+      two.daySent && two.weekSent && two.weekDrawn && two.dayDone && two.at === "?scope=week" && two.shown === "day" && two.listened === (listener ? "listener" : null) && two.within === (listener ? 1 : null) &&
+        two.state === (listener ? "listener" : null),
+      JSON.stringify(two),
+    );
+  }
+
   // A load of another document on its way (a link marked `data-reload`, held by the server) as a
   // marked answer comes: the platform shows no navigation on its way for it. A patch's replace
   // lets it go on and take the screen's place; Corten's redirect (`corten-location`) and a layout
@@ -1596,15 +1631,23 @@ async function markedPatchVisits(browser, errors) {
   const endsAlike = (/** @type {any} */ a, /** @type {any} */ b) =>
     a.sent && a.loading && b.sent && b.loading && a.cutOff === b.cutOff && a.final === b.final && a.aborted === b.aborted && [...a.asked].sort().join() === [...b.asked].sort().join();
   // Where the load did not cut the answer off (Chromium), the redirect and the reload are begun
-  // while it is held, as without the mark; where it did (Firefox and WebKit), nothing is.
+  // while it is held, as without the mark, and the patch is drawn while it is held, the marked
+  // press's address put in and the unmarked one's left; where it did (Firefox and WebKit), nothing
+  // is, and nothing is drawn.
   const begun = (/** @type {"patch" | "location" | "shell"} */ kind, /** @type {string} */ navigation) => {
     const { marked } = /** @type {any} */ (loads[kind]);
     return marked.cutOff ? marked.asked.length === 0 : navigation ? marked.asked.includes(navigation) : marked.asked.length === 0;
   };
   const patched = /** @type {any} */ (loads.patch).marked;
+  const unpatched = /** @type {any} */ (loads.patch).unmarked;
+  const drewHeld =
+    [patched, unpatched].every((l) => l.drew.fresh) &&
+    (patched.cutOff
+      ? [patched, unpatched].every((l) => l.drew.shown === "all" && l.drew.at === "/smoke/address")
+      : patched.drew.shown === "week" && patched.drew.at === "/smoke/address?scope=week" && unpatched.drew.shown === "week" && unpatched.drew.at === "/smoke/address");
   check(
     "a load of another document on its way as a marked answer comes goes on through its patch's replace, and its redirect and reload end as the same press's without the mark",
-    Object.values(loads).every((/** @type {any} */ l) => endsAlike(l.marked, l.unmarked)) && !patched.aborted && patched.final === "/smoke/address-elsewhere?held=1" &&
+    Object.values(loads).every((/** @type {any} */ l) => endsAlike(l.marked, l.unmarked)) && !patched.aborted && patched.final === "/smoke/address-elsewhere?held=1" && drewHeld &&
       begun("patch", "") && begun("location", "navigate push /smoke/address?scope=month") && begun("shell", "navigate reload /smoke/address"),
     JSON.stringify(loads),
   );
@@ -1925,7 +1968,8 @@ async function postThenRead(page, move, unmarked = false) {
  * Presses Week, marked or not, and while its answer is held follows a link marked `data-reload` to
  * another document, whose load the route holds too; then lets Week's answer come as `kind` says (its
  * patch, Corten's redirect to Month, or its patch with a layout that changed), and the load after it.
- * Says whether each was sent, whether the load was aborted, and where the page ended.
+ * Says whether each was sent, whether the load was aborted, what was drawn and where the page was
+ * while the load was held, and where the page ended.
  * @param {import("@playwright/test").Page} page @param {"patch" | "location" | "shell"} kind @param {boolean} marked
  */
 async function heldLoad(page, kind, marked) {
@@ -1963,6 +2007,13 @@ async function heldLoad(page, kind, marked) {
   // outlasts the document (put on now: the page cannot be reached while the held load is on its way).
   await page.evaluate(() => {
     sessionStorage.removeItem("smoke-navigations");
+    // And where the page is and what it shows, every 50 ms until it unloads, the last 40 kept.
+    sessionStorage.removeItem("smoke-looks");
+    setInterval(() => {
+      const looks = JSON.parse(sessionStorage.getItem("smoke-looks") ?? "[]").slice(-39);
+      looks.push([Date.now(), location.pathname + location.search, document.querySelector("#smoke-address output")?.textContent ?? null]);
+      sessionStorage.setItem("smoke-looks", JSON.stringify(looks));
+    }, 50);
     /** @type {any} */ (window).navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (event.destination.sameDocument) return;
       const to = new URL(event.destination.url);
@@ -1999,6 +2050,9 @@ async function heldLoad(page, kind, marked) {
   await page.waitForTimeout(1000);
   asking = false;
   page.off("request", ask);
+  // What the answer drew while the load is held, and the address then: the page's last look before
+  // the load is let go (the page is not asked while that load is on its way).
+  const releasedAt = Date.now();
   releaseOther();
   await page.waitForTimeout(1500);
   page.off("requestfailed", failed);
@@ -2008,7 +2062,103 @@ async function heldLoad(page, kind, marked) {
   /** @type {string[]} */
   const begun = await page.evaluate(() => JSON.parse(sessionStorage.getItem("smoke-navigations") ?? "[]"));
   const asked = [...begun.filter((n) => !n.endsWith(" /smoke/address-elsewhere?held=1")), ...requested];
-  return { sent, loading, cutOff, aborted, asked, final: final.pathname + final.search };
+  /** @type {[number, string, string | null][]} */
+  const looks = await page.evaluate(() => JSON.parse(sessionStorage.getItem("smoke-looks") ?? "[]"));
+  const last = looks.filter(([t]) => t < releasedAt).at(-1);
+  const drew = { at: last?.[1] ?? null, shown: last?.[2] ?? null, fresh: !!last && releasedAt - last[0] < 500 };
+  return { sent, loading, cutOff, aborted, asked, drew, final: final.pathname + final.search };
+}
+
+/**
+ * Presses a second marked form the page adds outside the panel (its Day) and then Week, both
+ * answers held, and lets Week's come and draw first, then Day's. With `listener`, a
+ * `currententrychange` listener of the page replaces the entry again (the same address, another
+ * state) as Week's answer replaces it, while the runtime's replace is running. Says whether each
+ * was sent and drawn, the state the listener left and how many calls of `replaceState` were
+ * running as it began its own (the runtime's: 1), and where the page is once Day's is drawn.
+ * @param {import("@playwright/test").Page} page @param {boolean} listener
+ */
+async function twoMarked(page, listener) {
+  const home = `${base}/smoke/address`;
+  const week = `${home}?scope=week`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  /** @type {Record<string, () => void>} */
+  const letGo = {};
+  /** @type {Record<string, Promise<unknown>>} */
+  const held = {};
+  for (const url of [week, day]) {
+    held[url] = new Promise((resolve) => (letGo[url] = () => resolve(undefined)));
+    await page.route(url, async (route) => {
+      if (route.request().headers()["corten"] !== "action") return route.continue();
+      await held[url];
+      await route.continue().catch(() => {});
+    });
+  }
+  const sent = (/** @type {string} */ url) => page.waitForRequest((r) => r.url() === url && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  const dayAsked = sent(day);
+  await page.evaluate((listener) => {
+    // A state an earlier check left (a load of the same address keeps it) is not this one's.
+    history.replaceState(null, "", location.href);
+    const form = document.createElement("form");
+    form.id = "smoke-address-second";
+    form.action = "/smoke/address";
+    form.dataset.patch = "";
+    form.dataset.address = "";
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "scope";
+    field.value = "day";
+    form.append(field);
+    document.querySelector("main")?.append(form);
+    Object.assign(window, { __second: form, __listened: null });
+    // How many calls of `replaceState` are running, so the listener can say it ran inside the runtime's.
+    let depth = 0;
+    const replace = history.replaceState;
+    history.replaceState = function (...args) {
+      depth += 1;
+      try {
+        return replace.apply(this, args);
+      } finally {
+        depth -= 1;
+      }
+    };
+    if (listener)
+      /** @type {any} */ (window).navigation.addEventListener("currententrychange", () => {
+        if (location.search !== "?scope=week" || /** @type {any} */ (window).__listened) return;
+        Object.assign(window, { __listened: "replacing", __within: depth });
+        history.replaceState({ smoke: "listener" }, "", location.href);
+        Object.assign(window, { __listened: history.state?.smoke ?? "none" });
+      });
+    form.requestSubmit();
+  }, listener);
+  const daySent = await dayAsked;
+  const weekAsked = sent(week);
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click());
+  const weekSent = await weekAsked;
+  letGo[week]();
+  const weekDrawn = await page
+    .waitForFunction(
+      () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+      undefined,
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  const listened = await page.evaluate(() => /** @type {any} */ (window).__listened);
+  const within = await page.evaluate(() => /** @type {any} */ (window).__within ?? null);
+  letGo[day]();
+  const dayDone = await page
+    .waitForFunction(
+      () => document.querySelector("#smoke-address output")?.textContent === "day" && !(/** @type {any} */ (window).__second.hasAttribute("aria-busy")),
+      undefined,
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200))));
+  await page.unroute(week);
+  await page.unroute(day);
+  const end = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent, state: history.state?.smoke ?? null }));
+  return { daySent, weekSent, weekDrawn, listened, within, dayDone, ...end };
 }
 
 /**

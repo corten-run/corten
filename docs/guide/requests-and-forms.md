@@ -2261,12 +2261,16 @@ One that comes while the page reads itself again (`ReadAgain`), or after another
 drawn in place, draws as usual, and the read starts again later at the new address. Where the
 runtime cannot tell that the screen is still the page and entry the press was made on, with no
 newer press of the form between and nothing it did not start under way, it leaves the address as it was, as the form without the mark
-does. So does an answer to a press made before a script of the page replaced the entry
-(`history.replaceState`, or a navigation of its own with `history: "replace"` that is over by the
-time the answer draws): it is drawn under the address the script put in, which an older answer
-does not take back (without the Navigation API, a `replaceState` to another address is a move to
-another entry, and the answer draws nothing). The runtime never reads the page again to repair
-the address. So a replace the browser refuses, with an
+does. So does an answer to a press made before anything replaced the entry: a script's
+`history.replaceState` (one in a `currententrychange` listener as the runtime's own replace runs
+included), a navigation with `history: "replace"`, or another marked form's answer putting its
+address in. The press keeps the entry exactly (its Navigation API `id`, without the API its
+address and `history.state`, compared as `Object.is` does), and the answer puts its address in
+only if the entry is still that one; it is drawn under the address the entry has, which an older
+answer does not take back. So of two marked forms pressed before either answers, the first answer
+puts its address in and the second leaves it. (Without the Navigation API, a `replaceState` to
+another address is a move to another entry, and the answer draws nothing.) The runtime
+never reads the page again to repair the address. So a replace the browser refuses, with an
 exception (WebKit past its limit of history updates) or without a word (Chromium past its limit),
 leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
 cancels: that script has taken the address over, so it puts the address it means in itself, or
@@ -2290,8 +2294,9 @@ draws even if the page moved to another `#id` meanwhile (once the answer has com
 navigation aborted the GET, the press sends its own). Give the form a
 `#[derive(Id)]` id, as below: `html!` refuses the mark on a form without one, and the runtime
 leaves the address for a press of a marked form that has none (a spread that writes none), whose
-presses it cannot tell apart. Two marked forms are not ordered against each other: their answers are drawn
-as they come.
+presses it cannot tell apart. Two marked forms are not ordered against each other: their answers
+are drawn as they come, and the address is left by one pressed before the other's answer put its
+own in.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
 page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,
@@ -2337,9 +2342,10 @@ looks at as a press is made, as its answer draws and at each `popstate`: a scrip
 when the runtime next looks, so an answer pressed before it draws nothing, while one the script
 puts back before then (which fires no `popstate`) is not seen, and nor is Back or Forward between
 two entries of one address. `html!` refuses `data-address` on anything but a `<form>`, on a form
-without `data-patch` or without an `id`, and on one whose `method` is `post` or `dialog`; a `formmethod="post"`
-button in a marked form posts as it would in any other, and leaves the address. A filter whose
-every change should be an entry of its own, which Back steps through, is a navigation for now
+without `data-patch` or without an `id`, and on one whose own `method` is `post` or
+`dialog`, even when a button's `formmethod="get"` would send it as a GET: a marked form is a GET
+form, and a `formmethod="post"` button in it posts as it would in any other, and leaves the
+address. A filter whose every change should be an entry of its own, which Back steps through, is a navigation for now
 ([#2104 A GET data-patch form marked data-address cannot add a history entry that Back answers from the patch it holds](https://github.com/corten-run/corten/issues/2104)).
 
 ## Redirects

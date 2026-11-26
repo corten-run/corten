@@ -2797,9 +2797,12 @@ impl Req {
     /// # fn main() {}
     /// ```
     ///
-    /// and on a form that posts, whose answer stays at the page's address. A `method` written as an
-    /// expression is known only when the form is sent, and the runtime changes the address only for
-    /// a GET; so is one after a spread, which may write the `method` the browser keeps, the first.
+    /// and on a form whose own `method` posts. That is a rule of its own: the runtime sends a press
+    /// as its button's `formmethod` says, so a posting form's `formmethod="get"` button would move
+    /// the address, but a marked form is a GET form, and refused even with such a button. A `method`
+    /// written as an expression is known only when the form is sent, and the runtime changes the
+    /// address only for a GET; so is one after a spread, which may write the `method` the browser
+    /// keeps, the first.
     ///
     /// ```compile_fail
     /// use corten::prelude::*;
@@ -2808,9 +2811,31 @@ impl Req {
     /// struct ScopeFormId;
     ///
     /// fn scope() -> impl Render {
-    ///     html! { <form id={ScopeFormId} method="post" data-patch data-address><button>"Apply"</button></form> }
+    ///     html! { <form id={ScopeFormId} method="post" data-patch data-address><button formmethod="get">"Apply"</button></form> }
     /// }
     /// # fn main() {}
+    /// ```
+    ///
+    /// A marked form that also posts is a GET form with a button that says so; that post's answer
+    /// leaves the address, as any write's does:
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Id)]
+    /// struct ScopeFormId;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! {
+    ///         <form id={ScopeFormId} method="get" data-patch data-address>
+    ///             <button>"Apply"</button>
+    ///             <button formmethod="post">"Save"</button>
+    ///         </form>
+    ///     }
+    /// }
+    /// # fn main() {
+    /// assert!(scope().to_html().contains(r#"formmethod="post""#));
+    /// # }
     /// ```
     ///
     /// A dialog's form closes its dialog and sends nothing, so it is refused too:
