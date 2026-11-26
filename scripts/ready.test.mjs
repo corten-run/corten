@@ -109,10 +109,12 @@ test("the budget ends the wait naming the last outcome, and nothing after it cou
 
 test("an attempt that hangs is given up after 5 s and the next one is made", async () => {
   const from = performance.now();
-  const got = await against((n, _q, s) => void (n > 1 && ok(s)), { budget: 7000 });
+  // The budget leaves the second exchange 25 s, so a slow runner cannot crowd it out, while an
+  // attempt given the whole budget would still hang past it.
+  const got = await against((n, _q, s) => void (n > 1 && ok(s)), { budget: 30_000 });
   const took = performance.now() - from;
   assert.deepEqual(got, { outcome: "ready", requests: 2 });
-  // The second request within the 7 s budget is the cap at work; the first attempt lasted its 5 s.
+  // A second request at all is the cap at work; the first attempt lasted its 5 s.
   assert.ok(took >= 4900, `ready after ${Math.round(took)} ms`);
 });
 
@@ -127,11 +129,18 @@ test("an answer that comes after its attempt's 5 s is not read, and the attempt 
 });
 
 test("a refused connection is waited out until the app listens", async () => {
-  // The port is picked below every default ephemeral range (Linux 32768, Windows and macOS 49152), so
-  // no server another process starts on port 0 takes it while it is free and answers in the app's
-  // place. One another process does hold is skipped for the next.
+  // The port is picked below every default ephemeral range (Linux 32768, Windows and macOS 49152),
+  // so no server another process starts on port 0 takes it. Before the app listens, the port must
+  // be seen to refuse: on a clock that ends the budget after a second attempt, two refusals in a
+  // row are retried and the second is named, which no answer from another listener can give.
   for (let tries = 0; ; tries++) {
+    assert.ok(tries < 5, "five ports below the ephemeral range did not refuse a connection");
     const port = 20_000 + Math.floor(Math.random() * 10_000);
+    const refusing = await ready(`http://127.0.0.1:${port}`, { now: jumps(5) }).then(
+      () => "ready",
+      (e) => String(e.message),
+    );
+    if (refusing !== `http://127.0.0.1:${port}/health/ready did not answer 200 within 120 s (last: ECONNREFUSED)`) continue;
     let asked = 0;
     const app = http.createServer((_q, s) => (asked++, ok(s)));
     /** @type {Promise<Error | undefined>} */
@@ -140,20 +149,13 @@ test("a refused connection is waited out until the app listens", async () => {
       app.once("listening", () => r(undefined));
     });
     const later = setTimeout(() => app.listen(port, "127.0.0.1"), 600);
-    const outcome = ready(`http://127.0.0.1:${port}`, { budget: 10_000 }).then(
-      () => "ready",
-      (e) => String(e.message),
-    );
-    const held = await listened;
     try {
-      if (held) {
-        assert.equal(/** @type {any} */ (held).code, "EADDRINUSE");
-        assert.ok(tries < 5, "five ports below the ephemeral range were all in use");
-        // The wait may be answered by whoever holds the port; it is not this test's to judge.
-        await outcome;
-        continue;
-      }
-      assert.equal(await outcome, "ready");
+      const outcome = await ready(`http://127.0.0.1:${port}`, { budget: 30_000 }).then(
+        () => "ready",
+        (e) => String(e.message),
+      );
+      assert.equal(await listened, undefined);
+      assert.equal(outcome, "ready");
       assert.equal(asked, 1);
       return;
     } finally {
