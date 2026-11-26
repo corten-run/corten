@@ -806,7 +806,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             await within(5000, "the reached page's part route was not set within 5 s", page.route(reachReads, reachPart));
             const nav = await goTo(reachedUrl);
             // `Saved.` drawn by an answer to the reached page's own part read, within 6 s.
-            await page
+            const inTime = await page
               .waitForFunction(
                 () => {
                   const status = document.getElementById("alert-status");
@@ -815,7 +815,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 null,
                 { timeout: 6000 },
               )
-              .catch(() => {});
+              .then(() => true, () => false);
             const reached = await readWithin(
               "the status line after the navigation's wait for Saved.",
               page.evaluate(() => {
@@ -831,11 +831,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             );
             const own = parts().slice(from).filter((e) => address(e) === reachedAt);
             const others = parts().slice(from).filter((e) => address(e) !== reachedAt);
-            const drewOwn = reached.text === "Saved." && reached.read !== null && reachAnswers[Number(reached.read)] === true;
+            const drewOwn = inTime && reached.text === "Saved." && reached.read !== null && reachAnswers[Number(reached.read)] === true;
             check(
               "a page's part reached by the runtime's navigation is read again, not the page",
               nav.saving && nav.sameDocument && kept && drewOwn && own.length > 0 && whole().length - wholeFrom === 1,
-              `${wentTo(nav)}, then ${reached.text}${reached.read === null ? " (not drawn by an answer to the reached page's own part read)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
+              `${wentTo(nav)}, then ${reached.text}${inTime ? "" : " (not drawn by its own part read within 6 s)"}${reached.read === null ? " (not drawn by an answer to the reached page's own part read)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
             );
           } finally {
             reachOver = true;
@@ -1455,7 +1455,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               await within(5000, "the held-read route was not set within 5 s", page.route(alerts, slow));
               await page.goto(address);
               await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__replayed = 7)));
-              waiting = (await saved()) ?? "";
+              waiting = (await readWithin("the status line once the held page loaded", saved())) ?? "";
               const held = await steps(5000, "no read held within 5 s").step(() => isHeld).catch(() => false);
               // The page's event for the read held may come a moment after its route.
               if (held) await pollFor(1000, async () => polls.length > 0);
@@ -1507,7 +1507,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             else if (!(await pollFor(1000, async () => answered.length > 0))) stopped = "no read of the replaced address finished within 1 s";
             else
               outcome = {
-                status: (await saved()) ?? "",
+                status: (await readWithin("the status line once Saved. was drawn", saved())) ?? "",
                 at: page.url(),
                 later: polls.slice(1).map((r) => r.url()),
                 statuses: await steps(1000, "the reads' answers not read within 1 s").step(() => Promise.all(answered)).catch(() => []),
