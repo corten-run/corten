@@ -786,6 +786,38 @@ function externalFailureFixture(p) {
   return { prepare, approve, seed };
 }
 
+test("retained orphan receipt survives a proved reuse of its stopped Windows owner PID", { timeout: 60000 }, async (t) => {
+  const p = fixture(t, "ssh-late", "hardening"), root = p.h.base;
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
+  fs.writeFileSync(path.join(root, "index.json"), "[]");
+  const { old, local } = await externalFailureFixture(p).seed("json-api", "r20", false, true);
+  const fleet = readFleet(old, "r20"), lock = path.join(old, ".fleet-operation.lock");
+  const { pid } = JSON.parse(fs.readFileSync(lock));
+  const receipt = path.join(old, "receipts", "external-failed-host.json");
+  const latest = Math.max(...[lock, path.join(local, "operation.lock"),
+    path.join(path.dirname(local), ".groups-launch.lock"), receipt].flatMap((file) => {
+    const s = fs.lstatSync(file);
+    return [s.birthtimeMs, s.mtimeMs, s.ctimeMs];
+  }));
+  await delay(20);
+  const started = Date.now(), stop = process.kill.bind(process);
+  assert.ok(started > latest);
+  const tree = treeHash(old);
+  t.mock.method(process, "kill", (id, signal) => id === pid && signal === 0 ? true : stop(id, signal));
+  assert.throws(() => externalFailedHostBinding(fleet, { orphaned: true }), /original stopped batch owner/);
+  assert.throws(() => readExternalFailedHost(fleet, { processStart: () => undefined }), /original stopped batch owner/);
+  assert.throws(() => readExternalFailedHost(fleet, { processStart: () => Math.floor(latest) }), /original stopped batch owner/);
+  assert.throws(() => readExternalFailedHost(fleet, { processStart: () => Date.now() + 60000 }), /original stopped batch owner/);
+  const row = readExternalFailedHost(fleet, { processStart: (id) => id === pid ? started : undefined });
+  assert.equal(row.round, "r20");
+  assert.equal(row.externalFailureSha256, fileHash(receipt));
+  assert.equal(treeHash(old), tree);
+  assert.throws(() => readExternalFailedHost(fleet, { processStart() {
+    fs.appendFileSync(receipt, "\n");
+    return started;
+  } }), /external failure receipt changed during replay/);
+});
+
 for (const kind of ["attempt", "posted create", "orphaned supervisor"])
 for (const scenario of ["absent", "renamed old ID", "old tag on a different ID", "incomplete census", "late recovery"]) {
   test(`external failed ${kind} before create: ${scenario}`, { timeout: 60000 }, async (t) => {

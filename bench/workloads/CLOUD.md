@@ -717,6 +717,12 @@ host does not make its old monitor active again. Preparation reads the original
 retirement evidence and rechecks the unchanged locks; it never removes them or
 authorizes collection or deletion on the old host.
 
+For an existing monitored external failure receipt, replay can also recognize a
+Windows process whose start time is strictly later than the saved receipt and all
+three original locks. Ambiguous identity still refuses. This does not allow a
+new receipt to be created for a live PID, change any old custody records, or
+replace the same-account absence check before a new allocation.
+
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
 commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
