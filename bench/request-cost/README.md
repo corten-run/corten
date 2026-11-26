@@ -1,0 +1,293 @@
+# What a request costs the server, over a socket
+
+Three numbers for a change to the request path
+([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2), each read from a
+small Corten app, the [probe](probe/src/main.rs), built against the commit being measured:
+
+1. Instructions a request: what the thread that serves runs to read one HTTP/1.1 request off a
+   keep-alive connection and write its answer, counted by callgrind.
+2. Allocations a request: calls into the allocator, from the same callgrind profile.
+3. Memory an idle connection holds: how much the process's resident memory grows for each open
+   connection, after one request, after three, or before any byte.
+
+Nothing here is part of the workspace or of `corten`. The scripts are Node, standard library
+only, and a POSIX shell.
+
+## Which tool for which number
+
+| Tool | What it runs | What its count holds |
+| --- | --- | --- |
+| [`crates/corten/tests/router_cost.rs`](../../crates/corten/tests/router_cost.rs) | The router in process, called with `oneshot`: no socket, no connection | Routing, the stages, the handler and the answer's body. Not reading or parsing the request, the connection's task, timers, or writing the answer. Use it for a change inside the router. |
+| [`bench/fullstack/cost-by-crate.sh`](../fullstack/cost-by-crate.sh) and [`cost-by-default.sh`](../fullstack/cost-by-default.sh) | `examples/card-market` (or the benchmark's axum app) as a server, one keep-alive connection, under callgrind | The whole request, as this kit counts it, for the item page and its JSON, of the checkout as it is: split by crate, or with each production default removed by a patch. Use them for where an app's request spends its instructions and for what a default costs. |
+| This kit | The probe as a server, one connection, under callgrind | The whole request too: the read, the parse, the connection, the router, the write. What it adds to the two scripts above: requests whose handlers do nearly nothing, so that a change to the connection is a large part of the count, a build of any named commit beside another, the requests written 16 at a time, allocations, and the memory of an idle connection. Use it to compare two commits on a change to the connection or to anything a request passes on its way in or out. |
+| [`bench/fullstack/count.mjs`](../fullstack/count.mjs) | A catalog app's container under load, counted by `perf stat` | User and kernel instructions and cycles of the catalog's item page or JSON. Use it when the change is exercised by those routes, and for cycles. |
+
+Callgrind counts user-space instructions only: it does not see the kernel. A count from this kit
+reads work, not speed: item 2 asks for cycles under load as well for a change around the
+handler, and this kit does not give them.
+
+## The cases
+
+Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
+API and no pages, and `pages`, an app without an API. Both keep every `App` default.
+
+| Case | Configuration | Request | Answer |
+| --- | --- | --- | --- |
+| `get` | `api` | `GET /baseline11?a=1&b=2`: a staged route, typed query parameters in, a short `String` out | `3` |
+| `post` | `api` | `POST /baseline11?a=1&b=2` with a two-byte `text/plain` body | `23` |
+| `unstaged` | `api` | `GET /unstaged11?a=1&b=2`: the same answer from a route that says `unstaged` | `3` |
+| `pipeline` | `api` | `GET /pipeline`: an `unstaged` route | `ok` |
+| `text` | `pages` | `GET /text` | `ok` |
+| `page` | `pages` | `GET /page` | A page of about 12 KB |
+| `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
+
+`get` and `unstaged` differ by more than the stages. The staged handler, which also answers
+`post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
+refuses it), so that one reads none.
+
+Every request has a `Host` line and nothing else it does not need. Every answer is checked
+against the table: a 200, the encoding or none, and the body, which for the page is the whole of
+it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
+and checked as the page is. `count.mjs --depth 16` writes 16
+requests at a time, as a client that pipelines does; the rows read that way have been
+`pipeline`, `get`, `unstaged` and `text`.
+
+## Running it
+
+On Linux, with the Rust toolchain, Node (the repository's `.node-version`; 22.15 at least, for
+zstd), `git`, `taskset`, valgrind, jemalloc (`libjemalloc.so.2`), `pkg-config` and libzstd's
+headers. On Debian 13, or in the `rust:1-trixie` container with Node added:
+
+```sh
+apt-get update && apt-get install -y valgrind libjemalloc2 pkg-config libzstd-dev
+```
+
+Build the probe against each commit to compare, one after another in one directory outside the
+checkout and any other git repository, from a checkout that has the commits:
+
+```sh
+sh bench/request-cost/build.sh <commit> <directory>
+```
+
+[`build.sh`](build.sh) puts the commit's `crates`, `docs`, `README.md`, `Cargo.toml` and
+`Cargo.lock` at `<directory>/work` and a copy of the probe beside it with that `Cargo.lock`,
+builds it with the repository's release profile and leaves the binary at
+`<directory>/bin/<commit>`. Three things about it:
+
+1. It removes `work` and `probe` in the directory first, so it refuses a directory inside this
+   checkout or inside any git repository, where a `probe` could be a checkout's own.
+2. It fails when the build used a crate, by name and version, that the commit's `Cargo.lock`
+   does not have. Names and versions are all it compares: a crate of a locked name and version
+   from another source, or with another checksum, is not noticed.
+3. A build that fails for either reason, or does not compile, leaves no `bin/<commit>`: the
+   binary of an earlier build of that commit is removed first.
+
+The probe's source is this checkout's, the same for every commit: only Corten and its locked
+crates differ. Use one checkout of the kit and one directory for every commit of a comparison
+(the first point under [What a count is not](#what-a-count-is-not)).
+
+No check builds the probe: Corten is at `../work/crates/corten` only after `build.sh` has put a
+commit there. `corten fmt --check`, which CI runs over `bench`, reads its markup; a change to
+Corten that stops it compiling shows the next time the kit is run.
+
+Then, with `<probe>` for one of those binaries and `<cpu>` for a CPU the server is held to:
+
+```sh
+node bench/request-cost/count.mjs <probe> --cpu <cpu> --answers <directory>/answers
+node bench/request-cost/count.mjs <probe> --cpu <cpu>
+node bench/request-cost/count.mjs <probe> --cpu <cpu> --depth 16 --cases pipeline,get,unstaged,text
+node bench/request-cost/count.mjs <probe> --cpu <cpu> --allocations
+node bench/request-cost/idle.mjs <probe> --cpu <cpu>
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --case get-browser --requests 3
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
+```
+
+1. `--answers` writes each case's answer as sent, with its `Date` and `ETag` values replaced.
+   Compare the two builds' directories (`diff -r`) before counting: item 2 asks that the answers
+   be verified, and a count of two builds that answer differently compares two different jobs.
+   Every reading also checks each answer against the case's own, as above.
+2. The second and third lines print, for each case, the median, least and most of three counts
+   (`--reps`) and the counts themselves, in instructions a request. Between them are two
+   columns to read a count by: `seconds`, how long the longest of the three windows lasted, and
+   `other threads`, the most that threads other than the serving one ran in a window and how
+   many they were (`243 in 1`). [How a number is read](#how-a-number-is-read) says what each
+   is for.
+3. `--allocations` prints allocations and frees a request, and the calls they are made of.
+4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`). One client
+   address has ports for about 28,000: for more, `--addresses` spreads them over that many
+   loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
+
+`--cases` takes a list of cases, and `--port` (8080 by default) the port the probe listens on,
+for two runs side by side on CPUs of their own. `--depth` takes at most 240.
+
+## How a number is read
+
+**Instructions.** A count is one run of the probe under callgrind. A client opens a connection
+and sends 240 requests, each after it has read the answer before it; the probe is then made to
+dump its counts (`callgrind_control -d`), which also sets them to zero; the client sends 1,000
+more requests on the same connection; and the probe dumps again. The count is what the second
+dump holds for the thread that serves, over 1,000 (over 992 at a depth of 16, which sends whole
+batches), to the nearest instruction. So the probe's start, the connection's opening and
+closing, the first requests' one-time work and shutdown are before the first dump or after the
+second, and are not in it. What is in it beside the requests: what the serving thread does to
+write a dump, 775 instructions measured over a window with no request (under 1 a request); and
+what it does by the clock, below.
+
+*One thread's work, and only that.* The probe has two threads. Its first serves: its runtime is
+a current-thread one, on the thread `main` starts on. The other is the clock Corten starts to
+close idle connections, which wakes once a second, runs 243 instructions and sleeps. Callgrind
+is run with `--separate-threads=yes`, so a dump is a file a thread, and the count is read from
+the file of callgrind's thread 1, the process's first thread. Nothing another thread runs is in
+a count. That is right for the clock and wrong for anything else: a commit that moved a
+request's work to another thread would read as a saving it is not, and Corten has such a thread
+outside this probe's cases (`corten-compress`, which compresses held values off the request).
+So each run
+reads every thread's file of the window, and `count.mjs` prints, in `other threads`, what the
+others ran together and how many they were. A run is refused, with no figure, in two cases:
+
+1. The first thread ran less than one instruction a request: it did not serve them. The probe
+   rebuilt on a multi-thread runtime with one worker is refused this way ("the probe's first
+   thread ran 0 instructions for 1000 requests, so it did not serve them (2 other threads ran
+   19574250)"). The kit cannot count such a probe.
+2. The other threads together ran more than the clock's ticks explain: 300 instructions a tick,
+   for each whole second of the window and two more (600 for a window under a second). The 300
+   is the 243 with room for a commit that changes the clock a little; it is not measured again
+   for each commit.
+
+Work of another thread below that allowance is not refused and not counted: read the column.
+
+The clock is also why a count is not callgrind's total at exit, nor the difference of two such
+totals (a run of 240 requests and one of 1,240), which is how this kit first read it. When the
+probe is stopped just before a tick, the clock's thread ends before the process does and gives
+back its allocator cache, about 42,000 instructions that are in one run's total and not in the
+other's: 42 a request. Stops aimed at that moment brought it out in 17 of 60 runs. With the two
+dumps, 60 runs aimed the same way read `get` as 18,987 every time, the clock's thread having
+ended first in 14 of them.
+
+*A count grows with how long its window lasts.* The serving thread does one thing by the
+second, not by the request: hyper keeps the `Date` line it sends and renders it again when the
+second has changed, about 600 instructions each time. So a window that lasts a second longer
+counts 0.6 more a request. With the 1,000 requests paced to stretch the window (on `c9666dc96`):
+
+| Window | `get` | `post` | `Date` lines rendered |
+| --- | --- | --- | --- |
+| 0.9 seconds | 18,987.4 | 23,656.1 | 1 |
+| 1.8 to 1.9 seconds | 18,987.4 | 23,656.8 | 1 and 2 |
+| 3.7 to 3.8 seconds | 18,988.6 | 23,657.4 | 3 |
+| 6.6 to 6.7 seconds | 18,991.1 | 23,659.2 | 7 and 6 |
+| 17.1 seconds | 18,997.1 | 23,665.8 | 17 |
+
+The count is not corrected for it. The line is rendered while these requests are served and is
+part of what serving them cost; how many seconds a window crosses is not its length but where it
+began in a second; and the 600 is this commit's, which a commit to compare could change. So
+`count.mjs` prints the seconds, and two counts are compared as they are when their seconds are
+alike. On the 16-CPU host these were read on, a window lasts 0.7 to 1.9 seconds for the nine
+cases and 0.7 to 0.8 at a depth of 16, and one binary's counts agree closely there: 30 counts
+of each of the 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and
+`page` with two busy loops on the probe's own CPU spanned at most 1 and read at most 1 more
+(rustc 1.100.0, valgrind 3.24.0). That is that host's, not the method's. On a slower, loaded
+machine, where windows last longer and vary more, the second review of the pull request that
+added this kit
+([#2097 Add bench/request-cost: what a request costs the server over a socket, and what an idle connection holds](https://github.com/corten-run/corten/pull/2097))
+read one binary's counts up to 3 apart within one condition (24 and 22 counts each of four
+cases) and up to 4 apart across the two.
+
+**Allocations.** The same dump, written without name compression. The serving thread's calls to
+`malloc`, `calloc`, `realloc`, the aligned forms and jemalloc's `mallocx` and `rallocx` are the
+allocations, and to `free`, `sdallocx` and `dallocx` the frees; calls the allocator makes to
+itself are left out. A dump with fewer allocations than requests is refused: every case
+allocates for each request, so it is not a profile of them.
+
+**Idle memory.** The probe is started without callgrind and warmed with 50 connections. The
+client then opens the connections one after another, sends what the case says on each and reads
+the answers, and waits a second. The growth of the process's `VmRSS` over those connections,
+divided by their number, is the figure. The kernel's socket buffers are not the process's and
+are not in it.
+
+A run prints no figure, and says why, when the probe did not hold every connection: when it
+closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
+when it may open fewer files than there are connections and the rest wait in its listen queue.
+A request on a connection waiting there is not answered while it waits, and such a run ends in
+one of two ways: no answer has come for 30 seconds, or the probe closed connections first,
+since Corten closes the ones it holds at its own 30 seconds and then accepts those that
+waited. Which of the two comes first is a race between those two clocks; either way the run
+exits 1 and prints no figure. Corten waits 30 seconds for a connection's next request unless
+the app says otherwise, so a run reads only as many connections as open in that time. How long
+that takes is the machine's: on the 16-CPU host these were read on, 5,000 opened in 0.4 to 1.9
+seconds and
+100,000 over 16 addresses in 6 to 19, reading 2,641 to 2,645 bytes a connection before any byte
+and 8,421 after one request (on `c9666dc96`). A run of 100,000 started in the minute after
+another one, in the same network namespace, took 58 to 71 seconds to open and was refused (three
+runs). The earlier run's connections were then still in `TIME_WAIT` (100,027 sockets, counted
+before one of the three), which is the likely cause. Wait a minute between runs of that size, or
+give each a container of its own.
+
+**The allocator** is jemalloc by `LD_PRELOAD`, with the thread cache the image `corten new`
+writes sets (`tcache_max:524288`). That image also turns jemalloc's background thread on; here
+it is off, so what the allocator does is done by the thread that asked and is in its count. The
+probe refuses to start when jemalloc is not the allocator in use. With the 64 KiB cache of
+earlier images the nine cases count up to 22 instructions fewer (`get` 18,972 against 18,987,
+`unstaged` 12,838 against 12,860, `page-browser` the same).
+
+## What a count is not
+
+1. Not a property of Corten alone. The count is of this probe's binary, run one way. Beside
+   Corten's commit five things move it: the allocator's setting and how long the window lasted,
+   both above, and these three.
+   - The program. The same request to the same commit costs a different number of instructions
+     in a program with other routes, or one that also serves TLS, because the compiler lays out
+     and inlines the connection's and the router's code by everything that uses it. Never
+     compare a count from here with a count of another program.
+   - The probe's source. A page carries an id made from where its markup is in the source. A
+     comment that moved the probe's markup two lines down changed that id, 22 bytes of the
+     answer, and `page-browser`, which compresses the page, read 162 instructions more (221,971
+     against 221,809) where `page` read the same. Compare counts taken with one checkout of the
+     kit.
+   - Where it is built. The directory's name is in the binary. `c9666dc96` built in five
+     directories gave five different binaries. Four counted every case within 2 of each other.
+     The fifth counted 32 to 37 more on seven cases (`get` 19,019 against 18,987) and the same
+     on `unstaged` and `pipeline`, on every repeat and however the count was read. Two commits
+     with the same crates built one after the other in one directory gave the same binary, byte
+     for byte. Build every commit of a comparison in one directory.
+2. Not time or cycles, and not the kernel's work: see the table above.
+3. Not HTTP/2, TLS, a streamed or chunked answer, or a request body longer than two bytes: the
+   probe serves none, and the client reads answers by their `Content-Length`.
+4. Not an app's runtime, and not what any thread but the first runs. The probe serves on one
+   thread; the app `corten new` writes runs a runtime of several. A count says nothing of what
+   threads cost each other, and work a commit does on another thread is not in it: the run is
+   refused when that is more than the clock's ticks, and printed beside the count either way.
+5. Not memory under attack. Peak memory under a list of hostile clients needs those clients and
+   a sampler of the container's memory, which this kit does not have.
+
+## The probe and placement runs
+
+The probe is shaped as the placement kit asks of a plan's probe
+([`bench/placement`](../placement/README.md), `probe.dir`;
+[design Choice 72](../../docs/design.md#choice-placement-runs)), so that a plan for such a run
+can name it for these requests rather than write another: its binary is called `probe` and it
+takes Corten from `../work/crates/corten`. It is started as `<bin> <port> <configuration>`, says
+`READY` on standard error once it listens, and `PROBE_ALLOCATOR` makes it refuse to start under
+another allocator, which a plan's `probe.start` would have to say. No placement run has been
+made with it, so the spread such a run records has not been recorded for this probe. Until one
+is, a difference between two commits of a few tens of instructions, as the 32 to 37 above, may
+be where the code was placed and not the change.
+
+## Tests
+
+`node --test bench/request-cost/*.test.mjs`, which `npm run check` runs file by file. No test
+runs the probe, valgrind or cargo: [`stand-in.mjs`](stand-in.mjs) and scripts on `PATH` stand in
+for them.
+
+| File | What it holds |
+| --- | --- |
+| `requests.test.mjs` | Each case's request byte for byte and the answer it must get, splitting a connection's bytes into answers, the masking |
+| `figures.test.mjs` | The arithmetic of a count and of an idle reading, and when a window or a run is refused |
+| `allocations.test.mjs` | Reading a profile |
+| `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
+| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
+| `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
+
+`run.test.mjs` (but its refusals of an option) and `build.test.mjs` need Linux with `sh` and
+`git`, and are skipped elsewhere: on Windows 30 of the 46 tests run. The hosted check runs on
+Linux. What no test covers is checked by running the kit: the probe itself, callgrind's own
+dumps, and a real build.

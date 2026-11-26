@@ -601,6 +601,27 @@ impl std::io::Write for Lines {
     }
 }
 
+/// What a test logs to [`Lines`] while it is held: the lines logged on this thread.
+#[cfg(feature = "log")]
+struct Logging {
+    _logging: tracing::subscriber::DefaultGuard,
+    _beside: tracing::Dispatch,
+}
+
+/// Logs what this thread logs to `lines` until the [`Logging`] is dropped. A second subscriber,
+/// which logs nothing, stays registered beside it for as long: while one subscriber alone is
+/// registered, `tracing` decides once for the whole process whether a log line is wanted, by the
+/// subscriber of the first thread to reach it, so a test running beside this one with none would
+/// have this one's lines dropped (`tracing_core::callsite`, 0.1.36). With two, it decides per
+/// line, by the subscriber of the thread that logs it.
+#[cfg(feature = "log")]
+fn log_to(lines: &Lines) -> Logging {
+    let _beside = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    Logging { _logging: tracing::subscriber::set_default(subscriber), _beside }
+}
+
 mod actions;
 mod api;
 mod app;

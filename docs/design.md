@@ -7778,7 +7778,46 @@ rules something out.
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
     lookup. It is on unless the app says otherwise, holds at most 32 MiB
-    (`App::kept_answers`), and is off under `corten dev`.
+    (`App::kept_answers`), and is off under `corten dev`. There the store stands but keeps and
+    gives nothing, so the code that decides what a release build keeps still runs, and each
+    `Public` route says in the log whether that build would keep its answer while its store has
+    room, and if not the first reason that code found (a bound of 0 among them), once for each
+    route and verdict
+    ([#1801 Nothing tells an author whether a Public page is kept, or why not](https://github.com/corten-run/corten/issues/1801)):
+    a page that is not kept looks the same from outside save for a missing `Age`, so without it
+    an author first met the difference in production. It says no more than that the answer may be
+    kept: the store under `corten dev` is never full, and a full one keeps only a URL asked for
+    before, so that the answer is kept, or given again, is not promised. Of a body not held whole
+    it says so only as the body ends; the body is not read to say it, which would hold it from the
+    middleware, drop its trailers and what came before a failure and keep a slow one from the
+    client, but watched as whatever reads it next pulls each frame (one held whole, which a
+    release build takes without reading, at once), and one dropped before its end says nothing.
+    That watch is passive, so it says only what `corten dev` saw: a release build reads the body
+    before the answer leaves, within the route's deadline and before the request's signal ends,
+    and `corten dev` after, so a body that read whole is said to be kept if that build reads it
+    whole within its deadline (a slow one may not be), and one that failed is said to have failed
+    as `corten dev` read it, with no status that build answers (one that fails only once the
+    signal has ended reads whole there). Reading it the release way under `corten dev` would tell
+    more and change the answer the app's middleware and the client see. The reasons come from the code
+    that decides, not from a second list of its rules, which could drift from what the build does.
+    That code is compiled twice, the route's and its answer's checks alike (`Keeping` and
+    `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn
+    submit key at the same watch and the same return as a release build (so a key drawn as the
+    body is read is said by neither), counts the head of an answer whose locale was chosen late as
+    a release build names it, from a copy, so the answer the app's middleware sees is the one it
+    saw with no store, and leaves an answer it would keep for its body to be watched; a release
+    build's copy does none of this. In `router_cost` (callgrind, three rounds each, against
+    `c46092aeb`, rustc 1.100.0) a kept page given again costs what it did (14,559.9 to 14,560.1
+    instructions a request), a `Public` page that is not kept 3 more (21,238.0 to 21,240.7) and
+    one that is made and stored 32 more (28,589.6 to 28,621.6). With rustc 1.99.1 the three are 9,
+    3 and 12 more (14,874.5 to 14,883.7, 21,628.5 to 21,631.1, 28,904.8 to 28,916.3), the kept
+    page's 9 all in `memcmp`, whose count turns on where the bytes it compares lie. The release
+    copy does no more work; with a second copy in the program the compiler no longer inlines
+    putting the kept entry on the answer (about 29 of those 32 under rustc 1.100.0) and lays out
+    the rest slightly otherwise, and the ways tried to keep one copy as it was cost more than
+    these. `corten dev`'s copy watches the handler through a borrow, a type of its own, since
+    sharing the release copy's watch made the compiler stop inlining it there, 23 more on each
+    page not kept or stored.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
