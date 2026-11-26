@@ -416,11 +416,10 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         ("/a/../..", "/"),
         ("/a/...", "/a/..."),
         ("/old ", "/old"),
-        (" \t/old\u{1} ", "/old"),
         ("/old ?x", "/old%20"),
         ("/o\tl\nd\r", "/old"),
         ("/old x/", "/old%20x/"),
-        ("\\old\\x", "/old/x"),
+        ("/old\\x", "/old/x"),
         ("/old|x", "/old%7Cx"),
         ("/old%7Cx", "/old%7Cx"),
         ("/old%7cx", "/old%7Cx"),
@@ -662,6 +661,103 @@ fn a_nav_with_other_addresses_compares_its_own_urls_by_the_same_key() {
     assert_eq!(marks("/settings"), ["Settings"]);
     for typed in ["/%73ettings", "/%7%33ettings", "/%53ettings", "/settings%2F"] {
         assert_eq!(marks(typed), ["Root"], "{typed}");
+    }
+}
+
+/// A nav URL that is not a path on this site (`//host/x`, `/\host/x`, `/<tab>/host/x`, a full or a
+/// relative URL) is never current, and is never compared as a path: not as an entry's own URL, in a
+/// nav with other addresses or without, and not as an other address, which is left out of
+/// `data-nav-also`. The browser reads such a link's pathname as another host's, and the runtime's
+/// `isPath` tests the same text, so the server and the runtime mark the same entry (#2119).
+#[test]
+fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    /// A URL as a route implemented by hand writes it.
+    struct Hand(&'static str);
+    impl crate::Route for Hand {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let drawn = |path: &str, entries: Vec<(NavTo, &'static str)>| {
+        nav_links(path, entries)
+            .links()
+            .map(|(link, label)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                (*label, out)
+            })
+            .collect::<Vec<_>>()
+    };
+    let marked = |links: &[(&'static str, String)]| {
+        links.iter().filter(|(_, out)| out.contains(r#" aria-current="page""#)).map(|(label, _)| *label).collect::<Vec<_>>()
+    };
+    let (root, older, here) = (Local::parse("/").unwrap(), Local::parse("/older").unwrap(), Local::parse("/here").unwrap());
+    let far = ["//corten.invalid/old", "/\\corten.invalid/old", "/\t/corten.invalid/old", "/\n/corten.invalid/old", "/\r/x"];
+
+    // An entry whose own URL leads off the site, in a nav with other addresses: only the section
+    // holds the page, at the path the browser shows for it and at the entry's other address, which
+    // is not written.
+    for url in far {
+        let (to, alias) = (Hand(url), Hand("/elsewhere"));
+        for path in ["/old", "/older", "/elsewhere", "//corten.invalid/old", url] {
+            let links = drawn(
+                path,
+                vec![
+                    (NavTo::section(&root), "Root"),
+                    (NavTo::page(&to).also(&older), "Far"),
+                    (NavTo::page(&here).also(&alias), "Here"),
+                ],
+            );
+            let expected: &[&str] = if path == "/elsewhere" { &["Here"] } else { &["Root"] };
+            assert_eq!(marked(&links), expected, "{url:?} at {path:?}");
+            assert!(!links[1].1.contains("data-nav-also"), "{url:?}: {}", links[1].1);
+        }
+    }
+
+    // Such an address of an entry is left out, and the entry holds the page at its others alone.
+    let (a, b, c) = (Hand(far[0]), Hand(far[1]), Hand(far[2]));
+    // Nor is one that does not start with its one `/` as written, which the runtime would not
+    // compare as a path either, though the URL Standard trims it to one.
+    let (spaced, backslashed) = (Hand(" \t/old\u{1} "), Hand("\\old\\x"));
+    let entry = || NavTo::page(&here).also(&a).also(&b).also(&older).also(&c).also(&spaced).also(&backslashed);
+    let links = drawn("/here", vec![(NavTo::section(&root), "Root"), (entry(), "Here")]);
+    assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{}", links[1].1);
+    for path in ["//corten.invalid/old", "/old"] {
+        assert_eq!(marked(&drawn(path, vec![(NavTo::section(&root), "Root"), (entry(), "Here")])), ["Root"], "{path:?}");
+    }
+    assert_eq!(marked(&drawn("/older", vec![(NavTo::section(&root), "Root"), (entry(), "Here")])), ["Here"]);
+    // An entry left with no address is written as one without them.
+    let only = || NavTo::page(&here).also(&a);
+    let links = drawn("/old", vec![(NavTo::section(&root), "Root"), (only(), "Here")]);
+    assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !out.contains(r#"+""#)), "{links:?}");
+
+    // Without other addresses, and for a lone link, the same: never current, even where the
+    // request path is the URL's text.
+    for url in far.into_iter().chain(["https://corten.invalid/old", "old", "?tab=2", " /old", ""]) {
+        let to = Hand(url);
+        for path in ["/old", "//corten.invalid/old", url] {
+            let expected: &[&str] = if path.starts_with('/') { &["Root"] } else { &[] };
+            assert_eq!(
+                marked(&drawn(path, vec![(NavTo::section(&root), "Root"), (NavTo::page(&to), "Far")])),
+                expected,
+                "{url:?} at {path:?}"
+            );
+            assert!(
+                !crate::page::is_current_for_tests(path, url, false) && !crate::page::is_current_for_tests(path, url, true),
+                "{url:?} at {path:?}"
+            );
+        }
+    }
+    // A path on this site stays one, `/` and a query or fragment straight after it included.
+    for (path, url) in [("/", "/"), ("/", "/?tab=2"), ("/", "/#top"), ("/a//b", "/a//b"), ("/a", "/a?b//c")] {
+        assert!(crate::page::is_current_for_tests(path, url, false), "{url:?} at {path:?}");
     }
 }
 

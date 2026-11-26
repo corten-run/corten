@@ -7,8 +7,8 @@
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
-//! controls named after the members their paths read, and a nav whose entry is current at an older
-//! address of its page.
+//! controls named after the members their paths read, a nav whose entry is current at an older
+//! address of its page, and navs whose entries lead off the site.
 use corten::{
     Error, LiveResponse,
     prelude::*,
@@ -111,13 +111,21 @@ pub mod url {
         pub name: &'a str,
         pub who: &'a str,
     }
+
+    /// Navs whose entries lead off this site in forms a browser reads as another host, never
+    /// current, by the server and the runtime alike (#2119).
+    #[route("/smoke/far/{name}", get = far_page)]
+    pub struct FarPage<'a> {
+        pub name: &'a str,
+    }
 }
 
 /// An older address of the nav page, written by hand as an app's own route might write it, in a
 /// form the browser does not show as written: a character beyond ASCII (asked for
 /// percent-encoded), a `..` segment written `%2e%2E` (resolved away), a trailing space (trimmed),
 /// or with escaped unreserved characters a `Local` refuses (`%2e`, `%7e`, `%41`), which WebKit asks
-/// for decoded and shows as written, so `NavTo::also` leaves such an address out.
+/// for decoded and shows as written, so `NavTo::also` leaves such an address out; or one that leads
+/// off this site (`//host/x`), which no nav compares.
 struct OlderNav(&'static str);
 
 impl corten::Route for OlderNav {
@@ -163,6 +171,45 @@ async fn nav_team(req: Req, Params(_): Params<url::NavTeam<'_>>) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Nav team" viewer={None} head="">
             <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// Entries whose URL leads off this site, `//corten.invalid/smoke/far/old`, the same with `/\` or
+/// a tab after the first `/`, which the browser reads as that host's `/smoke/far/old`: in a nav with
+/// other addresses (one of them also at `/smoke/far/older`, which is left out, and Here, whose other
+/// address `//corten.invalid/smoke/far/old` is left out and `/smoke/far/before` kept), in one
+/// without, and as a lone `req.nav` link. At `/smoke/far/old` and `/smoke/far/older` only the two
+/// sections are current, at `/smoke/far/before` Here and the plain nav's section.
+async fn far_page(req: Req, Params(_): Params<url::FarPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/far").expect("a local path");
+    let older = corten::Local::parse("/smoke/far/older").expect("a local path");
+    let before = corten::Local::parse("/smoke/far/before").expect("a local path");
+    let (slashes, backslash, tab) = (
+        OlderNav("//corten.invalid/smoke/far/old"),
+        OlderNav("/\\corten.invalid/smoke/far/old"),
+        OlderNav("/\t/corten.invalid/smoke/far/old"),
+    );
+    let here = url::FarPage { name: "here" };
+    let aliased = req.nav_of([
+        (corten::NavTo::section(&section), "Far"),
+        (corten::NavTo::page(&slashes).also(&older), "Slashes"),
+        (corten::NavTo::page(&backslash), "Backslash"),
+        (corten::NavTo::page(&tab), "Tab"),
+        (corten::NavTo::page(&here).also(&slashes).also(&before), "Here"),
+    ]);
+    let plain = req.nav_of([
+        (corten::NavTo::section(&section), "Plain far"),
+        (corten::NavTo::page(&slashes), "Plain slashes"),
+        (corten::NavTo::page(&backslash), "Plain backslash"),
+        (corten::NavTo::page(&tab), "Plain tab"),
+    ]);
+    let lone = req.nav(&slashes);
+    req.page(html! {
+        <Layout req={&req} title="Nav far" viewer={None} head="">
+            <nav>for (link, label) in aliased.links() { <a {..link}>{*label}</a> }</nav>
+            <nav>for (link, label) in plain.links() { <a {..link}>{*label}</a> }</nav>
+            <a {..lone}>"Lone"</a>
         </Layout>
     })
 }

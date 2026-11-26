@@ -315,9 +315,26 @@ pub(crate) fn is_prefetch(headers: &HeaderMap) -> bool {
     headers.get("purpose").is_some_and(|v| v.as_bytes() == b"prefetch")
 }
 
+/// Whether a nav link to `href` holds the page at `path`, by the runtime's rule (`markCurrent` in
+/// `corten.js`): never for a URL that is not a path on this site ([`is_path`]).
 fn is_current(path: &str, href: &str, section: bool) -> bool {
     let href = href.split(['?', '#']).next().unwrap_or(href);
-    path == href || (section && path.strip_prefix(href.trim_end_matches('/')).is_some_and(|rest| rest.starts_with('/')))
+    // The check after the comparison, which rules out most links before it.
+    (path == href || (section && path.strip_prefix(href.trim_end_matches('/')).is_some_and(|rest| rest.starts_with('/'))))
+        && is_path(href)
+}
+
+/// Whether a nav link's URL, as written, is a path on this site, the only kind a nav compares with
+/// the page: one `/` first, then neither `/` nor `\` nor a tab or line break, which a browser drops
+/// (`//host/x`, `/\host/x` and `/<tab>/host/x` name another host). Anything else (a full URL, a
+/// relative one, `?tab=2`, one that starts with a space) is never current, on the server and in the
+/// runtime (`isPath` in `corten.js`), which tests the same text, the `href` the server wrote. The
+/// start of [`crate::Local::parse`]'s rule, without its refusal of a character the URL Standard
+/// keeps in a path or encodes, which only changes the path a nav compares.
+#[inline(always)]
+fn is_path(href: &str) -> bool {
+    let bytes = href.as_bytes();
+    bytes.first() == Some(&b'/') && !matches!(bytes.get(1), Some(b'/' | b'\\' | b'\t' | b'\n' | b'\r'))
 }
 
 /// A nav link's attributes, from [`Req::nav`] or [`Req::nav_section`]: `href`, `data-nav` and,
@@ -565,6 +582,12 @@ impl<'a> NavTo<'a> {
     /// its runtime, at the same address, does not; Chromium and Firefox ask for it as written and
     /// neither marks it.
     ///
+    /// An address that is not a path on this site, `//host/old` (or `/\host/old`, or a tab or line
+    /// break after the first `/`, which a browser drops), names another host, so it is left out,
+    /// as the runtime would read its pathname as that host's; and an entry whose own URL is one is
+    /// never current, at any of its addresses ([`Req::nav_of`]). Only a route implemented by hand
+    /// can write one.
+    ///
     /// A typed route or a [`crate::Local`], as the entry's own:
     ///
     /// ```
@@ -797,9 +820,10 @@ pub(crate) fn own_key_for_tests(url: &str) -> (Option<usize>, String) {
 /// `also`, separated by spaces, each as its comparison key ([`pathname`]), and leaves out one whose
 /// key, its `.` and `..` segments resolved, has an escaped unreserved character
 /// ([`crate::route::escapes_unreserved`]), which WebKit asks for in another spelling than its
-/// `location.pathname` shows. An entry left with none is written as one without them. Each URL is
-/// written straight into the paths, and one that is its own key ([`own_key`]) is kept as written.
-/// Out of line, so a nav without them is drawn as it was before they existed.
+/// `location.pathname` shows, and one that is not a path on this site ([`is_path`]), which is never
+/// compared. An entry left with none is written as one without them. Each URL is written straight
+/// into the paths, and one that is its own key ([`own_key`]) is kept as written. Out of line, so a
+/// nav without them is drawn as it was before they existed.
 #[cold]
 #[inline(never)]
 fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Also>>) {
@@ -814,6 +838,11 @@ fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Al
         }
         let at = paths.len();
         other.write_url(paths);
+        // Not a path on this site (`//host/old`): never compared, so not written.
+        if !is_path(&paths[at..]) {
+            paths.truncate(start);
+            continue;
+        }
         match own_key(&paths[at..]) {
             Some(len) => paths.truncate(at + len),
             None => {
@@ -849,7 +878,8 @@ fn key(path: &str) -> std::borrow::Cow<'_, str> {
 /// the runtime does in a group named with a trailing `+`, so the server and the runtime mark the
 /// same entry whether an engine asks for and shows a `|` or an escape's hex digits in one case or
 /// another. An entry whose URL is its own key ([`own_key`]) on a page whose path is its own keeps
-/// the depth it was ranked with as written, which is the same. Out of line, so a nav without them
+/// the depth it was ranked with as written, which is the same; one whose URL is not a path on this
+/// site ([`is_path`]) holds no page and has no other addresses. Out of line, so a nav without them
 /// is ranked as it was before they existed, by the request path as written.
 #[cold]
 #[inline(never)]
@@ -863,6 +893,7 @@ fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<u
         let url = &urls[start..entry.0];
         start = entry.0;
         let mut depth = match own_key(url) {
+            _ if !is_path(url) => None,
             Some(_) if as_written => entry.2,
             Some(end) => holds_path(&page, &url[..end], entry.1),
             None => {
@@ -890,7 +921,8 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
         .map(|(entry, item)| {
             let start = urls.len();
             entry.to.write_url(&mut urls);
-            if let Some(others) = &entry.also {
+            // An entry whose URL leads off this site is never current, at another address either.
+            if let Some(others) = entry.also.as_deref().filter(|_| is_path(&urls[start..])) {
                 other_addresses(others, urls.len(), &mut also);
             }
             (urls.len(), entry.section, holds(path, &urls[start..], entry.section), item, entry.to.prefetch())
@@ -2321,7 +2353,8 @@ impl Req {
 
     /// True when `href` (a typed route) is the current page, or with `section` any page under
     /// it: the rule the runtime applies to `<a data-nav>` (`data-nav="section"`) after each
-    /// navigation.
+    /// navigation. A URL that is not a path on this site (`//host/x`, `/\host/x`, a full or a
+    /// relative URL) is never the current page, even at a request path with its text.
     pub fn is_current(&self, href: &(impl crate::route::Href + ?Sized), section: bool) -> bool {
         match href.as_text() {
             Some(text) => is_current(self.uri.path(), text, section),
@@ -2396,7 +2429,9 @@ impl Req {
     /// them; a link of [`Req::nav`] or [`Req::nav_section`] is still judged alone. An entry whose
     /// page also answers at another address is current there too with [`NavTo::also`]. Leave out an
     /// entry the user may not see before the call, not in the markup: the runtime ranks only the
-    /// links in the page.
+    /// links in the page. An entry whose URL is not a path on this site, one `/` and then not `/`,
+    /// `\`, a tab or a line break (`//host/x`, which only a route implemented by hand writes), is
+    /// never current, on the server and in the runtime alike.
     ///
     /// ```
     /// use corten::prelude::*;

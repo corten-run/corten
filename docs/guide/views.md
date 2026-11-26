@@ -582,7 +582,11 @@ that hold the page, only the deepest is current. Its links carry the group they 
 markup puts them, so render every link it gives back: leave out an entry the user may not see
 before the call. Each entry comes with its item (a label, or the row it was read from), which
 `links()` hands back beside its link. An entry is a route or a `Local` path, written as the
-browser asks for it (a link to another site is a plain link, never current):
+browser asks for it (a link to another site is a plain link, never current). A link of `req.nav`
+or `req.nav_of` whose URL is not a path on this site, one `/` and then not `/`, `\`, a tab or a
+line break (`//host/x`, `/\host/x`, which only a route implemented by hand writes, or a full or a
+relative URL), is never current, on the server and in the runtime, which test the same `href`
+text; the browser would read its pathname as another host's.
 
 ```rust,ignore
 let nav = req.nav_of(items.iter().map(|item| (NavTo::section(&item.href), item)));
@@ -594,13 +598,15 @@ names it with `also`, a route or a `Local` as the entry is: `NavTo::page(&Settin
 is current at `/governance` as at `/settings`, by the same rule and depth, and its link still goes to
 `/settings`. The other paths are written in `data-nav-also` as comparison keys, not as any one
 engine spells them: the path `location.pathname` shows at that address, by the URL Standard (the
-query and fragment left out, the ends trimmed, `.` and `..` segments resolved, and a space or a
+query and fragment left out, the end trimmed, `.` and `..` segments resolved, and a space or a
 character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the spellings
 engines differ on made one. A `|` is written `%7C`, as Chromium shows it where Firefox and WebKit keep
 it, and an escape's hex digits are uppercase, as WebKit asks for `/old%7chome` as `/old%7Chome` while
 its `location.pathname` keeps `%7c`; no escape is decoded. In a nav with other addresses every
-entry's own URL is compared by its key too, so a deeper entry still wins in another spelling. The
-server makes the request's path the same key and the runtime `location.pathname`, and each compares
+entry's own URL is compared by its key too, so a deeper entry still wins in another spelling. An
+other address that is not a path on this site (`//host/old`) is left out, and an entry whose own
+URL is not one is current at none of its addresses. The server makes the request's path the same
+key and the runtime `location.pathname`, and each compares
 the keys as plain text, so for every address Corten writes they mark the same entry at first render
 and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these
 spellings were measured. A nav without other addresses compares the paths as written, as before.
