@@ -11331,11 +11331,14 @@ rules something out.
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when the median
     of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and one page. Resident memory moves a page at a time, so base's three can
-    agree exactly and a reading one page higher is the least step a run can show (seen on
+    base's three span and one page. Resident memory is reported a page at a time, so base's
+    three can agree exactly and one page is the least step a run can show; one page is the
+    least allowed, the step of the reading, not a measured bound on its accuracy. The figures a
+    connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
-    [#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136));
-    the figures a connection are rounded and do not decide it. No run is taken again for its
+    head read 1 byte a connection above base's three equal figures, which one page or two can
+    give, and the growths in bytes were not recorded
+    ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)). No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that

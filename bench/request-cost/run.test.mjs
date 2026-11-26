@@ -30,9 +30,9 @@ function standIns() {
     valgrind: `${run} "$@"`,
     callgrind_control: `${run} control "$@"`,
     probe: `${run} "$@"`,
-    // getconf PAGESIZE: the page size a test asks for (4096 unless STAND_IN_PAGE says), or none
-    // when STAND_IN_PAGE is "fail".
-    getconf: '[ "$STAND_IN_PAGE" = fail ] && exit 1\nprintf \'%s\\n\' "${STAND_IN_PAGE:-4096}"',
+    // getconf PAGESIZE: the page size a test asks for (4096 unless STAND_IN_PAGE says). Asked for
+    // anything else, it answers nothing; with STAND_IN_PAGE=fail it prints a page size and fails.
+    getconf: '[ "$#" = 1 ] && [ "$1" = PAGESIZE ] || exit 2\nif [ "$STAND_IN_PAGE" = fail ]; then echo 4096; exit 1; fi\nprintf \'%s\\n\' "${STAND_IN_PAGE:-4096}"',
   };
   for (const [name, script] of Object.entries(scripts)) {
     writeFileSync(join(directory, name), `#!/bin/sh\n${script}\n`);
@@ -190,7 +190,7 @@ test("idle.mjs prints the page size getconf gives, and starts nothing without a 
   const large = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: "65536" });
   assert.equal(large.status, 0, large.stderr);
   assert.match(large.stdout, /grown, in 65536-byte pages\)$/m);
-  for (const page of ["fail", "4096.5", "0", "4k"]) {
+  for (const page of ["fail", "4096.5", "0", "4k", "9".repeat(310)]) {
     const run = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: page });
     assert.equal(run.status, 1, `page ${JSON.stringify(page)}`);
     assert.match(run.stderr, /getconf PAGESIZE did not give the page size/);

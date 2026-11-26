@@ -54,8 +54,8 @@ const { configuration } = /** @type {typeof cases[string]} */ (cases[name]);
 // Resident memory moves a page at a time, so a difference of one page is the least a reading shows.
 const pageSize = spawnSync("getconf", ["PAGESIZE"], { encoding: "utf8" });
 const pageText = pageSize.stdout?.trim() ?? "";
-if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText)) throw new Error("getconf PAGESIZE did not give the page size");
 const page = Number(pageText);
+if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteger(page)) throw new Error("getconf PAGESIZE did not give the page size");
 
 const probe = await start(binary, configuration, { cpu: values.cpu, port });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));

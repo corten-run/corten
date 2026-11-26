@@ -91,7 +91,7 @@ export function held({ connections, before, after, closed, accepted }) {
  *   and the page size in bytes (`getconf PAGESIZE`)
  */
 export function idleRise({ base, head, page }) {
-  if (!Number.isInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
+  if (!Number.isSafeInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
   for (const [side, growths] of /** @type {const} */ ([["base", base], ["head", head]])) {
     if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
     for (const growth of growths) if (!Number.isInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
