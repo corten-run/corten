@@ -100,10 +100,12 @@ test("a reviewed external failure leaves original launch custody intact and requ
   writeFileSync(recovery, "recovery active");
   assert.throws(() => admission.recheck(), /recovery is active/);
   unlinkSync(recovery);
-  const archive = join(local, "results.tgz");
-  writeFileSync(archive, "unclassified archive");
-  assert.throws(() => admission.recheck(), /cannot supersede other evidence/);
-  unlinkSync(archive);
+  for (const name of ["results.tgz", "results.tgz.download", "results.tgz.synced", "failed-native-results.tgz", "failed-native-capture.json", "evidence-Synthetic"]) {
+    const path = join(local, name);
+    writeFileSync(path, "unclassified collection artifact");
+    assert.throws(() => admission.recheck(), /cannot supersede other evidence/);
+    unlinkSync(path);
+  }
   writeFileSync(statePath, `${JSON.stringify(state)}\n`);
   assert.throws(() => admission.recheck(), /external failure binding differs/);
 });

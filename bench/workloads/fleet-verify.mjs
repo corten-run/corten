@@ -463,7 +463,7 @@ export function externalFailedHostBinding(fleet) {
   assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === "invalid"
     && !state.archiveSha256 && !state.evidence && !state.validation && !state.collectedAt && !state.deletionIntentAt && !state.destroyedAt,
     "external failure requires an uncollected invalid attempt");
-  const hasConflict = () => ["monitor-terminal.json", "audit-delivery.lock", "results.tgz"].some((name) => present(join(local, name)))
+  const hasConflict = () => readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz(?:\.|$)|monitor-terminal\.json$|audit-delivery\.lock$|state\.json\.tmp$)/.test(name))
     || [createQuarantineFile, quarantineWitnessFile].some((name) => present(join(root, "receipts", name)));
   assert.ok(!hasConflict(), "external failure cannot supersede other evidence or custody");
   const capture = (name, max) => digest(regular(join(local, name), max));

@@ -422,7 +422,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
-    inspectPreCreateInventory, quarantineTargets: [...quarantined, ...externalFailures].map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
+    inspectPreCreateInventory, completePreCreateCensus: externalFailures.length > 0,
+    quarantineTargets: quarantined.map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
