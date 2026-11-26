@@ -68,7 +68,7 @@ export async function dataAddress(browser) {
     /** A task, then a frame: whatever the runtime does with an answer it has read is done. */
     const settle = () => scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
     // The answer's headers are in and its body held: the address is the page's until the answer
-    // is drawn. It is the answer's by the time anything else can run after the draw: a mutation
+    // is drawn. It is the answer's before an observer or a timer can run after the draw: a mutation
     // observer of the panel the patch put in reads it, and presses Day from there, whose answer
     // takes the entry's place in turn. Neither adds an entry.
     const first = { index: await index(), entries: await entries(), key: await key() };
@@ -122,7 +122,7 @@ export async function dataAddress(browser) {
       before: await entryAt(-1),
     };
     check(
-      "a data-address form's patch puts the address it asked for in place of the entry's as it is drawn, before anything else runs, adding no entry",
+      "a data-address form's patch puts the address it asked for in place of the entry's as it is drawn, before an observer of the draw runs, adding no entry",
       replaced.during.reading && replaced.during.at === "/smoke/address" && replaced.during.shown === "all" && replaced.drawn && replaced.atReplace === "week" &&
         replaced.seenAt === "?scope=week" && replaced.at === "/smoke/address?scope=day" && replaced.index === 0 && replaced.added === 0 && replaced.sameKey && replaced.shown === "day" &&
         replaced.before.endsWith("/smoke/address-elsewhere"),
@@ -915,6 +915,104 @@ async function markedPatchVisits(browser, errors) {
     "a GET queued behind a write is dropped by a press of the form a read drew in its place",
     writeSent && formRedrawn && laterSent && writeDone && laterDrawn && superseded.reads.join() === "?scope=day" && superseded.at === "?scope=day" && superseded.shown === "day",
     JSON.stringify({ writeSent, formRedrawn, laterSent, writeDone, laterDrawn, superseded }),
+  );
+
+  // Pressed once the write's answer has drawn the form again, before the GET that waited for it is
+  // sent (in a task of its own), Day is newer than that GET all the same: it drops Week, which is not
+  // sent. Pressed the moment the write's busy mark is cleared, as its submit ends.
+  await page.goto(home);
+  const saving = await hold(home, "action");
+  const dayAfter = await hold(`${home}?scope=day`, "action");
+  await page.evaluate(() => {
+    /** @type {string[]} */
+    const reads = [];
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    Object.assign(window, { __reads: reads, __saving: form, __dayPressed: false });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && /^\?scope=(day|week)$/.test(url.search) && new Headers(init?.headers).get("corten") === "action") reads.push(url.search);
+      return fetch_.call(this, input, init);
+    };
+    let busy = false;
+    const watch = new MutationObserver(() => {
+      if (form.hasAttribute("aria-busy")) return void (busy = true);
+      if (!busy) return;
+      watch.disconnect();
+      const day = /** @type {HTMLButtonElement | null} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+      Object.assign(window, { __dayPressed: !!day && day.form !== form });
+      day?.click();
+    });
+    watch.observe(form, { attributes: true, attributeFilter: ["aria-busy"] });
+  });
+  await press("Save");
+  const savingSent = await saving.sent;
+  await press("Week");
+  saving.release();
+  const daySentAfter = await dayAfter.sent;
+  const dayPressed = await page.evaluate(() => /** @type {any} */ (window).__dayPressed);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  dayAfter.release();
+  const dayAfterDrawn = await wait(() => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await saving.clear();
+  await dayAfter.clear();
+  const afterSave = { reads: await page.evaluate(() => /** @type {any} */ (window).__reads), ...(await state()) };
+  check(
+    "a GET queued behind a write is dropped by a press of the form the write's answer drew before that GET is sent",
+    savingSent && daySentAfter && dayPressed && dayAfterDrawn && afterSave.reads.join() === "?scope=day" && afterSave.at === "?scope=day" && afterSave.shown === "day",
+    JSON.stringify({ savingSent, daySentAfter, dayPressed, dayAfterDrawn, afterSave }),
+  );
+
+  // A page's own `navigatesuccess` listener, put on before the runtime's, that begins a navigation to
+  // another page as one ends: the runtime hears the one that ended end after the next began, which
+  // is then on its way all the same. Week, pressed while it waits for its page, draws nothing and
+  // lets it finish.
+  const chained = await browser.newPage();
+  chained.on("pageerror", (e) => errors.push(`chained: ${e.message}`));
+  await chained.addInitScript((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav?.addEventListener("navigatesuccess", () => {
+      if (location.search !== "?scope=day" || /** @type {any} */ (window).__chainedMonth) return;
+      const next = nav.navigate(url);
+      next.committed.catch(() => {});
+      Object.assign(window, { __chainedMonth: next.finished.then(() => "finished", (/** @type {Error} */ error) => error.name) });
+    });
+  }, month);
+  await chained.goto(home);
+  /** @type {() => void} */
+  let releaseChained = () => {};
+  const chainedHeld = new Promise((resolve) => (releaseChained = () => resolve(undefined)));
+  await chained.route(month, async (route) => {
+    if (route.request().headers()["corten"] !== "nav") return route.continue();
+    await chainedHeld;
+    await route.continue().catch(() => {});
+  });
+  const chainedSent = chained.waitForRequest((r) => r.url() === month && r.headers()["corten"] === "nav", { timeout: 5000 }).then(() => true, () => false);
+  await chained.evaluate((url) => /** @type {any} */ (window).navigation.navigate(url).finished.catch(() => {}), `${home}?scope=day`);
+  const chainedNav = await chainedSent;
+  const chainedState = () =>
+    chained.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent ?? null }));
+  const chainedStill0 = await chainedState();
+  await chained.evaluate(() => Object.assign(window, { __form: document.getElementById("smoke-address-form") }));
+  const chainedAnswer = chained.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await chained.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const chainedAnswered = await chainedAnswer;
+  const chainedDone = await chained
+    .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await chained.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const chainedStill = await chainedState();
+  releaseChained();
+  const chainedFinished = await chained.evaluate(() => /** @type {any} */ (window).__chainedMonth);
+  await chained.unroute(month);
+  const chainedAfter = await chainedState();
+  await chained.close();
+  check(
+    "a marked patch pressed while a navigation another one's navigatesuccess began is on its way draws nothing and lets it finish",
+    chainedNav && chainedStill0.shown === "day" && chainedAnswered && chainedDone && chainedStill.shown === "day" && chainedStill.at !== "?scope=week" &&
+      chainedFinished === "finished" && chainedAfter.at === "?scope=month" && chainedAfter.shown === "month",
+    JSON.stringify({ chainedNav, chainedStill0, chainedAnswered, chainedDone, chainedStill, chainedFinished, chainedAfter }),
   );
 
   // A replacement the browser refuses with an exception (WebKit's SecurityError at its limit of

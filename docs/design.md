@@ -10648,14 +10648,20 @@ rules something out.
     JavaScript loads the page at its address, so the two paths disagreed (README Value 3)
     ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
     The mark says what the form already is: its answer is the page at the address it asked for.
-    In the task that draws the patch, before anything else can run (an observer of what it drew,
-    another submit), the runtime calls `history.replaceState` with the response's URL, the
+    Once the patch has drawn its last element, in the same task, before an observer of what it
+    drew, a timer or another submit's answer can run, the runtime calls `history.replaceState` with
+    the response's URL, the
     redirect's when there was one, and the `#fragment` of the form's `action` or `formaction`,
     keeping the entry's `history.state` (a fragment a redirect's `Location` names itself is not
     seen, as `fetch` does not show it, the same as for a link the runtime follows); the same
     address calls nothing, and a nav link to the new address is marked current, as for a
     navigation. No entry is added, so Back goes to the page before the screen, and Forward and a
-    reload read the page at the address, as for any entry. A page's own `navigate` listener can
+    reload read the page at the address, as for any entry. What the draw runs as it goes comes
+    before the replace and sees the old address: a `focus` handler as focus is put back on a
+    control the patch drew, a dialog it opens again, an element's `connectedCallback`. A submit
+    one of them sends goes as the page stood, so a form there without an `action` sends to the
+    old address. Putting focus back only after the replace would cover the first of these, not the
+    others, and would put focus back for every patch only once all its elements are in. A page's own `navigate` listener can
     cancel that `replaceState`, which then changes nothing and throws nothing: the runtime reads
     the address after the call, and when it is not the one asked for, reloads the entry's own
     page, so what the screen shows is the page at the address the entry has. A browser can refuse
@@ -10696,7 +10702,7 @@ rules something out.
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
     navigation, its submits are ordered as any form's are, a press dropping a read the form sent
     before a read drew it again in place (found by its id, which a patch requires), on its way or
-    waiting for a write of that form, and two marked
+    waiting for a write of that form, until it is sent, and two marked
     forms' answers are drawn as they come, the address that of the last one that moved it. The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
@@ -10759,9 +10765,15 @@ rules something out.
       though that page is another visit (the smoke's write-failure case caught it). Only a read
       is dropped by id, on its way or waiting for a write; a write is neither dropped nor
       waited for across a redraw.
+    - Ending a navigation's hold on the visit at `navigatesuccess` or `navigateerror`, as the build
+      before this one did: a listener of the page's heard before the runtime's can begin another
+      navigation as one ends, whose hold the runtime then ended, so a marked answer pressed while it
+      was on its way drew and its replace aborted it. Nor sending a read that waited for a write once
+      the write's answer is in, whatever was pressed since: a press of the form that answer drew, in
+      the task before the read was sent, was then the one dropped.
 
-    What it costs: the runtime every page loads is 1,045 bytes larger raw (46,502 to 47,547), 421
-    with gzip (16,718 to 17,139) and 362 with brotli (15,106 to 15,468), paid once a release by
+    What it costs: the runtime every page loads is 1,014 bytes larger raw (46,502 to 47,516), 418
+    with gzip (16,718 to 17,136) and 370 with brotli (15,106 to 15,476), paid once a release by
     every user. A `data-patch` submit reads one attribute and its form's id, and looks through the
     submits on their way (rarely more than one) for a read of that id, or a read waiting for a
     write of it; only a marked GET
@@ -10769,7 +10781,7 @@ rules something out.
     it reads back once after the replace. A patch tracks whether it placed every element as it
     walks them, without a separate scan, and a navigation the runtime takes to a page, a
     `popstate`, a `hashchange` and a reload the runtime starts each add one to a counter; the
-    navigation keeps its signal until it ends (`navigatesuccess`, `navigateerror`). On the server nothing runs that did not: `html!` writes the mark as
+    navigation keeps its signal until its own visit ends. On the server nothing runs that did not: `html!` writes the mark as
     an attribute and refuses a misplaced one when the markup compiles.
 
     Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their

@@ -2524,6 +2524,7 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
       : await swapPage(html, signal, stay, notice, null, undefined, undefined, drew);
     if (swappedIn && !again) announce(notice);
   } finally {
+    if (moving === signal) moving = null;
     signal.removeEventListener("abort", idle);
     idle();
     if (fetching === going) fetching = null;
@@ -2630,13 +2631,14 @@ const navigation = /** @type {Navigation | undefined} */ (window.navigation);
 let pageVisit = 0;
 for (const type of ["popstate", "hashchange"]) addEventListener(type, () => (pageVisit += 1));
 /**
- * The signal of the navigation that started the visit, until it ends: from the runtime's
- * `navigate` listener on, before the browser shows it on its way (`navigation.transition`), which
- * it does only once every listener has run. A navigation that fails ends without its signal aborting.
+ * The signal of the navigation that started the visit, until its own visit ends: from the
+ * runtime's `navigate` listener on, before the browser shows it on its way (`navigation.transition`),
+ * which it does only once every listener has run. A navigation that fails ends without its signal
+ * aborting. Not by `navigatesuccess`: a listener of the page's heard before the runtime's can
+ * begin another navigation as one ends, which this would then be.
  * @type {AbortSignal | null}
  */
 let moving = null;
-for (const type of ["navigatesuccess", "navigateerror"]) navigation?.addEventListener(type, () => (moving = null));
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -3642,7 +3644,9 @@ function sendAgain(form, submitter, within) {
             localNameOf(el) === localNameOf(submitter) &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  if (by !== undefined) send(now, by, sendsAs(now, by), within);
+  const sends = by !== undefined && sendsAs(now, by);
+  // A read is dropped by a press of the form since its write's answer, as by one before it.
+  if (sends && !(sends.method === "get" && submits.has(now))) send(now, by, sends, within);
 }
 
 /**
