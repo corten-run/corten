@@ -575,7 +575,7 @@ establish a general ranking.
       hosted job decides each idle reading so, from each run's growth and page size, and at its
       fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
       not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
-      `idle.mjs` printed it (its growth and settings, which decide), and says why the change is none of the kinds above, which the review
+      `idle.mjs` printed it (its growth and settings, which decide; the hosted job's summary gives each run's before, after, growth and page size, which stands in for it), and says why the change is none of the kinds above, which the review
       accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
       it may be taken again, and the description gives the refusal and the kit's reason for
       it; a case that still cannot be counted sends the change to measured. A cost inside the

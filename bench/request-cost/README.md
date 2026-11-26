@@ -334,7 +334,9 @@ On one runner it does what [Running it](#running-it) says, the first three by
    writes what it prints to the job's summary: for each case base, head, the difference and
    the percent, every count of every run with its longest window and the most that other
    threads ran in one, the allocator's calls, every idle run's growth in bytes with its rounded
-   figure a connection and what base's runs allow, each attempt that gave no figure, and one
+   figure a connection and what base's runs allow, each idle run's line with its before, after,
+   growth and page size (which stands in for the line `idle.mjs` printed), each attempt that gave
+   no figure, and one
    line of verdict. Its exit status is the job's.
 
 `compare.mjs` holds the figures to the rule of
@@ -436,10 +438,13 @@ apart and a head two pages above base's median would be one. A model says how of
 runners. When the rule compared the figures a connection by base's span alone, with every run
 drawn independently from one distribution, it did so in 8.7% of comparisons and 23.8% of jobs,
 a job being three readings, when the draws are normal, and in 5.5% and 15.7% when they are
-normal with a standard deviation of 1.5 bytes a connection and rounded to whole bytes. By the
-growths, with that standard deviation over 5,000 connections (7,500 bytes, 1.8 pages of 4,096)
-and each draw rounded to whole pages, it does so in 5.4% and 15.3% (each simulated, 1,000,000
-jobs): the one page allowed adds little at that spread. None of the five runs read one, whose
+normal with a standard deviation of 1.5 bytes a connection and rounded to whole bytes. On the
+growths, with that standard deviation over 5,000 connections (7,500 bytes, 1.8 pages of 4,096),
+each draw rounded to whole pages and the mean placed anywhere in a page, the same draws read
+one by base's span alone in 5.9% of comparisons and 16.7% of jobs, and with the one page
+allowed in 5.4% and 15.3% (each simulated, 1,000,000 jobs): most of the fall from 8.7% is the
+rounding, and the one page allowed takes away about half a point more at that spread. None of
+the five runs read one, whose
 figures were compared, not their growths, which those runs did not print. A job that fails on idle memory alone, by a byte or
 two, is to be read with that in mind; by the rule its runs are still not taken again for
 their result.

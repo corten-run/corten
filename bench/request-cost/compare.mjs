@@ -94,7 +94,9 @@ export function figure(text, expect) {
   // it was read in: a run printed before they were has no figure, its growth not guessed from its
   // rounded `bytes`.
   if (expect.kind === "idle") {
-    const sound = Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.grown === found.after - found.before && Number.isSafeInteger(found.page) && found.page > 0;
+    // Resident memory is whole pages, so each reading of it is too, not only their difference.
+    const paged = Number.isSafeInteger(found.page) && found.page > 0 && found.before % found.page === 0 && found.after % found.page === 0;
+    const sound = Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.grown === found.after - found.before && paged;
     return sound && found.bytes === Math.round(found.grown / found.connections) ? found : null;
   }
   const { counts, windows } = found;
@@ -230,10 +232,18 @@ export function compare(base, head, { description = "", names = { base: "base", 
   // An idle reading is decided by its growths in bytes, not by the figures a connection, which
   // are rounded: `idleRise` is the rule, and a reading it cannot decide is not counted.
   const connections = /** @type {number} */ (/** @type {ReturnType<typeof readings>[number]} */ (plan["idle-request-1.json"]).expect.connections);
+  /** Each idle run's record, as `idle.mjs` prints it on a host, with what decides: its before, after, growth and page size. */
+  const records = /** @type {string[]} */ ([]);
   const idle = IDLE.map(({ name, what }) => {
     const runs = [];
     for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.json`, `idle memory ${what}, run ${run},`));
     const [b, h] = [0, 1].map((side) => runs.map((found) => /** @type {any} */ (found[side] ?? null)));
+    for (const [side, found] of /** @type {const} */ ([["base", b], ["head", h]]))
+      found.forEach((run, at) => {
+        if (run === null) return;
+        const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
+        records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
+      });
     /** A build's runs of the reading, when every run gave a figure: a median of fewer is not the rule's. */
     const all = (/** @type {any[]} */ found) => (found.every((run) => run !== null) ? found : null);
     const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
@@ -326,6 +336,8 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Memory idle connections hold",
     `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and one page.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
+    "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
+    ["```text", ...records, "```"].join("\n"),
     ...(refusals.length > 0 ? ["### Runs that gave no figure", refusals.join("\n")] : []),
   ].join("\n\n");
   return { markdown: `${markdown}\n`, status, holds };

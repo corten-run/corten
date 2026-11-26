@@ -48,7 +48,8 @@ function printed(file, measured, page = 4_096) {
     return JSON.stringify({ ...of, allocations, frees, calls: { free: frees, malloc: allocations } }) + "\n";
   }
   const grown = /** @type {number} */ (measured) * page;
-  const before = 7_577_600;
+  // Resident memory is whole pages, so the reading before is one too, in either page size.
+  const before = Math.ceil(7_577_600 / page) * page;
   return JSON.stringify({ ...of, bytes: Math.round(grown / of.connections), before, after: before + grown, grown, page, seconds: 0.6 }) + "\n";
 }
 
@@ -157,6 +158,9 @@ test("a figure is a run's whole JSON, of the run asked for: cut short, of anothe
   // A growth that is not its after less its before, and a page size that is not one; and a run
   // without either, as idle.mjs printed before them, whose growth is not guessed from its bytes.
   assert.equal(figure(JSON.stringify({ ...run, grown: run.grown + 4_096 }), idle), null);
+  // A growth of whole pages between readings that are not whole pages, which no VmRSS gives.
+  assert.equal(figure(JSON.stringify({ ...run, before: 1, after: 1 + run.grown }), idle), null);
+  assert.equal(figure(JSON.stringify({ ...run, before: run.before + 1, after: run.after + 1 }), idle), null);
   for (const page of [0, -4_096, 4_096.5, "4096", 2 ** 53, null]) assert.equal(figure(JSON.stringify({ ...run, page }), idle), null, String(page));
   const { grown, page, ...old } = run;
   for (const before of [old, { ...old, grown }, { ...old, page }]) assert.equal(figure(JSON.stringify(before), idle), null, JSON.stringify(before));
@@ -232,6 +236,10 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 8,192 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
   // A row a case and a row a reading, and no section for runs with no figure when all gave one.
   assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, 9 + 4 + 9 + 3);
+  // Each idle run is given whole, with its before, after, growth and page size, which decide.
+  const record = markdown.split("\n").filter((line) => /^(base|head), .*, run [1-3]: /.test(line));
+  assert.equal(record.length, 2 * 3 * 3, markdown);
+  assert.ok(record.includes("base, after one request, run 2: 8422 bytes a connection (5000 that answered 1 pipeline, from 1 address; 7577600 before, 49688576 after, 42110976 grown, in 4096-byte pages)"), record.join("\n"));
   assert.doesNotMatch(markdown, /no figure|over the budget|rose|not decided/);
 });
 
