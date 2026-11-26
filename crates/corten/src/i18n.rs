@@ -1173,6 +1173,12 @@ mod tests {
         for n in [-1_i64, -9, -10, -1234567] {
             both(n);
         }
+        // Where the writer goes from three digits to its loop of pairs, at both ends of each width.
+        for n in [999_u16, 1_000, 9_999, 10_000] {
+            both(n);
+            both(u64::from(n));
+            both(-i64::from(n));
+        }
     }
 
     /// The month styles, by their index in the cases after the other 14, and the day styles after

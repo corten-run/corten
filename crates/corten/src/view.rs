@@ -2081,13 +2081,25 @@ macro_rules! tuples {
 }
 tuples!((A, B), (A, B, C), (A, B, C, D));
 
+/// The decimal digits of `n`, for every integer's `Render` and a message's integer argument.
+///
+/// Always inlined: a page writes many integers, and as a call each one paid for the call and for
+/// saving and restoring registers, and the caller reloaded across it what it could have kept.
+/// Inlined, the caller's type also bounds `n`, so for a `u8` the compiler can drop the long path.
+#[inline(always)]
 pub(crate) fn push_u64(mut n: u64, out: &mut String) {
-    // One or two digits, most of a page's counts and quantities: pushed with no buffer.
-    if n < 100 {
-        if n >= 10 {
-            out.push(char::from(b'0' + (n / 10) as u8));
+    // Up to three digits, most of a page's counts and quantities: written with no buffer, a digit
+    // and a pair at most.
+    if n < 1_000 {
+        let n = n as u16;
+        if n >= 100 {
+            out.push(char::from(b'0' + (n / 100) as u8));
+            out.push_str(crate::ascii::pair((n % 100) as u8));
+        } else if n >= 10 {
+            out.push_str(crate::ascii::pair(n as u8));
+        } else {
+            out.push(char::from(b'0' + n as u8));
         }
-        out.push(char::from(b'0' + (n % 10) as u8));
         return;
     }
     // Two digits per division, lowest first, then written highest first as two-digit text: one
