@@ -13,7 +13,8 @@ import { ready } from "./ready.mjs";
  */
 async function against(handle, { auth = "", ...options } = {}) {
   let n = 0;
-  const app = http.createServer((req, res) => handle(++n, req, res));
+  // Only the readiness route, asked with GET, is the stand-in's to answer; anything else is a 404 the wait refuses.
+  const app = http.createServer((req, res) => (req.method === "GET" && req.url === "/health/ready" ? handle(++n, req, res) : res.writeHead(404).end()));
   await new Promise((r) => app.listen(0, "127.0.0.1", () => r(undefined)));
   const port = /** @type {import("node:net").AddressInfo} */ (app.address()).port;
   try {
@@ -35,7 +36,11 @@ const jumps = (/** @type {number} */ calls) => {
 };
 
 test("a 503, a reset connection and a body that breaks off are waited out until a whole 200", async () => {
+  // Three 503s are three pauses of 250 ms: the wait does not ask again at once.
+  const began = performance.now();
   assert.deepEqual(await against((n, _q, s) => (n < 4 ? unavailable(s) : ok(s))), { outcome: "ready", requests: 4 });
+  const paced = performance.now() - began;
+  assert.ok(paced >= 600, `three retries took ${Math.round(paced)} ms`);
   assert.deepEqual(await against((n, q, s) => (n < 3 ? q.socket.destroy() : ok(s))), { outcome: "ready", requests: 3 });
   for (const status of [200, 503]) {
     const cut = await against((n, q, s) => {
@@ -85,6 +90,14 @@ test("the budget ends the wait naming the last outcome, and nothing after it cou
   }
   const noPause = await against((_n, _q, s) => unavailable(s), { now: jumps(3) });
   assert.deepEqual(noPause, { outcome: "http://127.0.0.1:PORT/health/ready did not answer 200 within 120 s (last: 503)", requests: 1 });
+});
+
+test("an attempt that hangs is given up after 5 s and the next one is made", async () => {
+  const from = performance.now();
+  const got = await against((n, _q, s) => void (n > 1 && ok(s)), { budget: 7000 });
+  const took = performance.now() - from;
+  assert.deepEqual(got, { outcome: "ready", requests: 2 });
+  assert.ok(took >= 4900 && took < 6500, `ready after ${Math.round(took)} ms`);
 });
 
 test("a base is named without its credentials, and one that cannot be read or is not plain http is refused by name", async () => {
