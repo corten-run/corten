@@ -11033,9 +11033,12 @@ rules something out.
     the changes that sentence names, and the author says why a change is of none of its kinds,
     which the review accepts, as a negative control's declaration is accepted. The trend reads
     what is left as it adds up (twenty costs at the budget are about 10% more instructions),
-    and no run of it has been made; until one is, a release takes the kit's counts of its candidate
-    against the last release's tag ([RELEASING.md](../RELEASING.md#readiness-checkpoints)),
-    which anyone can take in minutes and which read instructions, not cycles. One kind on the
+    and no run of it has been made. A release takes the kit's counts of its candidate against
+    the last release's tag, which anyone can take in minutes and which read instructions, not
+    cycles, unless a row of the trend reads the commit of `main` that candidate is made from
+    against that tag with every workload read
+    ([RELEASING.md](../RELEASING.md#readiness-checkpoints)): a row of an earlier commit, of
+    another release or with a workload not read stands in for no count. One kind on the
     list cannot be told from a diff, a future's size. The test `staged_page_future_sizes`
     prints the stage's and the handler's, the only futures any test in the repository sizes,
     so a change that edits an `async` body gives those two for base and head, and that a
@@ -11093,10 +11096,13 @@ rules something out.
     trend is made, weekly and before a release, before counted costs add up past what a
     release can carry, its plan, command and page being in the placement kit and no such run
     having been made; its threshold, `main` at least +2% over the release on a workload by the
-    lower bound, is a proposal no reading stands behind; and the placement kit's example
+    lower bound of its cycles, is a proposal no reading stands behind and nobody has accepted,
+    the 2% above being of instruction counts between releases; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the
-    handler add up to, though the release and `main` answer one of them differently, so part
-    of what a run reads there is the answer and not the path to it); measured (the kit's
+    handler add up to, though two requests to one probe do not take every path a counted change
+    can cost on, and the release and `main` answer one of them differently, by a difference a
+    run records and nobody reviews, so part of what a run reads there is the answer and not
+    the path to it); measured (the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -11123,9 +11129,13 @@ rules something out.
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; the trend's first run is read, so its threshold
-    can be set from what a run resolves and not proposed; a run cannot be read because the
-    trend's probe does not build at the release's tag or its A/A does not resolve; a release is
+    last release counted inside the budget; the trend's first run with every workload read is
+    made, which shows what a run of its plan resolves and so informs a review of the threshold,
+    not what rise a release can carry; a run of the trend leaves a workload not read, whatever
+    its row gives as the reason (the probe does not build at the release's tag, the kit refuses
+    a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
+    does not resolve, a placement answers with another body), so nothing read what this Choice
+    leans on the trend to read; a release is
     made with no trend reading against the
     one before it and no such count, so the guard this Choice leans on is not there; a future
     no test sizes is found to have grown under a counted change; repeats of one binary differ

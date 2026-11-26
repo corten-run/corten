@@ -577,11 +577,14 @@ establish a general ranking.
       ([#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)).
       One command of [`bench/placement`](bench/placement/README.md#the-trend) makes the run on
       a quiet host and adds a row to [the trend's page](bench/placement/trend/README.md). A row
-      gates no pull request and no release: a run past the threshold (`main` at least +2% over
-      the release on a workload, a proposal) opens an issue that names the pull requests merged
-      since the run before. No run has been made: until one is, no reading sees what counted
-      changes add up to in cycles, and a release takes the kit's counts of its candidate
-      against the last release ([RELEASING.md](RELEASING.md#readiness-checkpoints)).
+      gates no pull request and no release. A run is past the threshold when the lower bound of
+      a workload's change, `main` against the release, is at or above +2% (a proposal); the
+      command then drafts an issue for whoever made the run, naming the pull requests merged
+      since the row before, and opens nothing. A run that is not past it has not shown the cost
+      to be under +2%. No run has been made, so no reading sees what counted changes add up to
+      in cycles, and a release takes the kit's counts of its candidate against the last release
+      whenever no row reads that candidate
+      ([RELEASING.md](RELEASING.md#readiness-checkpoints) says which row does).
 
       A reading published under the rule as it stood before this paragraph was on `main` stays
       published, is never withdrawn and is read by the rule it was made under. One that was not
