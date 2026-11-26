@@ -56,6 +56,75 @@ function readAgainFault(page, answer, address, status) {
   );
 }
 
+/**
+ * The read-again tags in each of `answers`, the answer to a runtime read of a page (a whole page,
+ * `corten: page`, when `whole`; else a navigation's, `corten: nav`), found where a browser reads
+ * them: `page` parses each as the runtime does, a whole page with DOMParser (`swapDocument` in
+ * corten.js) and a navigation's answer as a template's `innerHTML` (`parse`), so a tag in a comment
+ * or in the text of a raw-text element (a `<script>`, `<style>`, `<textarea>` or `<title>`) is
+ * none. The head's tags are the `<noscript data-corten-read-again data-corten-head>` the runtime puts
+ * in the head: in a whole page, those in its `<head>`; in a navigation's answer, which has none, its
+ * top-level ones, where the server writes its head tags before the page. Each has its wait and the
+ * `content` of each `<meta http-equiv="refresh">` in it as a browser without JavaScript reads them,
+ * parsed with scripting off (a `<noscript>` the runtime's template parses as text is parsed again
+ * so, as a `<noscript>` in a head). With `part`, the part's tags are the
+ * `<template data-corten-read-again data-from>` reading again from `part` that the runtime reads in
+ * `<main>` (`readPartsAgain`): those in a whole page's `<main>`, or in a navigation's answer but for
+ * those in its head tags and in the layout elements that are the page's (`data-corten-page`), which
+ * the runtime takes out of it. Each wait is the attribute's value as the parse gives it, or null.
+ * Bounded to 5 s (`readWithin`).
+ * @param {import("@playwright/test").Page} page @param {string[]} answers @param {string | undefined} part @param {boolean} whole
+ * @returns {Promise<{ head: { wait: string | null, refresh: (string | null)[] }[], parts: { wait: string | null }[] }[]>}
+ */
+function readAgainTagsIn(page, answers, part, whole) {
+  return readWithin(
+    "an answer's read-again tags",
+    page.evaluate(
+      ({ answers, part, whole }) => {
+        const w = /** @type {any} */ (window);
+        const PART = "template[data-corten-read-again][data-from]";
+        // Whether a template's `innerHTML` here parses a <noscript>'s content as elements (scripting
+        // off) or as its text (scripting on), as the runtime's `parse` does.
+        const probe = document.createElement("template");
+        probe.innerHTML = w.__html("<noscript><i></i></noscript>");
+        const fragmentElements = !!probe.content.querySelector("noscript i");
+        /** @param {Element} noscript @param {boolean} elements whether its content was parsed as elements */
+        const refreshes = (noscript, elements) => {
+          const host = elements
+            ? noscript
+            : new DOMParser().parseFromString(w.__html(`<!doctype html><html><head><noscript>${noscript.textContent ?? ""}</noscript></head></html>`), "text/html").head.querySelector("noscript");
+          return Array.from(host?.querySelectorAll("meta") ?? [])
+            .filter((m) => m.getAttribute("http-equiv")?.toLowerCase() === "refresh")
+            .map((m) => m.getAttribute("content"));
+        };
+        return answers.map((answer) => {
+          /** @type {Element[]} */ let heads;
+          /** @type {Element[]} */ let parts;
+          let elements = true;
+          if (whole) {
+            const doc = new DOMParser().parseFromString(w.__html(answer), "text/html");
+            heads = Array.from(doc.head.querySelectorAll("noscript[data-corten-read-again][data-corten-head]"));
+            parts = Array.from(doc.querySelector("main")?.querySelectorAll(PART) ?? []);
+          } else {
+            const template = document.createElement("template");
+            template.innerHTML = w.__html(answer);
+            const top = Array.from(template.content.children);
+            heads = top.filter((el) => el.localName === "noscript" && el.hasAttribute("data-corten-read-again") && el.hasAttribute("data-corten-head"));
+            const out = top.filter((el) => el.hasAttribute("data-corten-head") || el.hasAttribute("data-corten-page"));
+            parts = Array.from(template.content.querySelectorAll(PART)).filter((el) => !out.some((o) => o.contains(el)));
+            elements = fragmentElements;
+          }
+          return {
+            head: heads.map((el) => ({ wait: el.getAttribute("data-corten-read-again"), refresh: refreshes(el, elements) })),
+            parts: part === undefined ? [] : parts.filter((el) => el.getAttribute("data-from") === part).map((el) => ({ wait: el.getAttribute("data-corten-read-again") })),
+          };
+        });
+      },
+      { answers, part, whole },
+    ),
+  );
+}
+
 export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
   // A page that waits for a write (ReadAgain) reads itself again until the write is in,
   // however it was reached: a full load, or the runtime's navigation (a link, or a data-patch
@@ -189,71 +258,38 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
     const savedLine = '<p id="alert-status" role="status">Saved.</p>';
     const savingLine = '<p id="alert-status" role="status">Saving...</p>';
-    /** The head's read-again tag of a page as the server writes it (`ReadAgain` in the head). */
-    const headTag = /<noscript data-corten-read-again="\d+"[^>]*>[\s\S]*?<\/noscript>/g;
-    /** A part's read-again tag as the server writes it (`ReadAgain::from`). */
-    const partTag = /<template data-corten-read-again="\d+"[^>]*><\/template>/g;
-    /** A tag's attributes (`name="value"`, or a bare name as ""), by lowercased name. @param {string} tag */
-    const attrsOf = (tag) =>
-      Object.fromEntries([...tag.replace(/^<[^\s>]+/, "").matchAll(/([^\s=/>]+)(?:\s*=\s*"([^"]*)")?/g)].map((m) => [m[1].toLowerCase(), (m[2] ?? "").replaceAll("&amp;", "&")]));
     /**
-     * The read-again tags in `body` that a browser reads as tags, where they count, each with the
-     * place its wait is written (`waits`: the value's start and end in `body`, and the value): the
-     * head's (`<noscript data-corten-read-again>` in the head, with its wait and each actual
-     * `<meta http-equiv="refresh">` in it, whose `content` is the refresh's wait), and with `part`
-     * the part's reading again from `part` (`<template data-corten-read-again data-from>`). A tag in
-     * an HTML comment is none, and the head is what is inside `<head>` or, in a navigation's answer,
-     * which has none, the run of head elements it starts with.
-     * @param {string} body @param {string} [part]
+     * The head's read-again tag of a page as the server writes it (`ReadAgain` in the head), and a
+     * part's below: the stand-in takes them out of an answer saying `Saved.` before it puts in its
+     * own. The server's tags in an answer saying `Saving...` are found where a browser reads them
+     * (`readAgainTags`), never by these.
      */
-    const readAgainTags = (body, part) => {
-      // Comments blanked to spaces of their length, so their tags are none and places stay `body`'s.
-      const html = body.replace(/<!--[\s\S]*?(?:-->|$)/g, (c) => " ".repeat(c.length));
-      const open = /<head\b[^>]*>/i.exec(html);
-      const from = open ? open.index + open[0].length : 0;
-      const close = open ? html.indexOf("</head>", from) : -1;
-      const to = open
-        ? close < 0 ? from : close
-        : (/^(?:\s+|<title\b[^>]*>[\s\S]*?<\/title>|<noscript\b[^>]*>[\s\S]*?<\/noscript>|<(?:meta|link|base)\b[^>]*>|<(?:style|script)\b[^>]*>[\s\S]*?<\/(?:style|script)>)*/i.exec(html)?.[0].length ?? 0);
-      /** Where `name`'s value is written in the tag at `at` (`tag` its text), or null. @param {string} tag @param {number} at @param {string} name */
-      const valueAt = (tag, at, name) => {
-        const m = new RegExp(`\\s${name}\\s*=\\s*"([^"]*)"`, "i").exec(tag);
-        if (!m) return null;
-        const start = at + m.index + m[0].length - 1 - m[1].length;
-        return { start, end: start + m[1].length, value: m[1] };
-      };
-      const head = [...html.slice(from, to).matchAll(/<noscript\b[^>]*>([\s\S]*?)<\/noscript>/gi)]
-        .filter((m) => "data-corten-read-again" in attrsOf(/^<[^>]*>/.exec(m[0])?.[0] ?? ""))
-        .map((m) => {
-          const at = from + /** @type {number} */ (m.index);
-          const inner = at + m[0].indexOf(">") + 1;
-          const refresh = [...m[1].matchAll(/<meta\b[^>]*>/gi)].filter((r) => attrsOf(r[0])["http-equiv"]?.toLowerCase() === "refresh");
-          return {
-            wait: valueAt(m[0].slice(0, m[0].indexOf(">") + 1), at, "data-corten-read-again"),
-            refresh: refresh.map((r) => valueAt(r[0], inner + /** @type {number} */ (r.index), "content")),
-          };
-        });
-      const parts =
-        part === undefined
-          ? []
-          : [...html.matchAll(/<template\b[^>]*>/gi)]
-              .filter((m) => "data-corten-read-again" in attrsOf(m[0]) && attrsOf(m[0])["data-from"] === part)
-              .map((m) => ({ wait: valueAt(m[0], /** @type {number} */ (m.index), "data-corten-read-again") }));
-      return { head, parts };
-    };
+    const headTag = /<noscript data-corten-read-again="\d+"[^>]*>[\s\S]*?<\/noscript>/g;
+    const partTag = /<template data-corten-read-again="\d+"[^>]*><\/template>/g;
+    /**
+     * The read-again tags in `body`, where a browser reads them (`readAgainTagsIn`): the head's, and
+     * with `part` the part's reading again from `part`; `whole` when `body` answers a whole read
+     * (`corten: page`) rather than a navigation's (`corten: nav`).
+     * @param {string} body @param {string | undefined} part @param {boolean} whole
+     */
+    const readAgainTags = async (body, part, whole) => (await readAgainTagsIn(page, [body], part, whole))[0];
+    /** Each wait of tags `readAgainTags` found, in its order. @param {Awaited<ReturnType<typeof readAgainTags>>} tags */
+    const waitsOf = (tags) => [...tags.head.flatMap((t) => [t.wait, ...t.refresh]), ...tags.parts.map((t) => t.wait)];
+    /** What tags `readAgainTags` found are, but for their waits. @param {Awaited<ReturnType<typeof readAgainTags>>} tags */
+    const shapeOf = (tags) => JSON.stringify([tags.head.map((t) => t.refresh.length), tags.parts.length]);
     /**
      * What is wrong with the read-again tags in `body`, the server's own answer saying `Saving...`,
      * against those the server writes while a write lands (`readAgainTags`): its head's tag, with an
      * actual refresh in it, and with `part` its part's tag reading again from `part` (the page's
      * address), each there and waiting `AGAIN_SECONDS` (the alerts page's own wait). Null when
-     * nothing is. @param {string} body @param {string} [part]
+     * nothing is. @param {string} body @param {string | undefined} part @param {boolean} whole
      */
-    const tagFaults = (body, part) => {
-      const { head, parts } = readAgainTags(body, part);
+    const tagFaults = async (body, part, whole) => {
+      const { head, parts } = await readAgainTags(body, part, whole);
       const faults = [];
-      /** @param {string} what @param {({ value: string } | null)[]} waits */
+      /** @param {string} what @param {(string | null)[]} waits */
       const judge = (what, waits) => {
-        const wrong = waits.map((w) => w?.value ?? "none").filter((v) => !/^\d+$/.test(v) || Number(v) !== AGAIN_SECONDS);
+        const wrong = waits.map((w) => w ?? "none").filter((v) => !/^\d+$/.test(v) || Number(v) !== AGAIN_SECONDS);
         if (wrong.length) faults.push(`with ${what} waiting ${wrong.join(", ")} s, not ${AGAIN_SECONDS}`);
       };
       if (!head.length) faults.push("without its head's read-again tag");
@@ -266,13 +302,37 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       return faults.length ? faults.join(" and ") : null;
     };
     /**
-     * `body` with the waits `readAgainTags` finds (with `part`) set to `seconds`, and nothing else
-     * changed. @param {string} body @param {string} part @param {number} seconds
+     * `body` with the waits `readAgainTags` finds (with `part`) set to `seconds` and every other byte
+     * as it was (`answer`), or why that cannot be done (`refused`). Each wait found is traced to the
+     * place in `body` it is written: `body` is parsed again with each quoted `data-corten-read-again`
+     * and `content` value written in it replaced by a mark of its own, and that parse must find the
+     * same tags, each wait one mark, a different one each, whose place holds that wait as written.
+     * Only those places are set, and a parse of the result must find the same tags, each waiting
+     * `seconds`. @param {string} body @param {string} part @param {number} seconds @param {boolean} whole
+     * @returns {Promise<{ answer: string } | { refused: string }>}
      */
-    const setWaits = (body, part, seconds) => {
-      const { head, parts } = readAgainTags(body, part);
-      const places = [...head.flatMap((t) => [t.wait, ...t.refresh]), ...parts.map((t) => t.wait)].filter((w) => w !== null).sort((a, b) => b.start - a.start);
-      return places.reduce((out, w) => `${out.slice(0, w.start)}${seconds}${out.slice(w.end)}`, body);
+    const setWaits = async (body, part, seconds, whole) => {
+      if (body.includes("smoke-wait-")) return { refused: "it already holds the text the marks are made of" };
+      const places = [...body.matchAll(/([\s/](?:data-corten-read-again|content)\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi)].map((m, i) => {
+        const value = m[2] ?? m[3] ?? "";
+        const start = /** @type {number} */ (m.index) + m[1].length + 1;
+        return { start, end: start + value.length, value, mark: `smoke-wait-${i}` };
+      });
+      const marked = places.reduceRight((out, p) => `${out.slice(0, p.start)}${p.mark}${out.slice(p.end)}`, body);
+      const [found, traced] = await readAgainTagsIn(page, [body, marked], part, whole);
+      if (shapeOf(found) !== shapeOf(traced)) return { refused: "its read-again tags are not the same once their waits are marked" };
+      const want = waitsOf(found);
+      /** @type {Set<(typeof places)[number]>} */
+      const chosen = new Set();
+      for (const [i, mark] of waitsOf(traced).entries()) {
+        const place = places.find((p) => p.mark === mark);
+        if (!place || chosen.has(place) || place.value !== want[i]) return { refused: `its wait ${JSON.stringify(want[i])} is not written in one place of its own` };
+        chosen.add(place);
+      }
+      const answer = [...chosen].sort((a, b) => b.start - a.start).reduce((out, p) => `${out.slice(0, p.start)}${seconds}${out.slice(p.end)}`, body);
+      const [set] = await readAgainTagsIn(page, [answer], part, whole);
+      if (shapeOf(set) !== shapeOf(found) || waitsOf(set).some((w) => w !== String(seconds))) return { refused: `its read-again tags, once set, do not each wait ${seconds} s` };
+      return { answer };
     };
     const savedSoon = () =>
       page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
@@ -410,7 +470,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // on so and fails the case (`seedFaults`), since the stand-in never supplies or repairs the
       // server's tags or waits. The one exception is the leave-before-read case, whose `seeds` wait
       // is longer: the server's waits are set to it (`setWaits`), once they were found to be
-      // `AGAIN_SECONDS`. Only the navigation's fetch is answered so: every part read after it is the
+      // `AGAIN_SECONDS`, and only where each is traced to one place in the answer: an answer whose
+      // waits cannot be traced so is passed on as written and fails the case. Only the navigation's fetch is answered so: every part read after it is the
       // server's, or a case's own route's.
       /** The pages whose navigation is answered so, by address (path and query), each with its part's wait in seconds. @type {Map<string, number>} */
       const seeds = new Map();
@@ -444,7 +505,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             return;
           }
           if (shows === "Saving...") {
-            const wrong = tagFaults(body, address);
+            const wrong = await tagFaults(body, address, mode === "page");
             if (wrong !== null) {
               const fault = `the server's own answer saying Saving... ${wrong}, passed on as the server wrote it`;
               seeded.set(address, fault);
@@ -459,9 +520,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             }
             // The leave-before-read case's longer wait, set only where `tagFaults` found it: the
             // head's tag, its refresh's content and the part's tag, each waiting `AGAIN_SECONDS`.
-            const answer = setWaits(body, address, seconds);
+            const set = await setWaits(body, address, seconds, mode === "page");
+            if ("refused" in set) {
+              const fault = `the server's own answer saying Saving..., with its read-again tags waiting ${AGAIN_SECONDS} s that could not be set to ${seconds} s (${set.refused}), passed on as the server wrote it`;
+              seeded.set(address, fault);
+              seedFaults.set(address, fault);
+              await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
+              return;
+            }
             seeded.set(address, `the server's own answer saying Saving..., with its read-again tags waiting ${AGAIN_SECONDS} s, set to ${seconds} s`);
-            await route.fulfill({ status: res.status(), headers, body: markNav(token, answer) });
+            await route.fulfill({ status: res.status(), headers, body: markNav(token, set.answer) });
             return;
           }
           // The write has landed: the stand-in answers as the server does while it lands.
@@ -1167,7 +1235,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
       }
       if (shows === "Saving...") {
-        const wrong = tagFaults(whole);
+        const wrong = await tagFaults(whole, undefined, mode === "page").catch(
+          (error) => `whose read-again tags were not read (${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]})`,
+        );
         if (wrong !== null) wholeFaults.set(address, `the server's own answer saying Saving... ${wrong}`);
         wholeSeeded.set(address, wrong === null ? "the server's own answer saying Saving..., with its head's read-again tag as the server wrote it" : `the server's own answer saying Saving... ${wrong}, passed on as the server wrote it`);
         return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
@@ -1181,36 +1251,42 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     try {
       await within(5000, "the whole-read route was not set within 5 s", page.route("**/alerts?saved=*", wholeOnly));
       page.on("request", onSaved);
-      await page.goto(await pending());
-      const waiting = await saved();
-      await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 5));
+      await page.goto(await readWithin("the pending write's page", pending()));
+      const waiting = await readWithin("the status line once the page loaded", saved());
+      await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 5)));
       await savedSoon();
-      check("a page waiting for a write reads itself again after a full load", waiting === "Saving..." && (await saved()) === "Saved.", `${waiting} -> ${await saved()}`);
-      if (swaps) check("reading again keeps the document", await page.evaluate(() => (/** @type {any} */ (window)).__marker === 5));
+      const read = await readWithin("the status line after the wait for Saved.", saved());
+      check("a page waiting for a write reads itself again after a full load", waiting === "Saving..." && read === "Saved.", `${waiting} -> ${read}`);
+      if (swaps) check("reading again keeps the document", await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 5)));
       else skip("reading again keeps the document", noSwaps);
       const settled = reads.length;
       await page.waitForTimeout(2200);
       check("it stops once the page no longer asks", reads.length === settled, `${reads.length - settled} more reads`);
       // At a place on the page (a write redirected to `route.at(..)`): read again all the same.
-      await page.goto(`${await pending()}#alert-status`);
+      await page.goto(`${await readWithin("the pending write's page", pending())}#alert-status`);
       await savedSoon();
-      check("a page at a place (#id) reads itself again too", (await saved()) === "Saved." && new URL(page.url()).hash === "#alert-status", `${await saved()} ${page.url()}`);
+      const atPlace = await readWithin("the status line after the wait for Saved.", saved());
+      check("a page at a place (#id) reads itself again too", atPlace === "Saved." && new URL(page.url()).hash === "#alert-status", `${atPlace} ${page.url()}`);
       // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
       // read again with the page, so the page read again draws what is on screen.
       {
-        await page.goto(await pending());
+        await page.goto(await readWithin("the pending write's page", pending()));
         const from = reads.length;
-        await page.evaluate(() => {
-          const to = new URL(location.href);
-          to.searchParams.set("shown", "1");
-          history.replaceState(history.state, "", to);
-        });
+        await readWithin(
+          "the page's replaced address",
+          page.evaluate(() => {
+            const to = new URL(location.href);
+            to.searchParams.set("shown", "1");
+            history.replaceState(history.state, "", to);
+          }),
+        );
         await savedSoon();
         const again = reads.slice(from);
+        const replaced = await readWithin("the status line after the wait for Saved.", saved());
         check(
           "a page reads itself again at the address a script replaced",
-          (await saved()) === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1"),
-          `${await saved()} ${again.join()}`,
+          replaced === "Saved." && again.length > 0 && again.every((u) => new URL(u).searchParams.get("shown") === "1"),
+          `${replaced} ${again.join()}`,
         );
       }
       // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that

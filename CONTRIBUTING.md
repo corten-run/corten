@@ -419,8 +419,8 @@ press task not returning in time, failing or finding nothing to press, or what i
 coming in time. The link to `/smoke/quoted` these checks then follow is
 pressed the same way, and that page must come in within five seconds counted from just before the
 press, a budget the press task shares. It has come only once the address is `/smoke/quoted` and its
-`<main>` holds an `<output id="quoted">`, no form and nothing busy: the written page draws that
-output too, inside its form, so neither the output nor the address alone shows that page, and an
+`<main>` holds an `<output id="quoted">` and no form, with neither `<main>` nor anything in it busy
+(`aria-busy`): the written page draws that output too, inside its form, so neither the output nor the address alone shows that page, and an
 empty or other `<main>` at that address does not count. The page that reads itself again swaps `<main>` about a
 second after it loads and whenever its answer changes, so a click that found the button (or the
 link) before a swap can reach nothing and send nothing
@@ -494,6 +494,11 @@ held write: each failure the page says
 is recorded with the wrapper's state at that moment and its target, compared with the form noted
 as it submitted that write, so a failure said at the headers, before the body, or said on the
 window or on another form, does not count as the body's.
+The check that a navigation leaving a write's patch before it is drawn reads the next page whole
+requires that page to show what the write changed: its brand, and the section the patch draws,
+which every page after the write draws too, drawn by that page's own section element and not by the
+patch. The check that the next navigation then reads `<main>` alone requires that section still
+drawn after it.
 These cases, the check that a write's patch answered before a navigation is drawn by that page,
 the two checks of a write's patch to the layout beside another write's own page, and each case that
 holds a script or write while it follows the link to `/smoke/quoted` close their page in a
@@ -568,13 +573,22 @@ in place, gets the server's own answer when that says `Saving...`, changed only 
 fixture puts on its status line to tell the navigation's draw (and, for the whole-page check, with
 its part templates taken out, as every read there is), and the case fails unless it carries the
 server's read-again tags (the head's, and for a part, the part's reading again from the page's own
-address), each waiting the page's one second. A tag counts only where a browser reads it: not in an
-HTML comment, the head's inside the head (a navigation's answer has none, so the head elements it
-starts with), and its wait read from it and from an actual `<meta http-equiv="refresh">` in it. A
-fixture never supplies or repairs the server's read-again tags or waits. Only when the write has
+address), each waiting the page's one second. A tag counts only where a browser reads it: the
+fixture parses the answer in the page as the runtime does (DOMParser for a whole read's page, a
+template's `innerHTML` for a navigation's answer), never with a pattern over its text, so a tag in an
+HTML comment or in the text of a raw-text element (`<script>`, `<style>`, `<textarea>`, `<title>`)
+is none. The head's tag is a `<noscript data-corten-read-again data-corten-head>` in the page's
+`<head>`, or, in a navigation's answer, which has none, one of its top-level elements; its wait is
+read from it and from each `<meta http-equiv="refresh">` in it as a browser without JavaScript
+parses it. The part's tag is the `<template data-corten-read-again data-from>` the runtime reads in
+`<main>`. A fixture never supplies or repairs the server's read-again tags or waits. Only when the write has
 already landed, and the server says `Saved.`, does the stand-in answer as the server does while it
 lands. Only the leave-before-read case changes the server's tags: once they are found waiting one
-second, it sets those waits to its own longer one, changing nothing else. The check that a page reached by the runtime's
+second, it sets those waits to its own longer one, changing nothing else. It finds where each wait
+is written by parsing the answer again with each quoted wait or `content` value replaced by a mark
+of its own, sets only the places whose marks the found tags carry, and parses the result to confirm
+the same tags each wait its time; an answer whose waits it cannot trace so is passed on as written
+and fails the case. The check that a page reached by the runtime's
 navigation reads itself again in place then requires `Saved.` drawn, at the navigation's address, by
 the answer to one of the page's own reads of that address sent after the navigation's fetch, which
 the route marks as it answers them (a `Saved.` another receipt's read drew is not this page reading
