@@ -4,6 +4,7 @@ import http from "node:http";
 import { chromium } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
+import { ready } from "../../scripts/ready.mjs";
 
 const base = process.argv[2];
 if (!base) throw new Error("usage: node examples/listings-feed/smoke.mjs <base url>");
@@ -22,6 +23,10 @@ const snapshot = async () => {
   return { seq: body.seq, rows: new Map(body.rows.map((/** @type {any} */ r) => [r.id, r])) };
 };
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+// The app listens only once it has migrated, seeded and started its cluster, and until then the page
+// load would get nothing (#2140), so the smoke begins when the app says it is ready.
+await ready(base);
 
 const browser = steady(await chromium.launch());
 /** What the page holds and what it asked for that did not arrive, printed when a wait times out. */
