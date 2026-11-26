@@ -3896,7 +3896,7 @@ impl ParamsRejection {
         use crate::response::IntoResponse as _;
         tracing::error!("corten: {why}");
         let status = http::StatusCode::INTERNAL_SERVER_ERROR;
-        ParamsRejection(Box::new((status, format!("corten: {why}")).into_response()))
+        ParamsRejection(Box::new(crate::cache::unshared((status, format!("corten: {why}")).into_response())))
     }
 }
 
@@ -4564,8 +4564,9 @@ fn written_checked<R: Route + ?Sized>() {
 /// handler set, since a browser enforces each: whatever its type, a document it sends (an uploaded
 /// SVG) runs no script on the app's origin. Neither reads the answer's type or policy, so none fools
 /// them; an unstaged route is for data, and an answer whose script must run is not one. An answer
-/// that sets a cookie is `private, no-cache` (`no-store` when it says one), with no CDN's own
-/// caching header, so no shared cache hands one visitor's cookie to another. A handler that panics
+/// that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), with no CDN's own
+/// caching header, so no shared cache hands one visitor's cookie to another, and is marked as that
+/// visitor's, as a staged one is, for an app that relays it inline. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
 /// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
 /// every failure there is. It wraps the handler's boxed future in one box of its own ([`laned`]);
@@ -4609,7 +4610,10 @@ where
     })
     .await;
     let res = polled.unwrap_or_else(|| {
-        crate::response::IntoResponse::into_response((http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
+        crate::cache::unshared(crate::response::IntoResponse::into_response((
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal Server Error",
+        )))
     });
     let res = unstaged_headers(res);
     match &lane.json {
@@ -4621,16 +4625,23 @@ where
     }
 }
 
-/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
+/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie or is a
+/// [`crate::NoStore`] answer (a relayed upstream's caching headers included). One that sets a
+/// cookie is marked [`crate::cache::Personal`] too, as a staged answer that sets one is: a staged
+/// middleware of another Corten app that relays it inline and takes the cookie off still settles it
+/// as one visitor's.
 fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Response {
     use http::header;
     use http::HeaderValue;
+    let kept_out = crate::cache::Typed::is_no_store(&res);
+    let cookie = res.headers().contains_key(header::SET_COOKIE);
     let headers = res.headers_mut();
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
-    if headers.contains_key(header::SET_COOKIE) {
-        let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
-        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
+    if kept_out || cookie {
+        let no_store = kept_out
+            || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
         // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a
         // [`crate::Public`] answer may not set, and the others Corten names
         // ([`crate::cache::CDN_CACHING`]).
@@ -4645,6 +4656,9 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
         for name in cdn {
             headers.remove(name);
         }
+    }
+    if cookie {
+        res.extensions_mut().insert(crate::cache::Personal);
     }
     res
 }

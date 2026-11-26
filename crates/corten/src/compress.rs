@@ -333,7 +333,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     // Exact size: a buffered page or JSON body, never a stream, so collecting it does not wait
     // (one held `Bytes` comes back as it is, with no copy).
     let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
-        return Response::from_parts(parts, Body::empty());
+        return crate::cache::unread(parts);
     };
     // A held value's stored form, only while the body is still its bytes: a handler or a
     // middleware that replaced the body keeps the extension, not the bytes it stood for.

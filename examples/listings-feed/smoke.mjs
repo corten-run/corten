@@ -145,7 +145,7 @@ try {
   const pageRes = await fetch(`${base}/sellers/${seller}`);
   check(
     "the unstaged sequence meets no middleware and says its own caching, with nosniff and a sandbox",
-    polled.ok && /^\d+$/.test(polledBody) && !("x-instance" in polledHeaders) && polledHeaders["cache-control"] === "no-store" &&
+    polled.ok && /^\d+$/.test(polledBody) && !("x-instance" in polledHeaders) && polledHeaders["cache-control"] === "private, no-store" &&
       polledHeaders["x-content-type-options"] === "nosniff" && polledHeaders["content-security-policy"] === "sandbox",
     `${polled.status} ${polledBody} ${JSON.stringify(polledHeaders)}`,
   );

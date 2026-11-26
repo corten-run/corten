@@ -47,6 +47,12 @@ pub(super) mod unstaged_url {
     #[route("/private-cookie", get = unstaged_private_cookie, unstaged)]
     pub struct PrivateCookie;
 
+    #[route("/no-store", get = unstaged_no_store, unstaged)]
+    pub struct NoStored;
+
+    #[route("/relayed-no-store", get = unstaged_relayed_no_store, unstaged)]
+    pub struct RelayedNoStore;
+
     #[route("/feeds/{name}.xml", get = unstaged_feed, unstaged)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -120,6 +126,31 @@ async fn unstaged_private_cookie() -> crate::response::Response {
         .header("cdn-cache-control", "max-age=600")
         .body(Body::from("id"))
         .unwrap()
+}
+
+/// An answer nothing may keep, with no cookie: a code in the link it answers.
+async fn unstaged_no_store() -> NoStore<&'static str> {
+    NoStore("code")
+}
+
+/// An upstream's answer nothing may keep, with no cookie (a download that works once), whose
+/// upstream says a CDN may keep it.
+async fn unstaged_relayed_no_store() -> NoStore<crate::Relay> {
+    let mut headers = http::HeaderMap::new();
+    for (name, value) in [
+        ("cache-control", "public, max-age=600"),
+        ("cdn-cache-control", "max-age=600"),
+        ("cloudflare-cdn-cache-control", "max-age=600"),
+        ("vercel-cdn-cache-control", "max-age=600"),
+        ("surrogate-control", "max-age=600"),
+        ("edge-control", "max-age=600"),
+        ("x-accel-expires", "600"),
+        ("foo-cache-control", "max-age=600"),
+        ("surrogate-key", "ids"),
+    ] {
+        headers.insert(http::HeaderName::from_static(name), http::HeaderValue::from_static(value));
+    }
+    NoStore(crate::Relay::new(StatusCode::OK, headers, Body::from("once")))
 }
 
 /// A cookie set on an answer that says a shared cache may keep it.
@@ -233,8 +264,28 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     }
     assert_eq!(headers["surrogate-key"], "ids", "a CDN's header that keeps nothing stays");
     let (_, headers, _) = call_with(router.clone(), "GET", "/private-cookie", None, None).await;
-    assert_eq!(headers["cache-control"], "no-store");
+    assert_eq!(headers["cache-control"], "private, no-store", "personal, so `private` too");
     assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
+    // `NoStore` says `private` too, with no stage to add it, for a CDN that ignores a bare `no-store`.
+    let (_, headers, _) = call_with(router.clone(), "GET", "/no-store", None, None).await;
+    assert_eq!(headers["cache-control"], "private, no-store");
+    // An upstream's `NoStore` answer, with no cookie, keeps none of the caching headers a CDN reads
+    // first that the upstream sent (any `*cache-control` too): a CDN would obey them over it.
+    let (status, headers, body) = call_with(router.clone(), "GET", "/relayed-no-store", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "once"));
+    assert_eq!(headers["cache-control"], "private, no-store");
+    for cdn in [
+        "cdn-cache-control",
+        "cloudflare-cdn-cache-control",
+        "vercel-cdn-cache-control",
+        "surrogate-control",
+        "edge-control",
+        "x-accel-expires",
+        "foo-cache-control",
+    ] {
+        assert!(!headers.contains_key(cdn), "{cdn}: {headers:?}");
+    }
+    assert_eq!(headers["surrogate-key"], "ids", "a CDN's header that keeps nothing stays");
     // Whatever type it says: a list a browser takes the last of too.
     let (_, headers, _) = call_with(router.clone(), "GET", "/listed", None, None).await;
     assert_eq!(headers["content-security-policy"], "sandbox");
