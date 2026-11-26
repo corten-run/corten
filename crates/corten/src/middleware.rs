@@ -250,7 +250,8 @@ impl Next for Handle {
 
 /// The route's own future, not an async block around it, which would move the request once more.
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
-/// the API writes as its own.
+/// the API writes as its own, which no handler answered either, so it is marked as the router's
+/// own `404` is (`crate::cache::Unshared`).
 #[inline]
 fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
@@ -258,7 +259,9 @@ fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Outp
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
-        None => Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND))),
+        None => {
+            Either::Right(std::future::ready(crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND))))
+        }
     };
     match here {
         None => Either::Left(answer),

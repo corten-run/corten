@@ -80,23 +80,28 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`.
+/// An answer that is a status alone: the router's `404` and `405`. No handler answered it, so it
+/// is marked so as it is made ([`crate::cache::Unshared`]): the error page in its place, and the
+/// answer in any form a middleware turns it into (another status, a redirect, a body of its own),
+/// are never shared. A middleware that answers with a response of its own instead has answered
+/// the request itself.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
     fn call(&self, _: Request) -> Answering {
-        Box::pin(std::future::ready(self.0.into_response()))
+        Box::pin(std::future::ready(crate::cache::unshared(self.0.into_response())))
     }
 }
 
 /// The router's `501` for a method no route in the app has, marked so the error page tells it
-/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]).
+/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]), and as
+/// no handler's answer, as [`Status`] marks its own.
 struct Unimplemented;
 
 impl Endpoint for Unimplemented {
     #[cold]
     fn call(&self, _: Request) -> Answering {
-        let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
+        let mut res = crate::cache::unshared(StatusCode::NOT_IMPLEMENTED.into_response());
         res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
         Box::pin(std::future::ready(res))
     }
@@ -269,7 +274,8 @@ impl Endpoint for Telling {
 /// so the body, a multipart upload's too, is still the chosen handler's to read, under its limit.
 /// A name the page has no post for, a post that names none where the page has no plain `post`,
 /// and a post that names two are a `400`: the address is the app's own, so the request is at
-/// fault, and no other handler is tried in its place.
+/// fault, and no other handler is tried in its place. No handler answers that `400`, so it is
+/// marked as the router's own `404` is ([`Status`]).
 struct Chooser {
     plain: Option<Route>,
     actions: Box<[(&'static str, Route)]>,
@@ -312,7 +318,7 @@ impl Chooser {
             Named::One(name) => format!("the page has no post named {name:?} (do={name}); its posts are {names}"),
             Named::Twice => format!("this post's address names do twice; it names one of the page's posts ({names})"),
         };
-        Box::pin(std::future::ready((StatusCode::BAD_REQUEST, message).into_response()))
+        Box::pin(std::future::ready(crate::cache::unshared((StatusCode::BAD_REQUEST, message).into_response())))
     }
 }
 

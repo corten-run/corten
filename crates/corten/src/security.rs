@@ -1383,7 +1383,7 @@ impl Applied {
         if !Origin::checks(method) || from_mount || origin.permits(&self.allowed_origins, self.hsts) {
             return None;
         }
-        Some((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response())
+        Some(crate::cache::unshared((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response()))
     }
 
     /// The security headers. `csp` is the policy of the area at the request's path (the app's
@@ -1477,22 +1477,37 @@ impl Applied {
     /// [`Applied::headers`], [`Applied::document`] and [`crate::cache::settle`], when those would
     /// leave the same lines in the same order: an answer with no header, or its `Content-Type`
     /// alone, that is not a document or a worker's script those give lines of its own, on a
-    /// request that took no nonce and drew no style block. `nonce` and `csp` are what
-    /// [`Applied::headers`] is given. Returns whether it did; `res` is untouched when not.
+    /// request that took no nonce and drew no style block, and without a [`crate::cache::Cache`]
+    /// mark (one whose header a middleware took out is settled by its mark). `nonce` and `csp`
+    /// are what [`Applied::headers`] is given, and `caller` whether something read a [`crate::Caller`]: such
+    /// an answer is marked [`crate::cache::Personal`], as `settle` marks it, the one thing `settle`
+    /// does differently for who asked to an answer this takes. Returns whether it did; `res` is
+    /// untouched when not.
     #[inline]
-    pub(crate) fn ready(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp) -> bool {
+    pub(crate) fn ready(
+        &self,
+        res: &mut Response,
+        lines: &HeaderMap,
+        nonce: Option<&NonceSlot>,
+        csp: &Csp,
+        caller: bool,
+    ) -> bool {
         // A page brings more than its type: it is told apart here, without a call.
-        res.headers().len() <= 1 && self.give(res, lines, nonce, csp)
+        res.headers().len() <= 1 && self.give(res, lines, nonce, csp, caller)
     }
 
     /// [`Applied::ready`], for an answer with one header at most.
     #[inline(never)]
-    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp) -> bool {
+    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp, caller: bool) -> bool {
         let kind = match res.headers().iter().next() {
             None => None,
             Some((name, kind)) if name == header::CONTENT_TYPE => Some(kind),
             Some(_) => return false,
         };
+        // A `Cache` answer whose header a middleware took out is settled by its mark.
+        if crate::cache::Typed::marked(res) {
+            return false;
+        }
         if let Some(slot) = nonce {
             if slot.taken().is_some() || res.extensions().get::<StyleBlock>().is_some() {
                 return false;
@@ -1510,6 +1525,10 @@ impl Applied {
         headers.reserve(lines.len() + 1);
         for (name, value) in lines {
             headers.append(name, value.clone());
+        }
+        // One visitor's, for an app that relays it inline ([`crate::cache::Personal`]).
+        if caller {
+            res.extensions_mut().insert(crate::cache::Personal);
         }
         true
     }
@@ -1882,6 +1901,7 @@ pub(crate) enum Asked {
 
 impl Asked {
     /// The answer to a request that goes no further, with a few words for a person who reads it.
+    /// Either is Corten's refusal ([`crate::cache::Unshared`]), for an app that relays it inline too.
     ///
     /// The `400` leaves the connection open, as the `421` does and as RFC 9112 lets it: the
     /// server read the message's head and knows where its body ends, so the next request on the
@@ -1894,8 +1914,10 @@ impl Asked {
     pub(crate) fn refusal(self) -> Option<Response> {
         match self {
             Asked::Here => None,
-            Asked::Elsewhere => Some((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()),
-            Asked::Malformed => Some((StatusCode::BAD_REQUEST, "Bad request.").into_response()),
+            Asked::Elsewhere => {
+                Some(crate::cache::unshared((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()))
+            }
+            Asked::Malformed => Some(crate::cache::unshared((StatusCode::BAD_REQUEST, "Bad request.").into_response())),
         }
     }
 }

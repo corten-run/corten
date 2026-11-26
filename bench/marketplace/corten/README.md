@@ -7,7 +7,7 @@ parsing and localized validation still use Corten's native form and money APIs.
 
 `GET /api/alerts` independently reads that store as an insertion-ordered JSON array:
 `[{"item_id":"item_1","email":"buyer@example.test","target_minor":1250}]`.
-It returns `Cache-Control: no-store`. No cookie, an unknown cookie, or a fresh
+It returns `Cache-Control: private, no-store`. No cookie, an unknown cookie, or a fresh
 browser context reads `[]`; reads never create, clear or reset state. Invalid
 forms, missing records, unsupported locales and cross-site rejections never append.
 Each accepted POST appends once, including a repeated accepted form. There is no

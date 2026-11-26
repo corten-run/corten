@@ -940,6 +940,12 @@ impl<M: Middleware> App<M> {
     /// request's mode, like any page, with the failure's status; `failure.detail()` is the error,
     /// set only under `corten dev`. A JSON route's failures, and a data client's, are JSON instead.
     /// `corten new` writes one. Without it, Corten sends a plain document.
+    ///
+    /// In place of a handler's own failure the page keeps what a middleware wrote, a CDN's
+    /// caching headers included, so a middleware that tells a CDN to keep every answer must not
+    /// do so for an error page that reads the raw `Cookie` or `Authorization` itself: find who is
+    /// asking through a `Caller` (which makes the answer private) or leave failures uncached
+    /// (the guide's Error pages).
     pub fn error_page<H, T, S>(mut self, page: H, state: S) -> Self
     where
         H: ErrorPageFn<T, S>,
@@ -2923,13 +2929,7 @@ impl<S: Steps> Layer<S> {
             if mount.is_none() {
                 self.policy.document(&mut refused, csp, mode.swaps());
             }
-            // An error page that drew a submit key keeps the rule every such page has.
-            let policy = if refused.extensions().get::<cache::Unrepeatable>().is_some() {
-                cache::drawn_unsettled(refused.headers_mut())
-            } else {
-                cache::PRIVATE
-            };
-            refused.headers_mut().insert(header::CACHE_CONTROL, policy);
+            cache::settle_refused(&mut refused);
             pending.discard();
             return refused;
         }
@@ -2999,7 +2999,7 @@ impl<S: Steps> Layer<S> {
         }
         // An answer that brings none of its scope's lines is given them all in one pass; any
         // other has each inserted.
-        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp);
+        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp, caller);
         if !ready {
             // First: the security headers reserve room for `Cache-Control` and `Vary` too.
             self.policy.headers(&mut res, nonce.as_ref(), csp, vary);

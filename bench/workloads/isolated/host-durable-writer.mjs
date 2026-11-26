@@ -7,7 +7,8 @@ import { physical } from "./evidence.mjs";
 import { hostObservationBytes } from "./host-observation.mjs";
 import { limits } from "./process.mjs";
 
-export const storageLimits = Object.freeze({ bytes: hostObservationBytes, queuedBytes: 8 * 2 ** 20, frames: 64, records: 4096 });
+// Allow one writer deadline of 100 ms samples, subject to both payload limits.
+export const storageLimits = Object.freeze({ bytes: hostObservationBytes, queuedBytes: 8 * 2 ** 20, frames: 300, records: 4096 });
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((key) => a[key] === b[key]);
 const codes = new Set(["ENOENT", "EEXIST", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ETIMEDOUT", "ERR_ASSERTION"]);
