@@ -9932,7 +9932,7 @@ rules something out.
     Pull requests, a band that moves after a reading does not reopen it, and a plan declared
     before `main` gave a band is read without one, so nobody is held to a rule `main` did not
     show them and no reading changes what it decided. The band is the same whatever reads the
-    workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
+    workload, the catalog count (`bench/fullstack/count-pairs.mjs`) or a probe, so nothing is gained against it by
     choosing one (but for the catalog's two targets, below). The test gives what it gives with a
     spread of the setup's own. A negative
     control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
@@ -9959,9 +9959,13 @@ rules something out.
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
 
-    The catalog's `page` and `json`. Pull requests (item 2.1) has a change that the catalog's
-    item page or item JSON exercises counted with `bench/fullstack/count.mjs`, targets `page`
-    and `json`: one build of each side, in the image that script starts. Under the default band
+    The catalog's `page` and `json`. When this case was decided, Pull requests (item 2.1) had a
+    change that the catalog's item page or item JSON exercises counted with
+    `bench/fullstack/count.mjs`, targets `page` and `json`: one build of each side, in the image
+    that script starts, with no A/A of the count's own and a bound outside the band binding by
+    itself. It is now counted with `bench/fullstack/count-pairs.mjs`, which runs that script on
+    one build of each side beside an A/A of its own, and binds only where that A/A resolves (The
+    count's own A/A, below). Under the default band
     a count whose bound's distance from its threshold is inside the band is not decided, does
     not pass and is to be read across placements, and nothing reads that image across
     placements: `bench/placement` reads a probe Cargo builds, and nothing else in the tree
@@ -10021,17 +10025,57 @@ rules something out.
     never added or changed after a run to clear its result already bars. The count is kept for
     what a probe is not: it
     is the only reading of the change in the catalog's own image, and outside the band it binds
-    for the margin as it did, whatever the probe read. It is declared before the plan's first
+    for the margin as it did, whatever the probe read, where the count's own A/A resolves (The
+    count's own A/A, below). It is declared before the plan's first
     turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
     of the pull request took is a later plan's too, since a second count could not clear the
     first and could leave the pull request two binding readings of one target that disagree.
     A count is not taken again for its result, since one taken until it lands outside the band
     would be chosen by its result, as a placement run again for its result would be.
 
+    The count's own A/A. The count of
+    [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+    read `json` above the band, bound +7.28%; the same count with the base's image on both
+    sides, on the same host, kit and arrangement, read `json`'s bound at +9.85%, outside the
+    band, and `page`'s at +1.34% and +2.74% with its labels swapped
+    ([a comment on it](https://github.com/corten-run/corten/pull/2066#issuecomment-7193964698),
+    under a rule [posted before it started](https://github.com/corten-run/corten/pull/2066#issuecomment-7187315828)).
+    A reading that misses with nothing changed can hold a pull request for nothing, and one that
+    can do that can clear one for nothing too. So the count carries an A/A of its own in every
+    run (`bench/fullstack/count-pairs.mjs`): the base's image against itself under the two side
+    names the change uses, pair for pair beside the change's pairs, read as recorded and with its
+    labels swapped, as a placement run's A/A is. It resolves when both of its bounds, less +1%,
+    are inside the default band, the test a change's count is read by; until then the count
+    neither holds nor clears. An A/A that is complete, with both bounds, and does not resolve
+    leaves the change "not decided", outside the band or in, read as one inside the band is.
+    That changes what passes: before it, a count above the band held its pull request; now a miss
+    whose run's A/A does not resolve no longer holds by itself, and is reported as not decided,
+    since that run did not show it could tell a change from nothing. An A/A with no bound (an
+    invocation that failed, pair 0's included, too few pairs) is a failed count, as a change with no bound is: it
+    returns to the maintainer and does not pass until the maintainer decides, since a run that
+    did not take its own A/A has not shown what it can read. A plan declared before this rule
+    was on `main` is read by the rule as it then stood. That
+    asks no more of the A/A than to read nothing for nothing where the change is read, so an A/A
+    that resolves near an end of the band leaves a change just past that end decided by a
+    margin its own noise could reach (Stands on, bet). It doubles a run's time, 808 invocations
+    for both targets where the change's are 404. What spreads the count's pairs on that host is
+    not known. One image's 200 recorded A/A values of a target ran up to 1.78 (`json`) and 1.68
+    (`page`) times their least, with user instructions a request within 0.8% as the kit's
+    reports posted them (kernel work is not ruled out), and nothing in the count or its kit
+    differs by a side's name. Swapping each recorded A/A pair's labels at random (100,000 seeded
+    draws) and reading each draw by this rule, 49% of `json`'s draws and 20% of `page`'s do not
+    resolve: that host did not reliably resolve the band (the method, the other statistics and
+    what one run would locate are in [bench/fullstack](../bench/fullstack/README.md#the-catalog-count-and-its-aa);
+    [#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)
+    asks for the cause).
+
     The limit of that case: the catalog's image is never read across placements. A cost that
     only that image shows, or that it shows more of than the workload named for the target
     does, and that leaves the count's distance inside the band (for the margin, a bound up to
-    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). The
+    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). A cost
+    whose miss is not decided because its run's own A/A did not resolve goes undetected too: the
+    count reads it as one inside the band, however far above the band its bound is, and the
+    change passes with it. The
     case is no wider than its words: the two targets alone; the default band, no spread being
     recorded for that image; and a target for which the plan names a probe workload read across
     placements. A change to code that only the catalog's image runs has no such workload until
@@ -10782,7 +10826,10 @@ rules something out.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
-    in [design Choice 70](#choice-kept-pages); the first placement run above, tag
+    in [design Choice 70](#choice-kept-pages); the count of the base's image against itself
+    and against the head's on the host of the pull request named in The count's own A/A, above,
+    100 recorded pairs of each target each, as its kit's reports posted them; the first
+    placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
     its kit's normalization, which this Choice accepts for that receipt alone, and its `kept`
     spread both ends of the default band; and the second
@@ -10895,7 +10942,10 @@ rules something out.
     accepted and no run measured, so that what the catalog's image shows alone, or shows more
     of than that workload, is small beside +1% or large enough to leave the band: nothing has
     read a change on a probe and on that image side by side, and no tool reads the image across
-    placements);
+    placements; and a count's own A/A, run in the same run with the change's pairs interleaved,
+    resolves when the change's pairs could resolve too and not otherwise, though the two are
+    separate pairs and one A/A of 100 pairs is one draw of its bound: no run has yet read a
+    change's count beside an A/A of its own);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
@@ -10963,7 +11013,12 @@ rules something out.
     counted under the turn protocol;
     [#2120 Nothing reads the catalog's page or JSON across placements, so a cost only the catalog image shows inside the default band is seen by no reading](https://github.com/corten-run/corten/issues/2120)
     asks for it), so the catalog's `page` and `json` can be read as a probe
-    workload is and need no case of their own; a count taken under that case reads above the
+    workload is and need no case of their own; the cause of the count's spread is found
+    ([#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)),
+    so the count's arrangement can change and what its A/A costs a run is asked again, or a
+    change whose count's own A/A resolved is read by another reading of the same commits past
+    the band from what its count read, so an A/A in the same run does not stand for its
+    change's pairs; a count taken under that case reads above the
     default band while every probe workload of its plan meets its margin across placements, or
     a later reading finds on either target a cost a change brought in under it, so a probe does
     not stand in for the image; the kinds of change Pull requests has measured change, or
@@ -11043,7 +11098,15 @@ rules something out.
     linker an ordering file (`symbol-ordering-file`), `bench/placement/relink.mjs` alone found,
     which runs a probe's captured link again, and `bench/fullstack/count.mjs` read for what it
     starts, each app's container from its image, at `1155bfdf8`, with the default band as the
-    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`.
+    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`;
+    2026-11-26, the count of
+    [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+    and its count of the base's image against itself, read from the kit's reports as posted
+    ([the A/A](https://github.com/corten-run/corten/pull/2066#issuecomment-7193965628),
+    [the change](https://github.com/corten-run/corten/pull/2066#issuecomment-7187087634)), their
+    pairs worked again from the posted rows (the label swaps by the two-direction rule, 100,000
+    draws of a seeded generator), and `count.mjs` and that kit's `run.sh` (tag
+    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
