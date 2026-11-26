@@ -2131,3 +2131,33 @@ async fn a_request_whose_client_has_closed_its_side_by_its_turn_is_not_answered(
     }
     assert_eq!(answers[3..], answers[..3]);
 }
+
+/// The 500 a connection sends in place of an interim answer (a handler answered with a `1xx`,
+/// which cannot be an answer) has none of that answer's headers, on both connections: hyper's
+/// drops them all, and so does Corten's. So a caching header the handler or a middleware put on
+/// it does not reach a failure the connection made, which nothing above the connection could
+/// mark as never shared (`tests::cache::corten_makes_its_failures_through_the_constructors_that_mark_them`
+/// lists it for that reason).
+#[tokio::test]
+async fn the_500_in_place_of_an_interim_answer_has_none_of_the_answer_s_headers() {
+    let shared = || async {
+        let cached = |name: &'static str| (::http::HeaderName::from_static(name), "public, max-age=60");
+        (
+            StatusCode::PROCESSING,
+            [cached("cache-control"), cached("cdn-cache-control"), cached("surrogate-control")],
+            "not an answer",
+        )
+    };
+    let mut answers = Vec::new();
+    for own in BOTH {
+        let served = Served::start(App::new(Routes::from(Table::new().route("/interim", get(shared)))), own).await;
+        let got = served.closed(format!("GET /interim HTTP/1.1\r\n{HOST}\r\n")).await;
+        assert_eq!(statuses(&got), [500], "own: {own}: {got}");
+        let lines: Vec<&str> = got.lines().skip(1).take_while(|line| !line.is_empty()).collect();
+        let names: Vec<&str> = lines.iter().filter_map(|line| line.split(':').next()).collect();
+        assert_eq!(names, ["content-length", "date"], "own: {own}: {got}");
+        answers.push(dateless(&got));
+        served.stop().await;
+    }
+    assert_eq!(answers[1], answers[0]);
+}
