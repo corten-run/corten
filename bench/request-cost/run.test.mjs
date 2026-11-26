@@ -187,9 +187,11 @@ test("idle.mjs prints a figure when the probe's open files grew by the connectio
 });
 
 test("idle.mjs names the case a silent run's probe was set up and warmed for", { skip }, async () => {
-  const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", "text"]);
-  assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that sent nothing to the probe for text, opened in /m);
+  for (const name of ["text", "pipeline"]) {
+    const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", name]);
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, new RegExp(`^-?\\d+ bytes a connection \\(40 that sent nothing to the probe for ${name}, opened in `, "m"));
+  }
 });
 
 test("idle.mjs prints the page size getconf gives, and starts nothing without a whole one", { skip }, async () => {

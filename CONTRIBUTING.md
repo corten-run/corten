@@ -560,8 +560,9 @@ establish a general ranking.
       connections, case, requests and page size (each run prints them), and the median of head's three growths of
       resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
       than the larger of base's three span and one page (the size it prints, the step resident
-      memory is reported in); the figures a connection are rounded and do not decide it. The description gives every figure of every
-      run for both builds, and says why the change is none of the kinds above, which the review
+      memory is reported in); the figures a connection are rounded and do not decide it. The
+      description gives every figure of every run for both builds, each idle run's whole line as
+      `idle.mjs` printed it (its growth and settings, which decide), and says why the change is none of the kinds above, which the review
       accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
       it may be taken again, and the description gives the refusal and the kit's reason for
       it; a case that still cannot be counted sends the change to measured. A cost inside the
