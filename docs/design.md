@@ -10816,9 +10816,19 @@ rules something out.
     with a bound of +0.28%, one change in a reading that gated nothing.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
-    the simplest thing a hosted job can read
-    ([#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
-    asks for the job); a label is not, since a fork's author cannot set one. A change goes from
+    the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
+    one. The job
+    [#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
+    asked for now reads it: the `Request Cost` workflow counts a pull request that changes what
+    a request is built from against its merge base, on one runner, and holds the figures to
+    the rule ([the kit's page](../bench/request-cost/README.md#the-hosted-job)). So the line is
+    checked, and it stays. The job counts; it cannot tell from a diff a lock, a wake or a
+    structure's layout, the kinds a count cannot judge, so the way is still the author's to
+    say and the review's to accept, and the line is what tells the job whether a miss fails
+    the change or is only reported: with `counted` a miss fails, with `measured` the counts
+    are reported and decide nothing, and with neither the job fails only on a miss and names
+    the line. The job reads the description from the event it was started by, since a fork's
+    pull request gives it a token that only reads. A change goes from
     counted to measured when a count sends it there. A pull request that declares a plan does
     not go from measured to counted, by item 2's rule that a declaration is never added or
     changed after a run to clear its result. A reading published under the rule as it stood
@@ -10845,8 +10855,11 @@ rules something out.
     result chosen; every edit to an `async` body measured, since any can change a future's
     size, which leaves the counted way nearly empty; a published reading deciding its pull
     request by whatever rule is in force when it merges, which lets a count clear a decided
-    miss; and a reading that was not decided keeping its pull request measured, for a reading
-    the rule no longer asks of such a change.
+    miss; a reading that was not decided keeping its pull request measured, for a reading
+    the rule no longer asks of such a change; and the line dropped now that a hosted job
+    counts, which leaves the job nothing to tell a change that is measured, and so must not
+    fail on its counts, from one that is counted, and leaves nobody saying a change is none of
+    the kinds a count cannot judge.
 
     Stands on: bet (a change of none of the listed kinds whose count stays inside the budget
     costs a request under +1% of its cycles, which nothing has measured, the figure being a
@@ -10863,7 +10876,10 @@ rules something out.
     having been made); measured (the kit's repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
-    and 22 counts of four cases on a slower, loaded machine, none taken again here; the
+    and 22 counts of four cases on a slower, loaded machine, none taken again here; one run
+    of the hosted job on a 4-CPU runner, with the same crates on both builds, where the six
+    counts of each of 13 rows spanned at most 1 instruction and the six runs of each idle
+    reading 1 to 4 bytes a connection; the
     default band and the estimate of a reading across placements, which are
     [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
     not decide, so for a change this small the only cycles reading was across placements; a
@@ -10891,8 +10907,12 @@ rules something out.
     no test sizes is found to have grown under a counted change; repeats of one binary differ
     by more than a quarter of the budget in a case, so a count no longer resolves it; a placement
     run is read on the kit's probe, which its page says none has been, and shows what a few tens
-    of instructions between two commits are worth; a hosted job counts every pull request
-    against its base, so the line of the description can be checked or dropped; or a reading
+    of instructions between two commits are worth; the hosted job, on two builds with the
+    same crates, counts a case more than a quarter of the budget apart or reads idle memory to
+    rise, so it fails a change for what the runner did (three runs a build drawn from one
+    distribution read a rise in about one comparison in twelve, simulated, which the rule's
+    idle statistic was not chosen against); a job comes to tell the kinds a count cannot judge
+    from a diff, so the line says nothing the job does not know and can be dropped; or a reading
     across placements comes to cost what a count does, so cycles can be asked of every change.
 
     Last checked: 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
@@ -10900,7 +10920,10 @@ rules something out.
     [design Choice 72](#choice-placement-runs) read at `9e209a32f` for the default band, the
     hours a reading across placements takes, the fourth run's 0.5% and the first run's reading
     of the kept answer's change; 2026-11-25, `crates` searched at `9e209a32f` for a test that
-    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found.
+    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found; 2026-11-26, the
+    hosted job's run on `651d61f71` against `1bef46229`, which have the same crates (valgrind
+    3.26.0, rustc 1.100.0): 62 runs of the kit, none refused, in a job of 5 minutes 19
+    seconds, read from its summary and its log.
 
 ## Rules
 
