@@ -88,15 +88,16 @@ test("the budget ends the wait naming the last outcome, and nothing after it cou
   const always = await against((_n, _q, s) => unavailable(s), { budget: 1234.75 });
   // The last attempt may be a short one the end of the budget cut off.
   assert.match(always.outcome, /^http:\/\/127\.0\.0\.1:PORT\/health\/ready did not answer 200 within 1\.23475 s \(last: (503|ABORT_ERR)\)$/);
-  // The attempt that stalls is cancelled when the budget runs out, not at its own 5 s.
+  // The attempt that stalls is cancelled when the budget runs out, not at its own 5 s. It is the
+  // first and only attempt, so no pause or second exchange has to fit in the budget.
   const from = performance.now();
-  const stalled = await against((n, _q, s) => (n < 2 ? unavailable(s) : s.writeHead(200, { "content-length": "10" }).write("o")), { budget: 1500 });
+  const stalled = await against((_n, _q, s) => void s.writeHead(200, { "content-length": "10" }).write("o"), { budget: 1500 });
   const took = performance.now() - from;
   // Not before the budget, and well short of the attempt's own 5 s.
   assert.ok(took >= 1400 && took < 4500, `stalled attempt ended after ${Math.round(took)} ms`);
   assert.deepEqual(stalled, {
     outcome: "http://127.0.0.1:PORT/health/ready did not answer 200 within 1.5 s (last: 200, then its body broke off (ABORT_ERR))",
-    requests: 2,
+    requests: 1,
   });
   for (const status of [200, 500]) {
     const late = await against((_n, _q, s) => s.writeHead(status).end("x"), { now: jumps(2) });
@@ -120,6 +121,9 @@ test("an answer that comes after its attempt's 5 s is not read, and the attempt 
   // past the attempt's 5 s before its abort ran.
   const got = await against((n, _q, s) => (n < 2 ? s.writeHead(500).end("x") : ok(s)), { now: shifts(2, 5100) });
   assert.deepEqual(got, { outcome: "ready", requests: 2 });
+  // A whole 200 that comes that late is not readiness either: the attempt is asked again.
+  const late200 = await against((n, _q, s) => (n < 2 ? ok(s) : s.writeHead(500).end("x")), { now: shifts(2, 5100) });
+  assert.deepEqual(late200, { outcome: "http://127.0.0.1:PORT/health/ready answered 500, not 200 or 503", requests: 2 });
 });
 
 test("a refused connection is waited out until the app listens", async () => {
