@@ -31,7 +31,7 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, probeCpu, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
+const { aggregate, cpuSettings, imageBuildTimeoutMs, probeCpu, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
   validateCatalog, verifyDocumentHeaderChecks, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
@@ -291,7 +291,7 @@ try {
         log(`building ${app}`);
         const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
         const dockerfile = app === "corten" ? join(here, "corten/Dockerfile") : join(context, "Dockerfile");
-        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: imageBuildTimeoutMs, file: join(folder, `build-${app}.log`) });
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;

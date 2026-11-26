@@ -221,11 +221,53 @@ jobs:
         run: |
           docker run --rm --cpus 1 --memory 1g cb-catalog-django python -m django test itempage --verbosity 1
           docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-django python -m django test itempage --verbosity 1
+      - name: Probe Django Mixed ASGI and WSGI over loopback
+        if: matrix.app == 'django'
+        timeout-minutes: 10
+        run: |
+          docker build --build-arg PROFILE=matched-asgi -t cb-catalog-django-mixed-asgi bench/fullstack/apps/django
+          container=$(docker run --detach --init --network none --cpus 1 --memory 1g \
+            -e API_BASE=http://127.0.0.1:18080 cb-catalog-django-mixed-asgi)
+          trap 'status=$?; if [ "$status" -ne 0 ]; then docker logs "$container" >&2 || true; fi; docker rm -fv "$container" >/dev/null' EXIT
+          docker exec "$container" python -m unittest -v \
+            test_mixed_asgi_socket.ShippedAsgiSocketTests.test_default_container_command_serves_and_cancels \
+            test_mixed_asgi_socket.MixedAsgiSocketTests test_mixed_asgi_socket.SocketTimingTests
       - name: Test native Spring alert persistence and source boundaries
         if: matrix.app == 'spring'
+        # The test-stage build's Maven runs (Dockerfile), the tests below, and room to pull images.
+        timeout-minutes: 30
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
-          docker run --rm --cpus 2 --memory 2g cb-spring-tests mvn -q -B test
+          # Maven's retries are per request (.mvn/maven.config), so the whole run has a budget too,
+          # and it logs each transfer to name one in flight (#1763). The proof below reuses this
+          # volume, the image's Maven repository plus what these tests fetched, and can still fetch
+          # what it lacks, such as the dependencies its WebFlux POM adds, from Central through the
+          # app's mirror (.mvn/settings.xml).
+          docker run --rm --cpus 2 --memory 2g --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
+            cb-spring-tests timeout --verbose --kill-after=10s 10m mvn -B test
+      - name: Probe Spring HTTP disconnect behavior with Reactor Netty
+        id: spring_proof
+        if: matrix.app == 'spring'
+        timeout-minutes: 12
+        run: |
+          evidence=$(mktemp -d "$RUNNER_TEMP/spring-transport-proof.XXXXXXXX")
+          printf 'evidence=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+          docker run --rm --cpus 2 --memory 2g \
+            --mount "type=bind,source=$PWD/bench/fullstack/apps/spring/transport-proof,target=/proof,readonly" \
+              --mount "type=bind,source=$evidence,target=/evidence" \
+              --mount type=volume,source=cb-spring-m2,target=/root/.m2 \
+              cb-spring-tests sh -eu -c '
+                # This is the untouched image of package -DskipTests, before adding proof sources.
+                test -f target/test-classes/bench/itempage/MarketplaceDeadlineTest.class
+                for class in MarketplaceDisconnectHttpTest transport/DisconnectSockets transport/WebFluxDisconnectHttpTest; do
+                  if [ -e "target/test-classes/bench/itempage/$class.class" ]; then
+                    echo "Ordinary Spring package compiled a socket proof class: $class" >&2
+                    exit 1
+                  fi
+                done
+                echo "Ordinary Spring package compiled the deadline test but no socket proof classes."
+                exec sh /proof/run.sh /src /evidence
+              '
       - name: Test matched Leptos marketplace HTTP cells in both sources
         if: matrix.app == 'leptos'
         run: node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
@@ -300,6 +342,16 @@ jobs:
             bench/fullstack/apps/gin/production-results/
             bench/fullstack/apps/nextjs/work/bounded-qualification-fixture.json
             bench/fullstack/apps/nextjs/work/bounded-qualification-api.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload scoped Spring socket test reports
+        if: always() && matrix.app == 'spring' && steps.spring_proof.outputs.evidence != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: spring-transport-proof
+          path: |
+            ${{ steps.spring_proof.outputs.evidence }}/mvc-surefire.txt
+            ${{ steps.spring_proof.outputs.evidence }}/webflux-surefire.txt
           if-no-files-found: warn
           retention-days: 14
 

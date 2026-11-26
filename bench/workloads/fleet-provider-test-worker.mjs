@@ -17,7 +17,7 @@ if (mode === "startup-refusal") { record({ boundary: "before-provider-boot" }); 
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
 const later = mode === "overlap" && group !== "catalog-page";
-let clock = 0, accountsAfterRegions;
+let clock = 0, accountsAfterRegions, firstInventoryPage = true;
 serveProviderWorker({
   now: () => clock,
   spawn(binary, argv) {
@@ -58,6 +58,24 @@ serveProviderWorker({
       return { status: 200, value: { regions, meta: { total: regions.length } } };
     }
     if (method === "GET" && path.startsWith("/v2/droplets?")) {
+      if (existsSync(hostsPath + ".census-next")) {
+        const match = JSON.parse(readFileSync(hostsPath + ".census-next", "utf8"));
+        if (path === "/v2/droplets?page=2&per_page=200") return { status: 200, value: { droplets: [], meta: { total: 1 } } };
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: { droplets: [match], meta: { total: 2 },
+            links: { pages: { next: "https://api.digitalocean.com/v2/droplets?page=2&per_page=200" } } } };
+        }
+        return { status: 200, value: { droplets: [{ ...match, name: "renamed", tags: [] }], meta: { total: 1 } } };
+      }
+      if (existsSync(hostsPath + ".census-first")) {
+        const rows = JSON.parse(readFileSync(hostsPath + ".census-first", "utf8"));
+        if (firstInventoryPage) {
+          firstInventoryPage = false;
+          return { status: 200, value: rows };
+        }
+        return { status: 200, value: { droplets: [], meta: { total: 0 } } };
+      }
       const droplets = hosts(); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
     }
     if (method === "POST" && path === "/v2/droplets") {

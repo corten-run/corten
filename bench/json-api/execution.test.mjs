@@ -125,7 +125,7 @@ for (const role of ["app", "upstream"]) for (const field of ["command", "entrypo
     const raw = f.load(original), receipt = role === "app" ? raw.runtime : raw.participants[role];
     receipt.configuration[field] = field === "path" ? "/unreviewed/node" : ["/unreviewed/node", "--eval", "process.exit(1)"];
     checked.raw = f.put(raw); save();
-    const report = inspectJson(s, { load: f.load, commit: s.commit });
+    const report = inspectJson(s, { load: f.load });
     assert.equal(report.attemptComplete, false, `${role}/${field}`); assert.equal(report.baseline, false);
     const native = await inspectNative(binding, folder);
     assert.equal(native.status, "invalid", `${role}/${field}`); assert.equal(native.attemptComplete, false);
