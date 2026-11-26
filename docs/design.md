@@ -11310,7 +11310,9 @@ rules something out.
     budget and any win claimed in cycles, time or requests a second. The trend, `main` across
     placements against the last release, is the run
     [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
-    asks for, which nothing makes yet. It gates no pull request, for the reason
+    asks for: [`bench/placement`](../bench/placement/README.md#the-trend) has its plan, its
+    command and the page a run adds a row to, and no run has been made. It gates no pull
+    request, for the reason
     [design Choice 72](#choice-placement-runs) gives against gating a release: it reads every
     change since that release together and cannot attribute a cost to one.
 
@@ -11349,9 +11351,13 @@ rules something out.
     the changes that sentence names, and the author says why a change is of none of its kinds,
     which the review accepts, as a negative control's declaration is accepted. The trend reads
     what is left as it adds up (twenty costs at the budget are about 10% more instructions),
-    and does not exist yet; until it does, a release takes the kit's counts of its candidate
-    against the last release's tag ([RELEASING.md](../RELEASING.md#readiness-checkpoints)),
-    which anyone can take in minutes and which read instructions, not cycles. One kind on the
+    and no run of it has been made. A release takes the kit's counts of its candidate against
+    the last release's tag, which anyone can take in minutes and which read instructions, not
+    cycles, unless a row of the trend reads the commit of `main` that candidate is made from
+    against that tag with every workload read
+    ([RELEASING.md](../RELEASING.md#readiness-checkpoints)): a row of an earlier commit, of
+    another release or with a workload not read stands in for no count, and none does for a
+    release-preparation pull request that changes code a request runs. One kind on the
     list cannot be told from a diff, a future's size. The test `staged_page_future_sizes`
     prints the stage's and the handler's, the only futures any test in the repository sizes,
     so a change that edits an `async` body gives those two for base and head, and that a
@@ -11420,9 +11426,18 @@ rules something out.
     which nothing sizes; a cost inside the budget on the kit's probe, whose handlers do nearly
     nothing, is inside it in an app, though the kit's page says a count is of one program's
     binary and never to be compared with another's; the kit's probe builds against the last
-    release's tag often enough for a release's count to be taken, which was not tried; and the
-    trend is made before counted costs add up past what a release can carry, no such run
-    having been made); measured (the kit's repeats as its page records them, 30 counts of one
+    release's tag often enough for a release's count to be taken, which was not tried; the
+    trend is made, weekly and before a release, before counted costs add up past what a
+    release can carry, its plan, command and page being in the placement kit and no such run
+    having been made; its threshold, `main` at least +2% over the release on a workload by the
+    lower bound of its cycles, is a proposal no reading stands behind and nobody has accepted,
+    the 2% above being of instruction counts between releases; and the placement kit's example
+    probe, on the two workloads the trend's plan takes from it, shows what costs around the
+    handler add up to, though two requests to one probe do not take every path a counted change
+    can cost on, and the release and `main` answer one of them differently, by a difference a
+    run records and nobody reviews, so part of what a run reads there is the answer and not
+    the path to it); measured (the kit's
+    repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
     and 22 counts of four cases on a slower, loaded machine, none taken again here; four runs
@@ -11452,7 +11467,14 @@ rules something out.
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; a release is made with no trend reading against the
+    last release counted inside the budget; the trend's first run with every workload read is
+    made, which shows what a run of its plan resolves and so informs a review of the threshold,
+    not what rise a release can carry; a run of the trend leaves a workload not read, whatever
+    its row gives as the reason (the probe does not build at the release's tag, the kit refuses
+    a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
+    does not resolve, a placement answers with another body), so nothing read what this Choice
+    leans on the trend to read; a release is
+    made with no trend reading against the
     one before it and no such count, so the guard this Choice leans on is not there; a future
     no test sizes is found to have grown under a counted change; repeats of one binary differ
     by more than a quarter of the budget in a case, so a count no longer resolves it; a placement
@@ -11477,7 +11499,17 @@ rules something out.
     hosted job's runs on `651d61f71`, `28d9af174` and `20960f56d` against `1bef46229` and on
     `1df3829c6` against `aa526350f`, each with its base's crates (valgrind 3.26.0, rustc
     1.100.0): 62 runs of the kit each, none refused, in jobs of 4 minutes 7 seconds to
-    5 minutes 46, read from their summaries and their logs.
+    5 minutes 46, read from their summaries and their logs; 2026-11-26, the
+    trend's plan resolved with the last release at `a833b4e3e` (the tag `v0.2.0`) and `main` at
+    `28cdc5bc7`, in a Debian 13 container the placement kit's `setup.sh` prepared (the date is
+    that run's, in UTC): the kit's example probe built on both sides with the plan's toolchain
+    and build command, `unstaged` answered the same on both, and `plain` differed in its
+    `corten-shell` header, the script hash of its policy and its body, 6,124 bytes on each,
+    all of it in a dry run of the trend's command with a stand-in for `perf`, which reads
+    nothing, no run having been made; 2026-11-26, that dry run made again with `main` at
+    `aa526350f` and the command as it reads after its first review: both sides built, the
+    same difference on `plain` and none on `unstaged`, and each of the 36 placements answered
+    with the bodies the check had recorded for its sides, by their digests.
 
 ## Rules
 
