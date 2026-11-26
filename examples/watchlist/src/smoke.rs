@@ -7,7 +7,8 @@
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
-//! controls named after the members their paths read.
+//! controls named after the members their paths read, and a nav whose entry is current at an older
+//! address of its page.
 use corten::{
     Error, LiveResponse,
     prelude::*,
@@ -95,6 +96,39 @@ pub mod url {
     pub struct ReplaceSharedRefPart {
         pub instance: u32,
     }
+
+    /// A nav whose entry, `/smoke/nav/here`, is current at an older address of its page too
+    /// (`NavTo::also`, #2119), `/smoke/nav/café`, which this route serves as well.
+    #[route("/smoke/nav/{name}", get = nav_page)]
+    pub struct NavPage<'a> {
+        pub name: &'a str,
+    }
+}
+
+/// The nav page's older address, written by hand with a character beyond ASCII in it as an app's
+/// own route might write it: the browser asks for it percent-encoded.
+struct OlderNav;
+
+impl corten::Route for OlderNav {
+    type Data = corten::route::NoData;
+    const PATH: &'static str = "/smoke/nav/{name}";
+    fn write_href(&self, out: &mut String, _: bool) {
+        out.push_str("/smoke/nav/caf\u{e9}");
+    }
+}
+
+/// The nav: the section `/smoke/nav`, which holds both addresses less deeply, and the entry.
+async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/nav").expect("a local path");
+    let nav = req.nav_of([
+        (corten::NavTo::section(&section), "Nav"),
+        (corten::NavTo::page(&url::NavPage { name: "here" }).also(&OlderNav), "Here"),
+    ]);
+    req.page(html! {
+        <Layout req={&req} title="Nav" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
 }
 
 /// The components the smoke's pages draw.

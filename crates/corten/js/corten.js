@@ -2202,15 +2202,11 @@ function markCurrent(kept = []) {
   /** The deepest link that holds the page in each group. @type {Map<Element | string, number>} */
   const deepest = new Map();
   for (const link of Array.from(document.querySelectorAll(NAV))) {
-    const section = link.getAttribute("data-nav") === "section";
-    let depth = -1;
-    // Its URL, and the other addresses of its page (`NavTo::also`), by the same rule.
-    for (const url of [/** @type {HTMLAnchorElement} */ (link).href, ...(link.getAttribute("data-nav-also") ?? "").split(" ")]) {
-      if (!url) continue;
-      const path = new URL(url, location.href).pathname;
-      const base = path.replace(/\/+$/, "");
-      if (here === path || (section && here.startsWith(`${base}/`))) depth = Math.max(depth, base.length);
-    }
+    const path = new URL(/** @type {HTMLAnchorElement} */ (link).href).pathname;
+    const base = path.replace(/\/+$/, "");
+    const holds = here === path || (link.getAttribute("data-nav") === "section" && here.startsWith(`${base}/`));
+    const also = link.getAttribute("data-nav-also");
+    const depth = also ? alsoDepth(link, also, here, holds ? base.length : -1) : holds ? base.length : -1;
     const group = link.getAttribute("data-nav-group") ?? link;
     links.push([link, group, depth]);
     deepest.set(group, Math.max(deepest.get(group) ?? -1, depth));
@@ -2228,6 +2224,24 @@ function markCurrent(kept = []) {
   }
   // In the next frame, once the page is laid out.
   if (made.length) requestAnimationFrame(() => made.forEach(([link, leave]) => inView(link, leave)));
+}
+
+/**
+ * How deep `link` is when it holds the page `here` at its own URL (`depth`, -1 when it does not)
+ * or at one of the paths of its `data-nav-also` (`also`, `NavTo::also`), by the same rule.
+ * @param {Element} link
+ * @param {string} also
+ * @param {string} here
+ * @param {number} depth
+ */
+function alsoDepth(link, also, here, depth) {
+  const section = link.getAttribute("data-nav") === "section";
+  for (const other of also.split(" ")) {
+    const path = new URL(other, location.href).pathname;
+    const base = path.replace(/\/+$/, "");
+    if (here === path || (section && here.startsWith(`${base}/`))) depth = Math.max(depth, base.length);
+  }
+  return depth;
 }
 
 /** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */

@@ -388,25 +388,36 @@ impl<R: crate::Route + ?Sized> NavTarget for R {
 }
 
 impl NavTarget for crate::Local {
-    /// The path with the characters a browser percent-encodes in one (`` "<>`{}^| ``) encoded, so the
-    /// link, the request it makes and the runtime's `pathname` are the same text in every engine
-    /// (Firefox and WebKit keep `|`, Chromium encodes it).
+    /// The path as the browser's `pathname` gives it ([`write_path`]; a `Local` has only the
+    /// characters of `` "<>`{}^| `` to encode), so the link, the request it makes and the runtime's
+    /// `pathname` are the same text in every engine.
     fn write_url(&self, out: &mut String) {
         let href = self.as_str();
-        {
-            let end = href.find(['?', '#']).unwrap_or(href.len());
-            for c in href[..end].chars() {
-                match c {
-                    '"' | '<' | '>' | '`' | '{' | '}' | '^' | '|' => {
-                        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                        out.push('%');
-                        out.push(HEX[c as usize >> 4] as char);
-                        out.push(HEX[c as usize & 15] as char);
-                    }
-                    c => out.push(c),
+        let end = href.find(['?', '#']).unwrap_or(href.len());
+        write_path(&href[..end], out);
+        out.push_str(&href[end..]);
+    }
+}
+
+/// Writes `path` (a URL's path, before its query and fragment) as the browser's
+/// `new URL(..).pathname` gives it, which is also how the browser asks for it: a tab or line break
+/// dropped, `\` read as `/`, and a space, a control character, `` "<>`{}^| `` and each byte of a
+/// character beyond ASCII percent-encoded (`|` too, which Chromium encodes and Firefox and WebKit
+/// keep, so every engine has the same text). A `%` and the rest are left as written.
+fn write_path(path: &str, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for c in path.chars() {
+        match c {
+            '\t' | '\n' | '\r' => {}
+            '\\' => out.push('/'),
+            ' ' | '"' | '<' | '>' | '`' | '{' | '}' | '^' | '|' | '\0'..='\x1f' | '\x7f'.. => {
+                for byte in c.encode_utf8(&mut [0; 4]).bytes() {
+                    out.push('%');
+                    out.push(HEX[byte as usize >> 4] as char);
+                    out.push(HEX[byte as usize & 15] as char);
                 }
             }
-            out.push_str(&href[end..]);
+            c => out.push(c),
         }
     }
 }
@@ -415,27 +426,33 @@ impl NavTarget for crate::Local {
 pub struct NavTo<'a> {
     to: &'a dyn NavTarget,
     section: bool,
-    /// Other addresses that serve the entry's page ([`NavTo::also`]).
-    also: Vec<&'a dyn NavTarget>,
+    /// Other addresses that serve the entry's page ([`NavTo::also`]), boxed so an entry without
+    /// them is one word larger than before they existed.
+    // Boxed, not a `Vec` in place: an eight-entry nav without aliases measured about 60 instructions
+    // a request more with the `Vec`.
+    #[allow(clippy::box_collection)]
+    also: Option<Box<Vec<&'a dyn NavTarget>>>,
 }
 
 impl<'a> NavTo<'a> {
     /// An entry current on its own URL alone (the query and fragment aside), as [`Req::nav`].
     pub fn page(to: &'a (impl NavTarget + 'a)) -> Self {
-        NavTo { to, section: false, also: Vec::new() }
+        NavTo { to, section: false, also: None }
     }
 
     /// An entry current on its own URL and every one under it, as [`Req::nav_section`]: a
     /// deeper entry of the same nav that also holds the page wins over it.
     pub fn section(to: &'a (impl NavTarget + 'a)) -> Self {
-        NavTo { to, section: true, also: Vec::new() }
+        NavTo { to, section: true, also: None }
     }
 
     /// The entry is current at `other` too, another address that serves its page (an older one
     /// that stored links still carry), by the same rule and depth as at its own URL. The link
-    /// still goes to its own URL; `other`'s path is written in `data-nav-also`, so the runtime
-    /// ranks it the same after a client navigation. A typed route or a [`crate::Local`], as the
-    /// entry's own:
+    /// still goes to its own URL; `other`'s path is written in `data-nav-also` as the browser's
+    /// `pathname` gives it (a space, a character beyond ASCII and the few a browser encodes
+    /// percent-encoded), and both the server and the runtime compare that text with the path the
+    /// browser asks for, so they mark the same link at first render and after a client navigation.
+    /// A typed route or a [`crate::Local`], as the entry's own:
     ///
     /// ```
     /// use corten::prelude::*;
@@ -466,8 +483,22 @@ impl<'a> NavTo<'a> {
     /// struct Settings;
     /// let _ = corten::NavTo::page(&Settings).also(&"/governance");
     /// ```
+    ///
+    /// Nor can a link name its other addresses by hand, in any case, which the server did not rank:
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// let link = html! { <a data-nav-also="/governance">"Settings"</a> };
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// let link = html! { <a data-Nav-Also="/governance">"Settings"</a> };
+    /// ```
     pub fn also(mut self, other: &'a (impl NavTarget + 'a)) -> Self {
-        self.also.push(other);
+        self.also.get_or_insert_with(Box::default).push(other);
         self
     }
 }
@@ -500,7 +531,7 @@ impl<T> NavLinks<T> {
         let group = std::str::from_utf8(&self.group).expect("hex digits");
         self.entries.iter().map(move |(end, also_end, section, depth, item, prefetch)| {
             let url = &self.urls[start..*end];
-            let also = &self.also[also_start..*also_end];
+            let also = if *also_end == also_start { "" } else { &self.also[also_start..*also_end] };
             (start, also_start) = (*end, *also_end);
             (
                 NavLink {
@@ -562,6 +593,28 @@ fn holds(path: &str, url: &str, section: bool) -> Option<usize> {
     is_current(path, url, section).then(|| url.split(['?', '#']).next().unwrap_or(url).trim_end_matches('/').len())
 }
 
+/// Writes an entry's other addresses ([`NavTo::also`]) to `out`, separated by spaces, and gives how
+/// deep the deepest that holds `path` is. Each is its path alone, as the browser's `pathname` gives
+/// it ([`write_path`]): the text the request's path is compared with here and `location.pathname`
+/// in the runtime, with no space left in it, so the runtime can split the attribute on spaces. Out
+/// of line, so a nav without them is drawn as it was before they existed.
+#[cold]
+#[inline(never)]
+fn other_addresses(path: &str, also: &[&dyn NavTarget], section: bool, out: &mut String) -> Option<usize> {
+    let (mut depth, mut url) = (None, String::new());
+    for (i, other) in also.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        url.clear();
+        other.write_url(&mut url);
+        let start = out.len();
+        write_path(url.split(['?', '#']).next().unwrap_or(""), out);
+        depth = depth.max(holds(path, &out[start..], section));
+    }
+    depth
+}
+
 /// [`Req::nav_of`] at `path`.
 pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (NavTo<'a>, T)>) -> NavLinks<T> {
     let (mut urls, mut also) = (String::new(), String::new());
@@ -571,28 +624,16 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
             let start = urls.len();
             entry.to.write_url(&mut urls);
             let mut depth = holds(path, &urls[start..], entry.section);
-            for (i, other) in entry.also.iter().enumerate() {
-                if i > 0 {
-                    also.push(' ');
-                }
-                // Its path alone, a space in it encoded as the browser asks for it, so the
-                // runtime can split the attribute on spaces.
-                let start = also.len();
-                other.write_url(&mut also);
-                also.truncate(also[start..].find(['?', '#']).map_or(also.len(), |end| start + end));
-                if also[start..].contains(' ') {
-                    let encoded = also[start..].replace(' ', "%20");
-                    also.truncate(start);
-                    also.push_str(&encoded);
-                }
-                depth = depth.max(holds(path, &also[start..], entry.section));
+            if let Some(others) = &entry.also {
+                depth = depth.max(other_addresses(path, others, entry.section, &mut also));
             }
             (urls.len(), also.len(), entry.section, depth, item, entry.to.prefetch())
         })
         .collect();
     let deepest = entries.iter().filter_map(|entry| entry.3).max();
     // The URLs, which are sections and any other addresses name the group; its 32 low bits, as
-    // hex. A nav with no other addresses hashes as it did before they existed.
+    // hex. A nav with no other addresses hashes as it did before they existed; one with them hashes
+    // every entry's whole boundaries too, so no two layouts of the same text share a group.
     let hash = entries.iter().fold(crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes()), |hash, entry| {
         crate::fnv::extend(hash, &[entry.2 as u8, (entry.0 >> 8) as u8, entry.0 as u8])
     });
@@ -600,7 +641,7 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
         hash
     } else {
         entries.iter().fold(crate::fnv::extend(hash, also.as_bytes()), |hash, entry| {
-            crate::fnv::extend(hash, &[(entry.1 >> 8) as u8, entry.1 as u8])
+            crate::fnv::extend(crate::fnv::extend(hash, &(entry.0 as u64).to_le_bytes()), &(entry.1 as u64).to_le_bytes())
         })
     };
     let mut group = [0; 8];

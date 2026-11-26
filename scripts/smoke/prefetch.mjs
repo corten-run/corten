@@ -345,3 +345,53 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
   check("data saver: hovering a link fetches nothing", savingRequests.length === 0, savingRequests.join());
   await saver.close();
 }
+
+/**
+ * `NavTo::also` at an address with a character beyond ASCII: the server marks the entry at the
+ * request for it by the `data-nav-also` text it writes, and the runtime, ranking copies of the same
+ * links it never saw marked, marks the same one at that address after a client navigation.
+ */
+export async function navAlso(browser, swaps) {
+  const name = "a nav entry is current at its page's older address, by the server and the runtime alike";
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const served = await (await page.request.get(`${base}/smoke/nav/caf%C3%A9`)).text();
+  const entry = /<a href="\/smoke\/nav\/here" data-nav data-nav-group="[0-9a-f]{8}" data-nav-also="\/smoke\/nav\/caf%C3%A9" aria-current="page">Here<\/a>/.test(served);
+  const section = /<a href="\/smoke\/nav" data-nav="section" data-nav-group="[0-9a-f]{8}">Nav<\/a>/.test(served);
+  if (!swaps) {
+    check(name, entry && section, "server only: without swaps a client navigation loads the page in full");
+    skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
+    await context.close();
+    return;
+  }
+  await page.goto(`${base}/smoke/nav/here`);
+  // Copies of the nav's links in the shell, which a client navigation keeps, unmarked: only the
+  // runtime marks them. Beside them a plain link to the older address, as a stored link carries it.
+  await page.evaluate(() => {
+    const nav = document.createElement("nav");
+    nav.id = "also-copy";
+    for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
+      const copy = /** @type {Element} */ (link.cloneNode(true));
+      copy.removeAttribute("aria-current");
+      nav.append(copy);
+    }
+    const older = document.createElement("a");
+    older.id = "also-older";
+    older.href = "/smoke/nav/caf\u00e9";
+    older.textContent = "Older";
+    document.querySelector("header")?.append(nav, older);
+  });
+  await page.click("#also-older");
+  await page.waitForURL((url) => url.pathname === "/smoke/nav/caf%C3%A9");
+  await page.waitForFunction(() => document.querySelector("#also-copy a[data-nav-also]")?.getAttribute("aria-current") === "page", null, { timeout: 5000 }).catch(() => {});
+  const seen = await page.evaluate(() => {
+    const copies = Array.from(document.querySelectorAll("#also-copy a"));
+    const also = copies[1]?.getAttribute("data-nav-also") ?? "";
+    return {
+      marks: copies.map((link) => link.getAttribute("aria-current") ?? "-").join(" "),
+      same: location.pathname === new URL(also, location.href).pathname,
+    };
+  });
+  check(name, entry && section && seen.marks === "- page" && seen.same, `served marked: ${entry}, section unmarked: ${section}; runtime: ${seen.marks}, same pathname: ${seen.same}`);
+  await context.close();
+}

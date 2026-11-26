@@ -294,6 +294,9 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
         "which entry an address belongs to names the group too"
     );
 
+    // A nav with no other addresses names the same group as before they existed.
+    assert_eq!(group(written("/", vec![NavTo::page(&Settings)])), "b6f787d3");
+
     // A route written by hand whose path has a space is written with it encoded, as the browser
     // asks for it, so the runtime can split the attribute on spaces.
     struct Spaced;
@@ -308,6 +311,56 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
     assert!(
         links[0].contains(r#" data-nav-also="/old%20settings /catalog/integrations/governance" aria-current="page""#),
         "{links:?}"
+    );
+
+    // One whose path has a character beyond ASCII is written and compared as the browser's
+    // `pathname` has it, percent-encoded, which is how the browser asks for it: the server marks
+    // the entry at that request as the runtime does at that `location.pathname`.
+    struct Cafe;
+    impl crate::Route for Cafe {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old/caf\u{e9}";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("/old/caf\u{e9}\\menu|\t?x=\u{e9}");
+        }
+    }
+    let links = written("/old/caf%C3%A9/menu%7C", vec![NavTo::section(&Catalog), NavTo::section(&Settings).also(&Cafe)]);
+    assert!(!links[0].contains("aria-current"), "{links:?}");
+    assert!(links[1].ends_with(r#" data-nav-also="/old/caf%C3%A9/menu%7C" aria-current="page""#), "{links:?}");
+    let under = written("/old/caf%C3%A9/menu%7C/more", vec![NavTo::section(&Settings).also(&Cafe)]);
+    assert!(under[0].ends_with(r#" aria-current="page""#), "a section under it too: {under:?}");
+}
+
+/// The other addresses name the group by each entry's whole boundaries: two navs of the same text
+/// whose entries split it 65,536 bytes apart are two groups, so ranked in one page neither can make
+/// the other's current link lose its mark.
+#[test]
+fn nav_entries_with_other_addresses_name_their_group_by_whole_boundaries() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    #[derive(crate::Route)]
+    #[route("/x")]
+    struct X;
+    #[derive(crate::Route)]
+    #[route("/y")]
+    struct Y;
+    let long = "b".repeat(65_535);
+    let (a, bc) = (Local::parse("/a").unwrap(), Local::parse(&format!("/{long}/c")).unwrap());
+    let (ab, c) = (Local::parse(&format!("/a/{long}")).unwrap(), Local::parse("/c").unwrap());
+    let group = |entries: [NavTo; 2]| {
+        let nav = nav_links("/", entries.map(|e| (e, ())));
+        let (link, ()) = nav.links().next().unwrap();
+        let mut out = String::new();
+        link.render_attrs(&mut out);
+        out.split(r#" data-nav-group=""#).nth(1).unwrap()[..8].to_string()
+    };
+    // The same text, `/a/bbb..b/c`, split after `/a` or after `/a/bbb..b`.
+    assert_ne!(
+        group([NavTo::page(&X).also(&a), NavTo::page(&Y).also(&bc)]),
+        group([NavTo::page(&X).also(&ab), NavTo::page(&Y).also(&c)])
     );
 }
 

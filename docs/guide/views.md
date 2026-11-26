@@ -592,9 +592,11 @@ html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</
 A page that also answers at another address, such as an older one that stored links still carry,
 names it with `also`, a route or a `Local` as the entry is: `NavTo::page(&Settings).also(&Governance)`
 is current at `/governance` as at `/settings`, by the same rule and depth, and its link still goes to
-`/settings`. The other paths are written in `data-nav-also` (the query and fragment left out), so the
-runtime ranks them the same after a client navigation; like `data-nav`, it does not compile written
-by hand.
+`/settings`. The other paths are written in `data-nav-also` (the query and fragment left out) as the
+browser's `pathname` has them, a space or a character beyond ASCII percent-encoded (`/old/café` as
+`/old/caf%C3%A9`), which is the path the browser asks for, so the server marks the entry at first render
+and the runtime after a client navigation by the same text; like `data-nav`, it does not compile
+written by hand.
 
 Structured data for search engines is a head tag too: `head={JsonLd { value: &product }}`
 (feature `json`) writes a `ToJson` value in `<script type="application/ld+json">` with `<` as
