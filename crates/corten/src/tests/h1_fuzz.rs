@@ -12,7 +12,9 @@
 //! into several writes one time in three, and its client's side closed behind it one time in
 //! twelve. Three streams in ten go over a pipe that holds little (64 bytes to 20 KB each way), so
 //! the server's writes are taken in parts and wait for the client, and one route's handler waits
-//! before it answers, so requests arrive while one is being answered. The streams before those
+//! before it answers, so requests arrive while one is being answered. No request of a stream sent
+//! over such a pipe has a body ([`stream`] says why: hyper 1.12.0 itself goes wrong there, on
+//! both servers). The streams before those
 //! are fixed: each of a few requests cut in two writes at every byte, and ended at every byte.
 //! The same number makes the same stream on every run.
 //!
@@ -197,11 +199,11 @@ struct Received {
 }
 
 impl Received {
-    /// What the server has sent from `from` on once it has gone quiet, and whether it has closed.
-    async fn quiet(received: &Mutex<Received>, from: usize) -> (Sent, bool) {
+    /// What the server has sent once it has gone quiet, as it sent it, and whether it has closed.
+    async fn quiet(received: &Mutex<Received>) -> (Vec<u8>, bool) {
         tokio::time::sleep(QUIET).await;
         let received = received.lock().unwrap();
-        (Sent(undated(&received.bytes[from..])), received.closed)
+        (received.bytes.clone(), received.closed)
     }
 }
 
@@ -240,13 +242,27 @@ async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, st
     if stream.closes {
         let _ = client.shutdown().await;
     }
-    let (before, closed) = Received::quiet(&received, 0).await;
+    let (first, closed) = Received::quiet(&received).await;
+    let before = Sent(undated(&first));
     let (mut after, mut closed_after) = (Sent::default(), closed);
     if !closed && !stream.closes && client.write_all(last_request(stream.index).as_bytes()).await.is_ok() {
-        (after, closed_after) = Received::quiet(&received, before.0.len()).await;
+        let (all, closed) = Received::quiet(&received).await;
+        after = Sent(behind(&first, &all));
+        closed_after = closed;
     }
     reader.abort();
     Outcome { before, closed, after, closed_after }
+}
+
+/// What a server sent behind `first`, of `all` it sent, with each `Date` taken out as [`undated`]
+/// takes it out. The dates are taken out of the whole, and what `first` gives without its own is
+/// cut off its front, so an answer begun in `first` and ended behind it loses its date too. Where
+/// `first` ends inside a `Date`'s own line the two differ from that date on, and what is behind
+/// begins with what stands for it.
+fn behind(first: &[u8], all: &[u8]) -> Vec<u8> {
+    let (before, whole) = (undated(first), undated(all));
+    let same = before.iter().zip(&whole).take_while(|(one, other)| one == other).count();
+    whole[same..].to_vec()
 }
 
 /// One answer in what a server sent: its status, and whether the app made it (the server's own
@@ -699,8 +715,11 @@ const CODING_NAMES: &[&str] = &[
 ];
 
 /// A request's framing lines and its body. `wild`: from the whole grammar, and otherwise as a
-/// client that follows HTTP frames a body.
-fn framing(dice: &mut Dice, wild: bool) -> (Vec<String>, String) {
+/// client that follows HTTP frames a body. `bodied`: it may have one.
+fn framing(dice: &mut Dice, wild: bool, bodied: bool) -> (Vec<String>, String) {
+    if !bodied {
+        return (Vec::new(), String::new());
+    }
     if !wild {
         return match dice.below(10) {
             0..=5 => (Vec::new(), String::new()),
@@ -725,11 +744,11 @@ fn framing(dice: &mut Dice, wild: bool) -> (Vec<String>, String) {
 }
 
 /// One request from the grammar. `wild`: from the whole of it, and otherwise one a client that
-/// follows HTTP sends, made of the first entries of each list.
-fn request(dice: &mut Dice, wild: bool) -> Vec<u8> {
+/// follows HTTP sends, made of the first entries of each list. `bodied`: it may have a body.
+fn request(dice: &mut Dice, wild: bool, bodied: bool) -> Vec<u8> {
     let of = |dice: &mut Dice, all: &[&'static str], plain: usize| pick(dice, if wild { all } else { &all[..plain] });
     let mut lines = vec![format!("{} {} {}", of(dice, METHODS, 11), of(dice, TARGETS, 12), of(dice, VERSIONS, 8))];
-    let (frames, body) = framing(dice, wild);
+    let (frames, body) = framing(dice, wild, bodied);
     let mut headers: Vec<String> = Vec::new();
     let asks = [of(dice, HOSTS, 8), of(dice, CONNECTIONS, 6), of(dice, ASKS, ASKS.len())];
     headers.extend(asks.into_iter().filter(|line| !line.is_empty()).map(str::to_owned));
@@ -798,6 +817,18 @@ fn mutate(dice: &mut Dice, mut bytes: Vec<u8>) -> Vec<u8> {
 }
 
 /// The stream numbered `index` of the run with this seed: the fixed ones first.
+///
+/// A stream that goes over a pipe that holds little has no request with a body. With one, hyper
+/// 1.12.0 goes wrong by itself, and a request with a body is hyper's on both servers, so the gate
+/// would compare hyper with hyper. Where a handler leaves a chunked body unread and its answer
+/// waits for the client in hyper's queue of buffers (it writes with `writev`), hyper finishes
+/// reading the body after the answer is whole and before it is sent, and takes the connection for
+/// idle then. It reads the next request with the answer before still queued, and from there: it
+/// does not write that request's answer until something else wakes the connection (it waits on
+/// nothing of its own: the last request this gate sends found one server stalled and the other,
+/// which had asked its pipe for more behind what it handed over, woken by it), and a next request
+/// it refuses has its `400` written ahead of the queued rest of the answer before (a debug build
+/// stops at hyper's own assertion there instead). `docs/design.md#choice-own-http1` has it.
 fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     let mut fixed = index;
     for base in bases {
@@ -814,9 +845,10 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     // Half the streams are of requests a client that follows HTTP sends, so both connections
     // answer them; in the others each request is as likely to be made from the whole grammar.
     let plain = chance(&mut dice, 50);
+    let pipe = if chance(&mut dice, 30) { [64, 512, 4096, 20_000][dice.below(4)] } else { WIDE };
     for _ in 0..1 + dice.below(4) {
         let wild = !plain && chance(&mut dice, 50);
-        bytes.extend(request(&mut dice, wild));
+        bytes.extend(request(&mut dice, wild, pipe == WIDE));
     }
     if chance(&mut dice, 30) {
         bytes = mutate(&mut dice, bytes);
@@ -836,7 +868,6 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
         writes.push(bytes);
     }
     let closes = chance(&mut dice, 8);
-    let pipe = if chance(&mut dice, 30) { [64, 512, 4096, 20_000][dice.below(4)] } else { WIDE };
     Stream { index, writes, closes, pipe }
 }
 
@@ -1156,4 +1187,21 @@ fn a_run_that_hangs_fails_by_the_clock() {
     let watching = std::panic::catch_unwind(|| watched(SEED, vec![hangs], Duration::from_millis(300)));
     let message = watching.err().and_then(|panic| panic.downcast::<String>().ok()).expect("the run fails");
     assert!(message.contains("a server hangs"), "{message}");
+}
+
+/// What a server sent to the last request has its dates taken out wherever the bytes before it
+/// ended: at an answer's end, inside an answer, and inside a `Date`'s own line.
+#[test]
+fn what_is_sent_behind_loses_its_dates_wherever_it_begins() {
+    let answer = |date: &str| format!("HTTP/1.1 200 OK\r\ncontent-length: 2\r\ndate: {date}\r\n\r\nhi");
+    let (one, other) = (answer("Thu, 26 Nov 2026 08:02:43 GMT"), answer("Thu, 26 Nov 2026 08:02:44 GMT"));
+    let (all, others) = (one.repeat(3), other.repeat(3));
+    for cut in 0..=all.len() {
+        let (first, theirs) = (&all.as_bytes()[..cut], &others.as_bytes()[..cut]);
+        let (ours, theirs) = (behind(first, all.as_bytes()), behind(theirs, others.as_bytes()));
+        assert_eq!(ours, theirs, "cut at {cut}");
+        assert!(find(&ours, b"2026").is_none(), "cut at {cut}: {:?}", Sent(ours));
+    }
+    // An answer's end: what is behind is the answers behind it, whole.
+    assert_eq!(behind(one.as_bytes(), all.as_bytes()), undated(one.repeat(2).as_bytes()));
 }
