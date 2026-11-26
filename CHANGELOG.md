@@ -19,7 +19,7 @@ and a direct patch comes from `req.action()`; that `html!` refuses a path in the
 text in a URL attribute (`href="/items"`), which links to the route instead; and that `html!` and
 component stylesheets refuse more markup, selectors and values a browser would read differently,
 while values a script reads move from `data-` attributes to typed refs (copied `corten-ui` kits
-update with `corten ui add --merge`). `corten check` refuses a missing or stale `Cargo.lock`,
+update with `corten ui add --merge <name>`, or `--all`). `corten check` refuses a missing or stale `Cargo.lock`,
 `data-on` is written single-quoted, and under `Policy::hsts` a plain-http page can no longer
 write to the app.
 `corten build --profile-from` makes a profile-guided release build, which the image `corten new`
@@ -199,7 +199,7 @@ builds against.
   plain `GET` sends `Accept-Encoding: gzip` or `If-None-Match`, or reads the tag from a `HEAD`.
 
 - **Breaking:** `corten build` refuses an argument it does not take. Before, it ignored every argument and built, so `corten build --release` or a misspelled flag passed as an ordinary build; a script that passes one now fails and says which.
-  Drop the argument: `corten build` is already a release build, and it takes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, and `--profile-from` ([deploy guide](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-guided-build)).
+  Drop the argument: `corten build` is already a release build, and it takes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, and `--profile-from`, with `--port <port>` before it for an app that binds its own port (refused without `--profile-from`) ([deploy guide](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-guided-build)).
 
 - **Breaking:** Builds now reject a literal `html!` sent as a whole patch when its top-level
   elements show that a browser would drop or wrap a sibling, such as a table row after a paragraph.
@@ -1050,7 +1050,7 @@ builds against.
 
 - Corten needs tokio 1.44 or later ([#1756 send timeout over TLS](https://github.com/corten-run/corten/pull/1756)).
 
-- `corten build` passes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from`, to each build it runs, so a profiled release can have features, a package, one binary or the lock ([#1759 Pass a closed list of Cargo arguments from corten build to each build it runs, so a profiled release can have features, a package, one binary or the lock](https://github.com/corten-run/corten/pull/1759)). Any other argument is still refused.
+- `corten build` passes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, given before `--profile-from`, to each build it runs, so a profiled release can have features, a package, one binary or the lock ([#1759 Pass a closed list of Cargo arguments from corten build to each build it runs, so a profiled release can have features, a package, one binary or the lock](https://github.com/corten-run/corten/pull/1759)). Any other argument is still refused, apart from `--port` for a profiled build (below).
 
 - card-market's example image now builds with `cargo build --locked`, like the starter's and the other examples', so a missing or stale `Cargo.lock` fails the image build instead of being repaired inside it. [#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)
 
