@@ -1324,7 +1324,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         try {
           // Armed inside the guard: the read the route holds is let go however the steps end.
           try {
-          const got = await within(15000, "the fixture's write and its page were not read within 15 s", capture());
+            const got = await within(15000, "the fixture's write and its page were not read within 15 s", capture());
             const body = got?.status === 200 ? asSaving(got.body) : null;
             if (!got || !body) stopped = `the fixture drew no page for its write: ${got ? `${got.status}` : "no receipt"}`;
             else {
