@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
@@ -14,6 +14,7 @@ import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remot
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
+import { verifyFleet } from "./fleet-verify.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -382,6 +383,20 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   assert.equal(await h.task({ run }).collect(), 1); assert.equal(h.inspections, 0);
   assert.equal(h.saved().fullGroupQualified, false);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
+
+  const root = join(h.temp, "verification"), child = join(root, s.group), local = join(child, "groups-r21");
+  mkdirSync(child, { recursive: true });
+  writeFileSync(join(root, "fleet-r21.json"), JSON.stringify(fleet));
+  cpSync(h.local, local, { recursive: true });
+  assert.ok(readFileSync(join(local, "failed-setup-host.json")).length > 4096, "real v2 receipt exceeds the legacy bound");
+  const verify = () => verifyFleet({ root, round: "r21", commit }, { inspect: () => assert.fail("no native result") });
+  let report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.outcome, "setup-failed-retired");
+  assert.equal(report.publishableBaseline, false);
+  const custody = join(local, s.evidence, "control");
+  writeFileSync(join(custody, readdirSync(custody)[0]), "tampered custody");
+  report = await verify();
+  assert.equal(report.groups.find(({ group }) => group === s.group)?.error, "group-evidence-invalid");
 
   for (const mode of ["native", "absent-proof", "active", "unacknowledged", "monitor-artifact", "changed-record", "foreign-unit"]) {
     const f = configured(t), g = f.h;

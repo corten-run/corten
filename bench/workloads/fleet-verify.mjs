@@ -12,7 +12,7 @@ import { streamLimits } from "./isolated/control-stream.mjs";
 import { digest, durable, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
+import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, verifyCreateErrored, verifyFailedNativeRetirement, verifyFailedSetupRetirement,
   exitOneEvidenceFingerprint, exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
@@ -758,19 +758,12 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
           add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
-        const bytes = regular(join(job.local, setup ? "failed-setup-host.json" : "unused-host.json"), 4096), record = JSON.parse(bytes);
-        assert.equal(digest(bytes), s.retirement.evidenceSha256);
-        const raw = JSON.stringify(record.observation);
-        if (setup) {
-          const extracted = join(job.local, s.evidence); physical(extracted);
-          assert.equal(fileHash(join(job.local, "results.tgz")), s.archiveSha256);
-          assert.equal(treeHash(extracted), s.evidenceSha256);
-          const campaign = join(extracted, "campaign");
-          if (present(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), []); }
-          const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
-          full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit"); const exit = Number(marker.trim()); assert.ok(exit <= 255);
-          assert.deepEqual(record, setupEvidence(raw, s, terminalSetupScript(s, exit), exit, record.startedAtMs, record.finishedAtMs));
-        } else verifyUnusedEvidence(record, s);
+        if (setup) verifyFailedSetupRetirement(job.local, s);
+        else {
+          const bytes = regular(join(job.local, "unused-host.json"), 4096);
+          assert.equal(digest(bytes), s.retirement.evidenceSha256);
+          verifyUnusedEvidence(JSON.parse(bytes), s);
+        }
         add({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
       }
       if (s.status !== "collected" || !s.collectedAt) { add({ group, outcome: "uncollected" }); continue; }

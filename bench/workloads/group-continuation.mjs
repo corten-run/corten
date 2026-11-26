@@ -6,10 +6,10 @@ import { isBuiltin, registerHooks } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
-import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
+import { digest, physical, regular } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
-  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
+import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, failedSetupRetirementFile, verifyCreateErrored,
+  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyFailedSetupRetirement, verifyHistoricalFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
   postedContradiction, readExternalFailedHost, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckExternalFailedHost, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
@@ -85,7 +85,7 @@ function verifyCreateErroredAttempt(saved) {
 }
 const receiptSha256 = (state, file) => file === createErroredReceipt ? state.createErrored?.evidenceSha256 : state.retirement?.evidenceSha256;
 const known = ({ state }) => state?.id && state.status === "collected" && state.validation?.status === "verified";
-const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
+const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": failedSetupRetirementFile, unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
 function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
@@ -109,18 +109,10 @@ function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
     }
   } else {
     assert.ok(saved.outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
-    const bytes = regular(join(local, retirementFile(kind)), 4096), record = JSON.parse(bytes);
+    if (kind === "setup-failed") return verifyFailedSetupRetirement(local, state);
+    const bytes = regular(join(local, retirementFile(kind)), 4096);
     assert.equal(digest(bytes), evidenceSha256, "unresolved custody: retirement receipt changed");
-    if (kind === "unused") verifyUnusedEvidence(record, state);
-    else {
-      const extracted = join(local, state.evidence), campaign = join(extracted, "campaign");
-      assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256);
-      assert.equal(treeHash(extracted), state.evidenceSha256);
-      if (present(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), []); }
-      const marker = full(regular(join(extracted, "exit-code"), 16).toString("utf8"), /[1-9]\d{0,2}\n/, "nonzero setup exit");
-      const exit = Number(marker.trim()); assert.ok(exit <= 255);
-      assert.deepEqual(record, setupEvidence(JSON.stringify(record.observation), state, terminalSetupScript(state, exit), exit, record.startedAtMs, record.finishedAtMs));
-    }
+    verifyUnusedEvidence(JSON.parse(bytes), state);
   }
 }
 
@@ -460,7 +452,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         "no-create custody changed");
       // The same custody predicates as the scan: a lock that appeared since refuses.
       if (retirementFile === createErroredReceipt) assert.ok(createErrored(current), "continuation create failure custody changed");
-      if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
+      if (retirementFile === failedSetupRetirementFile) {
+        assert.ok(current.outcome === "available" && !present(join(current.stateRoot, ".groups-launch.lock")), "continuation setup custody changed");
+        verifyFailedSetupRetirement(current.local, current.state);
+      } else if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
         retirementFile === "failed-native-host.json" ? undefined : retirementFile === createErroredReceipt ? 64 * 1024 : 4096)),
         receiptSha256(current.state, retirementFile), "continuation retirement changed");
     }

@@ -1805,3 +1805,23 @@ export function setupEvidence(raw, state, script, exitCode, startedAtMs, finishe
     archiveSha256: state.archiveSha256, evidenceSha256: state.evidenceSha256, exitCode, scriptSha256: digest(script),
     observation, startedAtMs, finishedAtMs };
 }
+
+export const failedSetupRetirementFile = "failed-setup-host.json";
+export function verifyFailedSetupRetirement(local, state) {
+  assert.equal(state.retirement?.kind, "setup-failed");
+  const bytes = regular(join(local, failedSetupRetirementFile), state.control ? 8 * 1024 * 1024 : 4096);
+  assert.equal(digest(bytes), state.retirement.evidenceSha256, "setup retirement receipt changed");
+  const record = JSON.parse(bytes);
+  const extracted = join(local, state.evidence), campaign = join(extracted, "campaign");
+  assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "setup archive changed");
+  assert.equal(treeHash(extracted), state.evidenceSha256, "setup evidence changed");
+  if (lstatSync(campaign, { throwIfNoEntry: false })) {
+    physical(campaign);
+    assert.equal(readdirSync(campaign).length, 0, "native evidence cannot use setup retirement");
+  }
+  const marker = regular(join(extracted, "exit-code"), 16).toString("utf8"), exit = Number(marker.trim());
+  assert.ok(/^[1-9]\d{0,2}\n$/.test(marker) && exit <= 255, "nonzero setup exit required");
+  const script = terminalSetupScript(state, exit, state.control ? state.control.ledger.length - 1 : undefined);
+  const expected = setupEvidence(JSON.stringify(record.observation), state, script, exit, record.startedAtMs, record.finishedAtMs, local);
+  assert.ok(isDeepStrictEqual(record, expected), "setup retirement receipt differs");
+}
