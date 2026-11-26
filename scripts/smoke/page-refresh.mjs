@@ -71,10 +71,32 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       });
       return `${base}${from}`;
     };
-    /** Navigates the runtime's way, and waits until the page is there, still saving. @param {string} url */
+    /**
+     * Navigates the runtime's way, and waits until the page is there, still saving. The page itself
+     * records that, from before the navigation starts (a client navigation keeps the document), so
+     * a waiter that starts late does not miss a `Saving...` its first part read has already
+     * replaced. @param {string} url
+     */
     const go = async (url) => {
-      await page.evaluate((url) => (/** @type {any} */ (window)).navigation.navigate(url), url);
-      await page.waitForFunction((url) => location.href === url && document.getElementById("alert-status")?.textContent === "Saving...", url);
+      await page.evaluate((url) => {
+        const w = /** @type {any} */ (window);
+        w.__smokeSawSaving = false;
+        const look = () => {
+          if (location.href === url && document.getElementById("alert-status")?.textContent === "Saving...") {
+            w.__smokeSawSaving = true;
+            seen.disconnect();
+          }
+        };
+        const seen = new MutationObserver(look);
+        seen.observe(document, { subtree: true, childList: true, characterData: true });
+        w.navigation.navigate(url);
+        look();
+      }, url);
+      // Or seen now, in case the navigation loaded a new document, which starts without the record.
+      await page.waitForFunction(
+        (url) => (/** @type {any} */ (window)).__smokeSawSaving === true || (location.href === url && document.getElementById("alert-status")?.textContent === "Saving..."),
+        url,
+      );
     };
     const saved = () => page.textContent("#alert-status");
     const savedSoon = () =>
