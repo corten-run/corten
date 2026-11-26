@@ -19,6 +19,9 @@ const tmp = mkdtempSync(join(tmpdir(), "placement-trend-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 const has = (why, word) => assert.ok(why.some((w) => w.includes(word)), `no "${word}" in: ${why.join(" | ") || "nothing"}`);
 const BASE = "a833b4e3e55033c5fa179f50cb9291d190aeedfb", HEAD = "153d10e9cdac318b761ab5bed2c204889606701a", EARLIER = "c6e9be955bedd2766795eab240e061c1b14ee5d0";
+// The repository's page as far as its table's heading, which is what these tests add rows to:
+// a run's row committed to the page must fail none of them.
+const BLANK = (() => { const lines = readFileSync(PAGE, "utf8").split(/\r?\n/), at = lines.indexOf(TABLE[0]); return `${lines.slice(0, at + 2).join("\n")}\n`; })();
 
 /** A gated part's report.json as far as the trend reads it: the change's lower bound, bound and median, and its A/A. */
 const report = (w, lower, bound, { resolution = "resolved", aa = [0.004, 0.002], K = 69, sized = { K }, dry = false, exit = 0 } = {}) => ({
@@ -128,10 +131,12 @@ test("the row: the run's date, the release and its commit, main's commit, each w
 });
 
 test("the page: a row is added under the table's heading, the newest first, and read back", () => {
-  const page = readFileSync(PAGE, "utf8");
-  // No run has been made: the page in the repository has its table and no row.
+  // The page in the repository has its table, nothing under its rows, and only rows the
+  // command wrote, however many runs have been made.
+  const kept = readFileSync(PAGE, "utf8").replaceAll("\r\n", "\n"), page = BLANK;
+  assert.ok(kept.startsWith(page));
+  assert.equal(rows(kept).length, kept.slice(page.length).split("\n").filter(Boolean).length);
   assert.deepEqual(rows(page), []);
-  assert.ok(page.endsWith(`${TABLE.join("\n")}\n`));
   const first = row(at(READ)), second = row(at(READ, { date: "2026-12-09", head: EARLIER }));
   const two = insert(insert(page, first), second);
   assert.equal(two, `${page}${second}\n${first}\n`);
@@ -195,7 +200,7 @@ const DIFF = "5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf5
 let made = 0;
 function command({ reports = {}, differ = ["plain"], real = false, silent = {}, build = {}, sizes = {}, ended = {}, known = [EARLIER], before = null, dry = false, tags = "evidence/placement-kit\nv0.1.9\nv0.2.0\n" } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
-  writeFileSync(page, before ? insert(readFileSync(PAGE, "utf8"), before) : readFileSync(PAGE, "utf8"));
+  writeFileSync(page, before ? insert(BLANK, before) : BLANK);
   const env = { ...process.env, ...(dry ? { DRYRUN: "1" } : {}) };
   if (!dry) delete env.DRYRUN;
   const exec = (cmd, args, { env: e = env, log = null } = {}) => {
@@ -271,7 +276,7 @@ test("a run: both sides checked before any turn, each workload's pilot and gated
   assert.ok(r.file(join("check-plain", "plan", "resolved.sh")).includes("DRY='1'\n") && r.file(join("plain-pilot", "plan", "resolved.sh")).includes("DRY='0'\n"));
   const line = "| 2026-12-02 | v0.2.0 `a833b4e3e` | `153d10e9c` | `plain` +0.40% to +1.10%, median +0.75%, K = 69, A/A resolved, answers differ; `unstaged` -0.20% to +0.30%, median +0.05%, K = 91, A/A resolved | pass at +2.00% |";
   assert.equal(r.line, line);
-  assert.equal(r.page, `${readFileSync(PAGE, "utf8")}${line}\n`);
+  assert.equal(r.page, `${BLANK}${line}\n`);
   assert.equal(r.file("row.md"), `${TABLE.join("\n")}\n${line}\n`);
   assert.equal(r.issue, null);
   assert.ok(!existsSync(join(r.dir, "issue.md")) && r.said.includes("commit it as it is") && r.said.includes("v0.2.0 and origin/main answer differently"));
@@ -354,7 +359,7 @@ test("not read, never a pass: a side the kit refuses, a pilot that sizes no K, a
 test("refused before anything is run: a directory that holds something or lies in the checkout, no release tag, a page with no table", () => {
   const refused = (opts, word, change = () => {}) => {
     const dir = join(tmp, `refused-${++made}`), page = join(tmp, `refused-${made}.md`), calls = [];
-    writeFileSync(page, readFileSync(PAGE, "utf8"));
+    writeFileSync(page, BLANK);
     const o = { dir, page, date: "2026-12-02", say: () => {}, exec: (cmd, args) => { calls.push(args.slice(2).join(" ")); return cmd === "git" && args[3] === "--show-toplevel" ? { status: 0, stdout: `${root}\n` } : { status: 0, stdout: opts.tags ?? "" }; } };
     change(o);
     const was = readFileSync(page, "utf8");
@@ -383,7 +388,7 @@ test("a dry run: every part the kit's dry run, the row kept with the run and mar
   const r = command({ reports: dry, dry: true });
   assert.equal(r.exit, 0);
   assert.deepEqual(r.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("plain"), ...PARTS("unstaged")].map((c) => (c.endsWith(" plan") ? `${c} dry` : c)));
-  assert.equal(r.page, readFileSync(PAGE, "utf8"));
+  assert.equal(r.page, BLANK);
   assert.ok(r.file("row.md").startsWith("DRY RUN: a test of the scripts, read for nothing. This row is not the page's.\n\n"));
   assert.ok(r.line.includes("`plain` not read: DRY RUN, read for nothing (+3.00% to +4.00%, median +3.50%, K = 6);") && r.line.endsWith("| not read: `plain`, `unstaged` |"));
   // Nothing is past a threshold in a dry run, whatever it read, and one that did not complete says so.
