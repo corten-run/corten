@@ -449,6 +449,8 @@ mod tests {
             assert!(page.text().contains(&format!(">{word}</span>")), "the plate lacks {word}");
         }
         assert!(page.text().contains(&format!("built from {HEAT}")), "the certificate does not name {HEAT}");
+        // The rounds measured trees older than the release the sheet names, and it says which.
+        assert!(page.text().contains("eea6adb (corten-run 0.1.0, round r16)"), "the certificate lacks the measured version");
     }
 
     /// The JSON's readings are the pulse's, and it says whose count each of the machine's is: a

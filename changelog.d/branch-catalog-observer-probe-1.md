@@ -1,1 +1,0 @@
-- A hosted Linux diagnostic can exercise Corten's catalog image build under the benchmark's process observer without renting a benchmark droplet. It checks both catalog sources but does not measure throughput.
