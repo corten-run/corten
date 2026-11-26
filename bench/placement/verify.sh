@@ -16,9 +16,10 @@
 # if it is still running 5 s later, so a server that ignores TERM holds verify.sh no longer
 # (serve.mjs, below). serve.mjs stops the process START is, and nothing it started: START must be,
 # or exec, the server that listens. After each stop nothing may accept a connection on 18083 (one
-# connect, at most a second): one that does, a server START forked and left, say, fails verify.sh.
-# Every curl is run with --disable, so no curl configuration of HOME's (a retry, a header)
-# changes a request or stretches its bound.
+# connect, at most a second): one that does, a server START forked and left, say, fails verify.sh,
+# and stopping that server is the operator's. Every curl is run with --disable, so no curl
+# configuration of HOME's (a retry, a header) changes a request or stretches its bound, and with
+# --noproxy '*', so no proxy of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1.
 # Every server is started with an environment of PATH, HOME, PORT and BIN alone, kept in
 # <out dir>/server-env.txt. Writes <out dir>/<side>-p<pad>/ and
 # <out dir>/verdicts.txt, one line a binary: "<binary> as <side>: answers: same; ...".
@@ -39,7 +40,10 @@ mkdir -p "$out"; : >"$out/verdicts.txt"
 # ends, KILL included. Starting a server and stopping one hold off HUP, INT, PIPE and TERM (late) until
 # they are done, a stop until serve.mjs has ended, and the shell then exits 1 for the signal: one
 # cannot cut a stop short and leave the server running. A trapped signal ends a wait early, with a
-# status above 128, so a wait it woke is made again.
+# status above 128, so a wait it woke is made again. serve.mjs is run with an environment of PATH
+# and HOME alone, so no NODE_OPTIONS of the caller's (--inspect-brk, say) holds it before it can
+# stop anything, and the wait for it is bounded: about 15 s, more than its own 10 s at most. If it
+# has not ended by then, verify.sh fails, saying the cleanup is unconfirmed, and signals nothing.
 sup=; late=
 hold() { woke=; trap 'late=1; woke=1' HUP INT PIPE TERM; }
 release() { trap 'exit 1' HUP INT PIPE TERM; [ -z "$late" ] || exit 1; }
@@ -48,18 +52,28 @@ halt() {
     exec 3>&-
     st=0; stopped=
     if [ -n "$sup" ]; then
-        s=$sup; stopped=1
-        while :; do
-            woke=; st=0; wait "$s" || st=$?
-            [ $st -gt 128 ] && [ -n "$woke" ] || break
-        done
-        sup=
+        s=$sup; stopped=1; sup=
+        # kill -0 sends no signal: it asks whether the shell's own child, serve.mjs, is still
+        # there. Its number cannot name another process until the shell reaps it, which the
+        # shell does while it waits for a sleep below (or in wait), and then kill -0 finds
+        # nothing. A number taken again since would read as still running, and the bound ends that.
+        n=0
+        while kill -0 "$s" 2>/dev/null && [ $n -lt 150 ]; do n=$((n + 1)); sleep 0.1; done
+        if kill -0 "$s" 2>/dev/null; then
+            echo "verify: serve.mjs, stopping the base's server, has not ended 15 s after its input closed: cleanup unconfirmed" >&2
+            st=1; stopped=
+        else
+            while :; do
+                woke=; st=0; wait "$s" || st=$?
+                [ $st -gt 128 ] && [ -n "$woke" ] || break
+            done
+            [ $st = 0 ] || echo "verify: serve.mjs, stopping the base's server, ended with status $st" >&2
+        fi
     fi
-    [ $st = 0 ] || echo "verify: serve.mjs, stopping the base's server, ended with status $st" >&2
     # The server serve.mjs stopped has ended, and its listening socket with it: curl's 7 is a
     # refused connection, and anything else is something that still accepts one.
     if [ $st = 0 ] && [ -n "$stopped" ]; then
-        cst=0; curl --disable -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null || cst=$?
+        cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null || cst=$?
         [ $cst = 7 ] || { echo "verify: something still accepts on 18083 after the base's server was stopped (curl status $cst): START must be, or exec, the server that listens, not start it and leave it" >&2; st=1; }
     fi
     release
@@ -74,17 +88,17 @@ for s in 1 2; do
     rm -f "$fifo"; mkfifo "$fifo"
     exec 3<>"$fifo" 4<"$fifo"
     rm -f "$fifo"
-    node "$KIT/serve.mjs" env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" taskset -c "$CPU_SERVER" sh -c "exec $START" <&4 3>&- 4>&- &
+    env -i PATH="$PATH" HOME="$HOME" node "$KIT/serve.mjs" env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" taskset -c "$CPU_SERVER" sh -c "exec $START" <&4 3>&- 4>&- &
     sup=$!
     exec 4<&-
     release
     i=0
-    until curl --disable -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null 3>&-; do
+    until curl --disable --noproxy '*' -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null 3>&-; do
         i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083" >&2; exit 1; }; sleep 0.1
     done
     set --
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    curl --disable -sS --max-time 10 -D "$out/start-$s.raw-headers" -o /dev/null "$@" "http://127.0.0.1:18083$REQ_PATH" </dev/null 3>&-
+    curl --disable --noproxy '*' -sS --max-time 10 -D "$out/start-$s.raw-headers" -o /dev/null "$@" "http://127.0.0.1:18083$REQ_PATH" </dev/null 3>&-
     halt || exit 1
 done
 node "$KIT/mask.mjs" starts "$MASK_JSON" "$out/start-1.raw-headers" "$out/start-2.raw-headers" || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }

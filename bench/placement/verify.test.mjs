@@ -1,7 +1,9 @@
 // verify.sh on a server of its own, on Linux alone: however verify.sh ends, a signal during the
 // stop and a KILL of verify.sh included, the base's server is stopped within a bound, a server
 // that ignores TERM too, and nothing is left listening; a START that leaves a server listening
-// fails it; and its readiness requests keep their bound whatever HOME's curl configuration says.
+// fails it; a serve.mjs that does not end holds verify.sh no longer than its bound, and no
+// NODE_OPTIONS of the caller's reaches serve.mjs; its readiness requests keep their bound whatever
+// HOME's curl configuration says; and no proxy of the environment's answers for 127.0.0.1.
 // The plan names no placement, so what is run is verify.sh's two starts of the base and nothing
 // after them. Then serve.mjs, which runs each start, on its own.
 //
@@ -11,7 +13,7 @@
 // connection while it runs and refuses one once it has ended.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -24,7 +26,7 @@ const LINUX = { skip: tools ? false : "needs Linux with taskset, timeout and cur
 const POSIX = { skip: process.platform === "win32" ? "needs POSIX signals and sockets" : false };
 const tmp = process.platform === "win32" ? null : realpathSync(mkdtempSync(join(tmpdir(), "placement-verify-")));
 after(() => tmp && rmSync(tmp, { recursive: true, force: true }));
-const taken = () => spawnSync("curl", ["--disable", "-s", "-o", "/dev/null", "--max-time", "1", "http://127.0.0.1:18083/"]).status !== 7;
+const taken = () => spawnSync("curl", ["--disable", "--noproxy", "*", "-s", "-o", "/dev/null", "--max-time", "1", "http://127.0.0.1:18083/"]).status !== 7;
 const lines = (file) => { try { return readFileSync(file, "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; } };
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 /** Whether the fixture whose liveness socket this is still runs: it takes a connection. */
@@ -73,28 +75,39 @@ require("node:http").createServer((q, s) => { ${answer} }).listen(Number(process
 /**
  * A work directory whose base is such a server, for the request path given, and the verify.sh
  * command that checks it; the test then waits, past its end, for the work directory's servers
- * to have ended by themselves. start: the plan's start command; life: the server's own bound.
+ * to have ended by themselves. start: the plan's start command; life: the server's own bound;
+ * serve: the text of a stand-in for serve.mjs, put in a kit of its own under the work directory.
  */
-function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life = LIFE } = {}) {
+function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life = LIFE, serve = null } = {}) {
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   assert.ok(!taken(), "port 18083 is in use, and verify.sh's port is fixed: this test needs it free");
-  const work = join(tmp, name), vars = { WORK: work, KIT: here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: "", PADS_Q: "", SIDES: "base" };
+  const work = join(tmp, name), vars = { WORK: work, KIT: serve === null ? here : join(work, "kit"), START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: "", PADS_Q: "", SIDES: "base" };
   mkdirSync(join(work, "plan"), { recursive: true });
   mkdirSync(join(work, "bin"));
   writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
   for (const [f, text] of [["headers.txt", ""], ["mask.sed", ""], ["mask.json", "[]\n"], ["request.lua", ""]]) writeFileSync(join(work, "plan", f), text);
   writeFileSync(join(work, "bin", "base"), fixture(kind, life), { mode: 0o755 });
+  if (serve !== null) { mkdirSync(join(work, "kit")); writeFileSync(join(work, "kit", "serve.mjs"), serve); }
   t.after(() => settle(work, life + 5000));
   return { work, args: [join(here, "verify.sh"), work, join(work, "verify")] };
 }
 
-/** verify.sh on such a work directory; killed, through its handle, at 60 s. */
-async function verify(t, name, path, options) {
-  const { work, args } = prepare(t, name, path, options), began = Date.now();
-  const r = spawnSync("sh", args, { encoding: "utf8", timeout: 60000, killSignal: "SIGKILL" });
-  const seconds = (Date.now() - began) / 1000;
-  return { ...r, seconds, pids: lines(join(work, "pids")), left: await living(work), said: (r.stdout ?? "") + (r.stderr ?? "") };
+/**
+ * verify.sh on such a work directory; killed, through its handle, at 60 s. env: the environment
+ * verify.sh is run with; before: run on the work directory before verify.sh is; file: its output
+ * goes to a file rather than a pipe, so its end is verify.sh's own, not that of the last process
+ * holding the pipe.
+ */
+async function verify(t, name, path, { env = process.env, before = null, file = false, ...options } = {}) {
+  const { work, args } = prepare(t, name, path, options);
+  if (before) await before(work);
+  const began = Date.now(), log = join(work, "verify.out"), fd = file ? openSync(log, "w") : null;
+  const r = spawnSync("sh", args, { encoding: "utf8", timeout: 60000, killSignal: "SIGKILL", env, ...(file ? { stdio: ["ignore", fd, fd] } : {}) });
+  const ended = Date.now(), seconds = (ended - began) / 1000;
+  if (file) closeSync(fd);
+  const said = file ? readFileSync(log, "utf8") : (r.stdout ?? "") + (r.stderr ?? "");
+  return { ...r, seconds, ended, work, pids: lines(join(work, "pids")), left: await living(work), said };
 }
 
 /**
@@ -113,11 +126,11 @@ async function interrupted(t, name, path, when, signal, { count = 1, env = proce
   while (lines(join(work, when)).length < count && child.exitCode === null && Date.now() - began < 30000) await sleep(20);
   const sent = lines(join(work, when)).length >= count && child.exitCode === null;
   if (sent) child.kill(signal);
-  const sentAt = (Date.now() - began) / 1000;
+  const sentTime = Date.now(), sentAt = (sentTime - began) / 1000;
   const end = await ended;
   clearTimeout(limit);
   const seconds = (Date.now() - began) / 1000;
-  return { ...end, sent, sentAt, seconds, work, said };
+  return { ...end, sent, sentAt, sentTime, seconds, work, said };
 }
 
 test("a fixture server ends by itself within its bound, though it ignores TERM, so no test need signal one", POSIX, async (t) => {
@@ -219,14 +232,85 @@ test("verify.sh, sent TERM while it stops a base that ignores TERM, finishes the
 
 test("verify.sh, killed while a base that ignores TERM runs, still has that base stopped within a bound", LINUX, async (t) => {
   // verify.sh sends no signal by number: its server is stopped by serve.mjs when verify.sh's end
-  // of serve.mjs's input closes, which a KILL of verify.sh closes too.
+  // of serve.mjs's input closes, which a KILL of verify.sh closes too. The bound is counted from
+  // the KILL, not from verify.sh's pipes closing (serve.mjs holds them until it ends), and is well
+  // short of the fixture's own, so the fixture ending by itself cannot pass for the stop.
+  const bound = 15000;
+  assert.ok(bound < LIFE - 5000);
   const r = await interrupted(t, "killed", "/hang", "hung", "SIGKILL");
   assert.ok(r.sent, `the request never reached the base, or verify.sh ended before it could be killed: ${r.said}`);
-  let left = [];
-  for (let i = 0; i < 150; i++) { left = await living(r.work); if (left.length === 0) break; await sleep(100); }
+  let left = await living(r.work), busy = taken();
+  while ((left.length > 0 || busy) && Date.now() - r.sentTime < bound) { await sleep(100); left = await living(r.work); busy = taken(); }
+  const ms = Date.now() - r.sentTime;
   assert.equal(lines(join(r.work, "pids")).length, 1, r.said);
-  assert.deepEqual(left, [], "the server verify.sh started was still running 15 s after verify.sh was killed");
+  assert.deepEqual(left, [], `the server verify.sh started was still running ${ms} ms after verify.sh was killed`);
+  assert.ok(!busy, `something still answered on 18083 ${ms} ms after verify.sh was killed`);
+});
+
+// A proxy of the environment's, at an address of its own: it answers every request it is sent
+// 200 and notes it in proxied. It ends by itself 20 s after it starts, and has a liveness socket
+// beside the work directory's servers', so the test waits for it as for them.
+const PROXY = `const at = (f) => require("node:path").join(process.argv[1], f), fs = require("node:fs");
+setTimeout(() => process.exit(0), 20000);
+require("node:net").createServer((c) => c.destroy()).listen(at("alive-" + process.pid + ".sock"));
+const s = require("node:http").createServer((q, r) => { fs.appendFileSync(at("proxied"), q.url + "\\n"); r.end("proxy"); });
+s.listen(0, "127.0.0.1", () => fs.writeFileSync(at("proxy-port"), String(s.address().port)));`;
+async function proxy(dir) {
+  spawn(process.execPath, ["-e", PROXY, dir], { stdio: "ignore" });
+  for (let i = 0; i < 200; i++) { try { return Number(readFileSync(join(dir, "proxy-port"), "utf8")); } catch { await sleep(25); } }
+  throw new Error("the stand-in proxy never listened");
+}
+
+test("verify.sh sends no request through a proxy of the environment's: readiness, the request and the check of the port after each stop all go to 127.0.0.1", LINUX, async (t) => {
+  let port;
+  const env = { ...process.env };
+  for (const k of ["NO_PROXY", "no_proxy"]) delete env[k];
+  const r = await verify(t, "proxied", "/page", { kind: "yielding", env, before: async (work) => { port = await proxy(work); env.http_proxy = env.ALL_PROXY = `http://127.0.0.1:${port}`; } });
+  assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+  const proxied = existsSync(join(r.work, "proxied")) ? readFileSync(join(r.work, "proxied"), "utf8") : "";
+  assert.equal(proxied, "", "requests went to the proxy");
+  assert.equal(r.status, 0, r.said);
+  assert.equal(r.pids.length, 2, r.said);
   assert.ok(!taken(), "something still answers on 18083");
+});
+
+test("verify.sh runs serve.mjs with no NODE_OPTIONS of the caller's, so a preload that would hold serve.mjs before it starts does not reach it", LINUX, async (t) => {
+  // The preload holds serve.mjs, and nothing else node runs, for 40 s before its own code runs,
+  // as --inspect-brk would without end, noting that it did; after that serve.mjs goes on as ever.
+  const pause = join(tmp, "pause.cjs");
+  writeFileSync(pause, `if (process.argv[1]?.endsWith("serve.mjs")) { require("node:fs").appendFileSync(${JSON.stringify(join(tmp, "paused"))}, process.pid + "\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40000); }\n`);
+  const r = await verify(t, "node-options", "/page", { kind: "yielding", env: { ...process.env, NODE_OPTIONS: `--require=${pause}` } });
+  assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+  assert.deepEqual(lines(join(tmp, "paused")), [], "the caller's NODE_OPTIONS reached serve.mjs");
+  assert.equal(r.status, 0, r.said);
+  assert.ok(r.seconds < 8, `verify.sh took ${r.seconds} s`);
+});
+
+test("verify.sh, whose serve.mjs does not end when its input closes, fails within its bound saying the cleanup is unconfirmed, and signals nothing", LINUX, async (t) => {
+  // A stand-in for serve.mjs that runs no server but is one, on 18083, ignores the signals it
+  // could be sent and its input ending, and ends by itself 30 s after it starts.
+  const serve = `import { appendFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { createServer as web } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+const at = (f) => join(dirname(fileURLToPath(import.meta.url)), "..", f);
+setTimeout(() => process.exit(0), 30000);
+for (const s of ["SIGHUP", "SIGINT", "SIGTERM"]) process.on(s, () => appendFileSync(at("signals"), s + "\\n"));
+createServer((c) => c.destroy()).listen(at("alive-" + process.pid + ".sock"));
+web((q, s) => s.end("ok")).listen(18083, "127.0.0.1");
+process.stdin.on("end", () => appendFileSync(at("closed"), Date.now() + "\\n"));
+process.stdin.resume();
+`;
+  const r = await verify(t, "serve-stuck", "/page", { serve, life: 30000, file: true });
+  assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
+  assert.notEqual(r.status, 0, r.said);
+  assert.ok(r.said.includes("verify: serve.mjs, stopping the base's server, has not ended 15 s after its input closed: cleanup unconfirmed"), r.said);
+  const [closed] = lines(join(r.work, "closed")), waited = (r.ended - closed) / 1000;
+  assert.ok(closed, `serve.mjs's input never closed: ${r.said}`);
+  assert.ok(waited >= 14.5 && waited < 22, `verify.sh ended ${waited} s after serve.mjs's input closed, not about 15 s`);
+  assert.deepEqual(lines(join(r.work, "signals")), [], "the stand-in serve.mjs was sent a signal");
+  assert.equal((await living(r.work)).length, 1, "the stand-in serve.mjs, which ends by itself at 30 s, had already ended");
 });
 
 // serve.mjs on its own: what verify.sh relies on to stop a server. POSIX alone, for its signals.

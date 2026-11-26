@@ -31,12 +31,14 @@
 # missing, not a number, zero or under 100%, fails the placement and records nothing.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
 # raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log. A diff.txt
-# that cannot be written or does not hold the difference diff or cmp reported, one that is not
-# there, not a regular file or not readable when they report none, or a diff or cmp that cannot
-# compare (status 2), fails the placement. Every curl is run with --disable, so no curl
-# configuration of HOME's (a retry, a header) changes a request or how long it may take.
+# that is there before the check creates it (answers/ is made afresh), cannot be created as a new
+# file, is not a regular file of its own or does not hold the difference diff or cmp reported,
+# one that is not readable when they report none, or a diff or cmp that cannot compare (status 2),
+# fails the placement. Every curl is run with --disable, so no curl configuration of HOME's (a
+# retry, a header) changes a request or how long it may take, and with --noproxy '*', so no proxy
+# of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,37p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,39p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -50,7 +52,7 @@ start() { # <A|B> <port> <binary>; the server's pid is then $!. Its environment 
 }
 aport=18081; bport=18082
 for port in $aport $bport; do
-    ! curl --disable -s -o /dev/null "http://127.0.0.1:$port/" </dev/null || fail "something already answers on $port"
+    ! curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$port/" </dev/null || fail "something already answers on $port"
 done
 : >"$out/serve-A.log"; : >"$out/serve-B.log"
 a=; b=
@@ -59,7 +61,7 @@ trap stop EXIT
 trap 'exit 1' HUP INT PIPE TERM
 ready() { # <port> <pid>
     i=0
-    until curl --disable -s -o /dev/null "http://127.0.0.1:$1/" </dev/null; do
+    until curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$1/" </dev/null; do
         i=$((i + 1)); [ $i -lt 100 ] || fail "nothing answers on $1"; sleep 0.1
     done
     [ "$(taskset -cp "$2" | sed 's/.*: //')" = "$cpu" ] || fail "pid $2 is not on cpu $cpu"
@@ -83,7 +85,7 @@ answer() { # <port> <out prefix>: writes <prefix>.raw-headers, .headers (masked)
     grep -qi '^accept:' "$HEADERS" || set -- "$@" -H 'Accept:'
     grep -qi '^user-agent:' "$HEADERS" || set -- "$@" -H 'User-Agent:'
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    curl --disable -sS --max-time 10 -D "$to.raw-headers" -o "$to.body" "$@" "http://127.0.0.1:$port$path" </dev/null
+    curl --disable --noproxy '*' -sS --max-time 10 -D "$to.raw-headers" -o "$to.body" "$@" "http://127.0.0.1:$port$path" </dev/null
     tr -d '\r' <"$to.raw-headers" | grep -iv '^date:' | sed -f "$mask" >"$to.headers"
 }
 answer $aport "$ans/A"
@@ -95,11 +97,16 @@ done
 node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not within the range the plan states"
 cmp -s "$ans/A.headers" "$ans/A-again.headers" || fail "two answers of A differ in their headers after the mask: $ans/A*.headers"
 cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in their bodies: $ans/A*.body"
-# diff.txt is written before anything is compared, so a file that cannot be is a failure and not
+# diff.txt is created before anything is compared, so a file that cannot be is a failure and not
 # an empty difference (printf, since a redirection that fails on the special builtin : would end
 # the shell without the reason); diff and cmp say 0 for the same, 1 for different and 2 for trouble.
+# answers/ is this check's own, made afresh above, so anything already at diff.txt is not one it
+# made: a link to the expected difference, say, which a write would truncate and the check then
+# compare with itself. It is refused, and diff.txt is created with noclobber (in a subshell, so
+# the option goes no further), which makes a new file and follows no link to a regular one.
 diffs=$ans/diff.txt
-printf '' >"$diffs" || fail "$diffs cannot be written"
+[ ! -e "$diffs" ] && [ ! -L "$diffs" ] || fail "$diffs cannot be written as a new file: something is there before the check made it"
+(set -C; printf '' >"$diffs") || fail "$diffs cannot be written"
 hst=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || hst=$?
 [ $hst -le 1 ] || fail "diff could not compare the two answers' headers (status $hst)"
 na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
@@ -114,11 +121,14 @@ esac
 # reported must be in diff.txt, which then ends with the bodies line (so an expected one names
 # the bodies as well) and holds the headers' diff before it when the headers differ, and when
 # neither reported one diff.txt is an empty regular file of its own that can be read. A diff.txt
-# that does not hold what they said (one that took no writes, say), or, when they said the same,
-# one that is not there (unlinked after diff wrote it), is not a regular file (a link, to
-# /dev/null say) or cannot be read, is missing evidence, and fails the placement rather than
-# reading as the same.
+# that does not hold what they said (one that took no writes, say), one that is not there
+# (unlinked after diff wrote it) or not a regular file (a link, to /dev/null or the expected
+# difference say), or, when they said the same, one that cannot be read, is missing evidence,
+# and fails the placement rather than reading as the same.
 if [ $hst = 1 ] || [ $bst = 1 ]; then
+    # The bodies line is added only to a regular file of the check's own, not through a link.
+    [ -f "$diffs" ] && [ ! -L "$diffs" ] \
+        || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence ($diffs is not there, not a regular file, or a link)"
     echo "$line" >>"$diffs" || fail "$diffs cannot be written"
     n=$(wc -l <"$diffs")
     { if [ $hst = 1 ]; then [ "$n" -gt 1 ]; else [ "$n" -eq 1 ]; fi; } && [ "$(tail -n 1 "$diffs")" = "$line" ] \

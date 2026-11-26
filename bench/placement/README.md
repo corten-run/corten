@@ -202,14 +202,19 @@ one of the commands above with its output under `<run dir>/log`:
    part's `run.sh` runs first, holds each placement's comparison to the same limit, gives
    each of its two starts of the base 100 readiness requests of at most a second, and stops
    each start with TERM and, if it is still running 5 s later, KILL. Each start runs under
-   [`serve.mjs`](serve.mjs), the server's parent, which sends those two signals through its child
-   handle alone (a number it has not yet reaped cannot name another process) and stops the server
-   when `verify.sh`'s end of its input closes, so a signal during the stop does not cut it short
-   and a `verify.sh` killed outright leaves no server running. `serve.mjs` stops its child alone,
-   so after each stop `verify.sh` makes one connection to its port, of at most a second, and
-   fails if anything takes it: a start command that left the server running. The kit runs every
-   `curl` with `--disable`, so a `.curlrc` (a retry, a header) changes neither a request nor its
-   bound. A release
+   [`serve.mjs`](serve.mjs), the parent of the process the start command is (or execs), which
+   sends those two signals to that direct child alone, through its child handle (a number it has
+   not yet reaped cannot name another process), and stops it when `verify.sh`'s end of its input
+   closes. So a signal during the stop does not cut it short, and a `verify.sh` killed outright
+   still has that child stopped. `serve.mjs` gets an environment of `PATH` and `HOME` alone, so
+   no `NODE_OPTIONS` holds it, and `verify.sh` waits for it about 15 s at most (it ends within
+   about 10 s), then fails, saying the cleanup is unconfirmed, and signals nothing. Nothing the
+   child started is stopped: after each stop `verify.sh` makes one connection to its port, of at
+   most a second, and fails if anything takes it, so a listener left by a start command that does
+   not exec its server is found, and fails the check, but stopping it is the operator's. The
+   `curl`s in `verify.sh` and `turns.sh`, all to 127.0.0.1, run with `--disable`, so a `.curlrc`
+   (a retry, a header) changes neither a request nor its bound, and with `--noproxy '*'`, so no
+   `http_proxy` or `ALL_PROXY` of the environment's answers for the servers. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
    found there is kept as the workload's `expect` for this run
@@ -399,15 +404,18 @@ Those tests run two shell scripts, and only on Linux: `trend.test.mjs` runs the 
 check, which is `turns.sh` with no pair turned, on servers of its own (the same answer, two
 bodies of one length, a third body of that length under the difference the two made, a
 difference in a header alone and, under it, another body both sides share, a
-`diff.txt` that cannot be written, one that takes every write and holds none of the difference `diff` and `cmp` reported (and, for the same answers, is no regular file), one unlinked after `diff` wrote it, and a `diff` that cannot compare, each of those four with a
-stand-in for a tool `turns.sh` runs, and a side that never answers), on a CPU the test may run
+`diff.txt` that cannot be written, one put in place of the check's own that holds none of the difference `diff` and `cmp` reported (an empty file, or a link to `/dev/null`, which for the same answers is no regular file), one unlinked after `diff` wrote it, one linked to the expected difference before the check creates it or before the bodies line is added, which must leave that file as it was, and a `diff` that cannot compare, each of those five with a
+stand-in for a tool `turns.sh` runs, a side that never answers, and a proxy of the environment's that answers everything, which no request may reach), on a CPU the test may run
 on, and fails saying so when the kit's two ports are in use. `verify.test.mjs`, which `npm run
 check` runs too, runs the second, `verify.sh`, and with a plan of no placement, on
 a base that ignores TERM: after its two starts, ended by a failed request while the base
 runs, sent TERM while it stops the base and killed outright while the base runs, it must have
 the base stopped within a bound and leave nothing on its port; it must fail when a start command
-forks the server and leaves it listening, and give each readiness request to a base that never
-answers at most a second under a `.curlrc` that asks for retries. Each of its servers ends by
+forks the server and leaves it listening, give each readiness request to a base that never
+answers at most a second under a `.curlrc` that asks for retries, send no request to a proxy of
+the environment's, keep a caller's `NODE_OPTIONS` from `serve.mjs`, and, with a stand-in
+`serve.mjs` that does not end when its input closes, fail about 15 s later saying the cleanup is
+unconfirmed, signalling nothing. Each of its servers ends by
 itself within a bound, so no test signals one by its number; and `serve.mjs` on its own, which
 must stop a server when its input ends (KILL 5 s after TERM for one that ignores TERM), and end
 at once, saying so, when its server ends before it is stopped. What `build.sh`, `run.sh`, `verify.sh` and

@@ -97,7 +97,7 @@ for case in "$@"; do
         { [ $rc = 124 ] || [ $rc = 137 ]; } && { [ "$(rows "$out/slow")" = none ] || [ "$(rows "$out/slow")" = 0 ]; } \
             || bad "the time limit did not stop the placement (exit $rc, rows $(rows "$out/slow"))"
         sleep 2
-        ! curl -s -o /dev/null http://127.0.0.1:18081/ </dev/null && ! curl -s -o /dev/null http://127.0.0.1:18082/ </dev/null \
+        ! curl --disable --noproxy '*' -s -o /dev/null http://127.0.0.1:18081/ </dev/null && ! curl --disable --noproxy '*' -s -o /dev/null http://127.0.0.1:18082/ </dev/null \
             || bad "a server was left running after the time limit"
         echo "limit: a placement past its time limit was stopped (exit $rc), with no recorded pair and no server left" ;;
     map)

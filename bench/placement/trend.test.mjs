@@ -4,7 +4,7 @@
 // part's report.json is what reading() takes is held in report.test.mjs, on results made there.
 // The answers check is run on real processes at the end, on Linux alone.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -719,12 +719,13 @@ const LINUX = { skip: tools ? false : "needs Linux with taskset, timeout, curl a
 // side: a value for a header of its own, x-side, so two servers can answer in a header alone.
 const serve = (body, side = null) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); ${side === null ? "" : `s.setHeader("x-side", ${JSON.stringify(side)}); `}s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
 const mute = 'require("node:net").createServer(() => {}).listen(Number(process.argv[2]), "127.0.0.1");';
-const taken = (port) => spawnSync("curl", ["--disable", "-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
+const taken = (port) => spawnSync("curl", ["--disable", "--noproxy", "*", "-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
 const full = (body) => createHash("sha256").update(body).digest("hex"), digest = (body) => full(body).slice(0, 16);
 // The check of two sides' answers, base and head each a script node runs, stopped after seconds.
 // expect: the text of an expected difference, given to turns.sh as a plan's is (the command's
-// own check gives none); first: a directory put first on PATH, of stand-ins for tools turns.sh runs.
-function answers(name, base, head, seconds, { expect = null, first = null } = {}) {
+// own check gives none); first: a directory put first on PATH, of stand-ins for tools turns.sh runs;
+// env: more of the environment the check is run with.
+function answers(name, base, head, seconds, { expect = null, first = null, env: more = {} } = {}) {
   // A CPU this process may run on, which need not be the first, and the kit's two ports free:
   // they are fixed, so one in use would be waited on, and is said instead.
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
@@ -738,7 +739,7 @@ function answers(name, base, head, seconds, { expect = null, first = null } = {}
   for (const [side, script] of [["base", base], ["head", head]]) writeFileSync(join(work, "bin", side), `#!/usr/bin/env node\n${script}\n`, { mode: 0o755 });
   const expected = join(work, "plan", "expect.txt"), command = expect === null ? ANSWERS : ANSWERS.replace(" EXPECT= exec ", ' EXPECT="$2" exec ');
   if (expect !== null) { assert.notEqual(command, ANSWERS); writeFileSync(expected, expect); }
-  const env = first ? { ...process.env, PATH: `${first}:${process.env.PATH}` } : process.env;
+  const env = { ...process.env, ...more, ...(first ? { PATH: `${first}:${process.env.PATH}` } : {}) };
   const r = spawnSync("sh", ["-c", command, "sh", work, expected], { encoding: "utf8", timeout: 120000, env });
   // Whatever the check found, the servers it started are gone: nothing takes a connection.
   for (const port of [18081, 18082]) {
@@ -746,7 +747,7 @@ function answers(name, base, head, seconds, { expect = null, first = null } = {}
     for (let i = 0; i < 20 && still; i++) still = taken(port);
     assert.ok(!still, `${name}: something still answers on ${port}`);
   }
-  return { status: r.status, said: r.stdout + r.stderr, answers: join(work, "compare", "answers") };
+  return { status: r.status, said: r.stdout + r.stderr, answers: join(work, "compare", "answers"), expected };
 }
 /** A directory under the test's own of one stand-in, a shell script, for a tool turns.sh runs. */
 const stand = (dir, name, script) => { mkdirSync(join(tmp, dir), { recursive: true }); writeFileSync(join(tmp, dir, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 }); return join(tmp, dir); };
@@ -795,7 +796,8 @@ test("the answers check on real servers: a difference in the headers alone holds
 });
 
 test("the answers check on real servers: a diff.txt that cannot be written fails it, and does not read as the same answers", LINUX, () => {
-  // A stand-in for cmp makes diff.txt a link to a directory that is not there, just before turns.sh writes it.
+  // A stand-in for cmp makes diff.txt a link to a directory that is not there, just before turns.sh
+  // creates it: something is there already, so diff.txt cannot be created as the check's own.
   const first = stand("unwritable", "cmp", 'case "$3" in */A-again.body) ln -s /nonexistent/diff.txt "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
   const r = answers("answers-unwritable", serve("aaaa"), serve("aaaa"), 60, { first });
   assert.equal(r.status, 1, r.said);
@@ -803,9 +805,15 @@ test("the answers check on real servers: a diff.txt that cannot be written fails
 });
 
 test("the answers check on real servers: a difference diff or cmp reported that diff.txt does not hold fails it as missing evidence, and does not read as the same answers", LINUX, () => {
-  // A stand-in for cmp makes diff.txt a link to /dev/null, just before turns.sh writes it: every
-  // write to it succeeds and it stays empty, so only diff's and cmp's own statuses say the answers differ.
-  const first = stand("swallowed", "cmp", 'case "$3" in */A-again.body) ln -s /dev/null "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+  // A stand-in for diff puts a new empty diff.txt in place of the one turns.sh created, before
+  // diff writes the one it was given: a regular file that took none of the headers' difference.
+  const emptied = stand("emptied", "diff", 'case "$1" in */A.headers) rm "${1%/*}/diff.txt" && : >"${1%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec diff "$@"');
+  const headers = answers("answers-emptied-headers", serve("aaaa", "a"), serve("aaaa", "b"), 60, { first: emptied });
+  assert.equal(headers.status, 1, headers.said);
+  assert.ok(headers.said.includes("diff (status 1) or cmp (status 0) reported a difference that") && headers.said.includes("answers/diff.txt does not hold: missing evidence\n") && !headers.said.includes("answers: same"), headers.said);
+  // A stand-in for diff makes diff.txt a link to /dev/null in the same place: every write to it
+  // succeeds and it stays empty, so only diff's and cmp's own statuses say the answers differ.
+  const first = stand("swallowed", "diff", 'case "$1" in */A.headers) ln -sf /dev/null "${1%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec diff "$@"');
   for (const [name, base, head] of [["answers-swallowed-headers", serve("aaaa", "a"), serve("aaaa", "b")], ["answers-swallowed-bodies", serve("aaaa"), serve("bbbb")]]) {
     const r = answers(name, base, head, 60, { first });
     assert.equal(r.status, 1, `${name}: ${r.said}`);
@@ -824,11 +832,56 @@ test("the answers check on real servers: a diff.txt that is gone when diff and c
   const r = answers("answers-unlinked", serve("aaaa"), serve("aaaa"), 60, { first });
   assert.equal(r.status, 1, r.said);
   assert.ok(r.said.includes("answers/diff.txt is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence") && !r.said.includes("answers: same"), r.said);
-  // The same stand-in on two answers that differ: cmp's difference is written to diff.txt afresh,
-  // and with the headers alike it is the whole of it, so the check fails only on the difference.
+  // The same stand-in on two answers that differ: a diff.txt that is gone when cmp's difference is
+  // to be added to it is missing evidence too, not a file for that line to begin afresh.
   const two = answers("answers-unlinked-two", serve("aaaa"), serve("bbbb"), 60, { first });
   assert.equal(two.status, 1, two.said);
-  assert.ok(two.said.includes("turns: plain: A and B answer differently"), two.said);
+  assert.ok(two.said.includes("reported a difference that") && two.said.includes("answers/diff.txt does not hold: missing evidence") && !two.said.includes("answer differently"), two.said);
+});
+
+test("the answers check on real servers: a diff.txt linked to the expected difference fails it, and the expected difference is left as it was", LINUX, () => {
+  // Expected: the difference of aaaa and bbbb. The placement answers cccc, which it does not allow.
+  const expect = `bodies differ: 4 and 4 bytes, sha256 ${full("aaaa")} and ${full("bbbb")}\n`;
+  // A stand-in for cmp links diff.txt to the expected difference before turns.sh creates it: a
+  // write through the link would truncate that file, take the difference found, and then compare
+  // the file with itself.
+  const before = stand("prelinked", "cmp", 'case "$3" in */A-again.body) ln -s "$EXPECT" "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+  const r = answers("answers-prelinked", serve("aaaa"), serve("cccc"), 60, { expect, first: before });
+  assert.equal(readFileSync(r.expected, "utf8"), expect, "the expected difference was written through the link");
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("answers/diff.txt cannot be written as a new file: something is there before the check made it") && !r.said.includes("differ only as"), r.said);
+  // A stand-in for cmp puts a link to the expected difference in place of diff.txt after diff
+  // wrote it, before the bodies line is added: that line goes through no link.
+  const later = stand("relinked", "cmp", 'case "$3" in */B.body) rm "${3%/*}/diff.txt" && ln -s "$EXPECT" "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+  const l = answers("answers-relinked", serve("aaaa"), serve("cccc"), 60, { expect, first: later });
+  assert.equal(readFileSync(l.expected, "utf8"), expect, "the bodies line was added through the link to the expected difference");
+  assert.equal(l.status, 1, l.said);
+  assert.ok(l.said.includes("answers/diff.txt does not hold: missing evidence") && l.said.includes("or a link)") && !l.said.includes("differ only as"), l.said);
+});
+
+test("the answers check on real servers: no request goes through a proxy of the environment's, so one that answers everything cannot stand in for the servers", LINUX, async () => {
+  // A proxy that answers every request 200 and notes it, ending by itself 20 s after it starts;
+  // the test waits for that rather than signal it.
+  const dir = join(tmp, "proxy");
+  mkdirSync(dir, { recursive: true });
+  const script = `const fs = require("node:fs"), at = (f) => require("node:path").join(process.argv[1], f);
+setTimeout(() => process.exit(0), 20000);
+const s = require("node:http").createServer((q, r) => { fs.appendFileSync(at("proxied"), q.url + "\\n"); r.end("proxy"); });
+s.listen(0, "127.0.0.1", () => fs.writeFileSync(at("port"), String(s.address().port)));`;
+  const child = spawn(process.execPath, ["-e", script, dir], { stdio: "ignore" });
+  const ended = new Promise((done) => child.on("exit", (code, signal) => done({ code, signal })));
+  let port = null;
+  for (let i = 0; i < 200 && port === null; i++) { try { port = Number(readFileSync(join(dir, "port"), "utf8")); } catch { await new Promise((done) => setTimeout(done, 25)); } }
+  assert.ok(port, "the stand-in proxy never listened");
+  const url = `http://127.0.0.1:${port}`, env = { http_proxy: url, HTTP_PROXY: url, ALL_PROXY: url, all_proxy: url, NO_PROXY: "", no_proxy: "" };
+  const r = answers("answers-proxied", serve("aaaa"), serve("aaaa"), 60, { env });
+  const proxied = existsSync(join(dir, "proxied")) ? readFileSync(join(dir, "proxied"), "utf8") : "";
+  const end = await Promise.race([ended, new Promise((done) => setTimeout(() => done(null), 25000))]);
+  if (end === null) child.kill("SIGKILL");
+  assert.notEqual(end, null, "the stand-in proxy was still running past its own 20 s bound");
+  assert.equal(proxied, "", "requests went to the proxy");
+  assert.equal(r.status, 0, r.said);
+  assert.ok(r.said.includes("answers: same"), r.said);
 });
 
 test("the answers check on real servers: a diff that cannot compare (status 2) fails it, and does not read as a difference or the same answers", LINUX, () => {
