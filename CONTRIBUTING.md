@@ -610,11 +610,16 @@ establish a general ranking.
       repeat per invocation and a fresh round name each time, tags each build in turn with the
       image name that script expects, and runs, beside the change's pairs and in the same run, an
       A/A of the count's own: the base's image against itself under the same two names. Until a
-      run's own A/A resolves, the count holds and clears nothing: it resolves when both of its
-      bounds, as recorded and with its labels swapped, less +1%, are inside the default band
-      (below), and where it does not, or has no bound, the change's reading on that target is
-      "not decided: the count's A/A does not resolve" (or "has no bound"), read as one inside the
-      band is, whatever the change's own bound. The A/A doubles a run's time. Its page
+      run's own A/A resolves, the count neither holds nor clears. The A/A resolves when both of
+      its bounds, as recorded and with its labels swapped, less +1%, are inside the default band
+      (below). Where the A/A is complete, with both bounds, and does not resolve, the change's
+      reading on that target is "not decided", read as one inside the band is, whatever the
+      change's own bound. This changes what passes: a miss whose run's A/A does not resolve no
+      longer holds the pull request by itself, and is reported as not decided. Where the A/A has
+      no bound (an invocation that failed, too few pairs), the count failed, as one whose change
+      has no bound has: it returns to the maintainer and does not pass until the maintainer
+      decides. A plan declared before this rule was on `main` is read by the rule as it then
+      stood. The A/A doubles a run's time. Its page
       ([The catalog count and its A/A](bench/fullstack/README.md#the-catalog-count-and-its-aa))
       says why: the count read `json` a miss for an image against itself
       ([#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)).
@@ -786,15 +791,18 @@ establish a general ranking.
       prints it when the plan is declared, beside its own A/A's two bounds; a count an earlier
       plan of the pull request declared and took is this plan's too and is not taken again.
       Where the count's own A/A resolves, outside the band binds for the margin, as above: a
-      distance above it is a miss, and one below it meets the margin. Where it does not resolve
-      or has no bound, the count is not decided, holds and clears nothing, and is read as one
-      inside the band is. Inside is reported as "inside the default band: not decided" and, for
-      these two workloads under such a plan, does not keep the pull request from passing. No win
-      is claimed from either count. A count is not taken again for its result, and one that fails
-      (a failed request, a counter under 100%, too few pairs, in the change's pairs or its A/A's)
+      distance above it is a miss, and one below it meets the margin. Where the A/A has both
+      bounds and does not resolve, the count is not decided: it holds and clears nothing, and is
+      read as one inside the band is, so a miss there does not by itself keep the pull request
+      from passing. Where the A/A has no bound, the count failed, as below. Inside is reported as
+      "inside the default band: not decided" and, for these two workloads under such a plan, does
+      not keep the pull request from passing. No win is claimed from either count. A count is not
+      taken again for its result, and one that fails (a failed request or invocation, a counter
+      under 100%, too few pairs, in the change's pairs or its A/A's, so that either has no bound)
       returns to the maintainer and does not pass until the maintainer decides; the author runs
       nothing again. A plan declared before this case was on
-      `main` is read by the rule as it then stood (the Choice names four exceptions).
+      `main` is read by the rule as it then stood (the Choice names four exceptions), and one
+      declared before the count had its own A/A by the rule as it stood then, without one.
       A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements

@@ -10005,22 +10005,36 @@ rules something out.
     names the change uses, pair for pair beside the change's pairs, read as recorded and with its
     labels swapped, as a placement run's A/A is. It resolves when both of its bounds, less +1%,
     are inside the default band, the test a change's count is read by; until then the count
-    holds and clears nothing, outside the band or in, and is read as one inside the band is. That
+    neither holds nor clears. An A/A that is complete, with both bounds, and does not resolve
+    leaves the change "not decided", outside the band or in, read as one inside the band is.
+    That changes what passes: before it, a count above the band held its pull request; now a miss
+    whose run's A/A does not resolve no longer holds by itself, and is reported as not decided,
+    since that run did not show it could tell a change from nothing. An A/A with no bound (an
+    invocation that failed, too few pairs) is a failed count, as a change with no bound is: it
+    returns to the maintainer and does not pass until the maintainer decides, since a run that
+    did not take its own A/A has not shown what it can read. A plan declared before this rule
+    was on `main` is read by the rule as it then stood. That
     asks no more of the A/A than to read nothing for nothing where the change is read, so an A/A
     that resolves near an end of the band leaves a change just past that end decided by a
     margin its own noise could reach (Stands on, bet). It doubles a run's time, 808 invocations
     for both targets where the change's are 404. What spreads the count's pairs on that host is
-    not known: each invocation's cycles a request were a draw of their own, from about one to
-    1.8 times the least, with the same instructions, consecutive invocations uncorrelated, and
-    nothing in the count or its kit that differs by a side's name (the reasons and what one run
-    would tell apart are in [bench/fullstack](../bench/fullstack/README.md#the-catalog-count-and-its-aa);
+    not known. One image's 200 recorded A/A values of a target ran up to 1.78 (`json`) and 1.68
+    (`page`) times their least, with user instructions a request within 0.8% as the kit's
+    reports posted them (kernel work is not ruled out), and nothing in the count or its kit
+    differs by a side's name. Swapping each recorded A/A pair's labels at random (100,000 seeded
+    draws) and reading each draw by this rule, 49% of `json`'s draws and 20% of `page`'s do not
+    resolve: that host did not reliably resolve the band (the method, the other statistics and
+    what one run would locate are in [bench/fullstack](../bench/fullstack/README.md#the-catalog-count-and-its-aa);
     [#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)
     asks for the cause).
 
     The limit of that case: the catalog's image is never read across placements. A cost that
     only that image shows, or that it shows more of than the workload named for the target
     does, and that leaves the count's distance inside the band (for the margin, a bound up to
-    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). The
+    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). A cost
+    whose miss is not decided because its run's own A/A did not resolve goes undetected too: the
+    count reads it as one inside the band, however far above the band its bound is, and the
+    change passes with it. The
     case is no wider than its words: the two targets alone; the default band, no spread being
     recorded for that image; and a target for which the plan names a probe workload read across
     placements. A change to code that only the catalog's image runs has no such workload until
@@ -11049,7 +11063,8 @@ rules something out.
     and its count of the base's image against itself, read from the kit's reports as posted
     ([the A/A](https://github.com/corten-run/corten/pull/2066#issuecomment-7193965628),
     [the change](https://github.com/corten-run/corten/pull/2066#issuecomment-7187087634)), their
-    pairs worked again from the posted rows, and `count.mjs` and that kit's `run.sh` (tag
+    pairs worked again from the posted rows (the label swaps by the two-direction rule, 100,000
+    draws of a seeded generator), and `count.mjs` and that kit's `run.sh` (tag
     `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,

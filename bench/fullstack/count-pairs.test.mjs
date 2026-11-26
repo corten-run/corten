@@ -1,17 +1,65 @@
 // The catalog count's pairs with its own A/A (count-pairs.mjs): its order, its validity checks, the
 // reading that holds or clears a change only where its A/A resolves the default band, and the
-// runner, with a stand-in for Docker and count.mjs.
+// runner, with a stand-in for Docker and count.mjs: its ledger, its locks and its failure paths.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { BAND, compare, inside, invalid, MARGIN, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
+import { BAND, compare, complete, COUNTS, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
 
 /** n recorded pairs whose changes are spread evenly from lo to hi. */
 const spread = (lo, hi, n = 100) => Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
 const pairsOf = (changes) => changes.map((c, i) => ({ pair: i + 1, base: 100000, head: 100000 * (1 + c) }));
 const of = (lo, hi) => compare(pairsOf(spread(lo, hi)));
+const running = Object.fromEntries(Object.values(COUNTS).map((e) => [e, 100]));
+const goodRow = (over = {}) => ({ requests: 5000, failed: 0, userPerRequest: 75000, kernelPerRequest: 26000, userCyclesPerRequest: 100000, kernelCyclesPerRequest: 60000, userL1iMissesPerRequest: 5000, perfRunningPct: { ...running }, perfDiagnostics: {}, ...over });
+const notDecided = { verdict: "not decided: the count's A/A does not resolve the default band, so the change is read as one inside the band, neither held nor cleared", decided: false, holds: false, clears: false, failed: false };
+const aaFailed = "failed: the count's A/A has no bound, so the count does not pass until the maintainer decides";
+const changeFailed = "failed: the change's pairs have no bound, so the count does not pass until the maintainer decides";
+
+/**
+ * A stand-in host: Docker images by name and ID, the tag count.mjs reads, and count.mjs, which
+ * writes its round's records as the real one does. `row(round, image, target)` gives each count's row
+ * (cycles 6% more on the head's image by default), `rc` its exit status, and `tagRc` the tag's.
+ */
+function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCount = () => {} } = {}) {
+  const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
+  const state = { tagged: "", counted: [], tags: [], calls: 0 };
+  const exec = (cmd, args, options = {}) => {
+    state.calls += 1;
+    if (cmd === "docker" && args[0] === "image") {
+      const id = args[4] === "cb-corten" ? state.tagged : ids[args[4]] ?? "";
+      return { status: id ? 0 : 1, stdout: id };
+    }
+    if (cmd === "docker" && args[0] === "tag") {
+      state.tags.push(args[1]);
+      const status = tagRc(args[1]);
+      if (status === 0) state.tagged = args[1];
+      return { status };
+    }
+    const [, round, , , target] = args;
+    state.counted.push([round, state.tagged, options.env]);
+    onCount(round);
+    const dir = join(results, round);
+    mkdirSync(dir, { recursive: true });
+    const image = state.tagged;
+    const n = state.counted.length;
+    const r = goodRow({ userCyclesPerRequest: (image === "sha256:head" ? 106000 : 100000) * (1 + 0.001 * ((n % 5) - 2)), kernelCyclesPerRequest: 0, ...row(round, image, target) });
+    writeFileSync(join(dir, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [r] }));
+    writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
+    return { status: rc(round) };
+  };
+  return { ids, state, exec };
+}
+
+/** A temporary results directory and tag lock for one test. */
+function scratch() {
+  const results = mkdtempSync(join(tmpdir(), "count-pairs-"));
+  return { results, tagLock: join(results, "cb-corten.lock"), done: () => rmSync(results, { recursive: true, force: true }) };
+}
+const env = { BENCH_APP_CPUS: "1", BENCH_LOAD_CPUS: "4-7", PATH: "/usr/bin" };
+const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, tagLock: s.tagLock, exec: h.exec, env, now: () => 0, ...over });
 
 test("a run is four invocations a pair and target, the A/A the change with the base's image under both names", () => {
   const plan = schedule(100, ["page", "json"], "p1");
@@ -30,13 +78,20 @@ test("a run is four invocations a pair and target, the A/A the change with the b
   assert.equal(plan[0].name, "p1-page-ab-000-head");
 });
 
-test("an invocation is valid only with 5,000 requests, none failed, every count, its k6 checks and the side's image", () => {
-  const row = { requests: 5000, failed: 0, userPerRequest: 1, kernelPerRequest: 1, userCyclesPerRequest: 1, kernelCyclesPerRequest: 1, userL1iMissesPerRequest: 1 };
+test("an invocation is valid only with a clean tag, exit 0, 5,000 requests, none failed, every count a number at 100%, its k6 checks and the side's image", () => {
   const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { row: [row], summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", rc: 0 };
+  const ok = { row: [goodRow()], summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid(ok), []);
   assert.deepEqual(invalid({ ...ok, after: "sha256:b" }), ["the image counted was not the side's"]);
-  assert.deepEqual(invalid({ ...ok, row: [{ ...row, failed: 2, userCyclesPerRequest: null }] }), ["2 failed requests", "userCyclesPerRequest is null"]);
+  assert.deepEqual(invalid({ ...ok, rc: 1 }), ["count.mjs exited 1"]);
+  assert.deepEqual(invalid({ ...ok, rc: null, signal: "SIGINT" }), ["count.mjs was stopped by SIGINT"]);
+  assert.deepEqual(invalid({ ...ok, tagRc: 1 }), ["docker tag exited 1, so count.mjs was not run"]);
+  assert.deepEqual(invalid({ ...ok, fresh: false }), ["its output path existed before it ran, so count.mjs was not run"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ failed: 2, userCyclesPerRequest: null })] }), ["2 failed requests", "userCyclesPerRequest is null, not a number"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: "100000" })] }), ["userCyclesPerRequest is \"100000\", not a number"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPerRequest: Infinity })] }), ["kernelPerRequest is Infinity, not a number"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: { ...running, "cycles:k": 88 } })] }), ["perf ran cycles:k 88% of its enabled time, not 100%"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: undefined })] }), Object.values(COUNTS).map((e) => `perf's running percentage for ${e} is not recorded`));
   assert.deepEqual(invalid({ ...ok, row: { failed: "never answered" } }), ["count.mjs recorded failed: never answered"]);
   assert.deepEqual(invalid({ ...ok, summary: { metrics: { checks: { passes: 4999, fails: 1 } } } }), ["1 failed status checks", "4999 passed status checks, not 5000"]);
   assert.deepEqual(invalid({ ...ok, interrupted: true }), ["started and never ended; not run again"]);
@@ -46,16 +101,15 @@ test("a change is read by the default band where its A/A's two bounds less +1% a
   const aa = of(-0.02, 0.02);
   assert.equal(resolution(aa), "resolved");
   assert.ok(inside(/** @type {number} */ (aa.bound)) && inside(/** @type {number} */ (aa.swappedBound)));
-  assert.deepEqual(reading(of(0.04, 0.08), aa), { verdict: "a miss", decided: true, holds: true, clears: false });
-  assert.deepEqual(reading(of(-0.08, -0.05), aa), { verdict: "meets +1%", decided: true, holds: false, clears: true });
-  assert.deepEqual(reading(of(-0.01, 0.03), aa), { verdict: "inside the default band: not decided", decided: false, holds: false, clears: false });
+  assert.deepEqual(reading(of(0.04, 0.08), aa), { verdict: "a miss", decided: true, holds: true, clears: false, failed: false });
+  assert.deepEqual(reading(of(-0.08, -0.05), aa), { verdict: "meets +1%", decided: true, holds: false, clears: true, failed: false });
+  assert.deepEqual(reading(of(-0.01, 0.03), aa), { verdict: "inside the default band: not decided", decided: false, holds: false, clears: false, failed: false });
   // The band's ends are inside.
   assert.ok(inside(BAND.high + MARGIN - 1e-12) && inside(BAND.low + MARGIN + 1e-12));
   assert.ok(!inside(BAND.high + MARGIN + 1e-9) && !inside(BAND.low + MARGIN - 1e-9));
 });
 
-test("where the A/A reads outside the band, as recorded or swapped, above or below, the change is neither held nor cleared", () => {
-  const notDecided = { verdict: "not decided: the count's A/A does not resolve the default band, so it neither holds nor clears", decided: false, holds: false, clears: false };
+test("where the A/A has both bounds and reads outside the band, as recorded or swapped, above or below, the change is not decided, read as inside, and not failed", () => {
   const above = of(0.05, 0.15), below = of(-0.08, -0.04);
   // Recorded inside, swapped outside: 42 pairs read -10% and 58 read 0 to +1%.
   const skewed = compare(pairsOf([...Array(42).fill(-0.1), ...spread(0, 0.01, 58)]));
@@ -66,14 +120,16 @@ test("where the A/A reads outside the band, as recorded or swapped, above or bel
   }
 });
 
-test("an A/A or a change with a pair not valid has no bound and decides nothing", () => {
+test("an A/A or a change with a pair not valid, or too few pairs, has no bound: the count failed, and does not pass until the maintainer decides", () => {
   const broken = pairsOf(spread(-0.02, 0.02)).map((p, i) => (i === 7 ? { ...p, head: null } : p));
   const aa = compare(broken);
   assert.equal(aa.bound, null);
   assert.equal(resolution(aa), "no bound");
-  assert.equal(reading(of(0.04, 0.08), aa).verdict, "not decided: the count's A/A has no bound, so it neither holds nor clears");
-  assert.equal(reading(compare(broken), of(-0.02, 0.02)).verdict, "no bound: does not pass");
+  assert.deepEqual(reading(of(0.04, 0.08), aa), { verdict: aaFailed, decided: false, holds: false, clears: false, failed: true });
+  assert.deepEqual(reading(compare(broken), of(-0.02, 0.02)), { verdict: changeFailed, decided: false, holds: false, clears: false, failed: true });
   assert.equal(resolution(compare(pairsOf(spread(-0.02, 0.02, 4)))), "no bound");
+  // A string where a count should be is not a value.
+  assert.equal(compare([{ pair: 1, base: "100000", head: 100000 }, ...pairsOf(spread(-0.02, 0.02, 9))]).bound, null);
 });
 
 // User plus kernel cycles a request of each recorded pair, [the side named base, the side named
@@ -96,89 +152,223 @@ test("on #2066's counts json's A/A does not resolve, so its miss is not decided,
   near(aa.page.bound, 0.013416); near(aa.page.swappedBound, 0.027367);
   near(change.json.bound, 0.072818); near(change.page.bound, 0.011783);
   assert.equal(resolution(aa.json), "not resolved");
-  assert.equal(reading(change.json, aa.json).holds, false);
-  assert.equal(reading(change.json, aa.json).decided, false);
+  assert.deepEqual(reading(change.json, aa.json), notDecided);
   assert.equal(resolution(aa.page), "resolved");
   assert.equal(reading(change.page, aa.page).verdict, "inside the default band: not decided");
 });
 
-test("the runner tags each side's image before its count, runs each invocation once and reads the change against its own A/A", () => {
-  const results = mkdtempSync(join(tmpdir(), "count-pairs-"));
+test("the runner pins each image's ID, tags by it, runs each invocation once and reads the change against its own A/A", async () => {
+  const s = scratch();
   try {
-    const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
-    let tagged = "", counted = [];
-    // The head's image costs 6% more cycles; turns alternate a little around it.
-    const exec = (cmd, args) => {
-      if (cmd === "docker" && args[0] === "image") return { status: 0, stdout: args[4] === "cb-corten" ? ids[tagged] ?? "" : ids[args[4]] ?? "" };
-      if (cmd === "docker" && args[0] === "tag") { tagged = args[1]; return { status: 0 }; }
-      const [, round, , , target] = args;
-      counted.push([round, tagged]);
-      const cyclesU = (tagged === "cb-corten-head" ? 106000 : 100000) * (1 + 0.001 * ((counted.length % 5) - 2));
-      const dir = join(results, round);
-      mkdirSync(dir, { recursive: true });
-      const row = { requests: 5000, failed: 0, userPerRequest: 75000, kernelPerRequest: 26000, userCyclesPerRequest: cyclesU, kernelCyclesPerRequest: 0, userL1iMissesPerRequest: 5000 };
-      writeFileSync(join(dir, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [row] }));
-      writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
-      return { status: 0 };
-    };
-    const o = { prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results, exec, now: () => 0 };
-    const first = runPairs(o);
-    assert.equal(counted.length, 7 * 4);
-    for (const [round, image] of counted) assert.equal(image, round.includes("-ab-") && round.endsWith("-head") ? "cb-corten-head" : "cb-corten-base", round);
+    const h = host(s.results);
+    const first = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4);
+    // Tagged by the pinned ID, never by the image's name.
+    assert.ok(h.state.tags.every((t) => t === "sha256:base" || t === "sha256:head"));
+    for (const [round, image] of h.state.counted) assert.equal(image, round.includes("-ab-") && round.endsWith("-head") ? "sha256:head" : "sha256:base", round);
+    // count.mjs is given the run's environment.
+    assert.ok(h.state.counted.every(([, , e]) => e === env));
     const json = first.targets.json;
     assert.equal(json.change.n, 6);
     assert.ok(json.change.bound > 0.05 && json.aa.bound < 0.01);
     // Six pairs give a 95% rank, the 6th: P(Binomial(6, 1/2) >= 6) = 1/64.
     assert.equal(json.change.rank, 6);
     assert.equal(json.reading.verdict, "a miss");
+    assert.ok(complete(first.targets));
     assert.match(first.md, /## `json`/);
-    const report = JSON.parse(readFileSync(join(results, "t1", "report.json"), "utf8"));
+    const report = JSON.parse(readFileSync(join(s.results, "t1", "report.json"), "utf8"));
     assert.equal(report.targets.json.aa.n, 6);
+    const ledger = JSON.parse(readFileSync(join(s.results, "t1", "run.json"), "utf8"));
+    assert.deepEqual(ledger.ids, { base: "sha256:base", head: "sha256:head" });
+    assert.deepEqual([ledger.pairs, ledger.targets, ledger.env.BENCH_APP_CPUS, ledger.env.BENCH_LOAD_CPUS, ledger.env.BENCH_TIER, ledger.count.args], [6, ["json"], "1", "4-7", null, ["<round>", "1", "corten", "<target>"]]);
+    assert.equal(ledger.schedule.length, 7 * 4);
+    // Both locks are gone once it ends.
+    assert.ok(!existsSync(join(s.results, "t1", "run.lock")) && !existsSync(s.tagLock));
     // Run again, nothing is counted again.
-    runPairs(o);
-    assert.equal(counted.length, 7 * 4);
+    await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4);
   } finally {
-    rmSync(results, { recursive: true, force: true });
+    s.done();
   }
 });
 
-test("an invocation started and never ended is not run again and leaves its comparison with no bound", () => {
-  const results = mkdtempSync(join(tmpdir(), "count-pairs-"));
+test("the report keeps the user and kernel cycle split, kernel instructions and user L1 instruction-cache misses of each side, and names each failure's comparison, pair and side", async () => {
+  const s = scratch();
   try {
-    const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
-    let tagged = "", counted = 0;
-    const exec = (cmd, args) => {
-      if (cmd === "docker" && args[0] === "image") return { status: 0, stdout: args[4] === "cb-corten" ? ids[tagged] ?? "" : ids[args[4]] ?? "" };
-      if (cmd === "docker" && args[0] === "tag") { tagged = args[1]; return { status: 0 }; }
-      counted += 1;
-      const [, round, , , target] = args;
-      mkdirSync(join(results, round), { recursive: true });
-      const row = { requests: 5000, failed: 0, userPerRequest: 1, kernelPerRequest: 1, userCyclesPerRequest: 100000, kernelCyclesPerRequest: 1, userL1iMissesPerRequest: 1 };
-      writeFileSync(join(results, round, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [row] }));
-      writeFileSync(join(results, round, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
-      return { status: 0 };
+    const h = host(s.results, { row: (round) => ({ kernelCyclesPerRequest: 54000, kernelPerRequest: round.endsWith("-head") ? 26500 : 26000, userL1iMissesPerRequest: 4100 }), rc: (round) => (round === "t1-json-aa-003-head" ? 1 : 0) });
+    const { md, targets } = await runPairs(options(s, h));
+    const d = targets.json.diagnostics;
+    assert.deepEqual(Object.keys(d.ab), Object.keys(COUNTS));
+    assert.equal(d.ab.kernelCyclesPerRequest.base, 54000);
+    assert.equal(d.ab.kernelPerRequest.head, 26500);
+    assert.ok(Math.abs(d.ab.kernelPerRequest.change - (26500 / 26000 - 1)) < 1e-12);
+    assert.equal(d.aa.userL1iMissesPerRequest.head, 4100);
+    for (const label of ["user cycles", "kernel cycles", "user instructions", "kernel instructions", "user L1i misses"]) assert.match(md, new RegExp(`\\| the change \\| ${label} \\|`));
+    assert.match(md, /- its A\/A, pair 3, side head: count\.mjs exited 1/);
+  } finally {
+    s.done();
+  }
+});
+
+test("a failed command or a record not to be trusted yields no bound: exit 1 with valid-looking output, a failed tag, a string cycle count, a counter at 88%", async () => {
+  const cases = {
+    "count.mjs exited 1": { rc: (round) => (round === "t1-json-ab-002-base" ? 1 : 0) },
+    "docker tag exited 1, so count.mjs was not run": { tagRc: (() => { let n = 0; return () => (++n === 9 ? 1 : 0); })() },
+    "userCyclesPerRequest is \"100000\", not a number": { row: (round) => (round === "t1-json-aa-004-base" ? { userCyclesPerRequest: "100000" } : {}) },
+    "perf ran cycles:u 88% of its enabled time, not 100%": { row: (round) => (round === "t1-json-ab-005-head" ? { perfRunningPct: { ...running, "cycles:u": 88 } } : {}) },
+  };
+  for (const [why, how] of Object.entries(cases)) {
+    const s = scratch();
+    try {
+      const h = host(s.results, how);
+      const { targets } = await runPairs(options(s, h));
+      const json = targets.json;
+      assert.ok(json.change.bound == null || json.aa.bound == null, why);
+      assert.equal(json.reading.failed, true, why);
+      assert.equal(json.reading.holds || json.reading.clears, false, why);
+      assert.ok(!complete(targets), why);
+      assert.ok(Object.values(json.pairs).flat().some((p) => p.why.some((w) => w.endsWith(why))), why);
+    } finally {
+      s.done();
+    }
+  }
+});
+
+test("an output path that exists before its invocation runs is not counted into, and leaves its comparison with no bound", async () => {
+  const s = scratch();
+  try {
+    // The run refuses to start where any of its output paths exists.
+    mkdirSync(join(s.results, "t1-json-aa-002-base"), { recursive: true });
+    const h0 = host(s.results);
+    await assert.rejects(runPairs(options(s, h0)), /output paths exist already/);
+    assert.equal(h0.state.counted.length, 0);
+    rmSync(join(s.results, "t1-json-aa-002-base"), { recursive: true });
+    // Once it is going, a path made by something else before its invocation is skipped, not merged into.
+    rmSync(join(s.results, "t1"), { recursive: true, force: true });
+    const reused = "t1-json-ab-004-head";
+    const made = () => {
+      mkdirSync(join(s.results, reused), { recursive: true });
+      writeFileSync(join(s.results, reused, "instructions.json"), JSON.stringify({ "corten/json": [goodRow()] }));
     };
-    mkdirSync(join(results, "t2"), { recursive: true });
-    const name = schedule(100, ["page"], "t2")[12].name;
-    appendFileSync(join(results, "t2", "invocations.jsonl"), JSON.stringify({ name, want: "sha256:base", started: 0 }) + "\n");
-    const { targets } = runPairs({ prefix: "t2", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 100, targets: ["page"], results, exec, now: () => 0 });
-    assert.equal(counted, 101 * 4 - 1);
+    const h = host(s.results, { onCount: (round) => { if (round === "t1-json-ab-002-base") made(); } });
+    const { targets } = await runPairs(options(s, h));
+    assert.ok(!h.state.counted.some(([round]) => round === reused));
+    assert.equal(targets.json.change.bound, null);
+    assert.equal(targets.json.reading.verdict, changeFailed);
+    assert.ok(targets.json.pairs.ab.find((p) => p.pair === 4).why.includes("the change, pair 4, side head: its output path existed before it ran, so count.mjs was not run"));
+  } finally {
+    s.done();
+  }
+});
+
+test("an invocation started and never ended is not run again and leaves its comparison with no bound: a failed count", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    // A first run stopped after 12 invocations, the 13th started and never ended.
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { last: 100, targets: ["page"], stop: () => ++n > 12 })), /stopped before/);
+    const name = schedule(100, ["page"], "t1")[12].name;
+    appendFileSync(join(s.results, "t1", "invocations.jsonl"), JSON.stringify({ name, want: "sha256:base", started: 0 }) + "\n");
+    const { targets } = await runPairs(options(s, h, { last: 100, targets: ["page"] }));
+    assert.equal(h.state.counted.length, 101 * 4 - 1);
     // The pair it falls in is pair 3, which starts with the A/A's side named base.
     assert.match(name, /-aa-003-base$/);
     assert.equal(targets.page.aa.bound, null);
     assert.notEqual(targets.page.change.bound, null);
-    assert.equal(targets.page.reading.verdict, "not decided: the count's A/A has no bound, so it neither holds nor clears");
+    assert.equal(targets.page.reading.verdict, aaFailed);
   } finally {
-    rmSync(results, { recursive: true, force: true });
+    s.done();
   }
 });
 
-test("the runner refuses one image for both sides, since the A/A is the run's own", () => {
-  const results = mkdtempSync(join(tmpdir(), "count-pairs-"));
+test("a run going on refuses another experiment's ledger: other images, pairs, targets or environment", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 3 })), /stopped before/);
+    const before = h.state.counted.length;
+    const refused = [
+      [{ last: 8 }, /pairs, schedule differ/],
+      [{ targets: ["json", "page"] }, /targets, schedule differ/],
+      [{ env: { ...env, BENCH_APP_CPUS: "2" } }, /env differ/],
+      [{ images: { base: "cb-corten-base", head: "cb-corten-base" } }, /images, the images' IDs now/],
+    ];
+    for (const [over, why] of refused) await assert.rejects(runPairs(options(s, h, over)), why);
+    // A tag moved to another image since the run started.
+    h.ids["cb-corten-head"] = "sha256:other";
+    await assert.rejects(runPairs(options(s, h)), /the images' IDs now \(cb-corten-base sha256:base, cb-corten-head sha256:other\)/);
+    assert.equal(h.state.counted.length, before);
+    h.ids["cb-corten-head"] = "sha256:head";
+    // A ledger with invocations and no settings is not gone on with either.
+    rmSync(join(s.results, "t1", "run.json"));
+    await assert.rejects(runPairs(options(s, h)), /has no run\.json beside it/);
+    assert.equal(h.state.counted.length, before);
+  } finally {
+    s.done();
+  }
+});
+
+test("two runners cannot share a ledger or the cb-corten tag, and a lock is removed only by the runner that made it", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    const other = lock(s.tagLock, "another run's ledger");
+    await assert.rejects(runPairs(options(s, h)), /is locked by process \d+ on .*, for another run's ledger .*remove .* by hand/);
+    assert.equal(h.state.calls, 0);
+    // Its lock stays, and the ledger lock it took is released.
+    assert.ok(existsSync(s.tagLock));
+    assert.ok(!existsSync(join(s.results, "t1", "run.lock")));
+    other();
+    assert.ok(!existsSync(s.tagLock));
+    mkdirSync(join(s.results, "t1"), { recursive: true });
+    writeFileSync(join(s.results, "t1", "run.lock"), "left by a runner that is gone\n");
+    await assert.rejects(runPairs(options(s, h)), /t1.run\.lock\)\. .*stale/);
+    assert.equal(readFileSync(join(s.results, "t1", "run.lock"), "utf8"), "left by a runner that is gone\n");
+    assert.ok(!existsSync(s.tagLock));
+    // A release does not remove a lock someone else has put in its place.
+    const release = lock(s.tagLock, "mine");
+    writeFileSync(s.tagLock, JSON.stringify({ token: "theirs" }));
+    release();
+    assert.ok(existsSync(s.tagLock));
+  } finally {
+    s.done();
+  }
+});
+
+test("the options are checked before Docker: a pair count that is not a whole number or gives no 95% bound, no target, a target twice", async () => {
+  assert.equal(MIN_PAIRS, 5);
+  for (const text of ["abc", "1e2", "-3", "7.5", ""]) assert.ok(Number.isNaN(parsePairs(text)), text);
+  assert.equal(parsePairs("100"), 100);
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    for (const [over, why] of [[{ last: NaN }, /whole number/], [{ last: 4 }, /4 recorded pairs give no 95% bound: at least 5/], [{ targets: [] }, /no target/], [{ targets: ["json", "json"] }, /named twice/], [{ targets: ["feed"] }, /unknown target/], [{ prefix: "../x" }, /prefix/]]) {
+      assert.match(/** @type {string} */ (optionsError(options(s, h, over))), why);
+      await assert.rejects(runPairs(options(s, h, over)), why);
+    }
+    assert.equal(h.state.calls, 0);
+    assert.equal(optionsError(options(s, h, { last: 5 })), null);
+    // An empty reading is not a complete one.
+    assert.equal(complete({}), false);
+    assert.equal(complete(readRun([], new Map(), () => ({}))), false);
+  } finally {
+    s.done();
+  }
+});
+
+test("the runner refuses one image for both sides, since the A/A is the run's own", async () => {
+  const s = scratch();
   try {
     const exec = () => ({ status: 0, stdout: "sha256:same" });
-    assert.throws(() => runPairs({ prefix: "t3", images: { base: "a", head: "b" }, last: 2, targets: ["page"], results, exec }), /one image/);
+    await assert.rejects(runPairs({ prefix: "t3", images: { base: "a", head: "b" }, last: 5, targets: ["page"], results: s.results, tagLock: s.tagLock, exec }), /one image/);
   } finally {
-    rmSync(results, { recursive: true, force: true });
+    s.done();
   }
+});
+
+test("the report says the count failed where it has no bound, and not decided where its A/A does not resolve", () => {
+  const md = markdown({ json: { change: of(0.04, 0.08), aa: of(0.05, 0.15), resolution: "not resolved", reading: reading(of(0.04, 0.08), of(0.05, 0.15)), diagnostics: {}, pairs: {} } }, { prefix: "p", base: "b", head: "h" });
+  assert.match(md, /## `json`: not decided: the count's A\/A does not resolve the default band, so the change is read as one inside the band/);
 });
