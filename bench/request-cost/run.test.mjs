@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import * as compare from "./compare.mjs";
 import { counted } from "./probe.mjs";
 
 const kit = dirname(fileURLToPath(import.meta.url));
@@ -184,6 +185,22 @@ test("idle.mjs prints no figure when a connection's answer is not the case's", {
   assert.equal(run.status, 1);
   assert.match(run.stderr, /pipeline: not a 200: HTTP\/1\.1 404 Not Found/);
   assert.doesNotMatch(run.stdout, /bytes a connection/);
+});
+
+test("each kind of run compare.mjs asks for is one the kit takes, and compare.mjs reads its figure from what the kit prints", { skip }, async () => {
+  const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
+  const take = async (/** @type {string} */ file, /** @type {string[]} */ more = []) => {
+    const { script, options } = /** @type {ReturnType<typeof compare.readings>[number]} */ (plan[file]);
+    const run = await running(script, [...options, ...more]);
+    assert.equal(run.status, 0, `${file}: ${run.stderr}`);
+    return run.stdout;
+  };
+  const count = compare.counted(await take("count-get.txt"), "get");
+  assert.deepEqual([count?.median, count?.counts], [1001, [1001, 1001, 1001]]);
+  assert.match(String(count?.seconds), /^\d+\.\d$/);
+  assert.equal(compare.counted(await take("count-16-pipeline.txt"), "pipeline")?.median, 1001);
+  assert.deepEqual(compare.allocated(await take("allocations-get.txt"), "get"), { allocations: 16, frees: 0 });
+  for (const file of ["idle-request-1.txt", "idle-browser-1.txt", "idle-silent-1.txt"]) assert.equal(typeof compare.idled(await take(file, ["--connections", "40"])), "number", file);
 });
 
 test("an option that would give a figure of something else is refused before anything is started", () => {
