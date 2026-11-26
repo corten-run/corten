@@ -321,8 +321,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    written without its figures.
 2. Writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
-   `--json`, on base and then on head, a case a run: the nine cases' instructions, three counts
-   each, the four at a depth of 16, the nine cases' allocations, and the three idle readings
+   `--json`, on base and then on head, a case a run: the ten cases' instructions, three counts
+   each, the four at a depth of 16, the ten cases' allocations, and the three idle readings
    three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
    minutes have gone since the job's first step, which leaves six of the job's 30 for the
    table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
