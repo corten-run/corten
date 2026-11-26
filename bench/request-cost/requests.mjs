@@ -14,8 +14,10 @@ const BROWSER = [
 ];
 
 const get = (path, more = []) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, `Host: localhost:${port}`, ...more, "", ""].join("\r\n"), "latin1");
-const post = (path, type, body) => (port) =>
-  Buffer.from([`POST ${path} HTTP/1.1`, `Host: localhost:${port}`, `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
+const post = (path, type, body, absolute = false) => (port) => {
+  const origin = `http://localhost:${port}`;
+  return Buffer.from([`POST ${absolute ? origin + path : path} HTTP/1.1`, `Host: localhost:${port}`, ...(absolute ? [`Origin: ${origin}`] : []), `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
+};
 
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
@@ -30,6 +32,7 @@ export const cases = {
   // A staged route in an API: typed query parameters in, a short String out.
   get: { configuration: "api", request: get("/baseline11?a=1&b=2"), body: "3" },
   post: { configuration: "api", request: post("/baseline11?a=1&b=2", "text/plain", "20"), body: "23" },
+  "post-absolute": { configuration: "api", request: post("/baseline11?a=1&b=2", "text/plain", "20", true), body: "23" },
   // The same GET from a route that says `unstaged`, and the shortest unstaged answer.
   unstaged: { configuration: "api", request: get("/unstaged11?a=1&b=2"), body: "3" },
   pipeline: { configuration: "api", request: get("/pipeline"), body: "ok" },

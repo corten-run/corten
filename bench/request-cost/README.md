@@ -35,6 +35,7 @@ API and no pages, and `pages`, an app without an API. Both keep every `App` defa
 | --- | --- | --- | --- |
 | `get` | `api` | `GET /baseline11?a=1&b=2`: a staged route, typed query parameters in, a short `String` out | `3` |
 | `post` | `api` | `POST /baseline11?a=1&b=2` with a two-byte `text/plain` body | `23` |
+| `post-absolute` | `api` | `post` with an absolute-form target and a matching `Host` and `Origin`, no `Sec-Fetch-Site` | `23` |
 | `unstaged` | `api` | `GET /unstaged11?a=1&b=2`: the same answer from a route that says `unstaged` | `3` |
 | `pipeline` | `api` | `GET /pipeline`: an `unstaged` route | `ok` |
 | `text` | `pages` | `GET /text` | `ok` |
