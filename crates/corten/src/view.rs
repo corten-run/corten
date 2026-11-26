@@ -2083,9 +2083,9 @@ tuples!((A, B), (A, B, C), (A, B, C, D));
 
 /// The decimal digits of `n`, for every integer's `Render` and a message's integer argument.
 ///
-/// Always inlined: a page writes many integers, and as a call each one paid for the call and for
-/// saving and restoring registers, and the caller reloaded across it what it could have kept.
-/// Inlined, the caller's type also bounds `n`, so for a `u8` the compiler can drop the long path.
+/// Always inlined: a page writes many integers, and as a call each one cost the call, six
+/// registers saved and restored, and loads after it of what the caller had held in registers:
+/// the string's length and capacity, and the bytes of the markup it writes next.
 #[inline(always)]
 pub(crate) fn push_u64(mut n: u64, out: &mut String) {
     // Up to three digits, most of a page's counts and quantities: written with no buffer, a digit
