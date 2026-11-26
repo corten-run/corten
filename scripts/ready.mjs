@@ -68,7 +68,9 @@ export async function ready(base, { budget = 120_000, now = () => performance.no
   for (;;) {
     const left = remaining();
     if (left === 0) throw late();
-    const { status, whole, cause } = await ask(Math.min(5000, left));
+    const within = Math.min(5000, left);
+    const { status, whole, cause } = await ask(within);
+    const after = remaining();
     const outcome =
       whole || (status !== undefined && status !== 200 && status !== 503)
         ? `${status}`
@@ -76,9 +78,17 @@ export async function ready(base, { budget = 120_000, now = () => performance.no
           ? String(cause)
           : `${status}, then its body broke off (${cause})`;
     // Nothing that arrives once the budget is over is read as an answer, but it is named.
-    if (remaining() === 0) {
+    if (after === 0) {
       last = outcome;
       throw late();
+    }
+    // Nor once its attempt's time is over, however its abort was delayed: the attempt is asked again.
+    if (left - after >= within) {
+      last = `${outcome}, after its attempt's ${within / 1000} s`;
+      const pause = Math.min(250, remaining());
+      if (pause === 0) throw late();
+      await new Promise((r) => setTimeout(r, pause));
+      continue;
     }
     if (status !== undefined && status !== 200 && status !== 503) throw new Error(`${name} answered ${status}, not 200 or 503`);
     // An answer Node's HTTP parser refuses is the route's failure, not the app still starting.

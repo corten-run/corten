@@ -29,6 +29,11 @@ async function against(handle, { auth = "", ...options } = {}) {
 }
 const ok = (/** @type {http.ServerResponse} */ res) => res.writeHead(200).end("ok");
 const unavailable = (/** @type {http.ServerResponse} */ res) => res.writeHead(503).end("unavailable");
+/** A clock that moves `by` milliseconds ahead after `calls` readings. */
+const shifts = (/** @type {number} */ calls, /** @type {number} */ by) => {
+  let read = 0;
+  return () => performance.now() + (++read > calls ? by : 0);
+};
 /** A clock that jumps past any budget after `calls` readings. */
 const jumps = (/** @type {number} */ calls) => {
   let read = 0;
@@ -66,6 +71,10 @@ test("any other status ends the wait at its headers, a 421, 407 or 101 included"
   // run out of budget instead.
   const open = await against((_n, _q, s) => void s.writeHead(500, { "content-length": "10" }).write("x"), { budget: 3000 });
   assert.deepEqual(open, { outcome: "http://127.0.0.1:PORT/health/ready answered 500, not 200 or 503", requests: 1 });
+  // A body framed in a way that is not HTTP is refused too, unlike one cut short.
+  const framing = await against((n, q, s) => (n < 2 ? q.socket?.end("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nx\r\n") : ok(s)));
+  assert.equal(framing.requests, 1);
+  assert.match(framing.outcome, /answered what is not HTTP \(HPE_[A-Z_]+\)$/);
   // An answer that is not HTTP (here two lengths) is refused, not retried until a 200 comes.
   const malformed = await against((n, q, s) => (n < 2 ? q.socket?.end("HTTP/1.1 500 x\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nx") : ok(s)));
   assert.equal(malformed.requests, 1);
@@ -77,7 +86,8 @@ test("any other status ends the wait at its headers, a 421, 407 or 101 included"
 
 test("the budget ends the wait naming the last outcome, and nothing after it counts", async () => {
   const always = await against((_n, _q, s) => unavailable(s), { budget: 1234.75 });
-  assert.equal(always.outcome, "http://127.0.0.1:PORT/health/ready did not answer 200 within 1.23475 s (last: 503)");
+  // The last attempt may be a short one the end of the budget cut off.
+  assert.match(always.outcome, /^http:\/\/127\.0\.0\.1:PORT\/health\/ready did not answer 200 within 1\.23475 s \(last: (503|ABORT_ERR)\)$/);
   // The attempt that stalls is cancelled when the budget runs out, not at its own 5 s.
   const from = performance.now();
   const stalled = await against((n, _q, s) => (n < 2 ? unavailable(s) : s.writeHead(200, { "content-length": "10" }).write("o")), { budget: 1500 });
@@ -103,6 +113,13 @@ test("an attempt that hangs is given up after 5 s and the next one is made", asy
   assert.deepEqual(got, { outcome: "ready", requests: 2 });
   // The second request within the 7 s budget is the cap at work; the first attempt lasted its 5 s.
   assert.ok(took >= 4900, `ready after ${Math.round(took)} ms`);
+});
+
+test("an answer that comes after its attempt's 5 s is not read, and the attempt is asked again", async () => {
+  // The clock reads 5.1 s later from the read after the first answer, as if the loop had stalled
+  // past the attempt's 5 s before its abort ran.
+  const got = await against((n, _q, s) => (n < 2 ? s.writeHead(500).end("x") : ok(s)), { now: shifts(2, 5100) });
+  assert.deepEqual(got, { outcome: "ready", requests: 2 });
 });
 
 test("a refused connection is waited out until the app listens", async () => {
