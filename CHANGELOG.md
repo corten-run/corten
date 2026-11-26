@@ -9,7 +9,7 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 ## 0.3.0 (2026-11-25)
 
-Upgrading from 0.2.0: each of the 55 entries under
+Upgrading from 0.2.0: each of the 57 entries under
 [Breaking changes](https://github.com/corten-run/corten/blob/v0.3.0/CHANGELOG.md#breaking-changes)
 says what to change; those marked "debug builds only" fail an app's debug builds and its own tests,
 not its release build. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
@@ -124,8 +124,10 @@ builds against.
   this builder to its part closure: `|action| async move { action.patch(view) }`. The builder
   is `corten::Action`, not in the prelude, where a bare `Action` would clash with a post's
   address (`route::Action`) under glob imports.
-  `patch_or`, `invalid` and `invalid_with` keep their APIs; the plain-request debug guard still
-  covers explicit mode overrides and raw marked responses.
+  `patch_or`, `invalid` and `invalid_with` take the same arguments as before but gain a `Kind`
+  type parameter after `For`, so a call that names its types with a turbofish names one more: the
+  `HtmlResponse` `Kind` entry below gives each call. The plain-request debug guard still covers
+  explicit mode overrides and raw marked responses.
 
 - **Breaking:** `corten-cluster` checks feed keys at creation, write and lookup. Corten's rule is
   stricter than what the NATS broker accepts: it rejects names such as `a*b` and keys containing a
@@ -145,7 +147,7 @@ builds against.
   has a string literal argument. A `transparent` type that also said `into` compiled under 0.2.0;
   keep one of the two, as serde's derive requires.
 
-- **Breaking:** For tables using a copied kit `SortHeader` or a custom header with `rows::sort`, declare `let cell = refs();` in the table's component, replace `data-sort={value}` with `ref={cell.with(value)}` on the cell, and change that column's handler to `rows::sortByNumber(event, target, cell)` or `rows::sortByText(event, target, cell)`. Headers that sort by cell contents or on the server do not need to change. ComboBox search terms now use an internal typed ref; its Rust API is unchanged. The table kit entry below then adds the table's head after `target`, so the final call is `rows::sortByNumber(event, target, head, cell)` (`rows.js`: `event, link, head, cells`).
+- **Breaking:** A table sorted in the browser by a value its cells gave in `data-sort` (a copied kit `SortHeader` or a custom header calling `rows::sort`) gives it as a ref value instead: declare `let cell = refs();` in the table's component, replace `data-sort={value}` with `ref={cell.with(value)}` on the cell, and make that column's handler `rows::sortByNumber(event, target, head, cell)` or `rows::sortByText(event, target, head, cell)`. A column sorted in the browser by its cells' contents keeps `rows::sort`, now `rows::sort(event, target, head)`; every `rows::sort*` call takes the table's head after `target`, wired as the table kit entry below says. A table sorted only on the server (its header links followed, with no `rows::sort*` handler) needs no change for this entry. ComboBox search terms now use an internal typed ref; its Rust API is unchanged.
 
 - **Breaking:** `Types::components` now declares named `ToJson` handler arguments and their
   nested types, so they no longer need `Types::add`. TypeScript generation fails if a handler
@@ -187,6 +189,14 @@ builds against.
 - **Breaking:** Hand-written named schemas calling the old hidden `Generator::define` helper now use `Generator::define::<Self>(read, name, make)`, without a string identity argument. Schema names must be ASCII TypeScript identifiers without a dollar sign that can be referenced by name, so they also work as JSON Schema references and OpenAPI component keys. The derives check the shared name rules at compile time; TypeScript generation rejects `as` as a type alias name but keeps it as an interface name. Generate separate JSON Schema and TypeScript definitions for distinct Rust types whose paths print the same, including types from different versions of one dependency. Reject a JSDoc import during declaration generation if it names the wrong definition.
 
 - **Breaking:** The router no longer sets `Content-Length` on an answer the server writes it for. hyper writes the same line from the body's exact size, so a page, a file or JSON from Corten's server says the same length as before, and a request makes two allocations fewer. An answer Corten's server did not send (a test with `App::test()`, a request sent through `app.router()`, or an app's own loop that serves the router) no longer carries the header unless it answers a `HEAD` or its handler set it: read `answer.bytes().len()` or the body's `size_hint()`, and have a server that does not write the length from the body set the header. Three answers change on the wire, each to what HTTP asks: a `101`, `204` or `304` given a body with bytes no longer says its length, a `HEAD` no longer says `Content-Length: 0` for one of those (RFC 9110 8.6), and an answer whose handler set `Transfer-Encoding` over a body of known size is sent chunked, with no length in its `HEAD`, where the client got no answer because hyper refused to send the two headers together.
+
+- **Breaking:** Builds without `compress` no longer generate page ETags for `GET` requests that do not explicitly
+  accept a non-identity content coding, unless the request sends `If-None-Match`. In both builds,
+  eligible `HEAD` responses carry an ETag so a shared cache cannot freshen an untagged page based
+  on length alone. This matches what builds with `compress` already did for a `GET`, so enabling it
+  does not bring the tag back. A browser sends `Accept-Encoding` with a coding and still gets the
+  tag, and a revalidation still gets its `304`. A test or client that expects an `ETag` on a
+  plain `GET` sends `Accept-Encoding: gzip` or `If-None-Match`, or reads the tag from a `HEAD`.
 
 - **Breaking:** `corten build` refuses an argument it does not take. Before, it ignored every argument and built, so `corten build --release` or a misspelled flag passed as an ordinary build; a script that passes one now fails and says which.
   Drop the argument: `corten build` is already a release build, and it takes Cargo's `--features` (`-F`), `--all-features`, `--no-default-features`, `--locked`, `--package` (`-p`) and `--bin`, and `--profile-from` ([deploy guide](https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-guided-build)).
@@ -451,8 +461,8 @@ builds against.
 
 - **Breaking:** three kinds of markup a browser parses differently from how it is written no
   longer compile (an element in an element whose content is text, a `<plaintext>`, and an element
-  taken out of foreign content; HTML a browser rearranges inside HTML, such as a `<div>` in a
-  `<p>`, still compiles) where the markup shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
+  taken out of foreign content; a block in a paragraph and the other HTML nesting a browser closes
+  or discards are refused by the `html!` entry above) where the markup shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
   a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
   `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
   a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose first
@@ -660,9 +670,9 @@ builds against.
 
 - **Breaking:** A typed link no longer writes a path value that would open another page: `.` or `..`, which a
   browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
-  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
-  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
-  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
+  `public/../private/x` to `/files/private/x`), and an empty value as a whole segment (first,
+  last or, as the matchit entry above says, between two), before text in its segment, or as a whole
+  `{*rest}` value, where the router has no segment for it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
   slug `/posts`). A debug build panics when such a link is written, naming the route by its
   module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
   (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
@@ -670,8 +680,7 @@ builds against.
   Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
   filters on an event's message text or its line can disagree with that check either way: a
   refusal it drops still uses up the one line, and one it would log may never be logged).
-  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
-  value between two segments. A route path with a `.` or `..` segment, or that text after a
+  Values that only contain dots (`a.b`, `.hidden`) are written as before. A route path with a `.` or `..` segment, or that text after a
   parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
   or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
   top level is not checked for a dot segment in its `PATH`, and the values a hand-written
@@ -927,11 +936,6 @@ builds against.
 - Document that a mid-batch cluster relay disconnect or a delayed reload marker can reorder JetStream messages, and that Corten followers recover from sequence gaps and ignore already-applied updates.
 
 - Failed catalog process censuses now distinguish time before the sampling callback from time spent reading and retrying the census. The benchmark's one-second continuity limit is unchanged.
-
-- Builds without `compress` no longer generate page ETags for `GET` requests that do not explicitly
-  accept a non-identity content coding, unless the request sends `If-None-Match`. In both builds,
-  eligible `HEAD` responses carry an ETag so a shared cache cannot freshen an untagged page based
-  on length alone.
 
 - Keep `Failure` exhaustive so an app's error page notices new variants at compile time.
   Use `Failure::default_text()` for Corten's default title and message in your own layout.
