@@ -281,22 +281,26 @@ export function captureNativeCpuScope(info) {
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
 export function captureBrowserParticipant(id, executables = new Map(), pending) {
-  const capture = () => readBrowserParticipant(id, executables, pending);
-  const attempt = () => pending ? pending.transaction(capture) : capture();
   // A container's first process renames itself or execs its entrypoint just
   // after Docker reports it running. Only that identity churn on a container
   // Docker started within the continuity window is rechecked: the whole capture
   // is taken again, with no new attempt after a fixed budget. Success must bind the same
   // container start, PID and kernel start time; anything else stays a gap.
   const began = performance.now();
-  let bound;
+  let bound, failed;
   for (let attempts = 1; ; attempts++) {
+    // The budget bounds when an attempt may start, so recheck it after each pause.
+    if (failed && performance.now() - began >= startupRetryMs) throw failed;
+    // Bind identity before the executable transaction commits: a rejected
+    // capture must pin no executable.
+    const capture = () => {
+      const record = readBrowserParticipant(id, executables, pending);
+      if (bound) startupRecheck(record, bound, attempts);
+      return record;
+    };
     try {
-      const record = attempt();
-      if (bound) {
-        startupRecheck(record, bound, attempts);
-        startupRechecks.set(record, { ...bound.diagnostic, attempts });
-      }
+      const record = pending ? pending.transaction(capture) : capture();
+      if (bound) startupRechecks.set(record, { ...bound.diagnostic, attempts });
       return record;
     } catch (error) {
       const churn = error && typeof error === "object" ? startupChurn.get(error) : undefined;
@@ -305,7 +309,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
       if (bound) startupRecheck({ container: { state: { Running: true, Pid: churn.pid, StartedAt: churn.startedAt } },
         kernel: { stat: churn.stat } }, bound, attempts);
       else if (!justStarted(churn.startedAt)) throw error;
-      bound ??= churn;
+      bound ??= churn; failed = error;
       Atomics.wait(retryPause, 0, 0, 1);
     }
   }
@@ -317,8 +321,12 @@ function justStarted(startedAt) {
   // Docker's RFC 3339 UTC start time, truncated to milliseconds. Anything else is not corroboration.
   const match = typeof startedAt === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(startedAt);
   if (!match) return false;
-  const at = Date.parse(`${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}Z`), age = Date.now() - at;
-  return Number.isFinite(at) && age >= 0 && age <= startupWindowMs;
+  const at = Date.parse(`${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}Z`);
+  // Date.parse normalizes an impossible calendar date (February 29 of a common
+  // year becomes March 1); only a date that round-trips is evidence.
+  if (!Number.isFinite(at) || new Date(at).toISOString().slice(0, 19) !== match[1]) return false;
+  const age = Date.now() - at;
+  return age >= 0 && age <= startupWindowMs;
 }
 function startupRecheck(record, bound, attempts) {
   try {
