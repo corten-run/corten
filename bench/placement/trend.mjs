@@ -42,7 +42,8 @@
 //              each as README.md gives the commands: plan.mjs, build.sh, run.sh. After a part,
 //              every placement the part was resolved to have must show the two bodies the check
 //              kept, by their digests: turns.sh holds a placement of the change to the expected
-//              difference, whose bodies line has both bodies' lengths and SHA-256s, and this
+//              difference, which ends with a bodies line of the bodies' lengths and SHA-256s
+//              (one body's, when the headers alone differ), and this
 //              holds a pilot's or an A/A's placement, which has no expected difference, to the
 //              release's body on both sides
 //   row        each workload's reading from its gated part's report.json, kept as

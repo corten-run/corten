@@ -12,8 +12,9 @@
 #      header with a stated range must be within it in every answer.
 # Any difference stops: the placement is not the same program. Each check is stopped (and fails)
 # after the plan's placementSeconds; each of the two starts of the base is given 100 tries of a
-# readiness request bounded to a second, and is stopped however verify.sh ends. Every server is
-# started with an environment of PATH, HOME, PORT and BIN alone, kept in
+# readiness request bounded to a second, and is stopped however verify.sh ends: TERM, and KILL
+# if it is still running 5 s later, so a server that ignores TERM holds verify.sh no longer.
+# Every server is started with an environment of PATH, HOME, PORT and BIN alone, kept in
 # <out dir>/server-env.txt. Writes <out dir>/<side>-p<pad>/ and
 # <out dir>/verdicts.txt, one line a binary: "<binary> as <side>: answers: same; ...".
 set -eu
@@ -23,8 +24,23 @@ out=$2; B=$WORK/bin; PL=$WORK/plan
 export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN
 export HEADERS="$PL/headers.txt" SCRIPT="$PL/request.lua" MASK="$PL/mask.sed" MASK_JSON="$PL/mask.json" WARMUP=0 EXPECT=
 mkdir -p "$out"; : >"$out/verdicts.txt"
+# Whether a process this shell started is running: there and not yet a zombie (dash reaps a
+# child only when it waits for it, and a zombie answers kill -0).
+alive() { st=$(sed -n 's/^.*) \([A-Za-z]\) .*$/\1/p' "/proc/$1/stat" 2>/dev/null) && [ -n "$st" ] && [ "$st" != Z ] && [ "$st" != X ]; }
+# Stops the server pid names, if any: TERM, then KILL if it is still running 5 s later, and
+# reaps it. pid is cleared before the wait, by when it was signalled for the last time, so
+# neither a later stop nor the EXIT trap signals a number that may since name another process.
 pid=
-trap '[ -z "$pid" ] || { kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true; }' EXIT
+halt() {
+    [ -n "$pid" ] || return 0
+    kill "$pid" 2>/dev/null || true
+    n=0
+    while [ $n -lt 50 ] && alive "$pid"; do sleep 0.1; n=$((n + 1)); done
+    ! alive "$pid" || kill -KILL "$pid" 2>/dev/null || true
+    stopping=$pid; pid=
+    wait "$stopping" 2>/dev/null || true
+}
+trap halt EXIT
 trap 'exit 1' HUP INT PIPE TERM
 env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" env | LC_ALL=C sort >"$out/server-env.txt"
 for s in 1 2; do
@@ -37,7 +53,7 @@ for s in 1 2; do
     set --
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
     curl -sS --max-time 10 -D "$out/start-$s.raw-headers" -o /dev/null "$@" "http://127.0.0.1:18083$REQ_PATH" </dev/null
-    kill $pid; wait $pid 2>/dev/null || true; pid=
+    halt
 done
 node "$KIT/mask.mjs" starts "$MASK_JSON" "$out/start-1.raw-headers" "$out/start-2.raw-headers" || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }
 echo "two starts of base: every header the plan masks differs between them ($(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).map((m) => m.header).join(", ") || "none masked")' "$MASK_JSON"))" | tee "$out/starts.txt"

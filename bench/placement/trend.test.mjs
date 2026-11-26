@@ -268,7 +268,7 @@ test("the pull requests a range of main merged: git log's records read whole or 
 test("past the threshold: a draft of an issue, with the row, the pull requests and what to add to them", () => {
   const readings = [reading(0.02, "plain", { report: report("plain", 0.021, 0.03), expect: OF() }), READ[1]], line = row(at(readings, { differ: ["plain"] }));
   const since = { date: "2026-11-25", head: EARLIER, reading: "past +2.00%: `plain`" };
-  const made = issue({ ...at(readings), line, since, prs: PRS, expected: { plain: "5c5\n< corten-shell: 618f\n---\n> corten-shell: c21c\nbodies differ: 6124 and 6124 bytes\n" } });
+  const made = issue({ ...at(readings), line, since, prs: PRS, expected: { plain: `5c5\n< corten-shell: 618f\n---\n> corten-shell: c21c\nbodies same: 6124 bytes, sha256 ${"a".repeat(64)}\n` } });
   assert.equal(made.title, "Trend: main costs a request at least +2.00% more cycles than v0.2.0 on plain (run of 2026-12-02)");
   for (const word of [
     "The trend run of 2026-12-02 read `main` at `153d10e9c` against v0.2.0 (`a833b4e3e`) across placements and is past its threshold on `plain`: the lower bound of the change in user plus kernel cycles a request is at or above +2.00%.",
@@ -279,7 +279,7 @@ test("past the threshold: a draft of an issue, with the row, the pull requests a
     // Whether it is an issue of its own is the reader's, who is told what the row before read.
     "This is a draft the run's command wrote; it opened nothing. Whether it becomes an issue of its own or is added to one already open for v0.2.0 is for whoever reads it.",
     "The row before this one (2026-11-25) reads: past +2.00%: `plain`.",
-    "`plain`: `main` and v0.2.0 answer its request differently, so part of the change may be what the answer now holds. The run recorded this difference before any turn and nobody reviewed it:\n\n```\n5c5\n< corten-shell: 618f\n---\n> corten-shell: c21c\nbodies differ: 6124 and 6124 bytes\n```\n",
+    `\`plain\`: \`main\` and v0.2.0 answer its request differently, so part of the change may be what the answer now holds. The run recorded this difference before any turn and nobody reviewed it:\n\n\`\`\`\n5c5\n< corten-shell: 618f\n---\n> corten-shell: c21c\nbodies same: 6124 bytes, sha256 ${"a".repeat(64)}\n\`\`\`\n`,
     "Merged from the row before this one (2026-11-25, `c6e9be955`) to this run, 4 on `main`'s first-parent line. Add to each line what its description says after `Request path:` and, for a counted change, the cost it stated:",
     "- [#2109 Let a probe read across placements decide a change's cycles](https://github.com/corten-run/corten/pull/2109)\n- [#2100 Parse an allowed origin once](https://github.com/corten-run/corten/pull/2100)\n- `84658be38` Fix a typo in the guide (no pull request named)\n",
   ]) assert.ok(made.body.includes(word), word);
@@ -716,7 +716,8 @@ test("a dry run: every part the kit's dry run, the row kept with the run and mar
 // turns.sh reads.
 const tools = process.platform === "linux" && spawnSync("sh", ["-c", "command -v taskset && command -v timeout && command -v curl && command -v sha256sum"]).status === 0;
 const LINUX = { skip: tools ? false : "needs Linux with taskset, timeout, curl and sha256sum" };
-const serve = (body) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
+// side: a value for a header of its own, x-side, so two servers can answer in a header alone.
+const serve = (body, side = null) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); ${side === null ? "" : `s.setHeader("x-side", ${JSON.stringify(side)}); `}s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
 const mute = 'require("node:net").createServer(() => {}).listen(Number(process.argv[2]), "127.0.0.1");';
 const taken = (port) => spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
 const full = (body) => createHash("sha256").update(body).digest("hex"), digest = (body) => full(body).slice(0, 16);
@@ -776,6 +777,21 @@ test("the answers check on real servers: the difference the check recorded holds
   const third = answers("answers-third", serve("aaaa"), serve("cccc"), 60, { expect: difference });
   assert.equal(third.status, 1, third.said);
   assert.ok(third.said.includes("turns: plain: the answers differ other than as the plan's expected difference says"), third.said);
+});
+
+test("the answers check on real servers: a difference in the headers alone holds a placement to the body the two sides share", LINUX, () => {
+  const recorded = answers("answers-headers", serve("aaaa", "a"), serve("aaaa", "b"), 60);
+  assert.equal(recorded.status, 1, recorded.said);
+  const difference = readFileSync(join(recorded.answers, "diff.txt"), "utf8");
+  assert.equal(difference.split("\n").at(-2), `bodies same: 4 bytes, sha256 ${full("aaaa")}`, difference);
+  assert.match(difference, /^(\d+)c\1\n< x-side: a\n---\n> x-side: b\nbodies same: /, difference);
+  // That difference expected: the same two answers pass, and another body both sides share, of
+  // the same length, does not, though the headers differ just as they did.
+  const held = answers("answers-headers-held", serve("aaaa", "a"), serve("aaaa", "b"), 60, { expect: difference });
+  assert.equal(held.status, 0, held.said);
+  const shared = answers("answers-headers-shared", serve("cccc", "a"), serve("cccc", "b"), 60, { expect: difference });
+  assert.equal(shared.status, 1, shared.said);
+  assert.ok(shared.said.includes("turns: plain: the answers differ other than as the plan's expected difference says"), shared.said);
 });
 
 test("the answers check on real servers: a diff.txt that cannot be written fails it, and does not read as the same answers", LINUX, () => {

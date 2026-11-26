@@ -7,6 +7,10 @@
 #             Then, with the difference that wrong answer made as the expected one, a stand-in
 #             that answers with a third body of the wrong one's length (wrong.mjs other) must
 #             fail the same way: the expected difference holds the bodies, not their lengths.
+#             And a stand-in that answers with the probe's own body under its own headers
+#             (wrong.mjs same) must fail as a wrong answer does, its diff.txt ending with the
+#             line "bodies same: <N> bytes, sha256 <the probe's>": a difference in the headers
+#             alone holds the body too. plan.mjs must take each diff.txt as an expected one.
 #   failed    a failed request: the request is one the probe answers 404, which both binaries
 #             answer alike, so the answers pass (the status asked of them is 404 here) and the
 #             load's requests all fail. wrk reports them, the turn must fail, and no row may be
@@ -48,6 +52,9 @@ run() { # <dir> <path> <status> <binary B> [<time limit>]
     REQ_PATH=$2 STATUS=$3 timeout -k 30 "${5:-120}" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$1" "$W" 1 "$B/base-p$first" "$4" >"$1.log" 2>&1 </dev/null
 }
 rows() { if [ -f "$1/counts-$W.csv" ]; then echo $(( $(wc -l <"$1/counts-$W.csv") - 1 )); else echo none; fi; }
+taken() { # <diff.txt>: plan.mjs takes it as a workload's expected difference, or says why not
+    node --input-type=module -e 'const { pathToFileURL } = await import("node:url"); const { readFileSync } = await import("node:fs"); const { expectProblem } = await import(pathToFileURL(process.argv[1] + "/plan.mjs")); const why = expectProblem(readFileSync(process.argv[2], "utf8")); if (why) { console.error(why); process.exit(1); }' "$KIT" "$1"
+}
 copy() { # <dir> [<sed expression>]: a work directory of its own that holds this one's plan
     rm -rf "$1"; mkdir -p "$1"; cp -R "$PL" "$1/plan"
     sed -e "s|^WORK=.*|WORK='$1'|" ${2:+-e "$2"} "$PL/resolved.sh" >"$1/plan/resolved.sh"
@@ -63,16 +70,23 @@ for case in "$@"; do
     answers)
         printf '#!/bin/sh\nunset LD_PRELOAD\nexec node %s/selftest/wrong.mjs "$1"\n' "$KIT" >"$out/wrong-bin"; chmod +x "$out/wrong-bin"
         printf '#!/bin/sh\nunset LD_PRELOAD\nexec node %s/selftest/wrong.mjs "$1" other\n' "$KIT" >"$out/other-bin"; chmod +x "$out/other-bin"
+        printf '#!/bin/sh\nunset LD_PRELOAD\nexec node %s/selftest/wrong.mjs "$1" same %s/wrong/answers/A.body\n' "$KIT" "$out" >"$out/same-bin"; chmod +x "$out/same-bin"
         run "$out/wrong" "$REQ_PATH" "$STATUS" "$out/wrong-bin"; rc=$?
         [ $rc != 0 ] && grep -q "A and B answer differently" "$out/wrong.log" && [ "$(rows "$out/wrong")" = none ] \
             || { tail -5 "$out/wrong.log"; bad "a wrong answer did not stop the placement (exit $rc, rows $(rows "$out/wrong"))"; }
         echo "answers: a wrong answer stopped the placement before any turn (exit $rc, no counts file): $(grep -m1 'answer differently' "$out/wrong.log")"
-        grep -q '^bodies differ: .*, sha256 ' "$out/wrong/answers/diff.txt" && cp "$out/wrong/answers/diff.txt" "$out/wrong-expect.txt" \
-            || bad "the wrong answer left no bodies line with the two digests in its diff.txt"
+        tail -n 1 "$out/wrong/answers/diff.txt" | grep -q '^bodies differ: .*, sha256 ' && taken "$out/wrong/answers/diff.txt" && cp "$out/wrong/answers/diff.txt" "$out/wrong-expect.txt" \
+            || bad "the wrong answer's diff.txt does not end with a bodies line of the two digests that plan.mjs takes"
         (EXPECT=$out/wrong-expect.txt; export EXPECT; run "$out/other" "$REQ_PATH" "$STATUS" "$out/other-bin"); rc=$?
         [ $rc != 0 ] && grep -q "differ other than as the plan's expected difference says" "$out/other.log" && [ "$(rows "$out/other")" = none ] \
             || { tail -5 "$out/other.log"; bad "a third body of the wrong one's length passed the wrong one's difference (exit $rc, rows $(rows "$out/other"))"; }
-        echo "answers: under that difference as the expected one, a third body of the same length stopped the placement before any turn (exit $rc, no counts file)" ;;
+        echo "answers: under that difference as the expected one, a third body of the same length stopped the placement before any turn (exit $rc, no counts file)"
+        run "$out/same" "$REQ_PATH" "$STATUS" "$out/same-bin"; rc=$?
+        body=$out/wrong/answers/A.body; digest=$(sha256sum <"$body"); digest=${digest%% *}
+        [ $rc != 0 ] && grep -q "A and B answer differently" "$out/same.log" && [ "$(rows "$out/same")" = none ] \
+            && tail -n 1 "$out/same/answers/diff.txt" | grep -qxF "bodies same: $(wc -c <"$body") bytes, sha256 $digest" && taken "$out/same/answers/diff.txt" \
+            || { tail -5 "$out/same.log"; bad "the probe's body under other headers did not stop the placement with a diff.txt ending in its bodies same line (exit $rc, rows $(rows "$out/same"))"; }
+        echo "answers: the probe's body under other headers stopped the placement before any turn (exit $rc, no counts file), its difference ending: $(tail -n 1 "$out/same/answers/diff.txt")" ;;
     failed)
         run "$out/failed" /no-such-path 404 "$B/base-p$first"; rc=$?
         [ $rc != 0 ] && grep -q "errors in pair" "$out/failed.log" && [ "$(rows "$out/failed")" = 0 ] \

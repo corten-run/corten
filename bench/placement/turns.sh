@@ -16,9 +16,11 @@
 #               mask, for the ranges it states (mask.mjs)
 #   STATUS      the status every compared answer must have
 #   EXPECT      empty, or a file holding the exact text of answers/diff.txt that the change makes
-#               by design (the diff of the masked headers, then for bodies that differ the line
-#               "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>"); without it A and B
-#               must answer the same
+#               by design; without it A and B must answer the same. When they answer the same,
+#               diff.txt is empty; otherwise it is the diff of the masked headers and then one
+#               bodies line, "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>" or, for
+#               one body, "bodies same: <N> bytes, sha256 <its>", so an expected difference holds
+#               the bodies too when the headers alone differ
 #   WARMUP      unrecorded pairs before the recorded ones
 #   TURN        seconds of load in a turn; WRK_T and WRK_C, wrk's threads and connections
 #   CPU_SERVER  the CPU every server is pinned to; CPU_LOAD, wrk's CPUs
@@ -31,7 +33,7 @@
 # raw-<workload>.log (every turn's perf and wrk output), answers/ and serve-{A,B}.log. A diff.txt
 # that cannot be written, or a diff or cmp that cannot compare (status 2), fails the placement.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,30p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,32p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -100,8 +102,9 @@ st=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || st=$?
 na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
 da=$(sha256sum <"$ans/A.body"); da=${da%% *}; db=$(sha256sum <"$ans/B.body"); db=${db%% *}
 st=0; cmp -s "$ans/A.body" "$ans/B.body" || st=$?
+# Any difference ends with the bodies line, so an expected one names the bodies as well.
 case $st in
-    0) ;;
+    0) [ ! -s "$diffs" ] || echo "bodies same: $na bytes, sha256 $da" >>"$diffs" || fail "$diffs cannot be written" ;;
     1) echo "bodies differ: $na and $nb bytes, sha256 $da and $db" >>"$diffs" || fail "$diffs cannot be written" ;;
     *) fail "cmp could not compare the two answers' bodies (status $st)" ;;
 esac

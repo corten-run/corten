@@ -183,16 +183,23 @@ export function inputs(probe, script, expect) {
 /** The line that declares them. */
 export const inputsLine = (i) => `inputs: sha256 ${i.sha256} over the ${i.files} files the plan names by path (the probe's, the request script${/  plan\/expect\.txt\n/.test(i.text) ? ", the expected answer" : ""}), each listed with its own`;
 
-/** The line turns.sh writes in answers/diff.txt for two bodies that differ, after the headers' diff. */
-export const BODIES_DIFFER = /^bodies differ: \d+ and \d+ bytes, sha256 [0-9a-f]{64} and [0-9a-f]{64}$/;
 /**
- * Why an expected difference's text is not one turns.sh can write, or null: a bodies line other
- * than BODIES_DIFFER's, such as the lengths alone that the kit wrote before it bound the bodies'
- * digests, can never be matched, so the placement would fail after its build.
+ * The line turns.sh ends a non-empty answers/diff.txt with, after the headers' diff: for two
+ * bodies that differ their lengths and SHA-256s, and for one body its length and SHA-256.
+ */
+export const BODIES = /^bodies (differ: \d+ and \d+ bytes, sha256 [0-9a-f]{64} and [0-9a-f]{64}|same: \d+ bytes, sha256 [0-9a-f]{64})$/;
+/**
+ * Why an expected difference's text is not one turns.sh can write, or null. It is the headers'
+ * diff, if any, and then exactly one bodies line as BODIES gives it, ended by a newline: a
+ * difference without one (in the headers alone, written before the kit bound the shared body)
+ * would hold a placement to no body, and one of another form, such as the lengths alone or a
+ * digest cut short, can never be matched, so the placement would fail after its build.
  */
 export function expectProblem(text) {
-  const odd = text.split("\n").find((l) => l.startsWith("bodies differ:") && !BODIES_DIFFER.test(l));
-  return odd === undefined ? null : `its line "${odd.slice(0, 120)}" is not "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>", the line turns.sh writes for two bodies that differ, each SHA-256 in full: record the difference again with this kit`;
+  const lines = text.split("\n"), last = lines.at(-2) ?? "";
+  if (text.endsWith("\n") && BODIES.test(last) && lines.filter((l) => l.startsWith("bodies ")).length === 1) return null;
+  const odd = lines.find((l) => l.startsWith("bodies ") && !BODIES.test(l));
+  return `does not end with one bodies line as turns.sh writes it, "bodies differ: <A> and <B> bytes, sha256 <A's> and <B's>" or "bodies same: <N> bytes, sha256 <its>", each SHA-256 in full (${odd !== undefined ? `its line "${odd.slice(0, 120)}" is neither` : text === "" ? "it is empty" : !lines.some((l) => l.startsWith("bodies ")) ? "it has no bodies line" : "its bodies line is not its only one, or not its last line ended by a newline"}): record the difference again with this kit`;
 }
 
 const quote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;

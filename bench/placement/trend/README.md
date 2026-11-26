@@ -29,12 +29,13 @@ recorded:
 
 1. The status line and every header line but `Date`, after the plan's mask (the plan masks no
    header): the lines that differ, with both sides' values, are the ones recorded and no others.
-2. The two bodies' lengths in bytes and their SHA-256s, the release's and `main`'s. A pilot's
-   or an A/A's placement must show the release's on both sides.
+2. The two bodies' lengths in bytes and their SHA-256s, the release's and `main`'s, or the one
+   body's when the two are the same. A pilot's or an A/A's placement must show the release's on
+   both sides.
 
 The kit's `turns.sh` holds a placement of the change to both before its turns: the recorded
-difference is its plan's expected one, and has the header lines and both bodies' lengths and
-SHA-256s. A pilot's or an A/A's placement has none, and `turns.sh` holds its two sides to each
+difference is its plan's expected one, and ends with a bodies line of both bodies' lengths and
+SHA-256s, or of the one body's when the headers alone differ, so it binds the body even then. A pilot's or an A/A's placement has none, and `turns.sh` holds its two sides to each
 other; the command then holds every placement to the bodies it recorded, by the first 16
 hexadecimal digits of each SHA-256, which `turns.sh` keeps for each placement. A placement that
 fails any of them makes its workload "not read". The run's directory keeps the difference
