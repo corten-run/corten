@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentCreate, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -270,7 +270,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       // before the private worker receives the mutation.
       if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
-    if (args[0] === "doctl" && args[1][2] === "create") checkHistoricalDispatch?.();
+    if (args[0] === "doctl" && args[1][2] === "create" && checkHistoricalDispatch) {
+      try { checkHistoricalDispatch(); } catch { return unsentCreate; }
+    }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
     // Hand custody back before cancellation: take the stream handle, record

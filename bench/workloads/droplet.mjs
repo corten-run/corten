@@ -10,7 +10,7 @@ import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleet
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
-import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
@@ -223,6 +223,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
+      if (r === unsentCreate) {
+        try {
+          boundary();
+          assert.ok(binary === "doctl" && argv[2] === "create" && state.status === "creating" && state.createIntentAt
+            && !state.id && !state.createPending);
+          assert.ok(regular(statePath, 1024 * 1024).equals(Buffer.from(stateBytes(state))), "unsent create intent state changed");
+          state.status = "reserved"; delete state.createIntentAt;
+          writeState(state, renameSync, "create-unsent");
+        } catch (cause) { preserveOperationLock = true; throw cause; }
+        assert.fail("prior retirement custody changed; create not dispatched");
+      }
       if (registration?.stream && r.monitor) {
         monitor = r.monitor;
         assert.equal(monitor.registration.id, registration.expected.id);

@@ -1404,6 +1404,8 @@ verify the final setup query and the original control files in the extraction.
 Verified setup retirement permits a retry; it does not qualify a result.
 The retry approval binds the prior retirement, and the child rechecks it and
 its custody before recording the create intent and again before provider dispatch.
+A local refusal before contacting the provider keeps the new reservation unused;
+a missing provider reply does not count as a local refusal.
 
 ### Failed Native Custody And Retirement
 

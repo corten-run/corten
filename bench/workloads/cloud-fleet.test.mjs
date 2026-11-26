@@ -14,7 +14,7 @@ import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remot
 import { digest, treeHash } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
-import { verifyFleet } from "./fleet-verify.mjs";
+import { recheckSetupRetirement, verifyFleet } from "./fleet-verify.mjs";
 import { continuationAdmission } from "./group-continuation.mjs";
 import { verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
 
@@ -400,7 +400,12 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   writeFileSync(join(continuation, "index.json"), JSON.stringify([
     { archives: {}, checkout: root, commit, root, round: "r21" },
   ]));
+  // A legacy v4 fleet's unrelated intent file is outside continuation custody.
+  writeFileSync(join(root, "launch-intent.json"), "ignored legacy record");
   const admission = await continuationAdmission(continuation, s.group);
+  const [retired] = admission.subject.setupRetirements;
+  assert.equal(retired.launch, undefined);
+  recheckSetupRetirement(continuation, retired, admission.subject.indexedCustody);
   admission.recheck();
   const lateLock = join(local, "stream-recovery.lock");
   writeFileSync(lateLock, "{}", { flag: "wx" });

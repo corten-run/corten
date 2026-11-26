@@ -456,7 +456,8 @@ export function recheckSetupRetirement(root, row, indexedCustody) {
     assert.equal(fleet.manifest.single.group, row.group);
   } else assert.ok(indexedCustody.some(({ root, manifestSha256 }) => root === fleet.root && manifestSha256 === row.manifestSha256),
     "setup retirement is not in the approved index");
-  assert.equal(present(join(fleet.root, "launch-intent.json")) ? readLaunchIntent(fleet).sha256 : undefined, row.launch,
+  assert.equal((fleet.manifest.single || stagedFleet(fleet.manifest)) && present(join(fleet.root, "launch-intent.json"))
+    ? readLaunchIntent(fleet).sha256 : undefined, row.launch,
     "prior setup retirement launch changed");
   const saved = readGroup(fleet, row.group);
   assert.ok(saved.stateSha256 === row.stateSha256 && saved.state?.status === "retired" && saved.state.destroyedAt,
