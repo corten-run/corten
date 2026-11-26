@@ -186,6 +186,12 @@ test("idle.mjs prints a figure when the probe's open files grew by the connectio
   assert.equal(figure, Math.round(grown / 40));
 });
 
+test("idle.mjs prints the case and the requests an active run sent", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--case", "get-browser", "--requests", "3"]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that answered 3 get-browser, opened in /m);
+});
+
 test("idle.mjs names the case a silent run's probe was set up and warmed for", { skip }, async () => {
   for (const name of ["text", "pipeline"]) {
     const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", name]);
