@@ -1410,6 +1410,23 @@ receipt, which must be for the final control, authorizes the intent and the DELE
 under its own deadline. A history copy kept by an earlier interrupted recovery is
 read back at the receipt's own bound (8 MiB for a v2 or v3 receipt), not 4 KiB.
 
+That prefix check takes the receipt's own timestamps, so it cannot tell an edited
+receipt from the one written. Before a v2 or v3 receipt is published, the state
+therefore records its digest as `pendingRetirement` (`kind` `setup-failed` and
+`evidenceSha256`); the retirement state that carries the intent removes it, and
+each new receipt replaces it first. An interrupted v2 or v3 receipt is recovered
+only when its bytes match that digest. A mismatch refuses with `interrupted
+retirement receipt differs from its recorded digest; preserve host`, and a state
+with such a receipt but no recorded digest (left by a controller from before this
+check) refuses with `interrupted retirement receipt has no recorded digest;
+preserve host`. Either refusal keeps no history copy, writes no intent and sends
+no DELETE; the host is then handled by the operator cleanup below. Without the
+prefix rule such a receipt could never be recovered anyway, because the retry's
+appended controls make it fail the full-ledger check. A v1 setup receipt and the
+unused and pinned unused receipts record no digest and keep their recovery by full
+verification against the current state; the pinned unused reservation is locked
+by its digest, so it cannot carry one.
+
 The drain proof is narrow. It can settle only a setup job whose host shows no
 Docker socket or daemon at query time (in practice one that failed before
 `docker-install`), with the guardian's exact deadline record archived, and that

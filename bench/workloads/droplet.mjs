@@ -977,20 +977,34 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
     assert.ok(Buffer.byteLength(bytes) <= (state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096), "bounded retirement record required");
     const path = join(local, retirementFile(kind));
+    // A v2 or v3 setup receipt left without its intent is recovered against the ledger
+    // prefix it names, using its own timestamps, so its bytes must also be the ones whose
+    // digest was saved before it was published. v1, unused and pinned unused receipts are
+    // still recovered only by full verification against the current state.
+    const recorded = kind === "setup-failed" && !!state.control;
     if (existsSync(path)) {
       // A crash between receipt and state writes is recoverable. Preserve the
       // exact old record, but only this operation's fresh probe authorizes intent.
       assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
       const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
-      const prior = regular(path, limit), hash = digest(prior); verifyRetirementRecord(prior, kind, true);
+      const prior = regular(path, limit), hash = digest(prior);
+      if (recorded) {
+        assert.ok(state.pendingRetirement, "interrupted retirement receipt has no recorded digest; preserve host");
+        assert.ok(state.pendingRetirement.kind === kind && state.pendingRetirement.evidenceSha256 === hash,
+          "interrupted retirement receipt differs from its recorded digest; preserve host");
+      }
+      verifyRetirementRecord(prior, kind, true);
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
       if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
       else durable(retained, prior);
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
       unlinkSync(path); syncDirectory(local);
     }
+    // Supersedes any earlier digest; the retirement state below clears it.
+    if (recorded) { state.pendingRetirement = { kind, evidenceSha256: digest(bytes) }; save(); }
     durable(path, bytes);
     if (bounded) requireFreshProof();
+    delete state.pendingRetirement;
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
