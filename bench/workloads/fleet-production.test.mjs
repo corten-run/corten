@@ -167,7 +167,7 @@ export async function productionMain(...args) {
     args[1].interrupted = () => {
       const target = syntheticPath.join(syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], 'groups-r21', 'state.json');
       if (syntheticFs.existsSync(target) && JSON.parse(syntheticFs.readFileSync(target, 'utf8')).createIntentAt
-          && ++afterIntent >= (dispatch.cancel ? 2 : 1)) {
+          && ++afterIntent >= (dispatch.cancel || 1)) {
         if (!syntheticFs.existsSync(dispatch.path)) syntheticFs.writeFileSync(dispatch.path, '{}', { flag: 'wx' });
       }
       return previous() || dispatch.cancel && syntheticFs.existsSync(dispatch.path);
@@ -916,11 +916,12 @@ test("a settled continuation placement refusal leaves the unallocated slot avail
   assert.deepEqual(p.events(), []);
 });
 
-for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "new batch after intent"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
+for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "cancel at provider", "new batch after intent"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
   const group = "json-api", lockFile = "stream-recovery.lock", childDir = [group, group, "groups-r19"];
   const markers = { "after create intent": [...childDir, lockFile], "cancel before dispatch": [...childDir, "cancelled"],
-    "new batch after intent": [group, ".fleet-operation.lock"] };
-  const dispatch = markers[change] ? { path: markers[change], cancel: change === "cancel before dispatch" } : undefined;
+    "cancel at provider": [...childDir, "cancelled"], "new batch after intent": [group, ".fleet-operation.lock"] };
+  const cancel = { "cancel before dispatch": 2, "cancel at provider": 3 }[change];
+  const dispatch = markers[change] ? { path: markers[change], cancel } : undefined;
   const p = fixture(t, "ssh-late", group, dispatch), root = p.h.base, prior = path.join(root, group);
   p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
   fs.writeFileSync(path.join(root, "index.json"), "[]");

@@ -405,12 +405,14 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
   const admission = await continuationAdmission(continuation, s.group);
   const [retired] = admission.subject.setupRetirements;
   assert.equal(retired.launch, undefined);
-  recheckSetupRetirement(continuation, retired, admission.subject.indexedCustody);
+  const dispatchRecheck = recheckSetupRetirement(continuation, retired, admission.subject.indexedCustody);
   admission.recheck();
   const lateLock = join(local, "stream-recovery.lock");
   writeFileSync(lateLock, "{}", { flag: "wx" });
+  assert.throws(dispatchRecheck, /group recovery remains active/);
   assert.throws(() => admission.recheck(), /group recovery remains active/);
   unlinkSync(lateLock);
+  dispatchRecheck();
   admission.recheck();
   const extracted = join(local, s.evidence), custody = join(extracted, "control");
   const entry = join(custody, readdirSync(custody)[0]), changed = readFileSync(entry);

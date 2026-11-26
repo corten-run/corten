@@ -259,7 +259,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   let checkHistoricalDispatch;
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
-    const creating = args[0] === "doctl" && args[1][2] === "create";
+    const creating = args[0] === "doctl" && args[1][0] === "compute" && args[1][1] === "droplet" && args[1][2] === "create";
     try { await controlCheckpoint(interrupted); } catch (error) {
       if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
       if (creating) return unsentCreate;
@@ -277,6 +277,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
+    if (creating && result === unsentCreate) return result;
     // Hand custody back before cancellation: take the stream handle, record
     // the acknowledged command exit, or clear a positively unsent DELETE.
     if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
@@ -368,9 +369,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       }
       if (beforeCreate !== "census") {
         for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
-        for (const row of setupRetirements) recheckSetupRetirement(root, row, indexedCustody);
+        const setupIdleChecks = setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody));
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
-        if (beforeCreate === "dispatch" && setupRetirements.length) recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
         for (const slot of ["client-heavy", "client-heavy--r78"]) {
@@ -379,6 +379,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
               || !lstatSync(join(prior, "fleet-r78.json"), { throwIfNoEntry: false })) continue;
           const { state } = readGroup(readFleet(prior, "r78", { priorSelection: true }), "client-heavy");
           assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
+        }
+        if (beforeCreate === "dispatch" && setupIdleChecks.length) {
+          recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+          for (const stillIdle of setupIdleChecks) stillIdle();
         }
       }
       return currentPeers;

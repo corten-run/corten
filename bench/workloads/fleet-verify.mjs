@@ -434,18 +434,20 @@ function evidenceSnapshot(job) {
   return { stateSha256: job.stateSha256, archiveSha256: s.archiveSha256, evidenceSha256: s.evidenceSha256 };
 }
 
-export function verifySetupRetry({ local, state, stateRoot, outcome, stateSha256 }) {
-  const idle = () => {
-    assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
-    assert.ok(outcome === "available" && !present(join(local, "operation.lock"))
-      && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
-  };
-  idle();
+function setupRetryIdle({ local, stateRoot, outcome }) {
+  assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
+  assert.ok(outcome === "available" && !present(join(local, "operation.lock"))
+    && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
+}
+
+export function verifySetupRetry(saved) {
+  const { local, state, stateSha256 } = saved;
+  setupRetryIdle(saved);
   verifyFailedSetupRetirement(local, state);
   assert.equal(digest(regular(join(local, "state.json"), 1024 * 1024)), stateSha256, "setup retirement state changed during replay");
   assert.equal(digest(regular(join(local, failedSetupRetirementFile), state.control ? 8 * 1024 * 1024 : 4096)),
     state.retirement.evidenceSha256, "setup retirement receipt changed during replay");
-  idle();
+  setupRetryIdle(saved);
 }
 
 export function recheckSetupRetirement(root, row, indexedCustody) {
@@ -463,8 +465,13 @@ export function recheckSetupRetirement(root, row, indexedCustody) {
   assert.ok(saved.stateSha256 === row.stateSha256 && saved.state?.status === "retired" && saved.state.destroyedAt,
     "prior setup retirement reservation changed");
   verifySetupRetry(saved);
-  const batch = fleetBatchLock(fleet.root);
-  assert.equal(batch && digest(batch), row.batchSha256, "prior setup retirement fleet lock changed");
+  const stillIdle = () => {
+    setupRetryIdle(saved);
+    const batch = fleetBatchLock(fleet.root);
+    assert.equal(batch && digest(batch), row.batchSha256, "prior setup retirement fleet lock changed");
+  };
+  stillIdle();
+  return stillIdle;
 }
 
 // Absence of an old ID in the provider account is necessary but not sufficient:
