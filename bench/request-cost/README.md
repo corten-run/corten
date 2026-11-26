@@ -354,8 +354,8 @@ median is the one stated, and for an idle run its growth equal to its after less
 and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
 growth is not guessed from its figure. The job's connections stay 5,000: on a runner whose page
 has more bytes than that (65,536-byte pages), a page is more than a byte a connection, and
-`idleRise` refuses the reading, as it does six runs not all of one page size, so the reading is
-not decided and cannot be counted. An answer is a capture that is one
+`idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
+asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one
 whole answer, by its `Content-Length`, with nothing after it, and the case's. Anything else
 is no figure or no answer, and a reading with no figure on either build, a case either build
 gave no answer to, an idle reading not decided, and a base that did not build are each a case

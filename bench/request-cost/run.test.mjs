@@ -272,9 +272,11 @@ test("each kind of run compare.mjs asks for is one the kit takes, and its --json
     assert.deepEqual([found.requests, found.connections, found.grown, found.page, found.bytes], [requests, 40, found.after - found.before, 4096, Math.round((found.after - found.before) / 40)], file);
     assert.equal(compare.figure(text, expect), null, file);
   }
-  // The page size getconf gives is the one the JSON carries.
+  // The page size getconf gives is the one the JSON carries. Its resident memory is still read in
+  // this host's pages, so the run need not be whole 65,536-byte pages and `figure` may refuse it:
+  // the printed JSON is read here, and the 65,536-byte rule is tested on figures of its own.
   const large = await take("idle-silent-1.json", ["--connections", "40"], { connections: 40 }, { STAND_IN_PAGE: "65536" });
-  assert.equal(large.found.page, 65536);
+  assert.equal(JSON.parse(large.text).page, 65536);
 });
 
 test("an option that would give a figure of something else is refused before anything is started", () => {
