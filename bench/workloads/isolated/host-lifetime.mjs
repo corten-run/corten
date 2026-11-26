@@ -294,7 +294,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
     // Bind identity before the executable transaction commits: a rejected
     // capture must pin no executable.
     const capture = () => {
-      const record = readBrowserParticipant(id, executables, pending, !bound);
+      const record = readBrowserParticipant(id, executables, pending, bound ? undefined : began);
       if (bound) startupRecheck(record, bound, attempts);
       return record;
     };
@@ -315,6 +315,8 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
   }
 }
 const startupRetryMs = 250, startupWindowMs = maximumSampleGapMs;
+const exitRecheckTargetMs = 70, exitRecheckDeadlineMs = 75;
+const dockerZeroTime = "0001-01-01T00:00:00.000000000Z";
 const startupChurn = new WeakMap(), startupAttempts = new WeakMap(), startupRechecks = new WeakMap();
 // A changed name inside the census is already retried by the census itself
 // (`snapshot`, for every participant), so only an executable inode change reaches here.
@@ -338,9 +340,31 @@ function stoppedDockerState(state, endedAt, earliest = -Infinity) {
     || ["Running", "Paused", "Restarting", "Dead"].some((key) => state[key] !== false)
     || typeof state.OOMKilled !== "boolean" || !Number.isSafeInteger(state.ExitCode) || state.ExitCode < 0) return false;
   const start = dockerUtcTime(state.StartedAt), finish = dockerUtcTime(state.FinishedAt);
-  if (!start || !finish || start <= "0001-01-01T00:00:00.000000000Z" || finish < start) return false;
+  if (!start || !finish || start <= dockerZeroTime || finish < start) return false;
   const at = Date.parse(finish);
   return at >= earliest && at <= endedAt;
+}
+function confirmDockerExit(inspect, running, startedAt, began) {
+  const { state } = running;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let observed;
+    try { observed = inspect(true); } catch { return; } // Keep the original proc gap.
+    const endedAt = Date.now();
+    if (observed.imageId === running.imageId && observed.restartCount === running.restartCount
+      && observed.state.StartedAt === state.StartedAt && stoppedDockerState(observed.state, endedAt, startedAt))
+      return { startedAt, endedAt, container: observed, kernel: null };
+    if (attempt || !isDeepStrictEqual(observed, running)) return;
+    const start = dockerUtcTime(state.StartedAt);
+    if (!start || start <= dockerZeroTime || Date.parse(start) > endedAt || dockerUtcTime(state.FinishedAt) !== dockerZeroTime
+      || state.OOMKilled !== false || state.ExitCode !== 0) return;
+    // Allow one pause for Docker to publish the exit. Charge the first two
+    // inspects against it and never start the last inspect after an oversleep.
+    const elapsed = performance.now() - began;
+    if (elapsed >= exitRecheckDeadlineMs) return;
+    if (elapsed < exitRecheckTargetMs) Atomics.wait(retryPause, 0, 0, exitRecheckTargetMs - elapsed);
+    const woke = performance.now() - began;
+    if (woke < exitRecheckTargetMs || woke >= exitRecheckDeadlineMs) return;
+  }
 }
 function startupRecheck(record, bound, attempts) {
   try {
@@ -354,11 +378,13 @@ function startupRecheck(record, bound, attempts) {
     throw error;
   }
 }
-function readBrowserParticipant(id, executables, pending, allowExitRecheck) {
+function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
-  const inspect = () => {
-    const infos = JSON.parse(docker(["container", "inspect", id])); assert.equal(infos.length, 1);
+  const inspect = (confirmingExit = false) => {
+    const infos = JSON.parse(docker(["container", "inspect", id]));
+    if (confirmingExit) assert.ok(Array.isArray(infos));
+    assert.equal(infos.length, 1);
     assert.equal(infos[0].Id, id); return containerState(infos[0]);
   };
   let stage = "inspect-open", container, stat, identity;
@@ -375,15 +401,11 @@ function readBrowserParticipant(id, executables, pending, allowExitRecheck) {
       // An exiting PID can vanish before Docker updates its running state.
       // Only the opening stat read can take this path, before any kernel evidence.
       const state = container.state;
-      if (allowExitRecheck && error?.code === "ENOENT" && state.Running === true && state.Status === "running"
+      if (exitRecheckBegan !== undefined && error?.code === "ENOENT" && state.Running === true && state.Status === "running"
         && state.Paused === false && state.Restarting === false && state.Dead === false
         && Number.isSafeInteger(container.restartCount) && container.restartCount >= 0) {
-        let terminal;
-        try { terminal = inspect(); } catch { /* Keep the original gap diagnostic. */ }
-        const endedAt = Date.now();
-        if (terminal && terminal.imageId === container.imageId && terminal.restartCount === container.restartCount
-          && terminal.state.StartedAt === state.StartedAt && stoppedDockerState(terminal.state, endedAt, startedAt))
-          return { startedAt, endedAt, container: terminal, kernel: null };
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        if (stopped) return stopped;
       }
       throw error;
     }

@@ -93,11 +93,14 @@ is of captures, including those in a sample the collector later rejects for anot
 reason, so it can exceed the retained Docker participant captures.
 
 Separately, if the opening `/proc/PID/stat` read returns `ENOENT` after a
-running inspect, one exact-ID re-observation can record the container as stopped.
+running inspect, an exact-ID re-observation can record the container as stopped.
 It must show the same image, start and restart generation, PID zero and an
 `exited` or `removing` state with a valid finish time in that capture. The
-stopped row has no kernel evidence. Failed confirmation retains the original
-gap; later proc reads and startup retries do not use this path.
+stopped row has no kernel evidence. Only an unchanged, coherent running response
+allows one pause and one final exact-ID inspect. The pause targets 70 ms from
+the start of capture; the final inspect must start before 75 ms on the monotonic
+clock. Failed confirmation retains the original gap; later proc reads and
+startup retries do not use this path.
 
 ## Fault Shutdown
 
