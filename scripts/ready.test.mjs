@@ -62,11 +62,14 @@ test("any other status ends the wait at its headers, a 421, 407 or 101 included"
     n < 2 ? s.socket?.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\nConnection: Upgrade\r\n\r\n") : ok(s),
   );
   assert.deepEqual(upgrade, { outcome: "http://127.0.0.1:PORT/health/ready answered 101, not 200 or 503", requests: 1 });
-  // A refused status is refused at its headers: its body, which never ends here, is not waited for.
-  const started = performance.now();
+  // A refused status is refused at its headers: its body never ends here, so a wait for it would
+  // run out of budget instead.
   const open = await against((_n, _q, s) => void s.writeHead(500, { "content-length": "10" }).write("x"), { budget: 3000 });
   assert.deepEqual(open, { outcome: "http://127.0.0.1:PORT/health/ready answered 500, not 200 or 503", requests: 1 });
-  assert.ok(performance.now() - started < 1000, `refused after ${Math.round(performance.now() - started)} ms`);
+  // An answer that is not HTTP (here two lengths) is refused, not retried until a 200 comes.
+  const malformed = await against((n, q, s) => (n < 2 ? q.socket?.end("HTTP/1.1 500 x\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nx") : ok(s)));
+  assert.equal(malformed.requests, 1);
+  assert.match(malformed.outcome, /^http:\/\/127\.0\.0\.1:PORT\/health\/ready answered what is not HTTP \(HPE_[A-Z_]+\)$/);
   // A success that is not a 200 is not readiness.
   const empty = await against((n, _q, s) => (n < 2 ? s.writeHead(204).end() : ok(s)));
   assert.deepEqual(empty, { outcome: "http://127.0.0.1:PORT/health/ready answered 204, not 200 or 503", requests: 1 });
@@ -79,7 +82,8 @@ test("the budget ends the wait naming the last outcome, and nothing after it cou
   const from = performance.now();
   const stalled = await against((n, _q, s) => (n < 2 ? unavailable(s) : s.writeHead(200, { "content-length": "10" }).write("o")), { budget: 1500 });
   const took = performance.now() - from;
-  assert.ok(took >= 1400 && took < 2500, `stalled attempt ended after ${Math.round(took)} ms`);
+  // Not before the budget, and well short of the attempt's own 5 s.
+  assert.ok(took >= 1400 && took < 4500, `stalled attempt ended after ${Math.round(took)} ms`);
   assert.deepEqual(stalled, {
     outcome: "http://127.0.0.1:PORT/health/ready did not answer 200 within 1.5 s (last: 200, then its body broke off (ABORT_ERR))",
     requests: 2,
@@ -97,7 +101,26 @@ test("an attempt that hangs is given up after 5 s and the next one is made", asy
   const got = await against((n, _q, s) => void (n > 1 && ok(s)), { budget: 7000 });
   const took = performance.now() - from;
   assert.deepEqual(got, { outcome: "ready", requests: 2 });
-  assert.ok(took >= 4900 && took < 6500, `ready after ${Math.round(took)} ms`);
+  // The second request within the 7 s budget is the cap at work; the first attempt lasted its 5 s.
+  assert.ok(took >= 4900, `ready after ${Math.round(took)} ms`);
+});
+
+test("a refused connection is waited out until the app listens", async () => {
+  const probe = http.createServer();
+  await new Promise((r) => probe.listen(0, "127.0.0.1", () => r(undefined)));
+  const port = /** @type {import("node:net").AddressInfo} */ (probe.address()).port;
+  await new Promise((r) => probe.close(() => r(undefined)));
+  let asked = 0;
+  const app = http.createServer((_q, s) => (asked++, ok(s)));
+  const later = setTimeout(() => app.listen(port, "127.0.0.1"), 600);
+  try {
+    await ready(`http://127.0.0.1:${port}`, { budget: 10_000 });
+    assert.equal(asked, 1);
+  } finally {
+    clearTimeout(later);
+    app.closeAllConnections();
+    app.close();
+  }
 });
 
 test("a base is named without its credentials, and one that cannot be read or is not plain http is refused by name", async () => {

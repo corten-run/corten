@@ -3,8 +3,8 @@
 // port published for a container accepts a connection and closes it unanswered until the app
 // listens, which a page load reports as net::ERR_EMPTY_RESPONSE (#2140). So a smoke begins when
 // the app says it is ready, as a load balancer asks it. A 503 (a dependency not answering yet), a
-// refused or reset connection and an answer whose body breaks off are waited out; any other status
-// is a failure of the readiness route itself and ends the wait at once. The budget is kept by the
+// refused or reset connection and an answer whose body breaks off are waited out; any other status,
+// or an answer that is not HTTP, is a failure of the readiness route itself and ends the wait at once. The budget is kept by the
 // monotonic clock, and no attempt or pause runs past it.
 import http from "node:http";
 
@@ -81,6 +81,8 @@ export async function ready(base, { budget = 120_000, now = () => performance.no
       throw late();
     }
     if (status !== undefined && status !== 200 && status !== 503) throw new Error(`${name} answered ${status}, not 200 or 503`);
+    // An answer Node's HTTP parser refuses is the route's failure, not the app still starting.
+    if (cause?.startsWith("HPE_")) throw new Error(`${name} answered what is not HTTP (${cause})`);
     if (whole && status === 200) return;
     last = outcome;
     const pause = Math.min(250, remaining());
