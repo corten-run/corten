@@ -7129,16 +7129,33 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
-    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
-    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
-    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
-    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
-    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
-    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
-    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
-    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
-    count on one connection with glibc's allocator changed level by about 370 with no change to
+    Revisit when: a change to the connection task, whichever way it is declared, raises a plain
+    HTTP request by more than the budget [design Choice 76](#choice-counted-or-measured) holds a
+    counted change to, +0.5% of its base's instructions a request, on
+    [`bench/request-cost`](../bench/request-cost/README.md)'s `get`, `unstaged`, `pipeline` or
+    `text`, one request at a time or 16, with base and head counted the way
+    [Pull requests](../CONTRIBUTING.md#pull-requests), item 2.1, counts a counted change, which
+    the hosted `Request Cost` job does for every pull request that changes what a request is
+    built from, as a change to the connection task does (for a change declared measured the job
+    reports the counts and fails nothing, so the line is read from its summary; the line is
+    drawn from each change's own base and is not the fixed count it was until 2026-11-26, whose
+    history is in Last checked and in
+    [#2167 Choice 60's Revisit-when names a fixed count (17,557 instructions at one commit) that main has since fallen about 580 below, on a harness that is not in the repository](https://github.com/corten-run/corten/issues/2167);
+    the budget is 64 instructions on `unstaged` and about 95 on `get` by the counts of
+    [design Choice 76](#choice-counted-or-measured), and less on the cheaper rows, about 52 on
+    `pipeline` and about 41 on it at 16, so twenty to forty-five times the 2.1 accepted above
+    and on every row more than the 10 and the 30 turned down there: one change can add what was
+    refused then and not reopen this Choice, and the figure is that Choice's proposal and moves
+    with it; what changes
+    that each stay under the budget add up to this line does not see, and nothing reopens this
+    Choice for it: [design Choice 76](#choice-counted-or-measured) leans for that on
+    the trend, [`bench/placement/trend`](../bench/placement/trend/README.md), which reads
+    `main`'s cycles, not its instructions, against the last release and gates nothing, and on
+    the kit's counts a release takes of its candidate against the last release
+    ([RELEASING.md](../RELEASING.md#readiness-checkpoints)); the kit counts with jemalloc
+    preloaded, which is what a rise read with glibc's allocator was to be counted again with
+    before it was believed, since in `tests::server::what_a_request_over_tcp_costs` a count on
+    one connection with glibc's allocator changed level by about 370 with no change to
     what a request does; the 2.1 above is not a regression still to fix); a compiler or code
     change lets the one loop poll the plain task at what it cost before the metadata path, which
     removes the residual (the rerun of Last checked counts the two the same and cannot say whether
@@ -7166,7 +7183,25 @@ rules something out.
     the first session's binary of this change was built from `9060dfb2a` and the second's from
     `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
     that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
-    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again; 2026-11-26,
+    that harness once more, to see where the fixed count Revisit when then named stood (the
+    24,287.261 accepted here was the request's whole count on 2026-11-17 on the harness that is
+    not in the repository, the one built again reads the same commit about 1,214 lower, the
+    commits from there to `main` at `8d5160be2` lowered it by 5,302 more, and the connection's
+    wait for shutdown, polled only when it was woken, by 218 more, which gave 17,552.8 at
+    `9060dfb2a`, and the line was put at the top of what two sessions read there, about
+    17,557, which left 0 to 5 instructions over them, so it reopened this Choice for a
+    rise of a few instructions when it was written and for none under about 580 once `main`
+    was at `d15d3ac3a`): two sessions of three rounds, `9060dfb2a` 17,554.920 (range
+    17,554.778-17,556.058) and 17,554.916 (range 17,553.216-17,555.770), inside what 2026-11-25
+    read, and `main` at `d15d3ac3a` 16,972.596 (range 16,971.613-16,975.479) and 16,974.877
+    (range 16,972.395-16,975.306), about 580 under that count, and with jemalloc preloaded
+    16,000.617 and 16,001.631 against 15,412.503 and 15,414.189, where four of those twelve
+    readings lay about 43 from their build's level and moved no median (about what
+    [the kit's page](../bench/request-cost/README.md#how-a-number-is-read) gives for a count read
+    from totals at exit, as this harness reads one, when the clock's thread ends before the
+    process). Revisit when was
+    restated that day as each change's own budget, by the maintainer's decision.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
