@@ -113,7 +113,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
      * page is and its status line, for a check's details. The draw counts only if the page drew it
      * within 5 s of starting the navigation, by the page's own clock (`performance.now()`), noted the
      * moment it was drawn: one drawn after them, before the record is read, does not (`lateBy`, how
-     * long after).
+     * long after). That clock alone decides: asking the page to navigate and reading the record are
+     * driver plumbing, bounded to 15 s each, so a draw in time is not failed because the record came
+     * back late.
      * @param {string} url
      * @returns {Promise<{ token: string, saving: boolean, lateBy: number | null, sameDocument: boolean, at: string, status: string | null }>}
      */
@@ -122,25 +124,29 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const address = new URL(url).pathname + new URL(url).search;
       navTokens.set(address, token);
       try {
-        await page.evaluate(
-          ({ url, token }) => {
-            const w = /** @type {any} */ (window);
-            /** @type {{ token: string, saving: boolean, drawnAt: number | null, by: number, stop: () => void }} */
-            const note = { token, saving: false, drawnAt: null, by: performance.now() + 5000, stop: () => seen.disconnect() };
-            w.__smokeGo = note;
-            const look = () => {
-              const status = document.getElementById("alert-status");
-              if (location.href === url && status?.getAttribute("data-smoke-nav") === token && status.textContent === "Saving...") {
-                note.drawnAt = performance.now();
-                note.saving = true;
-                seen.disconnect();
-              }
-            };
-            const seen = new MutationObserver(look);
-            seen.observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-nav"] });
-            w.navigation.navigate(url);
-          },
-          { url, token },
+        await within(
+          15000,
+          "the page was not asked to navigate within 15 s",
+          page.evaluate(
+            ({ url, token }) => {
+              const w = /** @type {any} */ (window);
+              /** @type {{ token: string, saving: boolean, drawnAt: number | null, by: number, stop: () => void }} */
+              const note = { token, saving: false, drawnAt: null, by: performance.now() + 5000, stop: () => seen.disconnect() };
+              w.__smokeGo = note;
+              const look = () => {
+                const status = document.getElementById("alert-status");
+                if (location.href === url && status?.getAttribute("data-smoke-nav") === token && status.textContent === "Saving...") {
+                  note.drawnAt = performance.now();
+                  note.saving = true;
+                  seen.disconnect();
+                }
+              };
+              const seen = new MutationObserver(look);
+              seen.observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["data-smoke-nav"] });
+              w.navigation.navigate(url);
+            },
+            { url, token },
+          ),
         );
         // A full load ends the wait too: its document has no record of this navigation.
         await page
@@ -153,8 +159,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             { timeout: 5000 },
           )
           .catch(() => {});
-        return await readWithin(
-          "the navigation's record",
+        return await within(
+          15000,
+          "the navigation's record was not read within 15 s",
           page.evaluate((token) => {
             const note = (/** @type {any} */ (window)).__smokeGo;
             const sameDocument = note?.token === token;
@@ -525,30 +532,87 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const from = parts().length;
           const wholeFrom = whole().length;
           /**
-           * `go` to `to` within 5 s, its navigation answered as still saving, with its part read
-           * again after `seconds` (`seeds`). @param {string} to @param {number} [seconds]
+           * `go` to `to`, its navigation answered as still saving, with its part read again after
+           * `seconds` (`seeds`): its `Saving...` must be drawn within 5 s by the page's clock, which
+           * `go` alone decides, with no outer bound of driver time on top. @param {string} to @param {number} [seconds]
            */
           const goTo = async (to, seconds = AGAIN_SECONDS) => {
             seeds.set(new URL(to).pathname + new URL(to).search, seconds);
-            const nav = await within(5000, "the runtime's navigation to a page still saving was not seen within 5 s", go(to));
+            const nav = await go(to);
             if (!nav.saving) throw new Error(`the runtime's navigation to ${new URL(to).pathname}${new URL(to).search}: ${wentTo(nav)}`);
             return nav;
           };
           const reachedUrl = await readWithin("the pending write's page", pending());
-          const nav = await goTo(reachedUrl);
-          await savedSoon();
-          const reached = await readWithin("the status line after the navigation's wait for Saved.", saved());
-          // The same document throughout: the record `go` put on its window is still there, which a
-          // full load (a document read, then its part) would have lost.
-          const kept = await readWithin(
-            "whether the navigation kept the document",
-            page.evaluate((token) => (/** @type {any} */ (window)).__smokeGo?.token === token, nav.token),
-          );
-          check(
-            "a page's part reached by the runtime's navigation is read again, not the page",
-            nav.saving && nav.sameDocument && kept && reached === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
-            `${wentTo(nav)}, then ${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(new URL(reachedUrl).pathname + new URL(reachedUrl).search) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
-          );
+          // The page reached, by its address: its own part reads are the ones that count. Each takes
+          // its place among `reachAnswers` as it reaches the route, which notes whether its answer
+          // draws `Saved.` and marks that answer's status line with the place (`data-smoke-reach`),
+          // so the `Saved.` the check sees is tied to an answer to the reached page's own read, not
+          // to a read of another address (an earlier receipt's), whose answer draws the same text in
+          // the same status line.
+          const reachedAt = new URL(reachedUrl).pathname + new URL(reachedUrl).search;
+          /** Whether each part read of the reached page drew `Saved.`, by the order it came. @type {boolean[]} */
+          const reachAnswers = [];
+          /** Set once the check is over: the route lets each read through, whether or not its removal is confirmed. */
+          let reachOver = false;
+          const reachReads = (/** @type {URL} */ u) => u.pathname + u.search === reachedAt;
+          const reachPart = async (/** @type {import("@playwright/test").Route} */ route) => {
+            const request = route.request();
+            if (reachOver || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
+            const at = reachAnswers.length;
+            reachAnswers.push(false);
+            try {
+              // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+              const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+              const headers = res.headers();
+              delete headers["content-encoding"];
+              delete headers["content-length"];
+              const body = await res.text();
+              reachAnswers[at] = res.ok() && body.includes(savedLine);
+              await route.fulfill({ status: res.status(), headers, body: body.replace('<p id="alert-status"', `<p data-smoke-reach="${at}" id="alert-status"`) });
+            } catch {
+              reachAnswers[at] = false;
+              await route.abort().catch(() => {});
+            }
+          };
+          try {
+            await within(5000, "the reached page's part route was not set within 5 s", page.route(reachReads, reachPart));
+            const nav = await goTo(reachedUrl);
+            // `Saved.` drawn by an answer to the reached page's own part read, within 6 s.
+            await page
+              .waitForFunction(
+                () => {
+                  const status = document.getElementById("alert-status");
+                  return status?.textContent === "Saved." && status.hasAttribute("data-smoke-reach");
+                },
+                null,
+                { timeout: 6000 },
+              )
+              .catch(() => {});
+            const reached = await readWithin(
+              "the status line after the navigation's wait for Saved.",
+              page.evaluate(() => {
+                const status = document.getElementById("alert-status");
+                return { text: status?.textContent ?? null, read: status?.getAttribute("data-smoke-reach") ?? null };
+              }),
+            );
+            // The same document throughout: the record `go` put on its window is still there, which a
+            // full load (a document read, then its part) would have lost.
+            const kept = await readWithin(
+              "whether the navigation kept the document",
+              page.evaluate((token) => (/** @type {any} */ (window)).__smokeGo?.token === token, nav.token),
+            );
+            const own = parts().slice(from).filter((e) => address(e) === reachedAt);
+            const others = parts().slice(from).filter((e) => address(e) !== reachedAt);
+            const drewOwn = reached.text === "Saved." && reached.read !== null && reachAnswers[Number(reached.read)] === true;
+            check(
+              "a page's part reached by the runtime's navigation is read again, not the page",
+              nav.saving && nav.sameDocument && kept && drewOwn && own.length > 0 && whole().length - wholeFrom === 1,
+              `${wentTo(nav)}, then ${reached.text}${reached.read === null ? " (not drawn by an answer to the reached page's own part read)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
+            );
+          } finally {
+            reachOver = true;
+            await cleanUp(() => within(5000, "the reached page's part route was not removed within 5 s", page.unroute(reachReads, reachPart)));
+          }
           // Away while the part still owes a read: the runtime's navigation reaches a page still
           // saving, whose part reads are each held unanswered from then on, so the part cannot draw
           // its last answer (`Saved.`) and stop on its own before the page leaves. The navigation's
@@ -568,14 +632,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // `AGAIN_SECONDS` from the held read's own address (parsed by the page as the runtime parses
           // a patch, resolved against the page it is delivered to, `readAgainFault`), or whose
           // release does not settle fails it, saying which. The 5 s are checked by that clock once
-          // the answer is fetched, again just before the fulfill is sent, and once the browser has
-          // finished the read, not by whether a timer has run: a release past them before its
-          // fulfill is sent aborts its read (and nothing answers it after), and one whose read the
-          // browser finishes past them fails as late. A release whose 5 s timer runs settles its
-          // route callback then: before its fulfill is sent it aborts the read, and after it cannot
-          // take the fulfill back, so it says the read's outcome is unconfirmed, which fails the
-          // check too. Without a held read it fails too, since a part that has stopped says nothing
-          // about leaving it.
+          // the answer is fetched and again just before the fulfill is sent, not by whether a timer
+          // has run: a release past them before its fulfill is sent aborts its read (and nothing
+          // answers it after). Once the fulfill is sent, the time the check heard the browser finish
+          // the read (its `requestfinished`, timestamped as it is heard) decides: one finished past
+          // the 5 s fails as late, and reading the finished answer's mark after that is the check's
+          // own work, which does not make a finish in time late. A release whose 5 s timer runs
+          // before its fulfill is sent aborts the read and settles its route callback then; one whose
+          // fulfill was sent waits 10 s more for the browser's end of the read and its mark, then
+          // says the read's outcome is unconfirmed, which fails the check too. Without a held read
+          // it fails too, since a part that has stopped says nothing about leaving it.
           /** How long no part read may come after the held reads are let go: longer than the part waits to read again. */
           const quietFor = AGAIN_SECONDS * 1000 + 1200;
           /** The address of the page the case leaves, once its write is sent: the route takes no read before. @type {string | null} */
@@ -595,16 +661,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             const request = route.request();
             if (gone || request.method() !== "GET" || request.headers()["corten"] !== "action") return route.fallback();
             // How the browser ends this read, heard from the moment it is held so its end cannot come
-            // before the check listens: true once it has finished loading an answer, else the
-            // browser's reason it failed.
+            // before the check listens: when it finished loading an answer, by the monotonic clock
+            // read as the check hears of it (`requestfinished`), else the browser's reason it failed.
             /** @type {() => void} */
             let unlisten = () => {};
-            /** @type {Promise<true | string>} */
+            /** @type {Promise<{ finishedAt: number } | string>} */
             const ended = new Promise((resolve) => {
               const finished = (/** @type {import("@playwright/test").Request} */ r) => {
                 if (r !== request) return;
+                const finishedAt = performance.now();
                 unlisten();
-                resolve(true);
+                resolve({ finishedAt });
               };
               const failed = (/** @type {import("@playwright/test").Request} */ r) => {
                 if (r !== request) return;
@@ -670,10 +737,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                       // finish this request, with this answer.
                       step = "the browser's end of its read";
                       const end = await ended;
-                      if (end !== true) return `its fulfill was sent but the browser failed the read (${end}), so it was not answered`;
+                      if (typeof end === "string") return `its fulfill was sent but the browser failed the read (${end}), so it was not answered`;
+                      // Late or not is decided by when the read finished, not by when its answer's
+                      // mark is read below, which is the check's own plumbing.
+                      if (end.finishedAt >= deadline) return `the browser finished the read ${Math.round(end.finishedAt - deadline)} ms after its 5 s, too late to count as answered`;
+                      step = "reading the mark of the answer the browser finished it with";
                       const mark = (await request.response())?.headers()["smoke-held"];
                       if (mark !== marker) return `the browser finished the read with an answer ${mark === undefined ? "without" : "with another"} smoke-held mark, not its fulfill's`;
-                      if (late()) return "the browser finished the read with its answer only after 5 s, too late to count as answered";
                       return fault;
                     } catch (error) {
                       // The page that sent it has left, or the read was cancelled: it is aborted, and
@@ -684,13 +754,18 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                   };
                   // The timer is armed before `reply` starts, with what is left of the same 5 s, so a slow
                   // start of its fetch does not stretch them.
-                  return within(Math.max(0, deadline - performance.now()), "its release did not settle within 5 s", Promise.resolve().then(reply))
+                  const replied = Promise.resolve().then(reply);
+                  return within(Math.max(0, deadline - performance.now()), "its release did not settle within 5 s", replied)
                     .catch((/** @type {Error} */ error) => {
                       over = true;
-                      // Its fulfill was sent, and it or the browser's end of the read has not
-                      // settled: it may still answer the read, and an abort now is refused, so what
-                      // became of the read is not known.
-                      if (sent) return `its fulfill was sent but the browser did not finish the read within 5 s: whether it answered the read is unconfirmed`;
+                      // Its fulfill was sent: an abort now is refused, and `reply` decides by when the
+                      // browser finished the read (a finish heard after the 5 s fails as late there), so
+                      // its outcome is waited for, 10 s more of plumbing. Not settled by then: whether the
+                      // fulfill answered the read is not known.
+                      if (sent)
+                        return within(10000, "", replied).catch(
+                          () => "its fulfill was sent but neither the browser's end of the read nor its answer's mark was heard within 10 s after its 5 s: whether it answered the read is unconfirmed",
+                        );
                       // Its fetch or answer never settled: the read is aborted and its callback
                       // settles now, not when (if ever) that work ends.
                       abort();

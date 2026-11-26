@@ -72,6 +72,8 @@ export async function pageWrites(page, browser) {
    * stand-in fails that write or hands the page its answer (`Since`): no read the page asked after
    * it saw that answer, or that write fail, has a place before it, and a bound on that read counts
    * from that time, not from when a check saw the outcome.
+   * `delivered` holds, by its place in `asked`, the same for each read a case held (`holdRead`), the
+   * moment the stand-in hands the page its answer once the hold is let go.
    * Making the context and the page is bounded to 30 s, Playwright's own timeout, as their closing
    * is (`opened`, `closeContext`); setting its route and marking it are each bounded to 5 s (its
    * load has Playwright's own 30 s), and the page is closed (`closeContext`) if one of them fails.
@@ -92,6 +94,8 @@ export async function pageWrites(page, browser) {
       /** @type {Record<string, string>} */ answered: {},
       /** By write number, the length of `asked` and the time when the stand-in failed or answered it. @type {Record<number, Since>} */
       settled: {},
+      /** By its place in `asked`, the length of `asked` and the time when the stand-in handed a held read its answer. @type {Record<number, Since>} */
+      delivered: {},
       /** Changes a navigation's <main>, given the request's place in `asked`. @type {(body: string, at: number) => string} */
       nav: (/** @type {string} */ body, /** @type {number} */ _at) => body,
       /** What a write's answer waits for, by the write's number. @type {(writes: number) => Promise<unknown> | undefined} */
@@ -142,7 +146,10 @@ export async function pageWrites(page, browser) {
               return route.abort("failed");
             }
             if (write) await seen.hold(writes);
-            else await holding;
+            else if (holding) {
+              await holding;
+              seen.delivered[at] = sinceNow(seen);
+            }
             if (write) seen.settled[writes] = sinceNow(seen);
             await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
             if (write) seen.answers += 1;
@@ -321,14 +328,21 @@ export async function pageWrites(page, browser) {
    * alone does not do: a place taken before the page is asked to do something (let a held body go)
    * lets in a read that reached the stand-in while that task waited to run, before what the read must
    * follow, and a read in the same millisecond as that moment may have come before it.
-   * @param {{ asked: string[], askedAt: number[] }} seen @param {Since} from
+   * Given `resumed`, a later time at which the page was let go of a read it was waiting on (a held
+   * read's answer handed to it), a first read that reached the stand-in after `resumed` has its 5 s
+   * counted from `resumed` instead: the page could not make it sooner. One that came before then
+   * keeps the 5 s from `from.time`, and a `resumed` not after `from.time` changes nothing.
+   * @param {{ asked: string[], askedAt: number[] }} seen @param {Since} from @param {number} [resumed]
    */
-  const readAsked = async (seen, from) => {
-    const by = from.time + 5000;
+  const readAsked = async (seen, from, resumed) => {
+    const after = resumed !== undefined && resumed > from.time ? resumed : undefined;
+    const last = (after ?? from.time) + 5000;
     const first = () => seen.asked.findIndex((a, i) => i >= from.at && seen.askedAt[i] > from.time && a.startsWith("GET /smoke/written/again"));
-    if (first() < 0) await pollFor(Math.max(0, by - Date.now()), async () => first() >= 0);
+    if (first() < 0) await pollFor(Math.max(0, last - Date.now()), async () => first() >= 0);
     const at = first();
-    return at >= 0 && seen.askedAt[at] <= by ? at : null;
+    if (at < 0) return null;
+    const by = (after !== undefined && seen.askedAt[at] > after ? after : from.time) + 5000;
+    return seen.askedAt[at] <= by ? at : null;
   };
   /**
    * Notes, from now on, whether the write's own <main> is drawn, the moment it is, with no element
@@ -381,13 +395,13 @@ export async function pageWrites(page, browser) {
    * taken at what the read follows (a write's `settled` moment, or a held body's release, its time
    * recorded by the page), not once the check has seen that in the page, by when the read may
    * already have been asked and its time run; without one (the write never answered) there is no
-   * such read.
+   * such read. `resumed` is `readAsked`'s.
    * @param {import("@playwright/test").Page} own @param {{ asked: string[], askedAt: number[] }} seen @param {Since | undefined} from @param {string} failure
-   * @param {string | null} [mark]
+   * @param {string | null} [mark] @param {number} [resumed]
    */
-  const nextPollDrawn = async (own, seen, from, failure, mark) => {
+  const nextPollDrawn = async (own, seen, from, failure, mark, resumed) => {
     if (from === undefined) return { again: null, drewAgain: false, drawn: null };
-    const at = await readAsked(seen, from);
+    const at = await readAsked(seen, from, resumed);
     const drawn = at === null ? null : await drawnBy(own, at, seen.askedAt[at] + 5000);
     const marked = mark === undefined || (mark !== null && drawn?.mark === mark);
     return { again: at === null ? null : seen.asked[at], drewAgain: !!drawn && drawn.failed === failure && marked, drawn };
@@ -1153,7 +1167,11 @@ export async function pageWrites(page, browser) {
       // (`pressWrite`), and the failure must be shown within 5 s of that. Then the held read is let
       // go: a whole read asked before the failure, which the runtime makes again as a read of <main>
       // (`deferWholeRead`, as the waiting-poll case below tests). The read checked below is the
-      // first asked after the write failed, which the held one is not.
+      // first asked after the write failed, which the held one is not. Its 5 s count from the
+      // stand-in failing the write, or, for a read that came after the held read's answer was handed
+      // to the page, from that moment (`resumed`): the page waits on the held read until then, and a
+      // runtime that drops its answer may read again on its one-second timer, so the time the check
+      // took to see the failure (up to its own 5 s) is not taken from the read's.
       /** @type {Awaited<ReturnType<typeof pressWrite>> | null} */
       let sentSecondAs = null;
       let held = false;
@@ -1178,9 +1196,13 @@ export async function pageWrites(page, browser) {
         }
       }
       releaseHeld();
+      // When the stand-in handed the held read its answer, once let go: the stand-in's plumbing,
+      // bounded to 10 s, not part of the read's 5 s.
+      const heldOne = heldAt;
+      const resumed = heldOne === null ? undefined : ((await pollFor(10000, async () => seen.delivered[heldOne] ?? false))?.time ?? undefined);
       // The page's first read of itself after the stand-in failed the second write, drawn with the
       // failure already shown.
-      const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "");
+      const { again, drewAgain, drawn } = await nextPollDrawn(own, seen, secondWrite === undefined ? undefined : seen.settled[secondWrite], "", undefined, resumed);
       // Looked at again at least 500 ms after that draw, by the time the page recorded as it drew it.
       if (drewAgain && drawn) await own.waitForTimeout(Math.max(0, drawn.time + 500 - Date.now()));
       const kept =

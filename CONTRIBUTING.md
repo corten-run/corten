@@ -357,14 +357,15 @@ against the base URL of the page it is delivered to (the page the case left for,
 runtime's fetch resolves it against), is the held read's own address. Without a held read it
 fails. Its holds are let go and its route removed in a `finally`, each bounded to five seconds. A
 release's five seconds are measured by the monotonic clock (`performance.now()`) from the release,
-and checked once its answer is fetched, again just before its fulfill is sent, and once the browser
-has finished the read, so a timer that runs late does not stretch them: a release past them before
-its fulfill is sent aborts its read, and one whose read the browser finishes past them fails as
-late. A release whose
-five-second timer runs before it has its outcome settles the route's callback then: before its
-fulfill is sent it aborts the read, and its late fetch, if it ever ends, does not answer it; after,
-it cannot abort the read (Playwright refuses an abort once a fulfill is under way), so the fulfill
-may still answer it: the read's outcome is reported as unconfirmed, and the check fails. The check of a navigation
+and checked once its answer is fetched and again just before its fulfill is sent, so a timer that
+runs late does not stretch them: a release past them before its fulfill is sent aborts its read,
+and its late fetch, if it ever ends, does not answer it. Once the fulfill is sent, the read is late
+only if the check heard the browser finish it (its `requestfinished`, timestamped as it is heard)
+after the five seconds; reading the finished answer's mark is the check's own work, so a read
+finished in time whose mark is read after them is not late. A release whose five-second timer runs
+after its fulfill is sent cannot abort the read (Playwright refuses an abort once a fulfill is under
+way): it waits ten seconds more for the browser's end of the read and its mark, judged as above,
+and without them reports the read's outcome as unconfirmed, and the check fails. The check of a navigation
 during a patch's stylesheet load holds the one stylesheet the patch links until the runtime has
 read the navigation's answer, and requires that
 the page did not swap while it was held and that the browser requested it once while it was
@@ -454,7 +455,10 @@ time of each outcome and request, and the page records the time it let a held bo
 asked later fails however soon the check looks. A read counts as after that moment only if it
 reached the stand-in after its time, not in the same millisecond, and not only after its place
 among the reads: a read that came while the page's task to let the body go waited to run came
-before the release, and one in the same millisecond may have. The page
+before the release, and one in the same millisecond may have. In the check whose next read after
+the whole one is held, a read that comes after the stand-in handed that held read its answer has its
+five seconds counted from that moment instead, which the stand-in records: the page waits on the
+held read until then, and the check's wait to see the failure has five seconds of its own. The page
 records, the moment it draws each mark, the time and whether the failure was shown; the `<main>`
 must be drawn within five seconds of the read reaching the stand-in by that recorded time, so a
 check that looks late neither fails a draw made in time nor passes one made after. The stand-in and the page record times by the same clock
@@ -549,7 +553,14 @@ shared page are removed, and its observer in the page disconnected, however it e
 removing the init script each bounded to five seconds; the init script then does nothing in the
 document it ran in, nor, by a switch the case sets in the page's session storage as it ends and
 clears once the removal is confirmed, in a later one, and the route lets each read through once the
-case is over, so neither acts on later checks if its removal is not confirmed. The slow part's reads
+case is over, so neither acts on later checks if its removal is not confirmed. The check that a
+page's part reached by the runtime's navigation is read again requires a part read of the reached
+page's own address, and the `Saved.` then shown drawn by an answer to one of those reads, which a
+route of its own marks as it answers them: a read of an earlier receipt's address draws the same
+`Saved.` in the same status line. That navigation, as each of the leaving cases' does, counts only
+if it drew its own `Saving...` within five seconds of its start by the page's clock, noted the
+moment it was drawn; asking the page to navigate and reading that note are bounded to 15 seconds
+each, so a draw in time does not fail because the note came back late. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
 the same, as its request listener is removed. The first check of a held slow part looks at it only
