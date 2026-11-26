@@ -27,7 +27,7 @@
     "workloads": [
       {
         "name": "plain",
-        "declared": "GET /private to the probe's configuration plain, no request header of its own: the record page for one visitor, about 6 KB, not kept. In the trend because it is the whole of a page's request: the connection, the routing, the stages, the handler, the page rendered and its headers written, so a cost added to any of them shows here.",
+        "declared": "GET /private to the probe's configuration plain, no request header of its own: the record page for one visitor, about 6 KB, not kept. In the trend because it is the whole of a page's request: the connection, the routing, the stages, the handler, the page rendered and its headers written, so a cost added to any of them on this request's path shows here. Not read by it: a cost on a path this request does not take (a request body, a compressed answer, a stream, a patch, a session), which the two workloads together do not show either.",
         "request": { "path": "/private", "headers": [] },
         "status": 200,
         "mask": [],
@@ -38,7 +38,7 @@
       },
       {
         "name": "unstaged",
-        "declared": "GET /unstaged to the probe's configuration plain, no request header of its own: a route that says unstaged, a short str out. In the trend because it is the least a request can be: the connection, the routing and the answer written, with no stage and no page, so a cost added around the handler is the largest share of this request that it is of any.",
+        "declared": "GET /unstaged to the probe's configuration plain, no request header of its own: a route that says unstaged, a short str out. In the trend because it is the least a request can be: the connection, the routing and the answer written, with no stage and no page, so a cost added around the handler is the largest share of this request that it is of any. Not read by it: a stage's cost, a page's rendering, and every path neither workload takes; two requests to one probe do not show every cost a change counts.",
         "request": { "path": "/unstaged", "headers": [] },
         "status": 200,
         "mask": [],

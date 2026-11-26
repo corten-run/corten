@@ -143,17 +143,20 @@ first on `PATH`.
 add up unseen ([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2.1,
 Trend). It has one plan, [`trend/plan.json`](trend/plan.json), one command and one page,
 [`trend/README.md`](trend/README.md), which holds a row a run. On a quiet Linux host prepared as
-above (`setup.sh` on a fresh Debian 13 host), in a checkout that has `main` and the release tags:
+above (`setup.sh` on a fresh Debian 13 host), in a full clone that has `main` and the release
+tags as the remote has them:
 
 ```sh
-git fetch --tags origin main
+git fetch --tags origin "+refs/heads/main:refs/remotes/origin/main"
 nohup node bench/placement/trend.mjs <run dir> ><run dir>.out 2>&1 &
 ```
 
-`<run dir>` is a new directory, an absolute path without white space outside the checkout.
-Leave the host alone until the command ends. The row is then in `trend/README.md`, to be
-committed as it is, and each part's `results` under `<run dir>` are what its figures are read
-from, to be kept as any run's are.
+The fetch names both ends of `main`, so it brings `origin/main` up to date in a clone that
+tracks another branch alone, where `git fetch origin main` leaves it as it was. `<run dir>` is a
+directory the command makes: an absolute path without white space, outside the checkout by
+where it really is (a link is followed), not there yet, in a directory that is. Leave the host
+alone until the command ends. The row is then in `trend/README.md`, to be committed as it is,
+and `<run dir>` is what its figures are read from, to be kept as any run's results are.
 
 The trend's plan is a plan as [the plan file](#the-plan-file) above, less what only a run can
 give, with the rules that give it. A field that is not in this table is refused.
@@ -162,44 +165,76 @@ give, with the rules that give it. A field that is not in this table is refused.
 | --- | --- |
 | `trend` | `1`, the format `trend.mjs` reads. |
 | `base` | `"release"`: the commit of the highest tag `vX.Y.Z` the checkout has when the run starts. |
-| `head` | A ref, `origin/main`, read as the checkout has it when the run starts. |
-| `seed` | `"date"`: a workload's seed is the run's date in UTC as `YYYYMMDD` and then its place in the plan as two digits (2026120201 for the first workload of a run of 2026-12-02), so each run has seeds of its own and nobody chooses one after a result. |
+| `head` | A remote's branch, `origin/main`, read as the checkout has it when the run starts. |
+| `seed` | `"date"`: a workload's seed is the run's date in UTC as `YYYYMMDD` and then its place in the plan as two digits (2026120201 for the first workload of a run of 2026-12-02), so each run has seeds of its own and nobody chooses one after a result. One run a date: the date names the run's plan too, so a date the page has a row of is refused, and a plan has at most 99 workloads. |
 | `threshold` | The rise the trend reports, as a fraction (`0.02`), read on the lower bound. |
-| `plan` | The plan, without `base`, `head` and each workload's `seed` and `expect`. Every workload's K is `"pilot"`: each run sizes K from its own pilot. `probe.dir` is a path from the trend's plan file and may lead out of its directory, since the run copies the probe beside its own plan. Each workload's `declared` says why it is in the trend. |
+| `plan` | The plan, without `base`, `head` and each workload's `seed` and `expect`. Every workload's K is `"pilot"`: each run sizes K from its own pilot. `probe.dir` is a path from the trend's plan file and may lead out of its directory, since the run copies the probe beside its own plan. It copies nothing else, so no workload names a `request.script`. Each workload's `declared` says why it is in the trend and what it does not read. |
 
-The command, in order, each step one of the commands above with its output under
-`<run dir>/log`:
+Before anything is made or run the command refuses, with exit 2: a run directory that is not as
+above, a shallow checkout (the commits `main` merged since a row cannot all be listed from one),
+a plan that cannot be read or used, a page that is not the table the command writes or that has
+a row of today's date (a dry run, which adds none, is not refused for the date), and a checkout
+without a release tag or the plan's branch. Then, in
+order, each step one of the commands above with its output under `<run dir>/log`:
 
 1. It writes the run's plan from the trend's: the two commits, the seeds and a copy of the probe.
 2. For each workload it resolves and builds a dry part and turns nothing, so a probe that does
    not build at the release tag, or a side `build.sh` refuses, is known before any turn. It then
    starts the two sides' unpadded binaries once and compares their answers as `turns.sh`
-   compares a placement's. A release and `main` may answer differently (today they do on
-   `plain`: the page names the runtime's file by a hash of it), and no plan written before the
-   run can say how. So the difference found there is kept as the workload's `expect` for this
-   run: every placement must show exactly that difference, and the row says "answers differ".
-3. It runs each workload's pilot and then its gated part at the K that pilot sizes.
-4. It reads each gated part's `report.json` and adds the row.
+   compares a placement's, stopped at the plan's `placementSeconds` as a placement is. A release
+   and `main` may answer differently (today they do on `plain`: the page names the runtime's
+   file by a hash of it), and no plan written before the run can say how. So the difference
+   found there is kept as the workload's `expect` for this run
+   (`<run dir>/expect-<workload>.txt`), with the two bodies' digests
+   (`<run dir>/bodies-<workload>.txt`), and the row says "answers differ as recorded". Nobody
+   reviewed that difference: the run recorded it.
+3. It runs each workload's pilot and then its gated part at the K that pilot sizes. After each
+   part it reads every placement's `answers/bodies.txt` and requires the two bodies the check
+   kept: the release's on both sides of a pilot's or an A/A's placement, the release's and
+   `main`'s in the change. `turns.sh` holds a placement to the expected difference, which has
+   the header lines that differ and the two bodies' lengths, and keeps the bodies' digests
+   without comparing them, so a third body of the same length passes it and does not pass here.
+4. It reads each gated part's `report.json`, keeps the row as `<run dir>/row.md` and then adds
+   it to the page, which it replaces whole from a file written beside it.
 
-A workload is read when its gated part is complete, its A/A resolved and its K checked by the
-kit. It is past the threshold when the lower bound of the change, `main` against the release,
-is at or above the threshold, and passes otherwise. Anything else is "not read", with the
-reason in the row, never a pass: a probe that does not build at the release tag, a pilot that
-sizes no K, an A/A that does not resolve, a comparison without a bound. Nothing is run again
-for its result, and a run directory that holds anything is refused. The kit's own page for a
-gated part still reads its bound against +1%, as for a change; the trend's row does not.
+A workload is read only when every step of its pilot and its gated part ended with status 0
+and the gated part's `report.json` says it is this run's (the plan file's SHA-256, the two
+commits and the workload), complete, at the K this run's pilot sized, with figures that are
+numbers and agree with each other, and its A/A resolved. It is then past the threshold when the
+lower bound of the change, `main` against the release, is at or above the threshold, and a pass
+otherwise. A pass says the run did not show a rise of at least the threshold. It does not say
+the cost is under it: a lower bound of +1.9% under a bound of +5% is a pass. Anything else is
+"not read", with the reason in the row, never a pass: a probe that does not build at the
+release tag, answers not compared in time, a pilot that sizes no K, a step that failed whatever
+report it left, a report that cannot be read, a placement with another body, an A/A that does
+not resolve, a comparison without a bound. One workload not read leaves the other to be read
+and the row to be written. Nothing is run again for its result. The kit's own page for a gated
+part still reads its bound against +1%, as for a change; the trend's row does not.
 
-A run past its threshold prints the pull requests `main` merged from the row before it to this
-one (from the release, when the page has no row) and an issue's title and body, kept as
-`<run dir>/issue.md`. The command exits 0 when every workload is read and none is past the
-threshold, 1 when one is past it, 3 when one is not read and 2 when it refused to start.
-`DRYRUN=1` makes every part a dry run: the row goes to `<run dir>/row.md` alone, marked, and
-the page is left as it was.
+For a run past its threshold the command drafts an issue, its title and body kept as
+`<run dir>/issue.md`, with the pull requests `main` merged from the row before it to this one
+(from the release when the page has no row, or none whose commit the checkout has, which the
+draft then says). It opens nothing: whether the draft becomes an issue or is added to one
+already open is for whoever made the run. A list git could not give is said to be unread, not
+empty.
 
-What the command does not do: start or prepare a host, commit the row, keep the results, or
-open the issue. The issue's list leaves each pull request's `Request path:` line and counted
-cost to be added from its description, since the command calls no service. It does not check
-that the host is quiet or that nobody logged in while it ran.
+| Exit | What ended |
+| --- | --- |
+| 0 | Every workload was read and none is past the threshold. |
+| 1 | A workload is past the threshold, and every workload was read. |
+| 3 | A workload was not read, whatever another read: 3 outranks 1, and the issue is still drafted for a workload that is past. |
+| 2 | Refused, with nothing run, nothing made and no row. |
+| 4 | `trend.mjs` itself failed: a defect in it, or a page that changed while the run was made so that its row cannot be added. Once the parts have run, the row is in `<run dir>/row.md` before the page is touched. |
+
+`DRYRUN=1` makes every part a dry run: the row goes to `<run dir>/row.md` alone, marked, the
+page is left as it was and no issue is drafted, whatever a report holds. It exits 0 when every
+part ran to its end as a dry run, though nothing was read, and 3 otherwise.
+
+What the command does not do: start or prepare a host, commit the row, keep the results, open
+the issue, or review how the two sides' answers differ. The draft's list leaves each pull
+request's `Request path:` line and counted cost to be added from its description, since the
+command calls no service. It does not check that the host is quiet or that nobody logged in
+while it ran.
 
 ## What each check proves
 
@@ -321,9 +356,11 @@ tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-
 (the maps), which are too large for `bench/`; in a checkout without those tags they fail with the
 `git fetch` that brings them ([`tags.mjs`](tags.mjs)).
 
-Those tests run no shell script, so what `build.sh`, `run.sh`, `verify.sh` and `turns.sh` refuse
-is held by the selftest alone, on a host that has `perf` and `wrk`, and by nothing in
-`npm run check`. The selftest's `inputs` case holds `build.sh`'s four checks of the files named
+Those tests run one shell script, and only on Linux: `trend.test.mjs` runs the trend's answers
+check, which is `turns.sh` with no pair turned, on servers of its own (the same answer, two
+bodies of one length, a side that never answers). What `build.sh`, `run.sh`, `verify.sh` and
+`turns.sh` refuse otherwise is held by the selftest alone, on a host that has `perf` and `wrk`,
+and by nothing in `npm run check`. The selftest's `inputs` case holds `build.sh`'s four checks of the files named
 by path and `run.sh`'s two, `refusals` holds `run.sh`'s refusal of results already there, of
 binaries built for another part and of another CPU model, and `zero` holds the above-zero test
 of the counters before a run and in a turn. Held by a whole run on a host and by no case: the
