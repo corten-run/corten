@@ -1212,36 +1212,50 @@ fn what_is_sent_behind_loses_its_dates_wherever_it_begins() {
 /// Its own connection counts them from the stream's start; one Corten's connection handed over
 /// counts them from the request with the body, since the requests before it were answered without
 /// hyper ([`crate::h1::Rewound`] gives hyper's first read what one read of its own would hold from
-/// there). So a body that ends past hyper's second read, by no more than the requests before it
-/// are long, has the request behind it answered with the switch on and not with it off. That is
-/// the one difference in what a connection with an unread body does next, fixed here at its edges
-/// on both sides: nothing is answered twice or out of order, and the bytes before the cut are the
-/// same.
+/// there). So where the body ends past hyper's second read, by no more than the requests before
+/// it are long, the request behind it is answered with the switch on and not with it off; and
+/// where the requests before it are longer than hyper's first read, hyper's own connection has
+/// read further by the time it meets the body (each read that fills doubles the next), and keeps
+/// a connection the handed one closes. That is the one difference in what a connection with an
+/// unread body does next, fixed here at its edges for the first and well inside it for the
+/// second: nothing is answered twice or out of order, and the bytes before the cut are the same.
 #[tokio::test(start_paused = true)]
 async fn a_long_unread_body_is_cut_where_hypers_reads_end() {
     const READS: usize = 8_192 + 16_384;
-    let before = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n".repeat(10);
+    let get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
     let behind = "GET /json HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n";
-    // A stream whose body ends `ends` bytes from where the request with the body begins.
-    let stream = |ends: usize| {
+    // A stream of `gets` requests, then one whose body ends `ends` bytes from where it begins,
+    // then one more.
+    let stream = |gets: usize, ends: usize| {
         let head = |length: usize| format!("POST /unread HTTP/1.1\r\nhost: localhost\r\ncontent-length: {length}\r\n\r\n");
         let length = ends - head(10_000).len();
         assert_eq!(head(length).len() + length, ends, "a length of five digits");
-        let bytes = [before.as_bytes(), head(length).as_bytes(), &vec![b'x'; length], behind.as_bytes()].concat();
+        let bytes = [get.repeat(gets).as_bytes(), head(length).as_bytes(), &vec![b'x'; length], behind.as_bytes()].concat();
         Stream { index: 0, writes: vec![bytes], closes: false, pipe: WIDE }
     };
     let (hyper, own) = (serve(false, 32 * 1024), serve(true, 32 * 1024));
-    // Where the body ends, and how many requests each answers: the ten before, the one with the
-    // body, and the one behind it where the connection was kept.
-    let edges = [(READS - before.len(), 12, 12), (READS - before.len() + 1, 11, 12), (READS, 11, 12), (READS + 1, 11, 11)];
-    for (ends, hypers, owns) in edges {
-        let stream = stream(ends);
+    // How many requests come before the one with the body, where its body ends, and whether each
+    // answers the request behind it (it kept the connection).
+    let before = 10 * get.len();
+    let cases = [
+        (10, READS - before, true, true),
+        (10, READS - before + 1, false, true),
+        (10, READS, false, true),
+        (10, READS + 1, false, false),
+        // The head of the request with the body is cut by hyper's first read, so its own
+        // connection has made a second by then and its third is of 32 KiB.
+        (8_192 / get.len(), 30_000, true, false),
+    ];
+    for (gets, ends, hypers, owns) in cases {
+        let stream = stream(gets, ends);
         let (theirs, ours) = (exchange(&hyper, &stream).await, exchange(&own, &stream).await);
         let statuses = |outcome: &Outcome| answers(&outcome.before.0).iter().map(|answer| answer.status).collect::<Vec<_>>();
-        assert_eq!(statuses(&theirs), vec![200; hypers], "hyper's, a body that ends at {ends}");
-        assert_eq!(statuses(&ours), vec![200; owns], "own, a body that ends at {ends}");
-        assert!(theirs.closed && ours.closed, "a body that ends at {ends}: {} and {}", theirs.closed, ours.closed);
-        assert!(ours.before.0.starts_with(&theirs.before.0), "a body that ends at {ends}: the bytes before the cut differ");
-        assert_eq!(hypers == owns, theirs == ours, "a body that ends at {ends}");
+        let what = format!("behind {gets} requests, a body that ends at {ends}");
+        assert_eq!(statuses(&theirs), vec![200; gets + 1 + usize::from(hypers)], "hyper's, {what}");
+        assert_eq!(statuses(&ours), vec![200; gets + 1 + usize::from(owns)], "own, {what}");
+        assert!(theirs.closed && ours.closed, "{what}: {} and {}", theirs.closed, ours.closed);
+        let (short, long) = if hypers { (&ours, &theirs) } else { (&theirs, &ours) };
+        assert!(long.before.0.starts_with(&short.before.0), "{what}: the bytes before the cut differ");
+        assert_eq!(hypers == owns, theirs == ours, "{what}");
     }
 }
