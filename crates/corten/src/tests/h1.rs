@@ -2079,3 +2079,54 @@ async fn an_answers_trailers_are_dropped_and_its_trailer_line_with_them() {
     hyper.stop().await;
     own.stop().await;
 }
+
+/// A client that has closed its side by the time the connection comes to a request of its is not
+/// answered that request, on both connections, however quick the handler: hyper looks for the
+/// client's end when it has read a head with nothing behind it, before it asks the handler, and
+/// Corten's connection looks there too. The requests before that one, read with it behind them,
+/// are answered, and their answers reach the client. (The first request's handler waits here, so
+/// the client's end has come when the last request's turn does; a client that stays is answered
+/// every request.)
+#[tokio::test]
+async fn a_request_whose_client_has_closed_its_side_by_its_turn_is_not_answered() {
+    let slow = format!("GET /slow HTTP/1.1\r\n{HOST}\r\n");
+    let mut answers = Vec::new();
+    for own in BOTH {
+        let begun = Arc::new(AtomicUsize::new(0));
+        let quick = {
+            let begun = begun.clone();
+            move || {
+                let begun = begun.clone();
+                async move {
+                    begun.fetch_add(1, SeqCst);
+                    "hi"
+                }
+            }
+        };
+        let wait = || async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            "slow"
+        };
+        let table = Table::new().route("/", get(quick)).route("/slow", get(wait));
+        let served = Served::start(App::new(Routes::from(table)), own).await;
+        for behind in 1..=3 {
+            begun.store(0, SeqCst);
+            let mut client = TcpStream::connect(served.addr).await.unwrap();
+            client.write_all(format!("{slow}{}", GET.repeat(behind)).as_bytes()).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            client.shutdown().await.unwrap();
+            let (got, closed) = read(&mut client, SOON).await;
+            assert!(closed, "own: {own}, {behind} behind: the connection is closed: {got}");
+            assert_eq!(statuses(&got), vec![200; behind], "own: {own}, {behind} behind: {got}");
+            assert_eq!(begun.load(SeqCst), behind - 1, "own: {own}, {behind} behind: the last handler is not asked");
+            answers.push(dateless(&got));
+        }
+        begun.store(0, SeqCst);
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        client.write_all(format!("{slow}{GET}").as_bytes()).await.unwrap();
+        let got = several(&mut client, 2).await;
+        assert_eq!((statuses(&got), begun.load(SeqCst)), (vec![200, 200], 1), "own: {own}, a client that stays: {got}");
+        served.stop().await;
+    }
+    assert_eq!(answers[3..], answers[..3]);
+}
