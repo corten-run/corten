@@ -3,9 +3,9 @@
 // item 2.1, Trend; docs/design.md#choice-counted-or-measured):
 //   node trend.mjs <run dir>
 // on a quiet Linux host prepared as README.md says one is for a placement run, from a full
-// (not shallow) checkout that has `main` and the release tags fetched. <run dir> is a directory
-// the command makes: an absolute path without white space, outside the checkout, that is not
-// there yet and whose parent is. The run takes hours, so start it detached and leave the host
+// (not shallow, not partial) checkout that has `main` and the release tags fetched. <run dir>
+// is a directory the command makes: an absolute path without white space, outside the checkout,
+// that is not there yet and whose parent is. The run takes hours, so start it detached and leave the host
 // alone until it ends:
 //   nohup node trend.mjs <run dir> ><run dir>.out 2>&1 &
 // The row is in trend/README.md when it ends, to be committed as it is, and <run dir> is what
@@ -27,7 +27,8 @@
 //              <run dir>/probe, the probe's copy
 //   check      for each workload a dry part of that plan is resolved and built (plan.mjs with
 //              DRYRUN=1, build.sh), which turns nothing: so a probe that does not build at the
-//              release tag, or a side the kit refuses, is known before any turn. The two sides'
+//              release tag, or a side the kit refuses for its sections, is known before any
+//              turn (a placement no second pad fits, when its own part is built). The two sides'
 //              unpadded binaries are then started once and their answers compared as turns.sh
 //              compares a placement's, under a placement's time limit. A release and `main` may
 //              answer differently, and no plan written before the run can say how, so the
@@ -39,14 +40,14 @@
 //              declares (<run dir>/declared.txt)
 //   parts      for each workload its pilot and then its gated part at the K that pilot sizes,
 //              each as README.md gives the commands: plan.mjs, build.sh, run.sh. After a part,
-//              every placement's two bodies must be the ones the check kept (turns.sh compares a
-//              placement's headers and its bodies' lengths with the expected difference, and
-//              keeps the bodies' digests without comparing them)
+//              every placement the part was resolved to have must show the two bodies the check
+//              kept (turns.sh compares a placement's headers and its bodies' lengths with the
+//              expected difference, and keeps the bodies' digests without comparing them)
 //   row        each workload's reading from its gated part's report.json, kept as
 //              <run dir>/row.md and then added to the page, newest first
 // A workload is read only when every step of its two parts ended with status 0 and its gated
 // part's report.json says the part is this run's (the plan, base, head and workload), complete,
-// at the K this run's pilot sized, with figures that are numbers and agree, and its A/A
+// at the K this run's pilot sized, with figures that are numbers, and its A/A
 // resolved. It is then past the threshold when the lower bound of the change in user plus
 // kernel cycles a request, `main` against the release, is at or above the threshold, and a pass
 // otherwise: a pass says the run did not show a rise of at least the threshold, not that the
@@ -54,11 +55,15 @@
 // failed (whatever report it left), a report that cannot be read, a pilot that sizes no K, an
 // A/A that does not resolve, a comparison without a bound. A probe that does not build at the
 // release tag is such a row, for every workload. Nothing is run again.
+// What is trusted: what the kit's own scripts wrote in the run's directory during this run,
+// when the step that wrote it ended with status 0. The command does not defend against a file
+// edited by hand or by another process. It does guarantee that nothing it cannot read becomes a
+// pass or loses the row: such a workload is "not read", and the row is written.
 // Past the threshold the command drafts an issue, its title and body kept as
 // <run dir>/issue.md, with the pull requests merged from the row before this one's head to this
-// one's (from the release when the page has no row, or none whose commit the checkout has). It
-// calls no service: opening the issue, or adding the draft to one already open, is the
-// reader's.
+// one's (from the release when the page has no row, or one whose commit this run's head does
+// not descend from, which the draft says). It calls no service: opening the issue, or adding
+// the draft to one already open, is the reader's.
 // Exit 0: every workload read and none past the threshold; 1: one past it and every workload
 // read; 3: a workload not read, whatever another read (3 outranks 1); 2: refused, with nothing
 // run, nothing made and no row; anything else (4): trend.mjs itself failed, by a defect in it
@@ -69,11 +74,11 @@
 // 0 when every part ran to its end as a dry run, though nothing was read, and 3 otherwise.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve as path, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { problems as planProblems } from "./plan.mjs";
-import { MARGIN, pct } from "./stats.mjs";
+import { K_MAX, K_MIN, problems as planProblems } from "./plan.mjs";
+import { pct } from "./stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const PLAN = join(here, "trend", "plan.json"), PAGE = join(here, "trend", "README.md");
@@ -112,7 +117,7 @@ export function resolved(t, { base, head, date, expect = {} }) {
   };
 }
 
-/** Why a trend's plan is not usable, or [] when it is. It throws for nothing a file can hold. */
+/** Why a trend's plan is not usable, or [] when it is. */
 export function problems(t) {
   if (!obj(t) || t.trend !== 1) return ['"trend": 1 is missing: not a trend plan this kit reads'];
   const why = Object.keys(t).filter((k) => !FIELDS.includes(k)).map((k) => `"${k}" is not a field of a trend's plan`);
@@ -136,16 +141,17 @@ export function problems(t) {
     }
   }
   if (why.length) return why;
-  try { return planProblems(resolved(t, { base: "0".repeat(40), head: "0".repeat(40), date: "2000-01-01" })).map((x) => `plan: ${x}`); } catch (e) { return [`plan: plan.mjs cannot judge it: ${e.message}`]; }
+  return planProblems(resolved(t, { base: "0".repeat(40), head: "0".repeat(40), date: "2000-01-01" })).map((x) => `plan: ${x}`);
 }
 
 /**
  * One workload's reading. report: its gated part's report.json, read only when every step of
  * the part ended with status 0, or null; why: why there is none to read. expect: what this
  * run's report must say of itself, { plan (the SHA-256 of the run's plan file), base, head,
- * dry, K (the K this run's pilot sized) }. state is "pass", "past" (the threshold) or "not
- * read"; text is what the row says. Nothing a report can hold makes a pass or a past but a
- * complete gated part of this run with figures that are numbers.
+ * dry, K (the K this run's pilot sized), from (that pilot's run id) }. state is "pass", "past"
+ * (the threshold) or "not read"; text is what the row says. The change's figures are read from
+ * one place, the report's own measure. A value no report of the kit's holds may make this
+ * throw, which a run catches as "not read".
  */
 export function reading(threshold, workload, { report = null, why = null, expect = null } = {}) {
   const not = (text) => ({ workload, state: "not read", text });
@@ -158,17 +164,16 @@ export function reading(threshold, workload, { report = null, why = null, expect
   for (const k of ["plan", "base", "head"]) if (typeof report[k] !== "string" || report[k] !== expect[k]) return not(`the report is of another ${k} than this run's`);
   if (report.dry !== Boolean(expect.dry)) return not(report.dry === true ? "the report is a dry run's, and this run is not one" : "the report is not a dry run's, and this run is one");
   const complete = report.exit === 0 && report.complete[`aa-${workload}`] === true && report.complete[`change-${workload}`] === true;
-  const figures = `${fmt(c.lower)} to ${fmt(g.changeBound)}, median ${fmt(g.changeMedian)}, K = ${report.K}`;
+  const figures = `${fmt(c.lower)} to ${fmt(c.bound)}, median ${fmt(c.median)}, K = ${report.K}`;
   if (report.dry) return { ...not(`DRY RUN, read for nothing (${figures})`), dry: true, complete };
   if (!complete) return not("the gated part is not complete: a comparison without all its placements has no bound");
-  if (!Number.isInteger(report.K) || !obj(report.sized) || report.sized.K !== report.K) return not("K was not checked by the kit");
-  if (report.K !== expect.K) return not(`K = ${report.K} is not the K this run's pilot sized`);
+  if (!Number.isInteger(report.K) || report.K < K_MIN || report.K > K_MAX || !obj(report.sized) || report.sized.K !== report.K) return not("K was not checked by the kit");
+  if (report.K !== expect.K || report.sized.from !== expect.from) return not(`K = ${report.K} is not the K this run's pilot sized`);
   const number = (...xs) => xs.every((x) => typeof x === "number" && Number.isFinite(x));
   if (g.resolution === "no bound" || !number(g.aaBound, g.aaBoundSwapped)) return not("the A/A has no bound");
   if (g.resolution !== "resolved") return not(`the A/A did not resolve (bounds ${fmt(g.aaBound)} and ${fmt(g.aaBoundSwapped)}, against +1%)`);
-  if (!number(c.lower, c.bound, g.changeBound, g.changeMedian)) return not("main against the release has no bound");
-  if (!(g.aaBound < MARGIN && g.aaBoundSwapped < MARGIN) || c.bound !== g.changeBound || !(c.lower <= g.changeMedian && g.changeMedian <= c.bound)) return not("the report's figures do not agree with each other");
-  return { workload, state: c.lower >= threshold ? "past" : "pass", text: `${figures}, A/A resolved`, lower: c.lower, bound: g.changeBound, median: g.changeMedian };
+  if (!number(c.lower, c.bound, c.median)) return not("main against the release has no bound");
+  return { workload, state: c.lower >= threshold ? "past" : "pass", text: `${figures}, A/A resolved`, lower: c.lower, bound: c.bound, median: c.median };
 }
 
 /**
@@ -197,10 +202,16 @@ export function row({ date, tag, base, head, threshold, readings, differ = [] })
 const ID = `\\[\`([0-9a-f]{9})\`\\]\\(${REPOSITORY.replace(/[.\/]/g, "\\$&")}\\/commit\\/([0-9a-f]{40})\\)`;
 const ROW = new RegExp(`^\\| (\\d{4}-\\d{2}-\\d{2}) \\| (v\\d+\\.\\d+\\.\\d+) ${ID} \\| ${ID} \\| (.*) \\| ((?:[^|\\\\]|\\\\.)*) \\|$`);
 
+/** A line as row() writes one, { date, tag, base, head, workloads, reading }, or null. */
+function parsed(line) {
+  const m = ROW.exec(line);
+  return m && m[4].startsWith(m[3]) && m[6].startsWith(m[5]) ? { date: m[1], tag: m[2], base: m[4], head: m[6], workloads: m[7], reading: m[8] } : null;
+}
+
 /**
  * The page as both reading and adding a row take it, or an error saying why it is not one:
  * one kind of line ending, the table's two heading lines once, under them rows this command
- * wrote and nothing else to the page's end.
+ * wrote, the newest first and one a date, and nothing else to the page's end.
  */
 function table(page) {
   const eol = page.includes("\r\n") ? "\r\n" : "\n";
@@ -210,9 +221,10 @@ function table(page) {
   const rest = lines.slice(at + 2), rows = [];
   let n = 0;
   for (; n < rest.length && rest[n] !== ""; n++) {
-    const m = ROW.exec(rest[n]);
-    if (!m || !m[4].startsWith(m[3]) || !m[6].startsWith(m[5])) throw new Error(`the page has a row trend.mjs did not write: ${rest[n]}`);
-    rows.push({ date: m[1], tag: m[2], base: m[4], head: m[6], workloads: m[7], reading: m[8] });
+    const r = parsed(rest[n]);
+    if (!r) throw new Error(`the page has a row trend.mjs did not write: ${rest[n]}`);
+    if (rows.length && !(r.date < rows.at(-1).date)) throw new Error(`the page's rows are not the newest first, one a date: ${r.date} is under ${rows.at(-1).date}`);
+    rows.push(r);
   }
   const under = rest.slice(n).find((l) => l !== "");
   if (under !== undefined) throw new Error(`the page has text under its table's rows, which end the page: ${under}`);
@@ -224,9 +236,9 @@ export const rows = (page) => table(page).rows;
 
 /** The page with a run's row added under the table's heading, above every earlier row. */
 export function insert(page, line) {
-  const t = table(page), m = ROW.exec(line);
-  if (!m) throw new Error(`not a row trend.mjs writes: ${line}`);
-  if (t.rows.some((r) => r.date === m[1])) throw new Error(`the page already has a row of ${m[1]}`);
+  const t = table(page), r = parsed(line);
+  if (!r) throw new Error(`not a row trend.mjs writes: ${line}`);
+  if (t.rows.length && !(t.rows[0].date < r.date)) throw new Error(`the page already has a row of ${t.rows[0].date}, and a row goes above rows of earlier dates alone`);
   t.lines.splice(t.at + 2, 0, line);
   return t.lines.join(t.eol);
 }
@@ -296,17 +308,14 @@ export function bodies(file) {
 }
 
 /**
- * Why a part's placements did not all answer with the two bodies the check kept, or null:
+ * Why the placements a part was resolved to have (schedule: its resolved.json's, each
+ * { comparison, i }) did not every one answer with the two bodies the check kept, or null:
  * the release's on both sides of an A/A, the release's and main's in the change.
  */
-export function stray(results, part, w, kept) {
-  for (const c of part === "pilot" ? [`pilot-${w}`] : [`aa-${w}`, `change-${w}`]) {
-    const dirs = existsSync(join(results, c)) ? readdirSync(join(results, c)).filter((d) => /^p\d+$/.test(d)).sort() : [];
-    if (!dirs.length) return `${c} kept no placement whose bodies can be checked`;
-    for (const d of dirs) {
-      const got = bodies(join(results, c, d, "answers", "bodies.txt")), b = c === `change-${w}` ? kept.b : kept.a;
-      if (!got || got.bytes !== kept.bytes || got.a !== kept.a || got.b !== b) return `${c} ${d} answered with other bodies than the run recorded before any turn (${got ? got.line : "no bodies.txt as the kit writes it"}; recorded: sha256 ${kept.a} and ${b})`;
-    }
+export function stray(results, schedule, w, kept) {
+  for (const { comparison: c, i } of schedule) {
+    const d = `p${String(i).padStart(3, "0")}`, got = bodies(join(results, c, d, "answers", "bodies.txt")), b = c === `change-${w}` ? kept.b : kept.a;
+    if (!got || got.bytes !== kept.bytes || got.a !== kept.a || got.b !== b) return `${c} ${d} answered with other bodies than the run recorded before any turn (${got ? got.line : "no bodies.txt as the kit writes it"}; recorded: sha256 ${kept.a} and ${b})`;
   }
   return null;
 }
@@ -370,14 +379,17 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
   if (within(physical(top), dir)) refuse(`${dir} is inside the checkout: a run's directory is outside it`);
   const shallow = git("rev-parse", "--is-shallow-repository");
   if (shallow !== "false") refuse(shallow === "true" ? "the checkout is shallow, so the commits main merged since a row cannot all be listed from it: use a full clone (git fetch --unshallow)" : "git could not say whether the checkout is shallow");
-  let t;
-  try { t = JSON.parse(readFileSync(plan, "utf8")); } catch (e) { refuse(`${plan} cannot be read as a trend plan: ${e.message}`); }
-  const bad = problems(t);
+  const partial = exec("git", ["-C", here, "config", "--get-regexp", "^remote\\..*\\.promisor$"], { env }).status;
+  if (partial !== 1) refuse(partial === 0 ? "the checkout is a partial clone (a remote of it is a promisor), which lacks objects and fetches them as they are read, so a run would build and list from what it does not hold: use a full clone" : "git could not say whether the checkout is a partial clone");
+  let t, bad;
+  try { t = JSON.parse(readFileSync(plan, "utf8")); bad = problems(t); } catch (e) { refuse(`${plan} cannot be read as a trend plan: ${e.message}`); }
   if (bad.length) refuse(`${plan} is not a usable trend plan:\n  ${bad.join("\n  ")}`);
+  const probe = path(dirname(plan), t.plan.probe.dir);
+  if (!existsSync(probe)) refuse(`${probe}, the plan's probe, is not there`);
   const dry = env.DRYRUN === "1";
   let earlier;
   try { earlier = rows(readFileSync(page, "utf8")); } catch (e) { refuse(`${page}: ${e.message}`); }
-  if (!dry && earlier.some((r) => r.date === date)) refuse(`the page already has a row of ${date}: one run a date (UTC), since the date gives a run its seeds and its plan's name`);
+  if (!dry && earlier[0]?.date >= date) refuse(`the page already has a row of ${earlier[0].date}: one run a date (UTC), each later than the page's rows, since the date gives a run its seeds and its plan's name`);
   const tags = git("tag", "--list", "v*") ?? refuse("git could not list the checkout's tags");
   const tag = latest(tags.split("\n")) ?? refuse("the checkout has no release tag vX.Y.Z: fetch the tags (git fetch --tags)");
   const base = commit(`refs/tags/${tag}`, `${tag} names no commit`);
@@ -389,7 +401,7 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
 
   const names = t.plan.workloads.map((w) => w.name), logs = join(dir, "log");
   mkdirSync(logs);
-  cpSync(path(dirname(plan), t.plan.probe.dir), join(dir, "probe"), { recursive: true });
+  cpSync(probe, join(dir, "probe"), { recursive: true });
   const write = (name, expect) => { const f = join(dir, name); writeFileSync(f, JSON.stringify(resolved(t, { base, head, date, expect }), null, 2) + "\n"); return f; };
   say(`trend ${date}${dry ? " (DRY RUN: a test of the scripts, read for nothing)" : ""}: ${t.head} ${head} against ${tag} ${base}; threshold ${pct(t.threshold)} on the lower bound; workloads ${names.join(", ")}`);
 
@@ -442,12 +454,12 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
   if (declared.status !== 0) for (const w of names) why[w] ??= `plan.mjs refused the plan: ${clean(String(declared.stderr ?? "").trim().split("\n").at(-1))}`;
   else say(String(declared.stdout ?? "").trimEnd());
 
-  // Each workload's pilot and then its gated part, as README.md gives the commands. A part
-  // counts only when each of its steps ended with status 0 and its placements answered with
-  // the bodies the check kept; a report a failed part left is not read.
-  const reports = {}, sizedK = {};
-  for (const w of names) {
-    if (why[w]) continue;
+  // A workload's pilot and then its gated part, as README.md gives the commands, and its
+  // reading, or why it has none. A part counts only when each of its steps ended with status 0
+  // and every placement it was resolved to have answered with the bodies the check kept; a
+  // report a failed part left is not read.
+  const json = (...f) => JSON.parse(readFileSync(join(...f), "utf8"));
+  const workload = (w) => {
     const pilot = join(dir, `${w}-pilot`), gated = join(dir, `${w}-gated`);
     const part = (name, work, more = []) => {
       let failed = step(`${w}-${name}-plan`, process.execPath, [kit("plan.mjs"), file, name, w, work, ...more], { pattern: /^plan\.mjs: |sizes no K|does not pass/ });
@@ -456,31 +468,30 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
       if (failed) return failed.status === 3 ? clean(said(join(work, "bin", "refused.txt"))).replace(/^REFUSED: /, "the kit refuses the run: ") : `the ${name} part was not built: ${failed.said}`;
       failed = step(`${w}-${name}-run`, "sh", [kit("run.sh"), work], { pattern: /^RUN-ENDED / });
       if (failed) return `the ${name} part ended ${failed.said.replace(/^RUN-ENDED /, "")}`;
-      const other = stray(join(work, "results"), name, w, kept[w]);
+      const other = stray(join(work, "results"), json(work, "plan", "resolved.json").schedule, w, kept[w]);
       return other && `the ${name} part: ${clean(other)}`;
     };
-    const read = (name, work) => { try { return JSON.parse(readFileSync(join(work, "results", "report.json"), "utf8")); } catch (e) { why[w] = `the ${name} part's report.json cannot be read: ${clean(e.message)}`; return null; } };
-    why[w] = part("pilot", pilot);
-    if (why[w]) continue;
-    if (!dry) {
-      const p = read("pilot", pilot);
-      if (!p) continue;
-      sizedK[w] = obj(p.pilot) && obj(p.pilot.sizing) && p.pilot.sizing.ok === true ? p.pilot.sizing.K : null;
-    }
-    why[w] = part("gated", gated, ["--sized-from", join(pilot, "results")]);
-    if (why[w]) continue;
-    reports[w] = read("gated", gated);
-  }
-
-  const readings = names.map((w) => reading(t.threshold, w, { report: reports[w] ?? null, why: why[w] || null, expect: { plan: sha, base, head, dry, K: sizedK[w] } }));
+    let failed = part("pilot", pilot);
+    if (failed) return failed;
+    const p = json(pilot, "results", "report.json");
+    if (p.part !== "pilot" || p.workload !== w || p.plan !== sha || p.dry !== dry || p.exit !== 0) return "the pilot part's report is not a complete pilot's of this run";
+    failed = part("gated", gated, ["--sized-from", join(pilot, "results")]);
+    return failed || reading(t.threshold, w, { report: json(gated, "results", "report.json"), expect: { plan: sha, base, head, dry, K: p.pilot.sizing.ok === true ? p.pilot.sizing.K : null, from: p.run } });
+  };
+  // Whatever of a workload's own files cannot be read leaves that workload not read, and the row is still written.
+  const readings = names.map((w) => {
+    let r = why[w];
+    if (!r) try { r = workload(w); } catch (e) { r = `the report could not be read (${clean(e?.message ?? e)})`; }
+    return typeof r === "string" ? reading(t.threshold, w, { why: r }) : r;
+  });
   const at = { date, tag, base, head, threshold: t.threshold, readings, differ: Object.keys(expect) }, line = row(at);
   // Kept with the run before the page is touched: the row, and the draft of an issue.
   writeFileSync(join(dir, "row.md"), `${dry ? "DRY RUN: a test of the scripts, read for nothing. This row is not the page's.\n\n" : ""}${TABLE.join("\n")}\n${line}\n`);
   let made = null;
   if (!dry && readings.some((r) => r.state === "past")) {
-    // From the row before this one when the checkout has its commit, and else from the release.
-    const prior = earlier[0] ?? null, since = prior && git("rev-parse", "--verify", "--quiet", `${prior.head}^{commit}`) === prior.head ? prior : null;
-    const note = prior && !since ? `The row before this one (${prior.date}) names \`${short(prior.head)}\`, a commit the run's checkout does not have, so the list below is from ${tag}.` : null;
+    // From the row before this one when this run's head descends from its commit, and else from the release.
+    const prior = earlier[0] ?? null, placed = prior && exec("git", ["-C", here, "merge-base", "--is-ancestor", prior.head, head], { env }).status, since = placed === 0 ? prior : null;
+    const note = prior && !since ? `The row before this one (${prior.date}) names \`${short(prior.head)}\`, ${placed === 1 ? "a commit this run's head does not descend from (`main` was moved back or rewritten since)" : "a commit git could not place before this run's head in the run's checkout"}, so the list below is from ${tag}.` : null;
     const log = exec("git", ["-C", here, "log", "--first-parent", "--format=%H%x1f%s%x1f%b%x1e", `${since ? since.head : base}..${head}`], { env });
     const records = log.status === 0 ? history(String(log.stdout ?? "")) : null;
     made = issue({ ...at, line, since, note, prs: records && merged(records), unread: log.status === 0 ? "git log's output is not a list of commits" : `git log ended with status ${log.status}`, expected });
@@ -490,7 +501,7 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
     // The page is replaced whole, by a file written beside it, so a run stopped here leaves it as it was or with the row.
     const next = insert(readFileSync(page, "utf8"), line), beside = `${page}.${process.pid}.tmp`;
     writeFileSync(beside, next);
-    renameSync(beside, page);
+    try { renameSync(beside, page); } catch (e) { rmSync(beside, { force: true }); throw e; }
   }
   say(`\n${TABLE.join("\n")}\n${line}\n\n${dry ? `DRY RUN: the row is in ${join(dir, "row.md")} alone` : `the row is in ${page}: commit it as it is. Keep each part's results under ${dir}, with its plan.json, row.md, expected differences and bodies: the row's figures are read from them`}`);
   if (made) say(`\nPast the threshold. A draft of an issue, kept as ${join(dir, "issue.md")}; the command opens nothing:\n\n${made.title}\n\n${made.body}`);

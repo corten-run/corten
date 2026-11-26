@@ -580,10 +580,14 @@ test("the trend reads a gated part's report.json as it is written: the change's 
   const pilot = results({ part: "pilot", edit: sized, change: even() });
   const from = (low) => (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : low + (i - 1) / 1000);
   // What a run holds its report to is here what the test itself knows, not what the report
-  // says: the plan file it wrote, the plan's two commits and the K the pilot's own report gives.
-  const K = report(pilot).json.pilot.sizing.K;
-  assert.deepEqual([report(pilot).json.pilot.sizing.ok, K], [true, 5]);
-  const of = (res, more) => ({ plan: createHash("sha256").update(readFileSync(join(res, "..", "..", "plan.json"))).digest("hex"), base: EXAMPLE.base, head: EXAMPLE.head, dry: false, K, ...more });
+  // says: the plan file it wrote, the plan's two commits, and the K and the run id the pilot's
+  // own report gives.
+  const p = report(pilot).json, K = p.pilot.sizing.K, run = p.run;
+  const of = (res, more) => ({ plan: createHash("sha256").update(readFileSync(join(res, "..", "..", "plan.json"))).digest("hex"), base: EXAMPLE.base, head: EXAMPLE.head, dry: false, K, from: run, ...more });
+  // A pilot's report as a run takes it: a pilot part's of the plan, complete, and a dry one's too.
+  assert.deepEqual([p.part, p.workload, p.plan, p.dry, p.exit, p.pilot.sizing.ok, K, run], ["pilot", "plain", of(pilot).plan, false, 0, true, 5, RUN]);
+  const d = report(results({ part: "pilot", edit: sized, dry: {}, change: even() })).json;
+  assert.deepEqual([d.part, d.dry, d.exit, d.pilot.sizing.ok], ["pilot", true, 0, false]);
   const read = (opts, more = {}) => { const res = results(opts); return reading(0.02, "plain", { report: report(res).json, expect: of(res, more) }); };
   const pass = read({ edit: sized, sizedFrom: pilot, change: from(0.003) });
   assert.deepEqual([pass.state, pass.text], ["pass", "+0.30% to +0.70%, median +0.50%, K = 5, A/A resolved"]);
@@ -613,5 +617,6 @@ test("the trend reads a gated part's report.json as it is written: the change's 
   not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "the report is of another base than this run's", { base: "0".repeat(40) });
   not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "the report is of another head than this run's", { head: "0".repeat(40) });
   not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "K = 5 is not the K this run's pilot sized", { K: 6 });
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "K = 5 is not the K this run's pilot sized", { from: "another run's pilot" });
   not({ part: "pilot", edit: sized, change: even() }, "the report is not a gated part's of this workload");
 });

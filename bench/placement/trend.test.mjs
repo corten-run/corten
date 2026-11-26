@@ -31,12 +31,15 @@ const LINE = (workloads, text, { date = "2026-12-02", head = HEAD } = {}) => `| 
 const PASSES = "pass: no rise of +2.00% shown";
 
 /** A gated part's report.json as far as the trend reads it: what it says it is of, and the change's lower bound, bound and median with its A/A. */
-const report = (w, lower, bound, { resolution = "resolved", aa = [0.004, 0.002], K = 69, sized = { K }, dry = false, exit = 0, complete = exit === 0, part = "gated", plan = SHA, base = BASE, head = HEAD } = {}) => ({
+const RUN = "0f8fad5b-d9cb-469f-a165-70867728950e";
+const report = (w, lower, bound, { resolution = "resolved", aa = [0.004, 0.002], K = 69, sized = { K, from: RUN }, dry = false, exit = 0, complete = exit === 0, part = "gated", plan = SHA, base = BASE, head = HEAD } = {}) => ({
   exit, part, workload: w, plan, base, head, dry, K, sized, complete: { [`aa-${w}`]: complete, [`change-${w}`]: complete },
-  gated: { resolution, changeBound: bound, changeMedian: lower == null ? 0.004 : (lower + bound) / 2, aaBound: aa[0], aaBoundSwapped: aa[1] },
-  [`change-${w}`]: { measures: { "cycles, user and kernel": { recorded: { lower, bound } } } },
+  gated: { resolution, aaBound: aa[0], aaBoundSwapped: aa[1] },
+  [`change-${w}`]: { measures: { "cycles, user and kernel": { recorded: { lower, bound, median: lower == null ? 0.004 : (lower + bound) / 2 } } } },
 });
-const OF = (more = {}) => ({ plan: SHA, base: BASE, head: HEAD, dry: false, K: 69, ...more });
+/** A pilot part's report.json as far as the trend reads it: what it is of, its run id and the K it sizes. */
+const piloted = (w, K = 69, more = {}) => ({ exit: 0, part: "pilot", workload: w, plan: SHA, dry: false, run: RUN, pilot: { sizing: { ok: true, K } }, ...more });
+const OF = (more = {}) => ({ plan: SHA, base: BASE, head: HEAD, dry: false, K: 69, from: RUN, ...more });
 
 test("the trend's plan is usable, and each field that is not is named", () => {
   assert.deepEqual(problems(TREND), []);
@@ -128,7 +131,7 @@ test("a workload's reading: past the threshold on the lower bound, a pass under 
   assert.deepEqual([dry.state, dry.text, dry.dry, dry.complete], ["not read", "DRY RUN, read for nothing (+3.00% to +4.00%, median +3.50%, K = 6)", true, true]);
 });
 
-test("a report that is not a complete gated part of this run, with numbers that agree, is never a pass or a past", () => {
+test("a report that is not a complete gated part of this run, with numbers for figures, is never a pass or a past", () => {
   const not = (r, text, expect = OF()) => assert.deepEqual([reading(0.02, "plain", { report: r, expect }).state, reading(0.02, "plain", { report: r, expect }).text], ["not read", text]);
   const good = () => report("plain", 0.03, 0.04);
   assert.equal(reading(0.02, "plain", { report: good(), expect: OF() }).state, "past");
@@ -142,6 +145,9 @@ test("a report that is not a complete gated part of this run, with numbers that 
   not({ ...good(), complete: undefined }, "the report is not a gated part's of this workload");
   not({ ...good(), sized: {} }, "K was not checked by the kit");
   not({ ...good(), K: "69", sized: { K: "69" } }, "K was not checked by the kit");
+  // A K outside the kit's own limits is none it sized, whatever the report says of it.
+  for (const K of [1, 4, 255]) not(report("plain", 0.03, 0.04, { K }), "K was not checked by the kit", OF({ K }));
+  assert.equal(reading(0.02, "plain", { report: report("plain", 0.03, 0.04, { K: 5 }), expect: OF({ K: 5 }) }).state, "past");
   not(report("plain", "bad", 0.04), "main against the release has no bound");
   not(report("plain", 0.03, "0.04"), "main against the release has no bound");
   for (const lower of [null, undefined, true, [], "0.03"]) not(report("plain", lower, 0.04), "main against the release has no bound");
@@ -153,15 +159,12 @@ test("a report that is not a complete gated part of this run, with numbers that 
   not({ ...good(), part: "pilot" }, "the report is not a gated part's of this workload");
   not(good(), "K = 69 is not the K this run's pilot sized", OF({ K: 91 }));
   not(good(), "K = 69 is not the K this run's pilot sized", OF({ K: null }));
+  not(good(), "K = 69 is not the K this run's pilot sized", OF({ from: "another-run" }));
+  not(report("plain", 0.03, 0.04, { sized: { K: 69 } }), "K = 69 is not the K this run's pilot sized");
   not(good(), "nothing says which run the report is to be of", null);
   // A dry run's report in a run that is not one, and the other way about.
   not(report("plain", 0.03, 0.04, { dry: true }), "the report is a dry run's, and this run is not one");
   not(good(), "the report is not a dry run's, and this run is one", OF({ dry: true }));
-  // Figures that do not agree with each other: an A/A called resolved over its margin, a bound
-  // that is not the change's, a median outside its bounds.
-  not(report("plain", 0.03, 0.04, { aa: [0.012, 0.002] }), "the report's figures do not agree with each other");
-  not({ ...good(), gated: { ...good().gated, changeBound: 0.05 } }, "the report's figures do not agree with each other");
-  not({ ...good(), gated: { ...good().gated, changeMedian: 0.01 } }, "the report's figures do not agree with each other");
   // A dry run that did not complete says so, and is past nothing.
   const dry = reading(0.02, "plain", { report: report("plain", 0.03, 0.04, { dry: true, exit: 1 }), expect: OF({ dry: true }) });
   assert.deepEqual([dry.state, dry.dry, dry.complete], ["not read", true, false]);
@@ -226,9 +229,14 @@ test("the page: one way to read it and to add a row, the newest first, and nothi
   refused(`${page}${first}\n\nA note.\n`, /the page has text under its table's rows, which end the page: A note\./);
   refused(`${page}${first.replace("`153d10e9c`", "`153d10e9d`")}\n`, /the page has a row trend\.mjs did not write/);
   refused(`${page}${first.replace(L(HEAD), "`153d10e9c`")}\n`, /the page has a row trend\.mjs did not write/);
-  // One row a date, and only a row is added.
+  // Rows are the newest first and one a date, on the page and when one is added.
+  refused(`${page}${first}\n${second}\n`, /the page's rows are not the newest first, one a date: 2026-12-09 is under 2026-12-02/);
+  refused(`${page}${first}\n${first}\n`, /the page's rows are not the newest first, one a date: 2026-12-02 is under 2026-12-02/);
   assert.throws(() => insert(insert(page, first), row(at(READ, { head: EARLIER }))), /the page already has a row of 2026-12-02/);
+  assert.throws(() => insert(two, first), /the page already has a row of 2026-12-09, and a row goes above rows of earlier dates alone/);
+  // Only a row is added, by the test a page's own rows are held to.
   assert.throws(() => insert(page, "| 2026-12-02 | by hand |"), /not a row trend\.mjs writes/);
+  assert.throws(() => insert(page, first.replace("`153d10e9c`", "`153d10e9d`")), /not a row trend\.mjs writes/);
 });
 
 const LOG = [
@@ -279,8 +287,8 @@ test("past the threshold: a draft of an issue, with the row, the pull requests a
   // The first run has no row before it, and an interval with no commit says which it is.
   const first = issue({ ...at(readings), line, prs: [] });
   assert.ok(first.body.includes("The page has no row before this one.") && first.body.includes("Merged from v0.2.0 to this run, 0 on `main`'s first-parent line.") && first.body.includes("\n- none: `main` has no commit in that interval\n"));
-  // A row before it whose commit the checkout lacks is said, and the list is from the release.
-  const note = "The row before this one (2026-11-25) names `c6e9be955`, a commit the run's checkout does not have, so the list below is from v0.2.0.";
+  // A row before it that the list cannot start from is said, and the list is from the release.
+  const note = "The row before this one (2026-11-25) names `c6e9be955`, a commit this run's head does not descend from (`main` was moved back or rewritten since), so the list below is from v0.2.0.";
   const lacking = issue({ ...at(readings), line, note, prs: PRS });
   assert.ok(lacking.body.includes(`${note}\n`) && lacking.body.includes("Merged from v0.2.0 to this run, 4 on") && !lacking.body.includes("The page has no row before this one."));
   // History that could not be read is said to be that, never "none".
@@ -297,47 +305,58 @@ test("the bodies a part's placements answered with are the two the check kept, e
   const kept = bodies((put("check", "p000", BODY(DIGEST.base, DIGEST.head)), join(res, "check", "p000", "answers", "bodies.txt")));
   assert.deepEqual(kept, { line: BODY(DIGEST.base, DIGEST.head).trimEnd(), bytes: 6124, a: DIGEST.base, b: DIGEST.head });
   assert.deepEqual([bodies(join(res, "none.txt")), bodies((writeFileSync(join(res, "odd.txt"), "bodies differ: 6124 and 6124 bytes\n"), join(res, "odd.txt")))], [null, null]);
+  // The placements a part was resolved to have, as its resolved.json lists them, in the order they run.
+  const of = (...cs) => [2, 1].flatMap((i) => cs.map((comparison) => ({ comparison, i }))), pilot = of("pilot-plain"), gated = of("aa-plain", "change-plain");
   for (const p of ["p001", "p002"]) { put("pilot-plain", p, BODY(DIGEST.base, DIGEST.base)); put("aa-plain", p, BODY(DIGEST.base, DIGEST.base)); put("change-plain", p, BODY(DIGEST.base, DIGEST.head)); }
-  assert.deepEqual([stray(res, "pilot", "plain", kept), stray(res, "gated", "plain", kept)], [null, null]);
+  assert.deepEqual([stray(res, pilot, "plain", kept), stray(res, gated, "plain", kept)], [null, null]);
   // A later start that serves a third body of the same length passes turns.sh's comparison
   // with the expected difference, which holds the bodies' lengths alone. It does not pass here.
   put("change-plain", "p002", BODY(DIGEST.base, DIGEST.third));
-  assert.equal(stray(res, "gated", "plain", kept), `change-plain p002 answered with other bodies than the run recorded before any turn (${BODY(DIGEST.base, DIGEST.third).trimEnd()}; recorded: sha256 ${DIGEST.base} and ${DIGEST.head})`);
+  assert.equal(stray(res, gated, "plain", kept), `change-plain p002 answered with other bodies than the run recorded before any turn (${BODY(DIGEST.base, DIGEST.third).trimEnd()}; recorded: sha256 ${DIGEST.base} and ${DIGEST.head})`);
   // The release's own body on a later start, in an A/A; another length; a file that is not there.
   put("change-plain", "p002", BODY(DIGEST.base, DIGEST.head));
   put("aa-plain", "p001", BODY(DIGEST.third, DIGEST.third));
-  assert.ok(stray(res, "gated", "plain", kept).startsWith("aa-plain p001 answered with other bodies"));
+  assert.ok(stray(res, gated, "plain", kept).startsWith("aa-plain p001 answered with other bodies"));
   put("pilot-plain", "p002", BODY(DIGEST.base, DIGEST.base).replace("6124", "6125"));
-  assert.ok(stray(res, "pilot", "plain", kept).startsWith("pilot-plain p002 answered with other bodies"));
+  assert.ok(stray(res, pilot, "plain", kept).startsWith("pilot-plain p002 answered with other bodies"));
   rmSync(join(res, "pilot-plain", "p002", "answers", "bodies.txt"));
-  assert.ok(stray(res, "pilot", "plain", kept).includes("no bodies.txt as the kit writes it"));
-  assert.equal(stray(res, "pilot", "unstaged", kept), "pilot-unstaged kept no placement whose bodies can be checked");
+  assert.ok(stray(res, pilot, "plain", kept).includes("no bodies.txt as the kit writes it"));
+  // Every placement the part was to have, not every one that is there: a third that left nothing.
+  put("pilot-plain", "p002", BODY(DIGEST.base, DIGEST.base));
+  assert.equal(stray(res, pilot, "plain", kept), null);
+  assert.ok(stray(res, [...pilot, { comparison: "pilot-plain", i: 3 }], "plain", kept).startsWith("pilot-plain p003 answered with other bodies than the run recorded before any turn (no bodies.txt as the kit writes it;"));
 });
 
-// git as the command asks it: the checkout's top, whether it is shallow, its tags, a ref's
-// commit and a range's log.
+// git as the command asks it: the checkout's top, whether it is shallow or partial, its tags, a
+// ref's commit, whether the head descends from a commit (under: the commits it does descend
+// from; apart: those the checkout has that it does not) and a range's log.
 const TAGS = "evidence/placement-kit\nv0.1.9\nv0.2.0\n";
-function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, commits = {}, known = [EARLIER], log = { status: 0, text: LOGTEXT }, calls = [] } = {}) {
+function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, partial = 1, commits = {}, under = [EARLIER], apart = [], log = { status: 0, text: LOGTEXT }, calls = [] } = {}) {
   const a = args.slice(2), ok = (stdout) => ({ status: 0, stdout, stderr: "" }), failed = (status = 1) => ({ status, stdout: "", stderr: "fatal: it failed\n" });
   if (a[1] === "--show-toplevel") return ok(`${root}\n`);
   if (a[1] === "--is-shallow-repository") return shallow.status === 0 ? ok(shallow.text) : failed(shallow.status);
+  if (a[0] === "config") return a[2] !== "^remote\\..*\\.promisor$" ? failed(2) : partial === 0 ? ok("remote.origin.promisor true\n") : failed(partial);
+  if (a[0] === "merge-base") { assert.deepEqual([a[1], a[3]], ["--is-ancestor", HEAD]); return under.includes(a[2]) ? ok("") : failed(apart.includes(a[2]) ? 1 : 128); }
   if (a[0] === "tag") return tags === null ? failed(128) : ok(tags);
   if (a[0] === "log") { calls.push(`git log ${a.at(-1)}`); return log.status === 0 ? ok(log.text) : failed(log.status); }
-  const ref = a.at(-1).replace("^{commit}", ""), commit = { "refs/tags/v0.2.0": BASE, "refs/remotes/origin/main": HEAD, ...commits }[ref] ?? known.find((c) => c === ref);
+  const commit = { "refs/tags/v0.2.0": BASE, "refs/remotes/origin/main": HEAD, ...commits }[a.at(-1).replace("^{commit}", "")];
   return commit ? ok(`${commit}\n`) : failed();
 }
 
 // The command, with the kit's shell scripts stood in for: build.sh and run.sh leave what a
 // step of theirs would, and the two sides' answers differ for the workloads named. With `real`,
 // plan.mjs is the kit's own but for a gated part's, which would size K from a pilot no script
-// here ran; without, it is stood in for too, since each call of it starts a process.
+// here ran; without, it is stood in for too, since each call of it starts a process. Either way
+// a part is resolved to K placements a comparison (a pilot's 100, a gated part's the K of its
+// report) and run.sh leaves every one of them.
 //   ended    a part's run.sh ended otherwise than complete, with what it said and the report it left
-//   written  a part's report.json as text, in place of the one a complete part leaves
+//   written  a part's report.json, in place of the one a complete part leaves: the file's text, or a report
 //   placed   a part's second placement answered with these bodies
+//   short    parts whose results hold their first placement alone
 //   late     workloads whose answers check was stopped at its time limit
 const DIFF = "5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes\n";
 let made = 0;
-function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], build = {}, sizes = {}, ended = {}, written = {}, placed = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
+function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
   writeFileSync(page, before ? insert(BLANK, before) : BLANK);
   const env = { ...process.env, ...(dry ? { DRYRUN: "1" } : {}) };
@@ -350,14 +369,19 @@ function command({ reports = {}, differ = ["plain"], real = false, silent = {}, 
     if (script === "plan.mjs" && args.length === 2) return real ? kit() : out(0, "", "plan trend-2026-12-02\n");
     const work = script === "answers" ? args[3] : script === "plan.mjs" ? args[4] : args[1], [x, y] = basename(work).split("-"), [part, w] = x === "check" ? [x, y] : [y, x], key = `${part} ${w}`;
     calls.push(`${key} ${script.replace(/\.(mjs|sh)$/, "")}${script === "plan.mjs" && e.DRYRUN === "1" ? " dry" : ""}`);
+    // As plan.mjs resolves a part: the placements it is to have, K a comparison.
+    const resolve = (K) => {
+      mkdirSync(join(work, "plan"), { recursive: true });
+      writeFileSync(join(work, "plan", "resolved.json"), JSON.stringify({ K, schedule: (part === "pilot" ? [`pilot-${w}`] : [`aa-${w}`, `change-${w}`]).flatMap((comparison) => Array.from({ length: K }, (_, n) => ({ comparison, i: n + 1 }))) }));
+    };
     if (script === "plan.mjs" && args.includes("--sized-from")) {
       assert.equal(args.at(-1), join(dir, `${w}-pilot`, "results"));
       if (sizes[w]) return out(1, `sizing from pilot-${w} of run 0f8fad5b\nplan.mjs: ${args.at(-1)} ${sizes[w]}\n`);
-      mkdirSync(join(work, "plan"), { recursive: true });
+      resolve(dry ? 6 : (reports[w]?.K ?? 69));
       return out(0, `gated ${w}: K = 69 placements (from the pilot, by the sizing rule)\n`);
     }
     if (script === "plan.mjs" && real) return kit();
-    if (script === "plan.mjs") { mkdirSync(join(work, "plan"), { recursive: true }); return out(0, `${part} ${w}: resolved\n`); }
+    if (script === "plan.mjs") { resolve(dry || part === "check" ? 6 : 100); return out(0, `${part} ${w}: resolved\n`); }
     if (script === "build.sh") {
       const b = build[key] ?? { status: 0, text: "BUILD-DONE\n" };
       if (b.refused) { mkdirSync(join(work, "bin"), { recursive: true }); writeFileSync(join(work, "bin", "refused.txt"), `REFUSED: ${b.refused}\n`); }
@@ -380,15 +404,20 @@ function command({ reports = {}, differ = ["plain"], real = false, silent = {}, 
     }
     const res = join(work, "results"), leave = (text) => { mkdirSync(res, { recursive: true }); writeFileSync(join(res, "report.json"), text); };
     // A report says which plan it is of: the one this run wrote.
-    const stamped = (r) => JSON.stringify(r && r.plan === SHA ? { ...r, plan: createHash("sha256").update(readFileSync(join(dir, "plan.json"))).digest("hex") } : r);
+    const stamped = (r) => (typeof r === "string" ? r : JSON.stringify(r)).replaceAll(SHA, createHash("sha256").update(readFileSync(join(dir, "plan.json"))).digest("hex"));
     if (ended[key]) {
       if (ended[key].report) leave(stamped(ended[key].report));
       return out(ended[key].status ?? 1, `== turns start\nRUN-ENDED ${ended[key].outcome}\nALL-DONE\n`);
     }
-    for (const [c, b] of part === "pilot" ? [[`pilot-${w}`, DIGEST.base]] : [[`aa-${w}`, DIGEST.base], [`change-${w}`, mine]]) {
-      for (const p of ["p001", "p002"]) { mkdirSync(join(res, c, p, "answers"), { recursive: true }); writeFileSync(join(res, c, p, "answers", "bodies.txt"), p === "p002" && c !== `aa-${w}` && placed[key] ? placed[key] : BODY(DIGEST.base, b)); }
+    // Every placement the part was resolved to have leaves the two bodies it compared.
+    for (const { comparison: c, i } of JSON.parse(readFileSync(join(work, "plan", "resolved.json"), "utf8")).schedule) {
+      if (short.includes(key) && i > 1) continue;
+      const at = join(res, c, `p${String(i).padStart(3, "0")}`, "answers");
+      mkdirSync(at, { recursive: true });
+      writeFileSync(join(at, "bodies.txt"), i === 2 && c !== `aa-${w}` && placed[key] ? placed[key] : BODY(DIGEST.base, c === `change-${w}` ? mine : DIGEST.base));
     }
-    leave(written[key] ?? stamped(part === "pilot" ? { exit: 0, part: "pilot", workload: w, pilot: { sizing: { ok: true, K: reports[w]?.K ?? 69 } } } : reports[w]));
+    const left = written[key] ?? (part === "pilot" ? piloted(w, reports[w]?.K ?? 69, dry ? { dry, pilot: { sizing: { ok: false, K: null } } } : {}) : reports[w]);
+    leave(stamped(left));
     return out(0, "RUN-ENDED complete: every comparison complete; results/report.md\nALL-DONE\n");
   };
   const result = run({ dir, page, date, env, exec, say: (l) => said.push(l) });
@@ -445,10 +474,13 @@ test("a run past its threshold: exit 1, and a draft of an issue with the pull re
   const first = command({ reports: { ...PASS, plain: report("plain", 0.03, 0.04) } });
   assert.equal(first.calls.at(-1), `git log ${BASE}..${HEAD}`);
   assert.ok(first.issue.body.includes("The page has no row before this one.") && first.issue.body.includes("Merged from v0.2.0 to this run, 4 on"));
-  // A row before it whose commit the checkout does not have: from the release, and said.
-  const lacking = command({ reports: { ...PASS, plain: report("plain", 0.03, 0.04) }, before, known: [] });
-  assert.equal(lacking.calls.at(-1), `git log ${BASE}..${HEAD}`);
-  assert.ok(lacking.issue.body.includes("The row before this one (2026-11-25) names `c6e9be955`, a commit the run's checkout does not have, so the list below is from v0.2.0."));
+  // A row before it whose commit this run's head does not descend from (main moved back, as a
+  // forced fetch can bring it), or that git cannot place: from the release, and said, never "none".
+  for (const [asked, word] of [[{ under: [], apart: [EARLIER] }, "a commit this run's head does not descend from (`main` was moved back or rewritten since)"], [{ under: [] }, "a commit git could not place before this run's head in the run's checkout"]]) {
+    const lacking = command({ reports: { ...PASS, plain: report("plain", 0.03, 0.04) }, before, log: { status: 0, text: "" }, ...asked });
+    assert.equal(lacking.calls.at(-1), `git log ${BASE}..${HEAD}`);
+    assert.ok(lacking.issue.body.includes(`The row before this one (2026-11-25) names \`c6e9be955\`, ${word}, so the list below is from v0.2.0.`) && lacking.issue.body.includes("Merged from v0.2.0 to this run, 0 on"), lacking.issue.body);
+  }
   // A log git could not give, or one that is not a list of commits, is no list: never "none".
   for (const [log, word] of [[{ status: 128 }, "git log ended with status 128"], [{ status: 0, text: "warning: something else\n" }, "git log's output is not a list of commits"]]) {
     const unread = command({ reports: { ...PASS, plain: report("plain", 0.03, 0.04) }, log });
@@ -523,28 +555,37 @@ test("a gated part that did not end with status 0 is not read, whatever report i
   // One that left no report says how it ended.
   const none = command({ reports: PASS, ended: { "gated plain": { outcome: "perf-preflight-failed: perf cannot count cycles:u here" } } });
   assert.ok(none.line.includes("`plain` not read: the gated part ended perf-preflight-failed: perf cannot count cycles:u here;"));
-  // A report cut short, or one that is not JSON at all: that workload is not read, with the
-  // reason, the other is, the row is written and the command ends as for any workload not read.
-  const whole = JSON.stringify(PASS.plain);
-  for (const [text, word] of [[whole.slice(0, whole.length / 2), "the gated part's report.json cannot be read: "], ["", "the gated part's report.json cannot be read: "], ["null", "the gated part left no report"], ["[1, 2]", "the gated part left no report"]]) {
-    const cut = command({ reports: PASS, written: { "gated plain": text } });
-    assert.equal(cut.exit, 3);
+  // A report that cannot be read, in whatever way, as the file on disk holds it: cut short,
+  // empty, not a report, or with a value where a number or a text is read (the review's two,
+  // which make reading it throw). That workload is not read, with the reason, the other is, the
+  // row is written and the command ends as for any workload not read.
+  const whole = JSON.stringify(PASS.plain), could = "the report could not be read (", odd = '{"toString": null}';
+  const unreadable = (written, word, calls = PARTS("unstaged")) => {
+    const cut = command({ reports: PASS, written });
+    assert.equal(cut.exit, 3, cut.line);
     assert.ok(cut.line.includes(`\`plain\` not read: ${word}`) && cut.line.includes(`; ${UNSTAGED} | not read: \`plain\` |`), cut.line);
-    assert.deepEqual([rows(cut.page).length, cut.file("row.md").includes(cut.line), cut.calls.slice(-6)], [1, true, PARTS("unstaged")]);
-  }
+    assert.deepEqual([rows(cut.page).length, cut.file("row.md").includes(cut.line), cut.calls.slice(-calls.length)], [1, true, calls]);
+  };
+  for (const [text, word] of [[whole.slice(0, whole.length / 2), could], ["", could], ["null", "the gated part left no report"], ["[1, 2]", "the gated part left no report"],
+    [whole.replace('"K":69', `"K":${odd}`), could], [`{"exit": 2, "refused": [${odd}]}`, could], [`${whole.slice(0, -1)},"complete":"all"}`, "the report is not a gated part's of this workload"]]) unreadable({ "gated plain": text }, word);
   // The same of the pilot's, whose K the gated part's is held to: no gated part is run on it.
-  const pilot = command({ reports: PASS, written: { "pilot plain": '{"exit": 0, "pilot": {"sizing"' } });
-  assert.ok(pilot.line.includes("`plain` not read: the pilot part's report.json cannot be read: "), pilot.line);
-  assert.deepEqual(pilot.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("plain").slice(0, 3), ...PARTS("unstaged")]);
-  // A gated part at another K than this run's pilot sized, of another plan, or a dry run's.
-  const other = (r, word) => { const x = command({ reports: { ...PASS, plain: r } }); assert.equal(x.exit, 3); assert.ok(x.line.includes(`\`plain\` not read: ${word};`), x.line); };
+  const early = [...PARTS("plain").slice(0, 3), ...PARTS("unstaged")];
+  for (const text of ['{"exit": 0, "pilot": {"sizing"', "null", `"pilot"`]) unreadable({ "pilot plain": text }, text === `"pilot"` ? "the pilot part's report is not a complete pilot's of this run" : could, early);
+  // One that says it is a complete pilot's and holds no sizing: plan.mjs refuses to size from
+  // it, and were a gated part made all the same, its report is not read.
+  unreadable({ "pilot plain": piloted("plain", 69, { pilot: null }) }, could);
+  // A pilot's report that is not a pilot part's of this run, complete: a gated part's, a dry
+  // run's, results the kit refused, another plan's, another workload's.
+  for (const more of [{ part: "gated" }, { dry: true }, { exit: 2 }, { plan: "d".repeat(64) }, { workload: "unstaged" }]) unreadable({ "pilot plain": piloted("plain", 69, more) }, "the pilot part's report is not a complete pilot's of this run;", early);
+  // A gated part at another K than this run's pilot sized or sized from another run's pilot, of
+  // another plan, or a dry run's.
+  const other = (r, word, written = {}) => { const x = command({ reports: { ...PASS, plain: r }, written }); assert.equal(x.exit, 3); assert.ok(x.line.includes(`\`plain\` not read: ${word};`), x.line); };
   other(report("plain", 0.03, 0.04, { plan: "d".repeat(64) }), "the report is of another plan than this run's");
   other({ ...report("plain", 0.03, 0.04), head: EARLIER }, "the report is of another head than this run's");
   other(report("plain", 0.03, 0.04, { dry: true }), "the report is a dry run's, and this run is not one");
-  const sized = command({ reports: PASS, written: { "pilot plain": JSON.stringify({ exit: 0, pilot: { sizing: { ok: true, K: 77 } } }) } });
-  assert.ok(sized.line.includes("`plain` not read: K = 69 is not the K this run's pilot sized;"), sized.line);
-  const unsized = command({ reports: PASS, written: { "pilot plain": JSON.stringify({ exit: 0, pilot: { sizing: { ok: false, K: 69 } } }) } });
-  assert.ok(unsized.line.includes("`plain` not read: K = 69 is not the K this run's pilot sized;"), unsized.line);
+  other(report("plain", 0.03, 0.04, { sized: { K: 69, from: "another-run" } }), "K = 69 is not the K this run's pilot sized");
+  other(PASS.plain, "K = 69 is not the K this run's pilot sized", { "pilot plain": piloted("plain", 77) });
+  other(PASS.plain, "K = 69 is not the K this run's pilot sized", { "pilot plain": piloted("plain", 69, { pilot: { sizing: { ok: false, K: 69 } } }) });
 });
 
 test("a placement that answered with another body than the check kept makes its workload not read", () => {
@@ -557,6 +598,12 @@ test("a placement that answered with another body than the check kept makes its 
   const early = command({ reports: PASS, placed: { "pilot unstaged": BODY(DIGEST.third, DIGEST.third) } });
   assert.deepEqual(early.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("plain"), ...PARTS("unstaged").slice(0, 3)]);
   assert.ok(early.line.includes("`unstaged` not read: the pilot part: pilot-unstaged p002 answered with other bodies than the run recorded before any turn"), early.line);
+  // Every placement the part was resolved to have, not every one that is there: results that
+  // hold the first of 69 alone, under a report that reads as a pass at K = 69, are not read.
+  const few = command({ reports: PASS, short: ["gated plain"] });
+  assert.equal(few.exit, 3);
+  assert.ok(few.line.includes(`\`plain\` not read: the gated part: aa-plain p002 answered with other bodies than the run recorded before any turn (no bodies.txt as the kit writes it; recorded: sha256 ${DIGEST.base} and ${DIGEST.base}); ${UNSTAGED} |`), few.line);
+  assert.ok(command({ reports: PASS, short: ["pilot unstaged"] }).line.includes("`unstaged` not read: the pilot part: pilot-unstaged p002 answered with other bodies"));
 });
 
 let refusals = 0;
@@ -597,15 +644,18 @@ test("refused before anything is made or run", () => {
   // The checkout: full, with a release tag and the plan's branch, and git answering as asked.
   refused({ shallow: { status: 0, text: "true\n" } }, "the checkout is shallow, so the commits main merged since a row cannot all be listed from it");
   refused({ shallow: { status: 128 } }, "git could not say whether the checkout is shallow");
+  refused({ partial: 0 }, "the checkout is a partial clone (a remote of it is a promisor), which lacks objects and fetches them as they are read");
+  refused({ partial: 128 }, "git could not say whether the checkout is a partial clone");
   refused({ tags: "evidence/placement-kit\n" }, "the checkout has no release tag vX.Y.Z: fetch the tags");
   refused({ tags: null }, "git could not list the checkout's tags");
   refused({ commits: { "refs/tags/v0.2.0": undefined, "v0.2.0": BASE } }, "v0.2.0 names no commit");
   refused({ commits: { "refs/remotes/origin/main": undefined, "origin/main": HEAD } }, "the checkout has no origin/main (refs/remotes/origin/main): fetch it");
   refused({ commits: { "refs/remotes/origin/main": "warning: refname is ambiguous" } }, 'git gave no commit id for refs/remotes/origin/main: "warning: refname is ambiguous"');
   refused({ commits: { "refs/tags/v0.2.0": BASE.slice(0, 12) } }, "git gave no commit id for refs/tags/v0.2.0");
-  // The page: a table as the command writes it, and no row of this date yet. One run a date.
+  // The page: a table as the command writes it, and no row of this date or a later one. One run a date.
   refused({}, "the page has no table of runs", (o) => writeFileSync(o.page, "# The trend\n"));
   refused({}, "the page already has a row of 2026-12-02: one run a date (UTC)", (o) => writeFileSync(o.page, insert(BLANK, row(at(READ, { head: EARLIER })))));
+  refused({}, "the page already has a row of 2026-12-09: one run a date (UTC), each later than the page's rows", (o) => writeFileSync(o.page, insert(BLANK, row(at(READ, { date: "2026-12-09" })))));
   // The plan: one that can be read and used, said before anything is made.
   const planned = (text, word) => refused({}, word, (o) => { o.plan = join(tmp, `plan-${refusals}.json`); writeFileSync(o.plan, text); });
   planned(JSON.stringify(trend((t) => { t.threshold = 0; })), "is not a usable trend plan:\n  threshold");
@@ -614,6 +664,10 @@ test("refused before anything is made or run", () => {
   planned(JSON.stringify(trend((t) => { delete t.plan.workloads; })), "plan.workloads: at least one workload");
   planned(JSON.stringify(trend((t) => { t.plan.workloads[1] = null; })), "plan.workloads: at least one workload");
   refused({}, "cannot be read as a trend plan: ", (o) => { o.plan = join(tmp, "no-such-plan.json"); });
+  // A plan whose checking throws (a name that is no text, as a file can hold one) is refused
+  // like any other, and so is one whose probe is not there.
+  planned(JSON.stringify(trend((t) => { t.plan.workloads[0].name = { toString: null }; t.plan.workloads[0].K = 5; })), "cannot be read as a trend plan: ");
+  planned(JSON.stringify(TREND), "probe, the plan's probe, is not there");
   // The command says the same and exits 2, with no directory made.
   const r = spawnSync(process.execPath, [join(here, "trend.mjs"), join(here, "trend", "run")], { encoding: "utf8" });
   assert.deepEqual([r.status, r.stdout, existsSync(join(here, "trend", "run"))], [2, "", false]);
@@ -648,8 +702,14 @@ const tools = process.platform === "linux" && spawnSync("sh", ["-c", "command -v
 test("the answers check on real servers: the same, two bodies of one length, and a side that never answers", { skip: tools ? false : "needs Linux with taskset, timeout, curl and sha256sum" }, () => {
   const serve = (body) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
   const mute = 'require("node:net").createServer(() => {}).listen(Number(process.argv[2]), "127.0.0.1");';
+  // A CPU this process may run on, which need not be the first, and the kit's two ports free:
+  // they are fixed, so one in use would be waited on, and is said instead.
+  const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
+  assert.ok(cpu, "taskset names no CPU this process may run on");
+  const taken = (port) => spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
+  for (const port of [18081, 18082]) assert.ok(!taken(port), `port ${port} is in use, and the kit's ports are fixed: this test needs 18081 and 18082 free`);
   const check = (name, base, head, seconds) => {
-    const work = join(tmp, name), vars = { KIT: here, START: "$BIN $PORT", REQ_PATH: "/page", STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: 0, CPU_LOAD: 0, CPU_DRIVER: 0, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: seconds };
+    const work = join(tmp, name), vars = { KIT: here, START: "$BIN $PORT", REQ_PATH: "/page", STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: seconds };
     mkdirSync(join(work, "plan"), { recursive: true });
     mkdirSync(join(work, "bin"));
     writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
@@ -658,9 +718,9 @@ test("the answers check on real servers: the same, two bodies of one length, and
     const r = spawnSync("sh", ["-c", ANSWERS, "sh", work], { encoding: "utf8", timeout: 120000 });
     // Whatever the check found, the servers it started are gone: nothing takes a connection.
     for (const port of [18081, 18082]) {
-      let status;
-      for (let i = 0; i < 20 && status !== 7; i++) status = spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status;
-      assert.equal(status, 7, `${name}: something still answers on ${port}`);
+      let still = true;
+      for (let i = 0; i < 20 && still; i++) still = taken(port);
+      assert.ok(!still, `${name}: something still answers on ${port}`);
     }
     return { status: r.status, said: r.stdout + r.stderr, answers: join(work, "compare", "answers") };
   };
