@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
-import { catalogClosureDetails, erroredCreate, pendingCreate, providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
+import { catalogClosureDetails, erroredCreate, pendingCreate, providerDiagnostic, unsentCreate, unsentDelete } from "./cloud-options.mjs";
 import { fleetCatalogCommand, providerCreateHost } from "./cloud-contract.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -159,7 +159,9 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
   }
   const run = async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
     if (closed || failed) throw uncertain();
+    const creating = allowFail && args?.[0] === "compute" && args[1] === "droplet" && args[2] === "create";
     if (interrupted()) {
+      if (creating && !pending) return unsentCreate;
       if (allowFail && args?.[2] === "delete" && deleteProofExpiresAtMs !== undefined && !pending) return unsentDelete;
       throw uncertain();
     }
@@ -169,7 +171,11 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     if (deleteProofExpiresAtMs !== undefined) assert.ok(args[2] === "delete" && Number.isSafeInteger(deleteProofExpiresAtMs) && deleteProofExpiresAtMs > 0);
     try {
       if (!child) await start();
-      if (failed || closed || interrupted()) throw uncertain();
+      if (failed || closed) throw uncertain();
+      if (interrupted()) {
+        if (creating && !pending) return unsentCreate;
+        throw uncertain();
+      }
       const id = ++sequence;
       const scoped = args.at(-2) === "--context" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(args.at(-1));
       const command = JSON.stringify(args.slice(0, -2));

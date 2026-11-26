@@ -1,1 +1,0 @@
-- The catalog benchmark prepares its pinned upstream image separately so a first-time download cannot consume the container startup deadline ([#1760 Catalog CI: downloading the shared Node image can exhaust the upstream startup timeout](https://github.com/corten-run/corten/issues/1760)).

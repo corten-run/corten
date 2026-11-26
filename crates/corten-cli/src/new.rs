@@ -218,8 +218,9 @@ mod tests {
     fn a_new_apps_dockerfile_installs_the_command_of_this_number_for_a_profiled_build() {
         // The image's profiled build installs the release with this command's number, as the
         // app's manifest names the library's, and says so where it refuses one without the
-        // option. A command built between releases has an earlier release's number: 0.2.0 has
-        // no `--profile-from`, which is what the Dockerfile's refusal is for.
+        // option. A command built between releases has an earlier release's number, so its
+        // Dockerfile installs that release; the refusal is for one without `--profile-from`
+        // (0.2.0, which a command built before 0.3.0 wrote).
         let dir = std::env::temp_dir().join(format!("corten-new-profiled-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         write_app(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();

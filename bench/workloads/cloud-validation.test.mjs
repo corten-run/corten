@@ -515,6 +515,21 @@ test("native replay timeout has a fixed stage and retains custody if the worker 
   assert.equal(unreferences, 1);
 });
 
+test("replay after confirmed host absence is still bounded, but permits 25 minutes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let stops = 0;
+  const pending = inspectCampaign({}, { confirmedAbsent: true, start: () => ({
+    result: new Promise(() => {}), stop: () => stops++,
+  }) });
+  const rejected = assert.rejects(pending, { controllerStage: "collect-native-replay-deadline" });
+  t.mock.timers.tick(validationLimit + 1);
+  assert.equal(stops, 0);
+  t.mock.timers.tick(25 * 60_000 - validationLimit);
+  assert.equal(stops, 1);
+  t.mock.timers.tick(validationStopLimit);
+  await rejected;
+});
+
 test("native replay startup, interruption and worker refusal have closed stages", async () => {
   const raw = Object.assign(new Error("PRIVATE_EVIDENCE_VALUE"), { controllerStage: "collect-native-replay-deadline" });
   const message = "native campaign validation unavailable or invalid; evidence/host preserved";

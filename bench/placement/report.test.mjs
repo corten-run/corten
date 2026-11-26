@@ -17,6 +17,7 @@ import { LIMIT } from "./pilot.mjs";
 import { declaration, inputs, problems, resolve } from "./plan.mjs";
 import { report, sizing } from "./report.mjs";
 import { schedule, shuffled, sides } from "./schedule.mjs";
+import { reading } from "./trend.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const EXAMPLE = JSON.parse(readFileSync(join(here, "example", "plan.json"), "utf8"));
@@ -572,4 +573,50 @@ test("each threshold the plan declares is stated on its own, and the spread only
   const lines = declaration(resolve(plan((p) => { p.workloads[0].reduction = 0.02; p.workloads[0].K = 30; p.workloads[0].sizedFrom = "an A/A made up for a test"; }), "gated", "plain"));
   assert.equal(lines[1], "thresholds: the margin (+1%, no floor): read by this run; a smallest worthwhile reduction of 2.00%: not read by this run, so it stays as one build read it");
   assert.equal(lines[2], "the A/A records no placement spread");
+});
+
+test("the trend reads a gated part's report.json as it is written: the change's lower bound against its own threshold", () => {
+  // At K = 5 the lower bound is the smallest placement median and the bound the largest.
+  const pilot = results({ part: "pilot", edit: sized, change: even() });
+  const from = (low) => (c, i) => (c === "aa-plain" ? (i - 3) / 1000 : low + (i - 1) / 1000);
+  // What a run holds its report to is here what the test itself knows, not what the report
+  // says: the plan file it wrote, the plan's two commits, and the K and the run id the pilot's
+  // own report gives.
+  const p = report(pilot).json, K = p.pilot.sizing.K, run = p.run;
+  const of = (res, more) => ({ plan: createHash("sha256").update(readFileSync(join(res, "..", "..", "plan.json"))).digest("hex"), base: EXAMPLE.base, head: EXAMPLE.head, dry: false, K, from: run, ...more });
+  // A pilot's report as a run takes it: a pilot part's of the plan, complete, and a dry one's too.
+  assert.deepEqual([p.part, p.workload, p.plan, p.dry, p.exit, p.pilot.sizing.ok, K, run], ["pilot", "plain", of(pilot).plan, false, 0, true, 5, RUN]);
+  const d = report(results({ part: "pilot", edit: sized, dry: {}, change: even() })).json;
+  assert.deepEqual([d.part, d.dry, d.exit, d.pilot.sizing.ok], ["pilot", true, 0, false]);
+  const read = (opts, more = {}) => { const res = results(opts); return reading(0.02, "plain", { report: report(res).json, expect: of(res, more) }); };
+  const pass = read({ edit: sized, sizedFrom: pilot, change: from(0.003) });
+  assert.deepEqual([pass.state, pass.text], ["pass", "+0.30% to +0.70%, median +0.50%, K = 5, A/A resolved"]);
+  near(pass.lower, 0.003);
+  near(pass.bound, 0.007);
+  near(pass.median, 0.005);
+  // The kit's margin reads the bound against +1%; the trend reads the lower bound against its
+  // threshold. A bound over the threshold with a lower bound under it is not a rise shown.
+  assert.deepEqual(read({ edit: sized, sizedFrom: pilot, change: from(0.017) }).text, "+1.70% to +2.10%, median +1.90%, K = 5, A/A resolved");
+  assert.equal(read({ edit: sized, sizedFrom: pilot, change: from(0.017) }).state, "pass");
+  const past = read({ edit: sized, sizedFrom: pilot, change: from(0.021) });
+  assert.deepEqual([past.state, past.text], ["past", "+2.10% to +2.50%, median +2.30%, K = 5, A/A resolved"]);
+  // Not read, each for its own reason: an A/A that did not resolve, a comparison without all
+  // its placements, a K nothing checked, a dry run, results the kit refuses, and a report of
+  // another plan, commit or K than the run's, or a pilot's.
+  const not = (opts, text, more) => { const r = read(opts, more); assert.equal(r.state, "not read", text); assert.ok(r.text.startsWith(text), `${r.text} does not start with ${text}`); };
+  const incomplete = "the gated part is not complete: a comparison without all its placements has no bound";
+  not({ edit: sized, sizedFrom: pilot, change: (c, i) => (c === "aa-plain" ? (i === 2 ? 0.015 : 0) : 0.05) }, "the A/A did not resolve (bounds +1.50% and ");
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05), touch: (res, put) => { const f = join("change-plain", "p003", "placement.txt"); put(f, readFileSync(join(res, f), "utf8").replace(/ended .*\n$/, "")); } }, incomplete);
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05), touch: (res) => rmSync(join(res, "aa-plain", "p001"), { recursive: true }) }, incomplete);
+  not({ change: from(0.05) }, "K was not checked by the kit");
+  not({ dry: {}, change: from(0.05) }, "the report is a dry run's, and this run is not one");
+  not({ dry: {}, change: from(0.05) }, "DRY RUN, read for nothing (+5.00% to +5.", { dry: true });
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "the report is not a dry run's, and this run is one", { dry: true });
+  not({ edit: sized, sizedFrom: pilot, touch: (res) => rmSync(join(res, "run-id")) }, "the kit refused the results: no run-id in the results");
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "the report is of another plan than this run's", { plan: "0".repeat(64) });
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "the report is of another base than this run's", { base: "0".repeat(40) });
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "the report is of another head than this run's", { head: "0".repeat(40) });
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "K = 5 is not the K this run's pilot sized", { K: 6 });
+  not({ edit: sized, sizedFrom: pilot, change: from(0.05) }, "K = 5 is not the K this run's pilot sized", { from: "another run's pilot" });
+  not({ part: "pilot", edit: sized, change: even() }, "the report is not a gated part's of this workload");
 });

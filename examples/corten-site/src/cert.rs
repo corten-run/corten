@@ -69,8 +69,10 @@ const PHONE: [(&str, u32); 18] = [
     ("TanStack Start", 2401),
 ];
 
-/// The commits the numbers were measured at (`docs/performance.md`): round r16, then browser-4.
-const MEASURED_AT: [(&str, &str); 2] = [("eea6adb", "round r16"), ("3fb4b1ac", "round browser-4")];
+/// The commits the numbers were measured at (`docs/performance.md`), round r16 then browser-4,
+/// each with the version its workspace manifest gave: both trees predate the 0.2.0 release, so
+/// what they measured is not the current release the sheet names above them.
+const MEASURED_AT: [(&str, &str, &str); 2] = [("eea6adb", "0.1.0", "round r16"), ("3fb4b1ac", "0.1.0", "round browser-4")];
 
 /// The apps of round browser-4, in its table's order. The last is the floor: hand-written code.
 const APPS: [&str; 7] = ["Corten", "Solid 1.9", "Svelte 5", "Vue 3.5", "React 19", "Remix 3", "Plain JS"];
@@ -192,14 +194,14 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
                 </div>
                 <dl class={Heat}>
                     <div>
-                        <dt>"Product"</dt>
-                        <dd>"corten-run 0.2"</dd>
+                        <dt>"Current release"</dt>
+                        <dd>"corten-run 0.3"</dd>
                     </div>
                     <div>
                         <dt>"Measured at"</dt>
                         <dd>
-                            for (commit, round) in MEASURED_AT {
-                                <span class={Tested}>{commit} " (" {round} ")"</span>
+                            for (commit, version, round) in MEASURED_AT {
+                                <span class={Tested}>{commit} " (corten-run " {version} ", " {round} ")"</span>
                             }
                         </dd>
                     </div>

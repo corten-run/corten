@@ -157,7 +157,7 @@ async fn a_json_answer_has_a_status_and_cookies_of_its_own() {
     let (status, headers, body) = call_with(router, "POST", "/secret/-", None, None).await;
     assert_eq!(
         (status, &body[..], headers["cache-control"].to_str().unwrap()),
-        (StatusCode::BAD_REQUEST, r#"{"error":"requestId is required"}"#, "no-store")
+        (StatusCode::BAD_REQUEST, r#"{"error":"requestId is required"}"#, "private, no-store")
     );
 }
 
