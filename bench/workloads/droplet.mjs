@@ -214,7 +214,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
         if (groupedExitOne) assert.ok(current >= exitOneFenceFinishedAtMs, "current retirement proof clock reversed");
       };
-      const guardDispatch = pinnedRetirement && expiry !== undefined ? () => {
+      const pinnedGuard = pinnedRetirement && expiry !== undefined ? () => {
         checkHandoffDelete();
         if (prepareDelete?.onUnsent) {
           const now = Date.now();
@@ -222,8 +222,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         fresh();
       } : undefined;
+      // A transport may await between run() and the request (production crosses a
+      // cancellation checkpoint), so the caller's last check runs again in the guard
+      // it calls after that await, refusing by throwing before any pinned outcome.
+      const guardDispatch = beforeDispatch === undefined ? pinnedGuard
+        : () => { beforeDispatch(); return pinnedGuard?.(); };
       if (expiry !== undefined) {
-        if (guardDispatch && !prepareDelete?.publishIntent) checkHandoffDelete(false);
+        if (pinnedGuard && !prepareDelete?.publishIntent) checkHandoffDelete(false);
         fresh();
       }
       let r;
@@ -236,7 +241,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.deletionIntentAt = new Date().toISOString(); save();
         }
       }
-      // After the account preflight and the proof's deadline, the last local check before the request.
+      // After the account preflight and the proof's deadline, the last local check before run().
       beforeDispatch?.();
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
@@ -1008,9 +1013,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       unlinkSync(path); syncDirectory(local);
     }
     // Supersedes any earlier digest; the retirement state below clears it. The digest is
-    // saved before the receipt is published, so a published receipt always has one.
+    // saved before the receipt is published, so a published receipt always has one. Like
+    // publishCreateErrored, it goes through its own fresh exclusive stage, so a save torn
+    // here leaves an unread stage rather than a state.json.tmp that blocks the next collect.
     const written = digest(bytes);
-    if (recorded) { state.pendingRetirement = { kind, evidenceSha256: written }; save(); }
+    if (recorded) { check(); state.pendingRetirement = { kind, evidenceSha256: written }; writeState(state, renameSync, "pending-retirement"); }
     (recorded ? durableNew : durable)(path, bytes);
     if (bounded) requireFreshProof();
     // The bytes this process wrote, not the file, are the authority: the published receipt

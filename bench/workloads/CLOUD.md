@@ -1432,10 +1432,20 @@ archive, evidence hash and extracted evidence preserved, and with no
 
 The digest is saved before the receipt is published, so a published v2 or v3
 receipt always has one, and a collect stopped between the two saves only the
-digest: the next collect finds no receipt and retires on a fresh proof. A v2 or
+digest: the next collect finds no receipt and retires on a fresh proof. The
+digest is saved through its own fresh exclusive staging file
+(`state.json.pending-retirement-<random>.tmp`), as `createErrored` is, so a
+save torn there leaves that stage and no digest, and the next collect retires
+on a fresh proof. The stage is never read or removed; it stays for the operator
+to archive. A v2 or
 v3 receipt and its history copy are published whole: each is written and synced
 as `<name>.stage` in the same directory, then hard-linked to its final name,
-which fails rather than replace an existing file, and the directory is synced.
+which fails rather than replace an existing file, and the directory is synced
+(except on Windows, where the controller does not sync directories at all, so a
+power loss there can still lose a link the collect reported). Publication
+requires hard links in the state root; on a filesystem without them the link
+fails, the collect refuses with the stage left in place and no receipt, and
+nothing falls back to a direct write.
 A write interrupted before publication therefore leaves only that stage, never a
 partial receipt or history copy. A stage is never read: the next collect removes
 a stage with exactly that name before it reads the receipt or the history copy,
@@ -1444,8 +1454,12 @@ The v1, unused and pinned unused receipts keep their exclusive direct writes.
 
 The bytes this process wrote, not the file, are the authority for the DELETE.
 After publication the receipt is read back and must match that digest before
-the intent is saved, and again after the DELETE's account preflight, just
-before the request is sent. A receipt edited before the intent refuses with
+the intent is saved, and again after the DELETE's account preflight, before the
+controller hands the DELETE to its transport. The production transport awaits a
+cancellation checkpoint before dispatch, so the same check also runs in the
+dispatch guard it calls after that checkpoint, immediately before the request
+goes to the provider worker; there it runs before a pinned retirement's own
+guard and refuses by throwing, never by reporting the request unsent. A receipt edited before the intent refuses with
 `published retirement receipt differs from the bytes written; preserve host`,
 saving no intent; its recorded digest stays, so a later collect refuses it as an
 interrupted receipt that differs from its recorded digest. Edited after the

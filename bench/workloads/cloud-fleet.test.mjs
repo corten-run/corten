@@ -16,6 +16,7 @@ import { digest, treeHash } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import setupDrainSource from "./cloud-setup-drain-source.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
+import { productionDispatch } from "./cloud-production.mjs";
 import { recheckSetupRetirement, verifyFleet } from "./fleet-verify.mjs";
 import { continuationAdmission } from "./group-continuation.mjs";
 import { SetupWatcherProofMissing, verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
@@ -485,7 +486,8 @@ const receiptName = /^failed-setup-host\.json(?:\.stage)?$/, historyName = /^fai
 // The first bootstrap session stays open until its watcher misses its deadline, so the
 // exit archive holds a real watch-failure and no receipt for it.
 for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time", "receipt-expired", "receipt-expired-kept", "receipt-expired-rebound", "receipt-expired-edited", "receipt-expired-unrecorded",
-  "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished"]) test({
+  "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished",
+  "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -503,7 +505,10 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-before-intent": "a receipt edited after it is published and before the intent refuses with no intent and no DELETE",
   "receipt-edited-before-delete": "a receipt edited during the DELETE's account preflight refuses before the DELETE is sent",
   "receipt-torn": "a receipt torn while it is written is never published, so the next collect retires on a fresh proof",
-  "receipt-unpublished": "a receipt that fails at publication leaves only its recorded digest, and the next collect retires on a fresh proof",
+  "receipt-unpublished": "a receipt whose stage link fails leaves its complete stage and no receipt, and the next collect retires on a fresh proof",
+  "receipt-edited-at-dispatch": "a receipt edited during the production dispatch checkpoint refuses at the dispatch guard and sends no DELETE",
+  "dispatch-unchanged": "an unchanged receipt passes the production dispatch guard and sends exactly one DELETE",
+  "pending-save-torn": "a torn save of the receipt digest leaves its own stage, and the next collect retires on a fresh proof",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -605,21 +610,77 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     return;
   }
+  if (mode === "receipt-edited-at-dispatch" || mode === "dispatch-unchanged") {
+    // The real production dispatch steps: a cancellation checkpoint, which yields, then the
+    // controller's dispatch guard, then the provider. The edit lands inside that checkpoint,
+    // after the controller's own last check before run().
+    let deleting = false;
+    const dispatch = productionDispatch({ processRun: run, provider: () => (...args) => run("doctl", ...args),
+      interrupted: () => { if (deleting && !edited && mode === "receipt-edited-at-dispatch") editReceipt(); return false; } });
+    const production = (...args) => { if (args[0] === "doctl" && args[1][2] === "delete") deleting = true; return dispatch(...args); };
+    if (mode === "dispatch-unchanged") {
+      assert.equal(await h.task({ run: production }).collect(), 1);
+      const s = h.saved();
+      assert.equal(edited, undefined); assert.ok(deleting); assert.equal(queries, 1);
+      assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+      assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt)));
+      assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+      return;
+    }
+    await assert.rejects(h.task({ run: production }).collect(), /published retirement receipt differs from the bytes written; preserve host/);
+    const saved = h.saved();
+    assert.ok(edited); assert.ok(deleting); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
+    assert.equal(saved.retirement.evidenceSha256, digest(edited)); assert.notEqual(digest(readFileSync(receipt)), digest(edited));
+    await assert.rejects(h.task({ run: production }).collect(), /retirement evidence changed/);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (mode === "pending-save-torn") {
+    // The first state save that carries the receipt digest is torn: 80 bytes, then an error.
+    const fds = new Set(); let torn;
+    hookFs(t, {
+      openSync: (original) => (path, flags, ...rest) => {
+        const fd = original(path, flags, ...rest);
+        if (!torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(path)))) fds.add(fd);
+        return fd;
+      },
+      writeFileSync: (original) => (target, data, ...rest) => {
+        if (!fds.has(target)) return original(target, data, ...rest);
+        fds.delete(target);
+        if (torn || !String(data).includes('"pendingRetirement"')) return original(target, data, ...rest);
+        torn = true; fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+        throw new Error("injected torn write");
+      },
+    });
+    await assert.rejects(h.task({ run }).collect(), /injected torn write/);
+    const interrupted = h.saved();
+    assert.ok(torn); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(interrupted.pendingRetirement, undefined); assert.equal(interrupted.deletionIntentAt, undefined);
+    assert.equal(existsSync(receipt), false); assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+    const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+    assert.equal(stages.length, 1); assert.match(stages[0], /^state\.json\.pending-retirement-[a-f0-9]{32}\.tmp$/);
+    const tornBytes = readFileSync(join(h.local, stages[0]));
+    assert.equal(tornBytes.length, 80);
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved();
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
+    // The torn stage is never read or removed; it stays for the operator.
+    assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
   if (mode === "receipt-torn" || mode === "receipt-unpublished") {
     const stage = `${receipt}.stage`;
     if (mode === "receipt-torn") tearWrite(t, receiptName);
     else {
-      // Fail at the publication itself, after the digest save: the exclusive create of the
-      // receipt, or the link that publishes its stage.
+      // Fail at the publication itself, after the digest save: the link that publishes the
+      // receipt's complete stage under its final name.
       let failedOnce = false;
-      const refuse = () => { if (failedOnce) return false; failedOnce = true; return true; };
       hookFs(t, {
-        openSync: (original) => (path, flags, ...rest) => {
-          if (flags === "wx" && basename(String(path)) === "failed-setup-host.json" && refuse()) throw new Error("injected publication failure");
-          return original(path, flags, ...rest);
-        },
         linkSync: (original) => (from, to) => {
-          if (basename(String(to)) === "failed-setup-host.json" && refuse()) throw new Error("injected publication failure");
+          if (!failedOnce && basename(String(to)) === "failed-setup-host.json") { failedOnce = true; throw new Error("injected publication failure"); }
           return original(from, to);
         },
       });
@@ -630,6 +691,11 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(interrupted.deletionIntentAt, undefined); assert.equal(interrupted.retirement, undefined);
     // The checkpoint is the digest alone, saved before the receipt was published.
     assert.equal(interrupted.pendingRetirement?.kind, "setup-failed");
+    if (mode === "receipt-unpublished") {
+      // Staged publication: the failed link leaves the whole receipt as its stage, never as the receipt.
+      assert.ok(existsSync(stage), "a failed link left no complete stage");
+      assert.equal(digest(readFileSync(stage)), interrupted.pendingRetirement.evidenceSha256);
+    }
     assert.equal(await h.task({ run }).collect(), 1);
     const s = h.saved(), current = readFileSync(receipt);
     assert.equal(published, false, "an interrupted write published the receipt");
