@@ -30,6 +30,7 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 // answer whose body breaks off are waited out; any other status is a failure of the readiness route
 // itself and ends the smoke at once. The 120 s are kept by the monotonic clock, and no attempt or
 // pause runs past them.
+if (new URL(base).protocol !== "http:") throw new Error(`${base}/health/ready: the smoke asks the app over plain http, as CI and CONTRIBUTING run it`);
 const readyBy = performance.now() + 120_000;
 /** Whole milliseconds left before the 120 s run out; none once they have. */
 const remaining = () => Math.max(0, Math.floor(readyBy - performance.now()));
@@ -42,13 +43,16 @@ const remaining = () => Math.max(0, Math.floor(readyBy - performance.now()));
  */
 const ask = (within) =>
   new Promise((resolve) => {
-    const req = http.get(`${base}/health/ready`, { signal: AbortSignal.timeout(within) });
+    /** @type {number | undefined} The status once its headers have come, kept whatever then ends the body. */
+    let status;
+    // Its own connection, never the global agent's (which a proxy set in the environment would take).
+    const req = http.get(`${base}/health/ready`, { agent: false, signal: AbortSignal.timeout(within) });
     req.on("upgrade", (/** @type {any} */ _res, /** @type {any} */ socket) => {
       socket.destroy();
       resolve({ status: 101, whole: false });
     });
     req.on("response", (res) => {
-      const status = res.statusCode;
+      status = res.statusCode;
       if (status !== 200 && status !== 503) {
         res.destroy();
         resolve({ status, whole: false });
@@ -59,7 +63,7 @@ const ask = (within) =>
       res.on("end", () => resolve({ status, whole: res.complete, cause: res.complete ? undefined : "cut short" }));
       res.resume();
     });
-    req.on("error", (e) => resolve({ whole: false, cause: String(/** @type {any} */ (e).code ?? e.message) }));
+    req.on("error", (e) => resolve({ status, whole: false, cause: String(/** @type {any} */ (e).code ?? e.message) }));
   });
 const late = () => new Error(`${base}/health/ready did not answer 200 within 120 s (last: ${last})`);
 let last = "no answer";
@@ -67,11 +71,20 @@ for (;;) {
   const left = remaining();
   if (left === 0) throw late();
   const { status, whole, cause } = await ask(Math.min(5000, left));
-  // Nothing that arrives once the 120 s are over is read as an answer.
-  if (remaining() === 0) throw late();
+  const outcome =
+    whole || (status !== undefined && status !== 200 && status !== 503)
+      ? `${status}`
+      : status === undefined
+        ? String(cause)
+        : `${status}, then its body broke off (${cause})`;
+  // Nothing that arrives once the 120 s are over is read as an answer, but it is named.
+  if (remaining() === 0) {
+    last = outcome;
+    throw late();
+  }
   if (status !== undefined && status !== 200 && status !== 503) throw new Error(`${base}/health/ready answered ${status}, not 200 or 503`);
   if (whole && status === 200) break;
-  last = whole ? "503" : status === undefined ? String(cause) : `${status}, then its body broke off (${cause})`;
+  last = outcome;
   const pause = Math.min(250, remaining());
   if (pause === 0) throw late();
   await new Promise((r) => setTimeout(r, pause));
