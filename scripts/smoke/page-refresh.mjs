@@ -189,6 +189,23 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
     const savedLine = '<p id="alert-status" role="status">Saved.</p>';
     const savingLine = '<p id="alert-status" role="status">Saving...</p>';
+    /** The head's read-again tag of a page as the server writes it (`ReadAgain` in the head). */
+    const headTag = /<noscript data-corten-read-again="\d+"[^>]*>[\s\S]*?<\/noscript>/g;
+    /** A part's read-again tag as the server writes it (`ReadAgain::from`). */
+    const partTag = /<template data-corten-read-again="\d+"[^>]*><\/template>/g;
+    /** The address a part's read-again tag reads from (`data-from`), as written. @param {string} tag */
+    const tagFrom = (tag) => /data-from="([^"]*)"/.exec(tag)?.[1]?.replaceAll("&amp;", "&") ?? null;
+    /**
+     * What `body`, the server's own answer saying `Saving...`, lacks of the read-again tags the
+     * server writes while a write lands: its head's tag, and with `part` its part's tag reading again
+     * from `part` (the page's address). Null when it has them. @param {string} body @param {string} [part]
+     */
+    const missingTags = (body, part) => {
+      const missing = [];
+      if (!(body.match(headTag) ?? []).length) missing.push("its head's read-again tag");
+      if (part !== undefined && !(body.match(partTag) ?? []).some((t) => tagFrom(t) === part)) missing.push(`its part's read-again tag from ${part}`);
+      return missing.length ? missing.join(" and ") : null;
+    };
     const savedSoon = () =>
       page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
     /** @type {string[]} */
@@ -312,19 +329,25 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         answers[at] = { url: address, asks: answer.includes("data-corten-read-again"), standIn };
         await route.fulfill({ status: res.status(), headers, body: marked });
       };
-      // The runtime's navigations below reach a page still saving (#2035): each one's fetch of the
-      // page is answered as the server answers it while the write lands, whatever the store has by
-      // then: its status line saying `Saving...`, its head's tag asking to be read again, and its
-      // part's tag asking again from the page's own address after the seconds `seeds` gives it. The
-      // write lands 1.5 s after it is sent, and a loaded browser's navigation can reach the server
-      // after that, when the right answer is `Saved.` with no part to read, so a case waiting for
-      // `Saving...` would fail on timing alone. The server's own answer is fetched and changed only
-      // there (its status line and read-again tags), and only for the navigation's fetch: every part
+      // The runtime's navigations below reach a page still saving (#2035). The write lands 1.5 s
+      // after it is sent, and a loaded browser's navigation can reach the server after that, when
+      // the right answer is `Saved.` with no part to read, so a case waiting for `Saving...` would
+      // fail on timing alone. So each one's fetch of the page is answered by the server's own answer,
+      // and only when that says `Saved.` does the stand-in answer as the server does while the write
+      // lands: its status line saying `Saving...`, its head's tag asking to be read again, and its
+      // part's tag asking again from the page's own address after the seconds `seeds` gives it. An
+      // answer of the server's that says `Saving...` is passed through with its own read-again tags,
+      // which must be there (`missingTags`): one without them is passed through as it came and fails
+      // the case (`seedFaults`), since the stand-in must not supply a tag the server dropped. Only
+      // the tags' wait is set to the seconds `seeds` gives, where those differ from the server's (the
+      // leave-before-read case's longer wait). Only the navigation's fetch is answered so: every part
       // read after it is the server's, or a case's own route's.
       /** The pages whose navigation is answered so, by address (path and query), each with its part's wait in seconds. @type {Map<string, number>} */
       const seeds = new Map();
       /** What each of those navigations was answered with, by address, for a check's detail. @type {Map<string, string>} */
       const seeded = new Map();
+      /** Why a navigation's answer failed its case, by address: the server's `Saving...` without its read-again tags. @type {Map<string, string>} */
+      const seedFaults = new Map();
       const seedReads = (/** @type {URL} */ u) => seeds.has(u.pathname + u.search);
       const seedNavigation = async (/** @type {import("@playwright/test").Route} */ route) => {
         const request = route.request();
@@ -350,13 +373,29 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
             return;
           }
-          const tags = /<noscript data-corten-read-again[^>]*>[\s\S]*?<\/noscript>|<template data-corten-read-again[^>]*><\/template>/g;
+          if (shows === "Saving...") {
+            const missing = missingTags(body, address);
+            if (missing !== null) {
+              const fault = `the server's own answer saying Saving... without ${missing}, passed through as it came`;
+              seeded.set(address, fault);
+              seedFaults.set(address, fault);
+              await route.fulfill({ status: res.status(), headers, body: markNav(token, body) });
+              return;
+            }
+            const wait = (/** @type {string} */ t) => t.replace(/data-corten-read-again="\d+"/, `data-corten-read-again="${seconds}"`).replace(/content="\d+"/, `content="${seconds}"`);
+            const answer = body.replace(headTag, wait).replace(partTag, (t) => (tagFrom(t) === address ? wait(t) : t));
+            seeded.set(address, `the server's own answer saying Saving..., with its read-again tags${answer === body ? "" : `, their wait set to ${seconds} s`}`);
+            await route.fulfill({ status: res.status(), headers, body: markNav(token, answer) });
+            return;
+          }
+          // The write has landed: the stand-in answers as the server does while it lands.
+          const tags = new RegExp(`${headTag.source}|${partTag.source}`, "g");
           const head = `<noscript data-corten-read-again="${seconds}" data-corten-head><meta http-equiv="refresh" content="${seconds}"></noscript>`;
           const tag = `<template data-corten-read-again="${seconds}" data-from="${address}"></template>`;
           const bare = body.replace(tags, "").replace(savedLine, savingLine);
           const headed = bare.includes("</title>") ? bare.replace("</title>", `</title>${head}`) : `${head}${bare}`;
           const answer = headed.includes("</main>") ? headed.replace("</main>", `${tag}</main>`) : `${headed}${tag}`;
-          seeded.set(address, `the stand-in, the server's saying ${shows}`);
+          seeded.set(address, "the stand-in, the server's saying Saved.");
           await route.fulfill({ status: res.status(), headers, body: markNav(token, answer) });
         } catch (error) {
           seeded.set(address, `failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`);
@@ -534,12 +573,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           /**
            * `go` to `to`, its navigation answered as still saving, with its part read again after
            * `seconds` (`seeds`): its `Saving...` must be drawn within 5 s by the page's clock, which
-           * `go` alone decides, with no outer bound of driver time on top. @param {string} to @param {number} [seconds]
+           * `go` alone decides, with no outer bound of driver time on top, and a server's `Saving...`
+           * without its read-again tags fails it (`seedFaults`). @param {string} to @param {number} [seconds]
            */
           const goTo = async (to, seconds = AGAIN_SECONDS) => {
-            seeds.set(new URL(to).pathname + new URL(to).search, seconds);
+            const at = new URL(to).pathname + new URL(to).search;
+            seeds.set(at, seconds);
             const nav = await go(to);
-            if (!nav.saving) throw new Error(`the runtime's navigation to ${new URL(to).pathname}${new URL(to).search}: ${wentTo(nav)}`);
+            const fault = seedFaults.get(at);
+            if (!nav.saving || fault !== undefined) throw new Error(`the runtime's navigation to ${at}: ${fault ?? wentTo(nav)}`);
             return nav;
           };
           const reachedUrl = await readWithin("the pending write's page", pending());
@@ -981,10 +1023,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const wholeReads = [];
     /** What each of `go`'s navigations here was answered with, by address, for a check's detail. @type {Map<string, string>} */
     const wholeSeeded = new Map();
+    /** Why a navigation's answer here failed its check, by address: the server's `Saving...` without its head's read-again tag. @type {Map<string, string>} */
+    const wholeFaults = new Map();
     /**
      * `body`, a whole page's answer, as the server writes it while its write lands: its status line
      * saying `Saving...` and its head asking to be read again after `AGAIN_SECONDS` (the alerts
-     * page's own wait), whatever the store had when it was read. @param {string} body
+     * page's own wait), for an answer the server gave once the write had landed. @param {string} body
      */
     const stillSaving = (body) => {
       const head = `<noscript data-corten-read-again="${AGAIN_SECONDS}" data-corten-head><meta http-equiv="refresh" content="${AGAIN_SECONDS}"></noscript>`;
@@ -1012,13 +1056,22 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // The write lands 1.5 s after it is sent, and a loaded browser's navigation can reach the
       // server after that, when the right answer is `Saved.` with nothing to read again, so the
       // navigation's own fetch alone is answered as the server answers it while the write lands
-      // (#2035), as `seedNavigation` answers the part cases'. Every read after it is the server's.
+      // (#2035), as `seedNavigation` answers the part cases', but only when the server's answer says
+      // `Saved.`: one that says `Saving...` is passed through with its own head's read-again tag,
+      // which must be there (`wholeFaults`), never one the stand-in supplies. Every read after it is
+      // the server's.
       const shows = whole.includes(savedLine) ? "Saved." : whole.includes(savingLine) ? "Saving..." : null;
       if (!res.ok() || shows === null) {
         wholeSeeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
         return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
       }
-      wholeSeeded.set(address, `the stand-in, the server's saying ${shows}`);
+      if (shows === "Saving...") {
+        const missing = missingTags(whole);
+        if (missing !== null) wholeFaults.set(address, `the server's own answer saying Saving... without ${missing}`);
+        wholeSeeded.set(address, missing === null ? "the server's own answer saying Saving..., with its head's read-again tag" : `the server's own answer saying Saving... without ${missing}, passed through as it came`);
+        return route.fulfill({ status: res.status(), headers, body: markNav(token, whole) });
+      }
+      wholeSeeded.set(address, "the stand-in, the server's saying Saved.");
       await route.fulfill({ status: res.status(), headers, body: markNav(token, stillSaving(whole)) });
     };
     await page.route("**/alerts?saved=*", wholeOnly);
@@ -1271,7 +1324,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const kept = await page.evaluate((token) => (/** @type {any} */ (window)).__marker === 6 && (/** @type {any} */ (window)).__smokeGo?.token === token, nav.token);
       check(
         "a page reached by the runtime's navigation reads itself again in place",
-        nav.saving && nav.sameDocument && status === "Saved." && kept,
+        nav.saving && nav.sameDocument && status === "Saved." && kept && !wholeFaults.has(address),
         `${wentTo(nav)} (answered with ${wholeSeeded.get(address) ?? "nothing seen"}) -> ${status}${kept ? "" : ", the document not kept"}`,
       );
       // The page's reads of its own address after the navigation's fetch: with none, the history
