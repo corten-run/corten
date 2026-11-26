@@ -24,8 +24,9 @@ const evidenceInputs = [...kernelInputs, ...rustInputs,
 // What the Request Cost job counts, and what it counts with: the crates the request path is built
 // from and their locked versions, the kit, and the job itself. The kit's probe builds from
 // crates/corten and crates/corten-macros alone; the feed's two crates are here because a request
-// for a feed runs them, though no case of the kit does.
-const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml", "scripts/benchmark-scope.mjs",
+// for a feed runs them, though no case of the kit does. .gitattributes says what `git archive`
+// puts in the tree build.sh builds from.
+const requestCostInputs = [".node-version", ".gitattributes", ".github/workflows/request-cost.yml", "scripts/benchmark-scope.mjs",
   "Cargo.toml", "Cargo.lock", "crates/corten", "crates/corten-macros", "crates/corten-feed", "crates/corten-protocol",
   "bench/request-cost"];
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));

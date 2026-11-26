@@ -406,6 +406,7 @@ for (const [name, paths, run] of [
   ["the job", [".github/workflows/request-cost.yml"], true],
   ["the scope script", ["scripts/benchmark-scope.mjs"], true],
   ["the Node pin", [".node-version"], true],
+  ["what an archive of a commit holds", [".gitattributes"], true],
   ["an event with no diff to read", undefined, true],
   ["what no request is built from", ["README.md", "docs/design.md", "CONTRIBUTING.md", "package.json", "examples/card-market/src/main.rs",
     "crates/corten-cli/src/main.rs", "crates/corten-ui/src/lib.rs", "crates/corten-cluster/src/lib.rs", "crates/corten-macros.md",
@@ -435,27 +436,25 @@ test("Request Cost's scope reads a pull request's merge against its first parent
   assert.equal(scope("main", "crates/corten-macros/src/lib.rs"), "run=true\n");
 });
 
-test("Request Cost runs for pull requests alone, always scopes, counts only what the scope selects and asks nothing of the token", () => {
+test("Request Cost runs for pull requests alone, in one job that always scopes, counts only what the scope selects and asks nothing of the token", () => {
   const source = readFileSync(new URL(".github/workflows/request-cost.yml", root), "utf8");
   const requestCost = parse(source);
   assert.deepEqual(requestCost.on, { pull_request: null });
   assert.deepEqual(requestCost.permissions, { contents: "read" });
-  const { scope, "request-cost": count } = requestCost.jobs;
-  assert.deepEqual(Object.keys(requestCost.jobs), ["scope", "request-cost"]);
-  assert.equal(scope.if, undefined);
-  assert.ok(scope.steps.some(step => step.run === "node scripts/benchmark-scope.mjs request-cost"));
-  assert.deepEqual(count.needs, "scope");
-  assert.equal(count.if, "needs.scope.outputs.run == 'true'");
-  for (const job of [scope, count]) {
-    assert.equal(job.permissions, undefined);
-    // The merge base is found in the history, and the token is not left in the checkout.
-    assert.deepEqual(job.steps.find(step => step.uses?.startsWith("actions/checkout@")).with, { "fetch-depth": 0, "persist-credentials": false });
-  }
+  assert.deepEqual(Object.keys(requestCost.jobs), ["request-cost"]);
+  const { if: when, permissions, steps } = requestCost.jobs["request-cost"];
+  assert.deepEqual([when, permissions], [undefined, undefined]);
+  // The merge base is found in the history, and the token is not left in the checkout.
+  assert.deepEqual(steps[0].with, { "fetch-depth": 0, "persist-credentials": false });
+  // The scope's step runs for every pull request, and every step after it by what it selected.
+  const scope = steps.findIndex(step => step.run === "node scripts/benchmark-scope.mjs request-cost");
+  assert.deepEqual(steps.slice(0, scope + 1).map(step => [step.uses?.split("@")[0] ?? step.id, step.if]), [["actions/checkout", undefined], ["actions/setup-node", undefined], ["scope", undefined]]);
+  assert.deepEqual(steps.slice(scope + 1).map(step => step.if), ["steps.scope.outputs.run != 'true'", ...Array(4).fill("steps.scope.outputs.run == 'true'")]);
   // A fork's run has a token that reads and no secrets, and a description is whatever its author
   // typed: it is read from the event's file, never written into a script.
   assert.doesNotMatch(source, /secrets\.|github\.token|GITHUB_TOKEN/);
-  assert.deepEqual(source.match(/\$\{\{[^}]*\}\}/g).filter(expression => !/^\$\{\{ (github\.workflow|github\.ref|steps\.scope\.outputs\.run) \}\}$/.test(expression)), []);
-  assert.ok(count.steps.some(step => step.run?.includes(`jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH"`)));
+  assert.deepEqual(source.match(/\$\{\{[^}]*\}\}/g).filter(expression => !/^\$\{\{ (github\.workflow|github\.ref) \}\}$/.test(expression)), []);
+  assert.ok(steps.at(-1).run.includes(`jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH"`));
 });
 
 test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
@@ -521,7 +520,7 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
 const toolchainJobs = {
   "catalog.yml": { node: ["scope", "harness", "parity", "json-harness", "json-aot"], upload: ["parity", "json-aot"] },
   "benchmark-evidence.yml": { node: ["scope", "evidence", "kernel"], upload: [] },
-  "request-cost.yml": { node: ["scope", "request-cost"], upload: [] },
+  "request-cost.yml": { node: ["request-cost"], upload: [] },
 };
 
 function assertToolchain(workflows, pin) {
