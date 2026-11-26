@@ -62,6 +62,11 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
 /// A directory holding `bin/cargo`, the stand-in for Cargo and the app (`fixtures/dev-cargo.rs`).
 fn stand_in(name: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("corten-dev-{name}-{}", std::process::id()));
+    // Left by an interrupted run of a process with the same id, its port files and marks would
+    // pass for this run's.
+    if base.exists() {
+        std::fs::remove_dir_all(&base).unwrap();
+    }
     std::fs::create_dir_all(base.join("bin")).unwrap();
     let cargo = base.join("bin").join(format!("cargo{}", std::env::consts::EXE_SUFFIX));
     let status = Command::new("rustc")
