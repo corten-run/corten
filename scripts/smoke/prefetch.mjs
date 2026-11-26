@@ -351,17 +351,24 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
  * `NavTo::also` at older addresses written in forms the browser does not show as written: a character
  * beyond ASCII, a `%2e%2E` segment, a `|` (raw in Firefox's and WebKit's request and pathname,
  * `%7C` in Chromium's), a lowercase escape (`%7c`, which WebKit keeps in `location.pathname` but
- * sends as `%7C`), a trailing space, and escaped unreserved characters (`%2e%2ex`, `%7eold%41`,
- * which WebKit keeps in `location.pathname` but sends decoded, `..x` and `~oldA`). For each, the
- * server marks the entry at the browser's own request for that address (a navigation, so each
- * engine's network path), and the runtime, ranking copies of the same links it never saw marked,
- * marks the same one at that address after a client navigation. Then a nav whose deeper entry's own
- * URL (`/smoke/nav/old%7c/team/people`) is under another entry's older address: it wins at a page
+ * sends as `%7C`) and a trailing space. For each, the server marks the entry at the browser's own
+ * request for that address (a navigation, so each engine's network path), and the runtime, ranking
+ * copies of the same links it never saw marked, marks the same one at that address after a client
+ * navigation. Then addresses where neither marks it, only the section: two the nav names with
+ * escaped unreserved characters (`%2e%2ex`, `%7eold%41`), which WebKit keeps in `location.pathname`
+ * but sends decoded, so the server leaves them out; and two typed by hand, `/smoke/nav/%73ettings`
+ * (the older address `/smoke/nav/settings` with its `s` escaped, compared as written) and
+ * `/smoke/nav/%7%33ettings` (a `%` without two hex digits, then `%33`). WebKit asks for the first
+ * as `/smoke/nav/settings`, so there its server marks the entry and its runtime does not (the limit
+ * the guide names), and it is checked in Chromium and Firefox only. Then a nav whose deeper entry's
+ * own URL (`/smoke/nav/old%7c/team/people`) is under another entry's older address: it wins at a page
  * under it in either spelling of the escape, by the server and the runtime alike.
  */
 export async function navAlso(browser, swaps) {
   const name = "a nav entry is current at its page's older addresses, by the server and the runtime alike";
+  const not = "a nav entry is not current at an address with an escaped unreserved character, by the server and the runtime alike";
   const team = "in a nav with other addresses a deeper entry's own URL wins in any spelling, by the server and the runtime alike";
+  const engine = browser.browserType().name();
   const context = await browser.newContext();
   const page = await context.newPage();
   // Each older address as a stored link carries it, with the path the server writes for it.
@@ -371,9 +378,11 @@ export async function navAlso(browser, swaps) {
     ["/smoke/nav/a|b", "/smoke/nav/a%7Cb"],
     ["/smoke/nav/old%7chome", "/smoke/nav/old%7Chome"],
     ["/smoke/nav/older", "/smoke/nav/older"],
-    ["/smoke/nav/%2e%2ex", "/smoke/nav/..x"],
-    ["/smoke/nav/%7eold%41", "/smoke/nav/~oldA"],
   ];
+  // Addresses where only the section is current: two the nav names and the server leaves out, and
+  // two typed by hand. WebKit asks for `%73ettings` decoded, `/smoke/nav/settings`, an older address.
+  const nots = ["/smoke/nav/%2e%2ex", "/smoke/nav/%7eold%41", "/smoke/nav/%7%33ettings"];
+  if (engine !== "webkit") nots.push("/smoke/nav/%73ettings");
   // Pages under the team nav's People entry, in the spelling its URL has and in another.
   const visits = ["/smoke/nav/old%7c/team/people/alex", "/smoke/nav/old%7C/team/people/alex"];
   const also = cases.map(([, path]) => path).join(" ");
@@ -385,6 +394,9 @@ export async function navAlso(browser, swaps) {
   };
   /** The same, for a request sent outside the browser. */
   const served = async (/** @type {string} */ href) => marked(await (await page.request.get(new URL(href, base).href)).text());
+  /** The aria-current of the nav's section and entry links in one answer, with its status. */
+  const navMarks = (/** @type {number} */ status, /** @type {string} */ html) =>
+    `${status} ${["Nav", "Here"].map((label) => (new RegExp(`<a [^>]*aria-current="page"[^>]*>${label}</a>`).test(html) ? "page" : "-")).join(" ")}`;
   /** The aria-current of the team nav's Settings and People links in one answer. */
   const teamMarks = (/** @type {string} */ html) =>
     ["Settings", "People"].map((label) => (new RegExp(`<a [^>]*aria-current="page"[^>]*>${label}</a>`).test(html) ? "page" : "-")).join(" ");
@@ -392,6 +404,8 @@ export async function navAlso(browser, swaps) {
   const seen = [];
   /** @type {string[]} */
   const teamSeen = [];
+  /** @type {string[]} */
+  const notSeen = [];
   const drawn = await (await page.request.get(`${base}/smoke/nav/here`)).text();
   const written = drawn.match(/<a href="\/smoke\/nav\/here" data-nav data-nav-group="[0-9a-f]{8}(\+?)" data-nav-also="([^"]*)"/);
   if (written?.[1] !== "+" || written[2] !== also) seen.push(`server wrote group mark "${written?.[1]}" and paths "${written?.[2]}"`);
@@ -405,6 +419,14 @@ export async function navAlso(browser, swaps) {
     const response = await page.goto(new URL(href, base).href);
     if (!response || !marked(await response.text())) seen.push(`server at the browser's request for ${href} (${response?.url()}): unmarked`);
   }
+  for (const href of nots) {
+    const outside = await page.request.get(new URL(href, base).href);
+    const outsideMarks = navMarks(outside.status(), await outside.text());
+    if (outsideMarks !== "200 page -") notSeen.push(`server at ${href}: ${outsideMarks}`);
+    const response = await page.goto(new URL(href, base).href);
+    const marks = response ? navMarks(response.status(), await response.text()) : "no answer";
+    if (marks !== "200 page -") notSeen.push(`server at the browser's request for ${href} (${response?.url()}): ${marks}`);
+  }
   for (const visit of visits) {
     const outside = teamMarks(await (await page.request.get(new URL(visit, base).href)).text());
     if (outside !== "- page") teamSeen.push(`server at ${visit}: ${outside}`);
@@ -415,6 +437,8 @@ export async function navAlso(browser, swaps) {
   if (!swaps) {
     check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
     skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
+    check(not, notSeen.length === 0, notSeen.join("; ") || `server only at ${nots.join(" ")}: without swaps a client navigation loads the page in full`);
+    skip(`${not} (runtime)`, "without the Navigation API the browser loads that page in full");
     check(team, teamSeen.length === 0, teamSeen.join("; ") || "server only: without swaps a client navigation loads the page in full");
     skip(`${team} (runtime)`, "without the Navigation API the browser loads that page in full");
     await context.close();
@@ -447,6 +471,31 @@ export async function navAlso(browser, swaps) {
     if (marks !== "- page") seen.push(`runtime at ${at}: ${marks}`);
   }
   check(name, seen.length === 0, seen.join("; ") || "server and runtime marked the entry at every older address");
+  for (const href of nots) {
+    await page.goto(`${base}/smoke/nav/here`);
+    // Unmarked copies of the nav's links, and a plain link to the address, as for an older one.
+    await page.evaluate((href) => {
+      const nav = document.createElement("nav");
+      nav.id = "not-copy";
+      for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
+        const copy = /** @type {Element} */ (link.cloneNode(true));
+        copy.removeAttribute("aria-current");
+        nav.append(copy);
+      }
+      const other = document.createElement("a");
+      other.id = "not-other";
+      other.setAttribute("href", href);
+      other.textContent = "Other";
+      document.querySelector("header")?.append(nav, other);
+    }, href);
+    const before = await page.evaluate(() => location.pathname);
+    await page.click("#not-other");
+    await page.waitForFunction((before) => location.pathname !== before && document.title.startsWith("Nav"), before);
+    await page.waitForFunction(() => !!document.querySelector("#not-copy a[aria-current]"), null, { timeout: 5000 }).catch(() => {});
+    const marks = await page.evaluate(() => Array.from(document.querySelectorAll("#not-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
+    if (marks !== "page -") notSeen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${marks}`);
+  }
+  check(not, notSeen.length === 0, notSeen.join("; ") || `server and runtime marked only the section at ${nots.join(" ")}`);
   for (const visit of visits) {
     await page.goto(`${base}/smoke/nav/old%7c/team/people/start`);
     // Unmarked copies of the team nav's links in the shell, and a plain link to the page under it.

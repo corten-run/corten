@@ -418,8 +418,8 @@ impl NavTarget for crate::Local {
 /// the query and fragment left out, `\` read as `/`, the `.` and `..` segments resolved (`%2e` for a
 /// dot too, in either case), and a control character, a space, `` "<>^`{} `` and each byte of a
 /// character beyond ASCII percent-encoded. Then the spellings engines differ on are made one
-/// ([`keyed`]): `|` is encoded, and each escape is normalized. [`key`] makes the page's path the
-/// same key before comparing. The result has no space in it.
+/// ([`keyed`]): `|` is encoded, and each escape's hex digits are uppercased. [`key`] makes the page's
+/// path the same key before comparing. The result has no space in it.
 fn pathname(url: &str, out: &mut String) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let from = out.len();
@@ -475,36 +475,36 @@ fn pathname(url: &str, out: &mut String) {
     keyed(&written, out);
 }
 
-/// Writes `text`, a path, as a comparison key to `out`: each `|` as `%7C`, each percent escape of
-/// an unreserved character (a letter, a digit, `-`, `.`, `_` or `~`) as that character, and the hex
-/// digits of every other escape uppercase; a `%` without two hex digits after it is kept as it is.
-/// That is RFC 3986's normalization of a path's escapes (section 6.2.2), with Chromium's `%7C` for
-/// `|`: Firefox and WebKit keep `|` in a request and in `location.pathname`, and WebKit asks for a
-/// path so normalized (`/a/%2e%2ex` as `/a/..x`, `%7c` as `%7C`) while its `location.pathname`
-/// keeps the path as written. No escape of another character is decoded, so a key never has `%`
-/// or a reserved character it did not have escaped.
+/// Writes `text`, a path, as a comparison key to `out`: each `|` as `%7C`, Chromium's spelling,
+/// where Firefox and WebKit keep `|` in a request and in `location.pathname`, and the two hex digits
+/// of each percent escape uppercase, as WebKit asks for `%7c` as `%7C` while its
+/// `location.pathname` keeps `%7c`. Nothing is decoded, and a `%` without two hex digits after it
+/// is kept as it is, so the server's key of a request and the runtime's of `location.pathname` are
+/// the same text whenever the two are. A path with an escaped unreserved character is not one
+/// Corten writes ([`crate::route::escapes_unreserved`]); one typed by hand is compared as written.
 fn keyed(text: &str, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let bytes = text.as_bytes();
-    let digit = |at: usize| bytes.get(at).and_then(|&b| (b as char).to_digit(16));
+    let hex = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_hexdigit);
     let (mut kept, mut i) = (0, 0);
     while i < bytes.len() {
-        let (byte, len) = match (bytes[i], digit(i + 1), digit(i + 2)) {
-            (b'|', _, _) => (b'|', 1),
-            (b'%', Some(high), Some(low)) => ((high * 16 + low) as u8, 3),
+        match bytes[i] {
+            b'|' => {
+                out.push_str(&text[kept..i]);
+                out.push_str("%7C");
+                i += 1;
+            }
+            b'%' if hex(i + 1) && hex(i + 2) => {
+                // `%` and the hex digits are ASCII, so these are whole characters.
+                out.push_str(&text[kept..i + 1]);
+                out.push(bytes[i + 1].to_ascii_uppercase() as char);
+                out.push(bytes[i + 2].to_ascii_uppercase() as char);
+                i += 3;
+            }
             _ => {
                 i += 1;
                 continue;
             }
-        };
-        // `|` and `%` are ASCII, so `i` is at a character boundary.
-        out.push_str(&text[kept..i]);
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.extend(['%', HEX[byte as usize >> 4] as char, HEX[byte as usize & 15] as char]);
         }
-        i += len;
         kept = i;
     }
     out.push_str(&text[kept..]);
@@ -538,15 +538,26 @@ impl<'a> NavTo<'a> {
     /// that stored links still carry), by the same rule and depth as at its own URL. The link
     /// still goes to its own URL. `other`'s path is written in `data-nav-also` once, as a
     /// comparison key: the path the browser's `location.pathname` shows at that address
-    /// (`/old/./a/../b ` as `/old/b`, `/old/café` as `/old/caf%C3%A9`), with the spellings engines
-    /// differ on made one: a `|` as `%7C` (which Chromium shows and Firefox and WebKit do not), an
-    /// escape of a letter, a digit, `-`, `.`, `_` or `~` as that character, and every other
-    /// escape's hex digits uppercase (`/old/%2e%7ex%7c` as `/old/.~x%7C`), as WebKit asks for a path
-    /// its `location.pathname` keeps as written. In a nav with other addresses every entry's own
-    /// URL is compared by its key too. The server compares the keys with the request path's and
-    /// the runtime with `location.pathname`'s, each made the same way and compared as plain text,
-    /// so they mark the same link at first render and after a client navigation in Chromium,
-    /// Firefox and WebKit. A typed route or a [`crate::Local`], as the entry's own:
+    /// (`/old/./a/../b ` as `/old/b`, `/old/café` as `/old/caf%C3%A9`), with the two spellings
+    /// engines differ on made one, a `|` as `%7C` (which Chromium shows and Firefox and WebKit do
+    /// not) and an escape's hex digits uppercase (`%7c` as `%7C`, which WebKit asks for while its
+    /// `location.pathname` keeps `%7c`); no escape is decoded. In a nav with other addresses every
+    /// entry's own URL is compared by its key too. The server compares the keys with the request
+    /// path's and the runtime with `location.pathname`'s, each made the same way and compared as
+    /// plain text, so for every address Corten writes they mark the same link at first render and
+    /// after a client navigation in Chromium, Firefox and WebKit.
+    ///
+    /// An address whose path has a percent escape of a letter, a digit, `-`, `.`, `_` or `~`
+    /// (`/old/%41`, `/old/%2e%2ex`) is left out, on the server and so in the runtime: WebKit asks for
+    /// it decoded while its `location.pathname` keeps the escape, so the two would mark different
+    /// links. A typed route never writes one and a [`crate::Local`] cannot hold one; only a route
+    /// implemented by hand can. A path with such an escape typed by hand is compared as written, so
+    /// it is never the address with the plain character. That is the one limit, in any nav: WebKit
+    /// asks for `/%73ettings` as `/settings`, so its first render marks the entry at `/settings` and
+    /// its runtime, at the same address, does not; Chromium and Firefox ask for it as written and
+    /// neither marks it.
+    ///
+    /// A typed route or a [`crate::Local`], as the entry's own:
     ///
     /// ```
     /// use corten::prelude::*;
@@ -716,21 +727,31 @@ fn holds(path: &str, url: &str, section: bool) -> Option<usize> {
 }
 
 /// Writes the other addresses ([`NavTo::also`]) of the entry whose URL ends at `url_end` to
-/// `also`, separated by spaces, each as its comparison key ([`pathname`]). Out of line, so a nav
-/// without them is drawn as it was before they existed.
+/// `also`, separated by spaces, each as its comparison key ([`pathname`]), and leaves out one with
+/// an escaped unreserved character ([`crate::route::escapes_unreserved`]), which WebKit asks for in
+/// another spelling than its `location.pathname` shows. An entry left with none is written as one
+/// without them. Out of line, so a nav without them is drawn as it was before they existed.
 #[cold]
 #[inline(never)]
 fn other_addresses(others: &[&dyn NavTarget], url_end: usize, also: &mut Option<Box<Also>>) {
-    let also = also.get_or_insert_with(|| Box::new(Also { paths: String::new(), ends: Vec::new() }));
-    let mut url = String::new();
-    for (i, other) in others.iter().enumerate() {
-        if i > 0 {
-            also.paths.push(' ');
-        }
+    let (mut url, mut paths) = (String::new(), String::new());
+    for other in others {
         url.clear();
         other.write_url(&mut url);
-        pathname(&url, &mut also.paths);
+        let start = paths.len();
+        if start > 0 {
+            paths.push(' ');
+        }
+        pathname(&url, &mut paths);
+        if crate::route::escapes_unreserved(&paths[start..]) {
+            paths.truncate(start);
+        }
     }
+    if paths.is_empty() {
+        return;
+    }
+    let also = also.get_or_insert_with(|| Box::new(Also { paths: String::new(), ends: Vec::new() }));
+    also.paths.push_str(&paths);
     also.ends.push((url_end, also.paths.len()));
 }
 
@@ -748,8 +769,9 @@ fn key(path: &str) -> std::borrow::Cow<'_, str> {
 /// Ranks every entry of a nav with other addresses ([`NavTo::also`]) by comparison keys: the page's
 /// path's ([`key`]) with each entry's own URL's and each of its other addresses' ([`pathname`]), as
 /// the runtime does in a group named with a trailing `+`, so the server and the runtime mark the
-/// same entry whichever spelling of the path an engine asks for and shows. Out of line, so a nav
-/// without them is ranked as it was before they existed, by the request path as written.
+/// same entry whether an engine asks for and shows a `|` or an escape's hex digits in one case or
+/// another. Out of line, so a nav without them is ranked as it was before they existed, by the
+/// request path as written.
 #[cold]
 #[inline(never)]
 fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<usize>, T, bool)], also: &Also) {

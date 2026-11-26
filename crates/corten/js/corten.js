@@ -2251,16 +2251,12 @@ function alsoDepth(link, path, page) {
 
 /**
  * The comparison key of a pathname, as the server makes it (`NavTo::also`): `|` as `%7C`, which
- * Chromium shows and Firefox and WebKit keep, an escape of a letter, a digit, `-`, `.`, `_` or `~`
- * as that character, and the hex digits of every other escape uppercase, as WebKit asks for a path
- * its `location.pathname` keeps as written.
+ * Chromium shows and Firefox and WebKit keep, and the hex digits of each escape uppercase, as WebKit
+ * asks for `%7c` as `%7C` while its `location.pathname` keeps `%7c`. Nothing is decoded.
  * @param {string} path
  */
 function keyOf(path) {
-  return path.replaceAll("|", "%7C").replace(/%[\da-f]{2}/gi, (escape) => {
-    const char = String.fromCharCode(parseInt(escape.slice(1), 16));
-    return /[\w.~-]/.test(char) ? char : escape.toUpperCase();
-  });
+  return path.replaceAll("|", "%7C").replace(/%[\da-f]{2}/gi, (escape) => escape.toUpperCase());
 }
 
 /** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */

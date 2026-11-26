@@ -377,9 +377,8 @@ fn nav_entries_with_other_addresses_name_their_group_by_whole_boundaries() {
 /// An entry's other address is written as `location.pathname` shows it at that address, by the URL
 /// Standard, made a comparison key, and both the server and the runtime compare the page's path's
 /// key with that text alone: `.` and `..` segments resolved (`%2e` too), the ends of the URL trimmed,
-/// `|` read as `%7C` in both, which Chromium shows and Firefox and WebKit keep, and an escaped
-/// unreserved character decoded, which WebKit asks for decoded, so every engine marks the same entry
-/// (#2119).
+/// `|` read as `%7C` in both, which Chromium shows and Firefox and WebKit keep, and an escape's hex
+/// digits uppercase, never decoded, so every engine marks the same entry (#2119).
 #[test]
 fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
     use crate::{
@@ -416,8 +415,6 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         ("/..", "/"),
         ("/a/../..", "/"),
         ("/a/...", "/a/..."),
-        ("/a/%2e%2ex", "/a/..x"),
-        ("/old/%41%7e%2D%5f%30", "/old/A~-_0"),
         ("/old ", "/old"),
         (" \t/old\u{1} ", "/old"),
         ("/old ?x", "/old%20"),
@@ -428,6 +425,7 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
         ("/old%7Cx", "/old%7Cx"),
         ("/old%7cx", "/old%7Cx"),
         ("/caf%c3%a9/%zz/%7", "/caf%C3%A9/%zz/%7"),
+        ("/old/%2541/%7%", "/old/%2541/%7%"),
         ("/old^`{}\"<>", "/old%5E%60%7B%7D%22%3C%3E"),
         ("/old/caf\u{e9}", "/old/caf%C3%A9"),
     ] {
@@ -467,9 +465,12 @@ fn an_other_address_is_written_and_compared_as_the_browser_shows_it() {
 
 /// The server marks an entry at its other address for each request a browser sends for that
 /// address, not only for the comparison key: measured in Playwright 1.65.1's builds (Linux),
-/// Chromium and Firefox ask for the path as written, `|` as `%7C` in Chromium, and WebKit decodes
-/// each escape of an unreserved character (`%2e`, `%41`, `%7e`) and uppercases the rest, while its
-/// `location.pathname` keeps the path as written (#2119).
+/// Chromium and Firefox ask for the path as written, `|` as `%7C` in Chromium, and WebKit
+/// uppercases each escape, while its `location.pathname` keeps the path as written. WebKit also
+/// asks for an escape of an unreserved character (`%2e`, `%41`, `%7e`) decoded, so an address with
+/// one, which only a route implemented by hand writes, is left out on both sides, and a path with
+/// one typed by hand is compared as written: it is never the entry whose URL has the plain
+/// character (#2119).
 #[test]
 fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
     use crate::{
@@ -489,19 +490,16 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
             out.push_str(self.0);
         }
     }
-    let marked = |path: &str, also: &'static str| {
+    let drawn = |path: &str, also: &'static str| {
         let nav = nav_links(path, [(NavTo::page(&Settings).also(&Written(also)), ())]);
         let (link, ()) = nav.links().next().unwrap();
         let mut out = String::new();
         link.render_attrs(&mut out);
-        out.contains(r#" aria-current="page""#)
+        out
     };
+    let marked = |path: &str, also: &'static str| drawn(path, also).contains(r#" aria-current="page""#);
     // Each older address as a page writes it, then what Chromium, Firefox and WebKit ask for.
     for (written, sent) in [
-        ("/old/%2e%2ex", ["/old/%2e%2ex", "/old/%2e%2ex", "/old/..x"]),
-        ("/old/x%2Ey", ["/old/x%2Ey", "/old/x%2Ey", "/old/x.y"]),
-        ("/old/%41b%61", ["/old/%41b%61", "/old/%41b%61", "/old/Aba"]),
-        ("/old/%2d%5f%7e%30", ["/old/%2d%5f%7e%30", "/old/%2d%5f%7e%30", "/old/-_~0"]),
         ("/old/%7c", ["/old/%7c", "/old/%7c", "/old/%7C"]),
         ("/old/|", ["/old/%7C", "/old/|", "/old/|"]),
         ("/old/caf%c3%a9", ["/old/caf%c3%a9", "/old/caf%c3%a9", "/old/caf%C3%A9"]),
@@ -511,12 +509,41 @@ fn an_other_address_holds_at_every_request_a_browser_sends_for_it() {
             assert!(marked(sent, written), "{written} at {sent}");
         }
     }
+    // An address with an escaped unreserved character is left out, at every spelling: not written,
+    // and the nav drawn as one without other addresses (no `+` in its group).
+    for (written, sent) in [
+        ("/old/%2e%2ex", ["/old/%2e%2ex", "/old/..x"]),
+        ("/old/x%2Ey", ["/old/x%2Ey", "/old/x.y"]),
+        ("/old/%41b%61", ["/old/%41b%61", "/old/Aba"]),
+        ("/old/%2d%5f%7e%30", ["/old/%2d%5f%7e%30", "/old/-_~0"]),
+        ("/old/%7%33x", ["/old/%7%33x", "/old/%73x"]),
+    ] {
+        for sent in sent {
+            let out = drawn(sent, written);
+            assert!(
+                !out.contains("aria-current") && !out.contains("data-nav-also") && !out.contains('+'),
+                "{written} at {sent}: {out}"
+            );
+        }
+    }
+    // Only that address is left out: another of the same entry is still written and holds.
+    let nav = nav_links("/old/b", [(NavTo::page(&Settings).also(&Written("/old/%41")).also(&Written("/old/b")), ())]);
+    let (link, ()) = nav.links().next().unwrap();
+    let mut out = String::new();
+    link.render_attrs(&mut out);
+    assert!(out.ends_with(r#"+" data-nav-also="/old/b" aria-current="page""#), "{out}");
     // An escape of a reserved character, or of `%`, is not the character.
     assert!(!marked("/old/a/b", "/old/a%2fb") && marked("/old/a%2Fb", "/old/a%2fb"));
     // `%252e` is `%` and the text `2e`, which no browser asks for as `%252E`.
     assert!(!marked("/old/a%2e", "/old/a%252e") && !marked("/old/a.", "/old/a%252e") && marked("/old/a%252e", "/old/a%252e"));
     assert!(!marked("/old/a%252E", "/old/a%252e"));
-    assert!(marked("/old/a%2eb", "/old/a.b") && !marked("/old/a%252eb", "/old/a.b"));
+    // A path typed by hand with an escaped unreserved character is compared as written, as
+    // Chromium and Firefox ask for it, and so is not the address with the plain character; nor is
+    // a `%` without two hex digits read with the escape after it (`%7%33` is not `%73`, `s`).
+    assert!(marked("/old/a.b", "/old/a.b") && !marked("/old/a%2eb", "/old/a.b") && !marked("/old/a%252eb", "/old/a.b"));
+    for typed in ["/old/%73ettings", "/old/%7%33ettings", "/old/%7%73ettings", "/old/%73%65ttings"] {
+        assert!(!marked(typed, "/old/settings"), "{typed}");
+    }
 }
 
 /// In a nav with other addresses the entries' own URLs are compared by the same key as the other
@@ -557,12 +584,33 @@ fn a_nav_with_other_addresses_compares_its_own_urls_by_the_same_key() {
     let mut out = String::new();
     link.render_attrs(&mut out);
     assert!(!out.contains("aria-current"), "{out}");
+    // Nor does a key decode: `/settings` typed as `/%73ettings`, which Chromium and Firefox ask for
+    // as written and Corten's router does not serve as `/settings`, holds neither entry, under the
+    // section `/` aside, which holds every path.
+    let root = Local::parse("/").unwrap();
+    let marks = |path: &str| {
+        nav_links(path, [(NavTo::section(&root), "Root"), (NavTo::page(&settings).also(&team), "Settings")])
+            .links()
+            .filter(|(link, _)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out.contains(r#" aria-current="page""#)
+            })
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(marks("/settings"), ["Settings"]);
+    for typed in ["/%73ettings", "/%7%33ettings", "/%53ettings", "/settings%2F"] {
+        assert_eq!(marks(typed), ["Root"], "{typed}");
+    }
 }
 
 /// What a page whose nav is an eight-entry `Req::nav_of` with no other addresses (`NavTo::also`)
 /// costs: `NAV_PAGES` (200) requests in process, one at a time; with `NAV_TARGET=local` the
-/// entries are `Local` paths read from data, otherwise typed routes. Counting it under callgrind at
-/// two numbers of requests gives the instructions per request. Run in release:
+/// entries are `Local` paths read from data, otherwise typed routes. With `NAV_ALSO=primary` or
+/// `NAV_ALSO=alias` the same nav's fourth entry, `/n/3`, is current at `/old/3` too, and the page is
+/// asked for at `/n/3` or at `/old/3`. Counting it under callgrind at two numbers of requests gives
+/// the instructions per request. Run in release:
 /// `NAV_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_a_nav_of_costs`
 #[test]
 #[ignore]
@@ -571,6 +619,11 @@ fn what_a_page_with_a_nav_of_costs() {
     #[derive(crate::Route)]
     #[route("/n/{n}")]
     struct N {
+        n: u32,
+    }
+    #[derive(crate::Route)]
+    #[route("/old/{n}")]
+    struct Old {
         n: u32,
     }
     async fn typed(req: Req) -> HtmlResult {
@@ -583,17 +636,41 @@ fn what_a_page_with_a_nav_of_costs() {
         let nav = req.nav_of(to.iter().map(|to| (NavTo::page(to), "Entry")));
         req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
     }
+    async fn typed_also(req: Req) -> HtmlResult {
+        let to: Vec<N> = (0..8).map(|n| N { n }).collect();
+        let old = Old { n: 3 };
+        let nav = req.nav_of(to.iter().map(|to| (if to.n == 3 { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")));
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn local_also(req: Req) -> HtmlResult {
+        let to: Vec<Local> = (0..8).map(|n| Local::parse(&format!("/n/{n}")).expect("a local path")).collect();
+        let old = Local::parse("/old/3").expect("a local path");
+        let nav = req.nav_of(
+            to.iter().map(|to| (if to.path() == "/n/3" { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")),
+        );
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
     let pages: usize = std::env::var("NAV_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
-    let routes = if std::env::var("NAV_TARGET").is_ok_and(|v| v == "local") {
-        Table::new().route("/n/{n}", get(local))
-    } else {
-        Table::new().route("/n/{n}", get(typed))
+    let local_target = std::env::var("NAV_TARGET").is_ok_and(|v| v == "local");
+    let also = std::env::var("NAV_ALSO").ok();
+    let (routes, at) = match (also.as_deref(), local_target) {
+        (None, false) => (Table::new().route("/n/{n}", get(typed)), "/n/3"),
+        (None, true) => (Table::new().route("/n/{n}", get(local)), "/n/3"),
+        (Some(at), local_target) => {
+            let handler = if local_target { get(local_also) } else { get(typed_also) };
+            let at = match at {
+                "primary" => "/n/3",
+                "alias" => "/old/3",
+                other => panic!("NAV_ALSO is primary or alias, not {other}"),
+            };
+            (Table::new().route("/n/{n}", handler.clone()).route("/old/{n}", handler), at)
+        }
     };
     let router = app(routes, None);
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         for _ in 0..pages {
-            let (status, _, body) = call_with(router.clone(), "GET", "/n/3", None, None).await;
+            let (status, _, body) = call_with(router.clone(), "GET", at, None, None).await;
             assert!(status == StatusCode::OK && body.matches(r#"aria-current="page""#).count() == 1, "{body}");
         }
     });

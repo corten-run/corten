@@ -116,8 +116,8 @@ pub mod url {
 /// An older address of the nav page, written by hand as an app's own route might write it, in a
 /// form the browser does not show as written: a character beyond ASCII (asked for
 /// percent-encoded), a `..` segment written `%2e%2E` (resolved away), a trailing space (trimmed),
-/// and escaped unreserved characters a `Local` refuses (`%2e`, `%7e`, `%41`), which WebKit asks for
-/// decoded and shows as written.
+/// or with escaped unreserved characters a `Local` refuses (`%2e`, `%7e`, `%41`), which WebKit asks
+/// for decoded and shows as written, so `NavTo::also` leaves such an address out.
 struct OlderNav(&'static str);
 
 impl corten::Route for OlderNav {
@@ -131,9 +131,9 @@ impl corten::Route for OlderNav {
 /// The nav: the section `/smoke/nav`, which holds every address less deeply, and the entry, also
 /// current at `/smoke/nav/café`, `/smoke/nav/settings`, `/smoke/nav/a|b` (a `Local`, whose `|`
 /// Firefox and WebKit keep and Chromium encodes), `/smoke/nav/old%7chome` (a `Local` with a
-/// lowercase escape, which WebKit shows as written and asks for as `%7C`), `/smoke/nav/older`,
-/// `/smoke/nav/%2e%2ex` (asked for by WebKit as `/smoke/nav/..x`) and `/smoke/nav/%7eold%41` (as
-/// `/smoke/nav/~oldA`).
+/// lowercase escape, which WebKit shows as written and asks for as `%7C`) and `/smoke/nav/older`;
+/// not at `/smoke/nav/%2e%2ex` and `/smoke/nav/%7eold%41`, which it names too but leaves out, as
+/// WebKit asks for them decoded (`/smoke/nav/..x`, `/smoke/nav/~oldA`) and shows them as written.
 async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
     let section = corten::Local::parse("/smoke/nav").expect("a local path");
     let piped = corten::Local::parse("/smoke/nav/a|b").expect("a local path");

@@ -2938,24 +2938,33 @@ impl Local {
         let printable = bytes.iter().all(|&b| b.is_ascii_graphic() && b != b'\\');
         let route = text.split(['?', '#']).next().unwrap_or("");
         let dots = route.split('/').any(|segment| segment == "." || segment == "..");
-        let unreserved = |pair: &[u8]| {
-            let hex = |b: u8| (b as char).to_digit(16);
-            match (hex(pair[0]), hex(pair[1])) {
-                (Some(high), Some(low)) => {
-                    let b = (high * 16 + low) as u8;
-                    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
-                }
-                _ => false,
-            }
-        };
-        let escaped = route.as_bytes().split(|&b| b == b'%').skip(1).any(|after| after.len() >= 2 && unreserved(&after[..2]));
-        (path && printable && !dots && !escaped).then(|| Local(text.to_string()))
+        (path && printable && !dots && !escapes_unreserved(route)).then(|| Local(text.to_string()))
     }
 
     /// The path, without the query or fragment: what the app's routes are matched against.
     pub fn path(&self) -> &str {
         self.0.split(['?', '#']).next().unwrap_or("")
     }
+}
+
+/// Whether `path` has a percent escape of an unreserved character, a letter, a digit, `-`, `.`, `_`
+/// or `~` (`%61`, `%2e`), which a browser may ask for as the plain character while its
+/// `location.pathname` keeps the escape (WebKit does). No link Corten writes has one: a typed route
+/// writes those characters as they are, [`Local::parse`] refuses a path with one, and a nav entry's
+/// other address with one is left out ([`crate::NavTo::also`]).
+#[inline]
+pub(crate) fn escapes_unreserved(path: &str) -> bool {
+    let unreserved = |pair: &[u8]| {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (hex(pair[0]), hex(pair[1])) {
+            (Some(high), Some(low)) => {
+                let b = (high * 16 + low) as u8;
+                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+            }
+            _ => false,
+        }
+    };
+    path.as_bytes().split(|&b| b == b'%').skip(1).any(|after| after.len() >= 2 && unreserved(&after[..2]))
 }
 
 impl std::fmt::Display for Local {
@@ -3323,6 +3332,10 @@ mod local_tests {
             "/a%2Db",
             "/a%5Fb",
             "/%31",
+            // An escape after a `%` without two hex digits is one still: WebKit asks for
+            // `/a/%7%33x` as `/a/%73x`.
+            "/a/%7%33x",
+            "/a/%%41",
         ] {
             assert!(Local::parse(bad).is_none(), "{bad:?}");
         }
@@ -6067,6 +6080,9 @@ mod tests {
                 let mut out = String::new();
                 Encode { out: &mut out, keep }.push(v);
                 assert_eq!(out, reference(v, rest), "{v:?}");
+                // So no link a typed route writes has an escaped unreserved character, which WebKit
+                // would ask for decoded (`NavTo::also` leaves out an address with one).
+                assert!(!super::escapes_unreserved(&out), "{v:?} as {out}");
             }
         }
     }
@@ -6158,6 +6174,7 @@ mod tests {
                     assert_eq!(href, *release);
                     let path = href.split('?').next().unwrap();
                     assert!(!path.split('/').any(dot), "{href} has no dot segment");
+                    assert!(!super::escapes_unreserved(path), "{href} has no escaped unreserved character");
                 }
                 (Err(panic), true) => {
                     let message = panic.downcast_ref::<String>().map(String::as_str).unwrap_or_default();

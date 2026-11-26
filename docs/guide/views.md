@@ -597,19 +597,27 @@ engine spells them: the path `location.pathname` shows at that address, by the U
 query and fragment left out, the ends trimmed, `.` and `..` segments resolved, and a space or a
 character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the spellings
 engines differ on made one. A `|` is written `%7C`, as Chromium shows it where Firefox and WebKit keep
-it. An escape is normalized as RFC 3986 does, since WebKit asks for a path so normalized while its
-`location.pathname` keeps it as written: one of a letter, a digit, `-`, `.`, `_` or `~` is the
-character (WebKit asks for `/old/%2e%2ex` as `/old/..x`), and any other has uppercase hex digits
-(`/old%7chome` as `/old%7Chome`). In a nav with other addresses every entry's own URL is compared by
-its key too, so a deeper entry still wins in another spelling. The server makes the request's path
-the same key and the runtime `location.pathname`, and each compares the keys as plain text, so they
-mark the same entry at first render and after a client navigation in Playwright's Chromium, Firefox
-and WebKit builds, where these spellings were measured. A nav without other addresses compares the
-paths as written, as before; there the engines' spellings can still differ.
+it, and an escape's hex digits are uppercase, as WebKit asks for `/old%7chome` as `/old%7Chome` while
+its `location.pathname` keeps `%7c`; no escape is decoded. In a nav with other addresses every
+entry's own URL is compared by its key too, so a deeper entry still wins in another spelling. The
+server makes the request's path the same key and the runtime `location.pathname`, and each compares
+the keys as plain text, so for every address Corten writes they mark the same entry at first render
+and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these
+spellings were measured. A nav without other addresses compares the paths as written, as before.
 The nav's group name ends in `+` when an entry has other addresses, so the runtime reads
-`data-nav-also` and compares by key only in such a nav.
-Like `data-nav`, `html!` refuses it written as an attribute by hand; a spread of pairs passes it
-through, as it does `data-nav` and `data-nav-group`.
+`data-nav-also` and compares by key only in such a nav. Like `data-nav`, `html!` refuses
+`data-nav-also` written as an attribute by hand; a spread of pairs passes it through, as it does
+`data-nav` and `data-nav-group`.
+
+WebKit asks for an escape of a letter, a digit, `-`, `.`, `_` or `~` decoded (`/old/%2e%2ex` as
+`/old/..x`) while its `location.pathname` keeps it, so Corten never writes one: a typed route writes
+those characters as they are, `Local::parse` refuses a path with one, and `also` leaves out an
+address with one, which only a route implemented by hand can write. An address typed by hand with
+such an escape is compared as written, so it is never the address with the plain character, as
+Corten's router matches a route's fixed text as sent (`/%73ettings` is not the route `/settings`).
+That leaves one limit, in any nav: WebKit asks for `/%73ettings` as `/settings`, so its server
+answer marks the Settings entry there and its runtime, after a client navigation to the same
+address, does not. Chromium and Firefox ask for it as written, and neither marks it.
 
 Structured data for search engines is a head tag too: `head={JsonLd { value: &product }}`
 (feature `json`) writes a `ToJson` value in `<script type="application/ld+json">` with `<` as
