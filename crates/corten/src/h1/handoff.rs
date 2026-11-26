@@ -25,20 +25,32 @@ use bytes::{Buf, Bytes};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// An IO with bytes already read from it put back in front: they are read first, then the IO.
+///
+/// The read that takes the last of them goes on to the IO for the room it has left, so hyper's
+/// first read holds what one read of its own would have: what this connection had read and what
+/// waited in the socket behind it. That matters for one thing. hyper keeps a connection whose
+/// handler left a body unread only if one more read finishes that body, so where a read ends
+/// decides whether the requests behind are answered, and this connection's reads end sooner than
+/// hyper's (a head is read no further than the app's limit).
 pub(crate) struct Rewound<I> {
     read: Bytes,
     io: I,
+    /// An error the IO gave a read that had bytes to give already: the next read's.
+    failed: Option<io::Error>,
 }
 
 impl<I> Rewound<I> {
     pub fn new(io: I, read: Bytes) -> Rewound<I> {
-        Rewound { read, io }
+        Rewound { read, io, failed: None }
     }
 }
 
 impl<I: AsyncRead + Unpin> AsyncRead for Rewound<I> {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
+        if let Some(error) = this.failed.take() {
+            return Poll::Ready(Err(error));
+        }
         if !this.read.is_empty() {
             let take = this.read.len().min(buf.remaining());
             buf.put_slice(&this.read[..take]);
@@ -46,6 +58,14 @@ impl<I: AsyncRead + Unpin> AsyncRead for Rewound<I> {
             if this.read.is_empty() {
                 // The allocation is freed here, not when the connection ends.
                 this.read = Bytes::new();
+                if buf.remaining() > 0 {
+                    // What the IO has now, behind them. Nothing there yet leaves the task to be
+                    // woken for a read it has no need of, which costs a poll; the client's end
+                    // is met again by the next read, and an error is kept for it.
+                    if let Poll::Ready(Err(error)) = Pin::new(&mut this.io).poll_read(cx, buf) {
+                        this.failed = Some(error);
+                    }
+                }
             }
             return Poll::Ready(Ok(()));
         }

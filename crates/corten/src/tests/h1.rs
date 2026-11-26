@@ -1019,6 +1019,28 @@ async fn a_body_left_unread_behind_a_head_that_fills_a_read_keeps_its_connection
     }
 }
 
+/// Where a client's own writes end decides the same thing on both connections, since the request
+/// is hyper's on both: a chunk whose data comes in two writes behind a handler that does not read
+/// it closes the connection after its answer, and the request behind it is not answered. So what
+/// the test above holds is that Corten's own connection adds no such cut, not that there is none.
+#[tokio::test]
+async fn a_body_left_unread_that_comes_in_two_writes_closes_its_connection_on_both() {
+    let mut all = Vec::new();
+    for own in BOTH {
+        let served = Served::start(App::new(routes()), own).await;
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        let head = format!("{GET}POST /unread HTTP/1.1\r\n{HOST}transfer-encoding: chunked\r\n\r\n5\r\nhe");
+        client.write_all(head.as_bytes()).await.unwrap();
+        let first = several(&mut client, 2).await;
+        client.write_all(format!("llo\r\n0\r\n\r\n{GET}").as_bytes()).await.unwrap();
+        let (rest, closed) = read(&mut client, SOON).await;
+        assert!(closed && statuses(&first) == [200, 200] && rest.is_empty(), "own: {own}: {first:?} then {rest:?}");
+        all.push(dateless(&first));
+        served.stop().await;
+    }
+    assert_eq!(all[1], all[0]);
+}
+
 /// `App::header_timeout` holds on both connections: a head the client does not finish, and a
 /// connection idle after its answers, are closed when it has passed, counted from when the
 /// answers were sent and not from when their requests came; a handler that takes longer is not
