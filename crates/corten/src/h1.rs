@@ -272,6 +272,25 @@ impl Inbox {
         }
         Poll::Ready(Ok(count))
     }
+
+    /// Reads from `io` once into the room the buffer has, to learn whether the client has closed
+    /// its side ([`Conn::poll_left`]): `Ok(0)` when it has. No room is made where there is any (a
+    /// byte tells), so a look, which each request has, moves nothing and allocates nothing: the
+    /// request it is made for still holds the bytes of its head, and room could only be made
+    /// beside them. What a look does read (a request sent behind this one) is read again from,
+    /// with room made, when the connection comes to it.
+    pub(crate) fn poll_look<I: AsyncRead + Unpin>(&mut self, io: &mut I, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        let offered = self.buf.capacity() - self.buf.len();
+        if offered == 0 {
+            return self.poll_fill(io, cx, usize::MAX);
+        }
+        let count = {
+            let mut read = pin!(tokio::io::AsyncReadExt::read_buf(io, &mut self.buf));
+            ready!(read.as_mut().poll(cx))?
+        };
+        self.filled = count == offered;
+        Poll::Ready(Ok(count))
+    }
 }
 
 /// Why the bytes a connection has read hold a whole head and no request for it to answer.
@@ -489,19 +508,14 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         }
     }
 
-    /// What the connection does while the handler, or the answer's body, waits: `Err` when the
-    /// client is gone, and the request with it.
-    fn poll_meanwhile(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
-        // Everything written so far goes out: the answers before this one, the pieces of a
-        // stream.
-        if let Poll::Ready(Err(error)) = self.poll_send(cx) {
-            return Err(error);
-        }
-        // A client that closes its side while its request is being answered has left, as with
-        // hyper. Seen only while nothing it sent waits to be read: at most one read is taken
-        // ahead (a pipelined request), and no more until the connection has used it.
+    /// Whether the client has closed its side: `Err` when it has, or the IO has failed. A client
+    /// that closes its side while a request of its is being answered has left, and the request
+    /// with it, as with hyper. Looked for only while nothing it sent waits to be read: at most
+    /// one read is taken ahead (a pipelined request), and no more until the connection has used
+    /// it.
+    fn poll_left(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
         if self.inbox.is_empty() {
-            match self.inbox.poll_fill(&mut self.io, cx, usize::MAX) {
+            match self.inbox.poll_look(&mut self.io, cx) {
                 Poll::Ready(Ok(0)) => return Err(io::ErrorKind::UnexpectedEof.into()),
                 Poll::Ready(Err(error)) => return Err(error),
                 Poll::Ready(Ok(_)) | Poll::Pending => {}
@@ -510,14 +524,38 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         Ok(())
     }
 
+    /// What the connection does while an answer's body waits: `Err` when the client is gone, and
+    /// the request with it.
+    fn poll_meanwhile(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
+        // Everything written so far goes out: the answers before this one, the pieces of a
+        // stream.
+        if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+            return Err(error);
+        }
+        self.poll_left(cx)
+    }
+
+    /// The handler's answer. The client's end is looked for first, each time, and so before the
+    /// handler is polled at all: hyper looks when it has read a head, and so a request whose
+    /// client had closed its side by then is not answered by either, however quick its handler.
+    /// (A request read with others behind it is not looked for: its client's end is behind
+    /// them.) The answers before it are the client's all the same, and go out first.
     fn poll_answer<F>(&mut self, cx: &mut Context<'_>, answering: Pin<&mut F>) -> Poll<io::Result<http::Response<Answered>>>
     where
         F: Future<Output = Result<http::Response<Answered>, Infallible>>,
     {
+        if let Err(left) = self.poll_left(cx) {
+            ready!(self.poll_send(cx))?;
+            return Poll::Ready(Err(left));
+        }
         if let Poll::Ready(Ok(answer)) = answering.poll(cx) {
             return Poll::Ready(Ok(answer));
         }
-        self.poll_meanwhile(cx)?;
+        // While the handler waits, everything written so far goes out: the answers before this
+        // one.
+        if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+            return Poll::Ready(Err(error));
+        }
         Poll::Pending
     }
 
