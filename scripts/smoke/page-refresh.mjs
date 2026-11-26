@@ -2201,13 +2201,23 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     /**
      * The receipt the press's POST answer asks to be read again from: its read-again template's
      * `data-from`, resolved against the alerts page, as path and query; null if that answer was not
-     * read within 5 s or names none. @param {import("@playwright/test").Request | undefined} post
+     * read within 5 s or names none. The answer is the one at the end of the POST's redirects (WebKit
+     * over http can be sent on with a 307, whose own body Playwright does not keep).
+     * @param {import("@playwright/test").Request | undefined} post
      */
     const receiptOf = async (post) => {
       if (!post) return null;
       const body = await readWithin(
         "the press's POST answer",
-        post.response().then((res) => res?.text() ?? null),
+        (async () => {
+          let request = post;
+          for (;;) {
+            const res = await request.response();
+            const next = request.redirectedTo();
+            if (res === null || next === null) return res === null ? null : res.text();
+            request = next;
+          }
+        })(),
       ).catch(() => null);
       const tag = body === null ? undefined : /<template\b[^>]*\sdata-corten-read-again(?=[\s=>])[^>]*>/.exec(body)?.[0];
       const from = tag === undefined ? undefined : /\bdata-from="([^"]*)"/.exec(tag)?.[1];

@@ -665,8 +665,9 @@ failed marks, read once each wait has come or run out. The check that a read the
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
 sent while the check fills or focuses the form is not taken for it. That read must be of the receipt
-the press's own POST answer asks to be read again from (its read-again template's `data-from`), so
-an earlier write's read answered 502 is not taken for it. It requires that read sent within
+the press's own POST answer asks to be read again from (its read-again template's `data-from`, in
+the answer at the end of the POST's redirects), so an earlier write's read answered 502 is not taken
+for it. It requires that read sent within
 five seconds of the press, counted from that same moment, and that read's own answer, with status
 502, received in full (the browser finished
 loading that exact request) within five seconds of that read being sent, each judged by the time
