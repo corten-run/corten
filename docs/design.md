@@ -3182,6 +3182,22 @@ rules something out.
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
     instruction counts with a listed line and with curl's (tags
     `evidence/stage-header-checks-2002` and `evidence/stage-header-checks-2002-review`);
+    2026-11-26, at `7c1e7a795` (this change merged with main `aa526350f`, whose one pass at the
+    last stage now marks an answer that read a caller `Personal` and leaves one with a `Cache` mark
+    to the stages) against that main. Over a socket with `bench/request-cost` (rustc 1.100.0,
+    valgrind 3.24.0, one reading of three counts a build, each build's counts within 1 of each
+    other, the answers identical): `get` 6 fewer (18,335 against 18,341), `post` 7 fewer (22,785
+    against 22,792), the unstaged route 7 more (12,527 against 12,520), `pipeline` 7 more (10,568
+    against 10,561), `text` 36 fewer (17,175 against 17,211) and the page 118 more (43,216 against
+    43,098); with a browser's lines `get` 7 fewer (23,874 against 23,881), `text` 35 fewer (25,822
+    against 25,857) and the page 123 more (221,831 against 221,708); 16 at a time `pipeline` 8
+    more, `get` 6 fewer, `unstaged` 8 more and `text` 36 fewer; the same allocations a request in
+    every case. In process with round 20's probe, both builds with Rust 1.99.1 in a Debian 12 image
+    and valgrind 3.19.0, so not comparable with round 20's counts (three rounds alternating the two
+    builds, every run within 0.1 of the others): the plain page 114 more (15,896.7 against
+    15,782.7), the `cookie` page 405 more (19,077.0 against 18,671.9), a tool's answer from an
+    endpoint whose `Tools::auth` found its caller 497 more (28,396.7 against 27,899.3) and the
+    unstaged route the same (6,573.2). These are instructions, not cycles, as below;
     2026-11-25, at `af17ca8da` (this change merged with main `65419e4e1`, with round 20's test and
     guide fixes) against that main, built with Rust 1.100.0 in a Debian 12 image other than round
     18's (three rounds alternating the two builds, every run within 2.1 of the others): the
