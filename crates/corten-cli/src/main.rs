@@ -34,7 +34,8 @@ Usage:
                    Cargo.lock too (cargo update --workspace), which corten check requires.
   corten dev [--port <port>]
                    Build and run the app in this directory; rebuild and restart on every
-                   change, and reload open pages. Default port 3000.
+                   change, and reload open pages. The port is --port's (or --port=<port>),
+                   else PORT's, else 3000.
   corten build [<cargo argument> ..] [[--port <port>] --profile-from <command> [<argument> ..]]
                    Run Cargo's release build. Cargo's --features (-F), --all-features,
                    --no-default-features, --locked, --package (-p) and --bin, given before
@@ -132,7 +133,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some("new") => new::run(&args[1..]),
-        Some("dev") => dev::run(&args[1..]),
+        Some("dev") => dev_flags(&args[1..]).and_then(dev::run),
         Some("build") => build_flags(&args[1..]).and_then(|build| match build.profile_from {
             Some(command) => profile::run(command, &build.cargo, build.port),
             None => cargo(&["build", "--release"].into_iter().chain(build.cargo.iter().map(String::as_str)).collect::<Vec<_>>()).map(|()| {
@@ -187,12 +188,13 @@ fn command_help(args: &[String]) -> Option<String> {
 /// neither does this: the command would still read a flag after it. `build` is read with its own
 /// grammar ([`build_asks_help`]), which refuses `--`.
 fn asks_help(command: &str, args: &[String]) -> bool {
-    if command == "build" {
-        return build_asks_help(args);
+    match command {
+        "build" => return build_asks_help(args),
+        "dev" => return dev_asks_help(args),
+        _ => {}
     }
     let takes_value: &[&str] = match command {
         "new" => &["--name", "--corten-path"],
-        "dev" => &["--port"],
         _ => &[],
     };
     let mut args = args.iter();
@@ -242,6 +244,30 @@ fn build_asks_help(args: &[String]) -> bool {
     false
 }
 
+/// [`asks_help`] for `corten dev`, read with [`dev_flags`]'s grammar, as [`build_asks_help`] reads
+/// build's: help in a flag position or as `--port`'s missing value (`--port --help`), and never
+/// after a token `dev_flags` refuses (`--prot 4000 -h`, `--port http -h`, a second `--port`).
+fn dev_asks_help(args: &[String]) -> bool {
+    let mut args = args.iter();
+    let mut port_named = false;
+    while let Some(arg) = args.next() {
+        let value = match (arg.as_str(), port_arg(arg)) {
+            ("--help" | "-h", _) => return true,
+            (_, Some(Some(value))) => value,
+            (_, Some(None)) => match args.next().map(String::as_str) {
+                Some("--help" | "-h") => return true,
+                Some(value) if !value.starts_with('-') => value,
+                _ => return false,
+            },
+            (_, None) => return false,
+        };
+        if std::mem::replace(&mut port_named, true) || port_number(value).is_err() {
+            return false;
+        }
+    }
+    false
+}
+
 /// `--port`'s value when `arg` is that option: what follows `=` in the same token, or `None`
 /// when the value is the next one.
 fn port_arg(arg: &str) -> Option<Option<&str>> {
@@ -249,6 +275,40 @@ fn port_arg(arg: &str) -> Option<Option<&str>> {
         "" => Some(None),
         rest => rest.strip_prefix('=').map(Some),
     }
+}
+
+/// Reads `--port` when `arg`, the argument before `args[*at]`, is that option: its value after
+/// it (moving `at` past it) or after `=`, once, a port number ([`port_number`]). `false` when
+/// `arg` is another argument. `corten build` and `corten dev` read the flag with it, so the two
+/// take the same spellings and refuse the same values.
+fn read_port(arg: &str, args: &[String], at: &mut usize, port: &mut Option<u16>) -> Result<bool, String> {
+    let Some(joined) = port_arg(arg) else { return Ok(false) };
+    let value = match (joined, args.get(*at)) {
+        (Some(value), _) => value,
+        (None, Some(value)) if !value.starts_with('-') => {
+            *at += 1;
+            value.as_str()
+        }
+        (None, _) => return Err("--port needs a value".into()),
+    };
+    if port.replace(port_number(value)?).is_some() {
+        return Err("--port is given more than once".into());
+    }
+    Ok(true)
+}
+
+/// `corten dev`'s flags: `--port` alone, read as `corten build` reads it ([`read_port`]). Any
+/// other argument is refused, so a misspelled flag does not start the app on the default port.
+fn dev_flags(args: &[String]) -> Result<Option<u16>, String> {
+    let mut port = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if !read_port(arg, args, &mut at, &mut port)? {
+            return Err(format!("corten dev takes --port <port> (or --port=<port>); not {arg:?}"));
+        }
+    }
+    Ok(port)
 }
 
 /// The port `--port` names: digits that make a number from 1 to 65535. 0 names no port to look
@@ -322,18 +382,7 @@ fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
             }
             return Ok(Build { cargo, port, profile_from: Some(command) });
         }
-        if let Some(joined) = port_arg(arg) {
-            let value = match (joined, args.get(at)) {
-                (Some(value), _) => value,
-                (None, Some(value)) if !value.starts_with('-') => {
-                    at += 1;
-                    value.as_str()
-                }
-                (None, _) => return Err("--port needs a value".into()),
-            };
-            if port.replace(port_number(value)?).is_some() {
-                return Err("--port is given more than once".into());
-            }
+        if read_port(arg, args, &mut at, &mut port)? {
             continue;
         }
         match cargo_arg(arg) {
@@ -460,7 +509,7 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{Build, asks_help, build_flags, check_flags, lint_build_test, option};
+    use super::{Build, asks_help, build_flags, check_flags, dev_flags, lint_build_test, option};
     use std::cell::RefCell;
 
     #[test]
@@ -470,7 +519,14 @@ mod tests {
         assert!(asks_help("new", &args(&["app", "--name", "shop", "-h"])));
         assert!(!asks_help("new", &args(&["app", "--corten-path", "--help"])));
         assert!(!asks_help("new", &args(&["app", "--name", "-h"])));
-        assert!(!asks_help("dev", &args(&["--port", "--help"])));
+        // dev reads `--port` as build does: a value never starts with `-`, so help in its place is
+        // help, and a token dev refuses ends the scan.
+        assert!(asks_help("dev", &args(&["--port", "--help"])));
+        assert!(asks_help("dev", &args(&["--port=4000", "-h"])));
+        assert!(asks_help("dev", &args(&["--port", "4000", "--help"])));
+        assert!(!asks_help("dev", &args(&["--prot", "4000", "-h"])));
+        assert!(!asks_help("dev", &args(&["--port", "http", "-h"])));
+        assert!(!asks_help("dev", &args(&["--port", "4000", "--port=5000", "-h"])));
         // `--` ends no command's options, so it ends no scan for help either.
         assert!(asks_help("new", &args(&["app", "--", "--help"])));
         // An option names a value only for the command that has it, and a `--` it takes is a value.
@@ -480,7 +536,7 @@ mod tests {
         assert!(asks_help("build", &args(&["--help", "--profile-from", "./train.sh"])));
         assert!(!asks_help("build", &args(&["--profile-from", "./train.sh", "--help"])));
         assert!(!asks_help("build", &args(&["--profile-from", "--help"])));
-        assert!(asks_help("dev", &args(&["--profile-from", "--help"])));
+        assert!(!asks_help("dev", &args(&["--profile-from", "--help"])));
         // A Cargo argument's value is a value, and one that reads as a flag is not.
         assert!(asks_help("build", &args(&["--bin", "web", "-h"])));
         assert!(asks_help("build", &args(&["--bin", "--help"])));
@@ -501,6 +557,29 @@ mod tests {
         assert!(!asks_help("build", &args(&["--port", "8443", "--port", "8444", "-h"])));
         assert!(!asks_help("build", &args(&["--port", "8443", "--profile-from", "sh", "-h"])));
         assert!(!asks_help("build", &args(&["--ports", "8443", "-h"])));
+    }
+
+    #[test]
+    fn dev_reads_its_port_as_build_does_and_refuses_what_it_does_not_take() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(dev_flags(&[]), Ok(None));
+        // Both spellings, as build takes them.
+        assert_eq!(dev_flags(&args(&["--port", "4000"])), Ok(Some(4000)));
+        assert_eq!(dev_flags(&args(&["--port=4000"])), Ok(Some(4000)));
+        // What is no port number is refused, where it reached the app as PORT before.
+        for no_port in ["", "0", "http", "65536", "+4000", "4000.0"] {
+            let says = format!("--port takes the number of the port the app binds, from 1 to 65535; not {no_port:?}");
+            assert_eq!(dev_flags(&args(&[format!("--port={no_port}").as_str()])), Err(says.clone()));
+            assert_eq!(dev_flags(&args(&["--port", no_port])), Err(says));
+        }
+        assert_eq!(dev_flags(&args(&["--port"])), Err("--port needs a value".into()));
+        assert_eq!(dev_flags(&args(&["--port", "-1"])), Err("--port needs a value".into()));
+        assert_eq!(dev_flags(&args(&["--port", "4000", "--port=4001"])), Err("--port is given more than once".into()));
+        // A misspelled flag or a stray argument no longer starts the app on the default port.
+        for stray in [&["--prot", "4000"][..], &["4000"], &["--port", "4000", "--release"], &["--ports=4000"]] {
+            let refused = dev_flags(&args(stray)).unwrap_err();
+            assert!(refused.starts_with("corten dev takes --port <port> (or --port=<port>); not "), "{refused}");
+        }
     }
 
     #[test]
