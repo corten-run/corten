@@ -2805,14 +2805,17 @@ rules something out.
     a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,
     `shop.example`) is read in line as its first and last eight bytes, which the compiler joins
     into one look at sixteen; a longer one is read sixteen at a look out of line, as far as the
-    first look that finds another byte, and the table reads on from where that look starts; any
-    other name is read by the table as before; and the
+    first look that finds another byte, and the table reads on from the first byte no earlier
+    look read: where that look starts, or, when the last sixteen find it, which overlap the look
+    before them, the first byte after the whole sixteens (byte 32 of a name of 40, whose last
+    look starts at byte 24); any other name, one shorter than eight bytes included, is read by
+    the table as before; and the
     check at a route that says `unstaged` decides once whether the app holds names, so the
     reader of an app that answers to any host holds none. That came in three commits:
     `b52f57475` read the short name in line, decided once at `unstaged`, and read a longer name
     sixteen at a look to its end, then one with another byte by the table again from its start;
     `ecb6e2bd6` stopped at the first look that finds another byte; and the table reads on from
-    that look since `a0cd728aa`, which only the hosted job's table on #2134 (below) measures.
+    there since `a0cd728aa`, which only the hosted job's table on #2134 (below) measures.
     Counted with `bench/request-cost`
     (below), whose four cases of an app that answers to any host came with this change, at
     `ea3983d0b` against its base `3d84f7de4`, which is main with #2037: such an app's unstaged
@@ -2820,10 +2823,11 @@ rules something out.
     lines, its `GET` through the stages 17 and 18 fewer, and every other case 1 to 9 fewer.
     Those figures are of that earlier tree, whose `security.rs` and `Cargo.lock` are not those
     merged: it read a long name with another byte from its start again by the table, and it had
-    no case with a name longer than `localhost`. The three cases that came after it,
-    `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`) and
+    no case with a name other than `localhost`. The four cases that came after it,
+    `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`),
     `unstaged-any-encoded` (4,093 `a` and `%4a`, where a table that read the percent-encoded
-    byte from the name's start would read 4,080 bytes more), and the count of the head of
+    byte from the name's start would read 4,080 bytes more) and `unstaged-any-short` (`a.test`,
+    6 bytes, fewer than the eight read in line), and the count of the head of
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134)
     against its merge base, are that pull request's hosted job's table. The encoded case counts
     the read but does not by itself catch a reader given the name from its start again, as the

@@ -30,7 +30,7 @@ item 2 asks for cycles under load as well, which this kit does not give.
 
 Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
 API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
-to the names an app answers to by default (`localhost` and IP addresses) but in the seven cases
+to the names an app answers to by default (`localhost` and IP addresses) but in the eight cases
 with `-any` in their name, where the probe is started with `HOSTS=*` and answers to any
 host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 
@@ -48,6 +48,7 @@ host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 | `unstaged-any-name` | `api`, `HOSTS=*` | As `unstaged` to `Host: shop-2.example-cdn.region-9.example.test` and the port, a name of 40 bytes | `3` |
 | `unstaged-any-long` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,095 `a` and a `_` and the port | `3` |
 | `unstaged-any-encoded` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,093 `a` and `%4a` and the port | `3` |
+| `unstaged-any-short` | `api`, `HOSTS=*` | As `unstaged` to `Host: a.test` and the port, a name of 6 bytes | `3` |
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
@@ -55,8 +56,9 @@ refuses it), so that one reads none.
 
 Every request has a `Host` line and nothing else it does not need. An app that answers to any host
 reads its `Host` by itself and not against names, and finds it on a later line by other searches
-than on the first: the cases of `HOSTS=*` count those reads, with `Host` first and last, and with
-names longer than `localhost`: one of the letters, digits, `-` and `.` most names are made of, and
+than on the first: the cases of `HOSTS=*` count those reads, with `Host` first and last, with a
+name of 6 bytes, fewer than the eight a name needs to be read in line, and with names longer than
+`localhost`: one of the letters, digits, `-` and `.` most names are made of, and
 one whose last byte is none of those, which is read to its end before that byte is found, and one
 whose last three bytes are a percent-encoded byte, which is read from the look that found the `%`
 and not again from the name's start. That case counts the read but does not by itself catch a

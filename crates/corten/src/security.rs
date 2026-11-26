@@ -2276,14 +2276,15 @@ fn reg_name(name: &[u8]) -> bool {
 /// [`reg_name`] for a name it does not read in line: one longer than 16 bytes of letters,
 /// digits, `-` and `.` alone sixteen at a look ([`plain`]); a shorter one, and one with any
 /// other byte, by the table below, which says the same of these. The table reads on from the
-/// look that found another byte, as the bytes before it are a name's as written and none is `%`.
+/// first byte no look before the one that found another byte read ([`plain`]), as the bytes
+/// before it are a name's as written and none is `%`.
 #[inline(never)]
 fn spelled(name: &[u8]) -> bool {
     spelled_by(name, encoded)
 }
 
 /// [`spelled`], with the reader of percent-encoded bytes given ([`encoded`]; a test sees the
-/// bytes it is given, which are only those from the look that found another byte).
+/// bytes it is given: only those no look before the one that found another byte read).
 #[inline(always)]
 fn spelled_by(name: &[u8], encoded: impl FnOnce(&[u8]) -> bool) -> bool {
     let from = match plain(name, unlike_a_name) {
@@ -2305,8 +2306,10 @@ fn spelled_by(name: &[u8], encoded: impl FnOnce(&[u8]) -> bool) -> bool {
 /// `Ok` when `name` is longer than 16 bytes and all letters, digits, `-` and `.`, each 16 from
 /// its start and then the last 16, which overlap the one before, looked at by `unlike`
 /// ([`unlike_a_name`]; a test counts the looks). It stops at the first look that finds another
-/// byte and gives where that look starts, before which every byte is one of those, so a long
-/// `Host` is not read to its end before the table reads it, nor read again by the table up to
+/// byte and gives the first byte no earlier look read: where that look starts, or, when the last
+/// 16 find it, the first byte after the whole sixteens, as the last 16 overlap the look before
+/// (32 for a name of 40, whose last 16 start at 24). Every byte before it is one of those, so a
+/// long `Host` is not read to its end before the table reads it, nor read again by the table up to
 /// there; 0 for a name of 16 bytes or fewer, which it does not look at.
 #[inline(always)]
 fn plain(name: &[u8], mut unlike: impl FnMut(&[u8; 16]) -> u8) -> Result<(), usize> {
@@ -3096,7 +3099,7 @@ mod tests {
                     }
                 }
                 // A percent-encoded byte at each place, whole and cut short: the table reads on
-                // from the start of the look that found its `%`.
+                // from the first byte no look before the one that found its `%` read.
                 for at in 0..=length {
                     for encoded in [&b"%4a"[..], b"%C3%A9", b"%4", b"%4g", b"%g4"] {
                         hold(&[&plain[..at], encoded, &plain[at..length], port].concat());
@@ -3120,8 +3123,8 @@ mod tests {
     /// A long `Host` that is no name is read sixteen bytes at a look only as far as the first look
     /// that finds a byte no plain name has: `@` and 4,095 `a` is one look, where the old
     /// reader stopped at its first byte as well, and a name that is one is read to its end. The
-    /// table reads on from where that look starts, so 4,095 `a` and `_` is read once and not
-    /// again by the table from its start.
+    /// table reads on from the first byte no earlier look read, so 4,095 `a` and `_` is read once
+    /// and not again by the table from its start.
     #[test]
     fn a_long_name_that_is_none_is_not_read_to_its_end() {
         let looks = |name: &[u8]| {
@@ -3161,7 +3164,8 @@ mod tests {
         assert_eq!(looks(&name), (Err(32), 3));
         assert!(reg_name(&name));
         // A percent-encoded byte found by a look, and one whose `%` ends the look before its
-        // digits: the table and the encoded bytes are read from that look's start.
+        // digits: the table and the encoded bytes are read from the first byte no earlier look
+        // read, 32 where the last 16 (from 24) found it and 16 where the second look did.
         for (at, encoded, whole, from) in
             [(37, &b"%4a"[..], true, 32), (37, b"%4g", false, 32), (31, b"%4a", true, 16), (31, b"%g4", false, 16)]
         {

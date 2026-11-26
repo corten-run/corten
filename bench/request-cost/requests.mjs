@@ -22,12 +22,14 @@ const post = (path, type, body) => (port) =>
   Buffer.from([`POST ${path} HTTP/1.1`, `Host: localhost:${port}`, `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
 
 /**
- * A name of 40 bytes, as a site's host on a CDN is, one of 4,096 that ends in `_`, and one of
- * 4,096 that ends in a percent-encoded byte.
+ * A name of 40 bytes, as a site's host on a CDN is, one of 4,096 that ends in `_`, one of
+ * 4,096 that ends in a percent-encoded byte, and one of 6, shorter than the eight bytes a name
+ * must have to be read in line.
  */
 const NAME = "shop-2.example-cdn.region-9.example.test";
 const LONG = `${"a".repeat(4095)}_`;
 const ENCODED = `${"a".repeat(4093)}%4a`;
+const SHORT = "a.test";
 
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
@@ -68,6 +70,9 @@ export const cases = {
   // last 16 bytes, and a reader that read it from the name's start would read 4,080 bytes more.
   // This counts that read; a unit test in `security.rs`, not this case, catches the longer one.
   "unstaged-any-encoded": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", ENCODED), body: "3" },
+  // `unstaged-any` with a name shorter than `localhost` and than the eight bytes read in line:
+  // `a.test`, read by the table out of line.
+  "unstaged-any-short": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", SHORT), body: "3" },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */

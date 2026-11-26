@@ -1415,7 +1415,7 @@ it last of eight; an app that names its hosts pays 2 to 9 fewer than with the fi
 [`bench/request-cost`](../../bench/request-cost/README.md) counted an earlier tree of the change,
 `ea3983d0b` against `3d84f7de4`, as 17 to 28 fewer a request in an app that answers to any
 host and 1 to 9 fewer in one that names its hosts; its hosted job's table counts the change's
-last head against its merge base, with names of 40 and 4,096 bytes as well. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+last head against its merge base, with names of 6, 40 and 4,096 bytes as well. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 

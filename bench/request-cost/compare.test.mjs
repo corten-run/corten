@@ -426,7 +426,7 @@ test("a probe that did not build is said once: against base it leaves the change
   assert.equal(counted.status, 1);
   assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
   assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
-  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`\.$/m);
+  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`\.$/m);
   const measured = compare(empty, head, { description: measuring });
   assert.deepEqual([measured.status, measured.holds], [0, false]);
   assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}. ${readMeasured}`);
