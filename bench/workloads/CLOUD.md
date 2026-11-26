@@ -1401,6 +1401,15 @@ seconds from the proof's end, made before the intent. Expiry before the intent
 does not consume the intent; expiry after the intent forbids another DELETE, so a
 later collect only verifies the saved receipt and checks exact absence.
 
+Expiry after the receipt is written but before the intent leaves a receipt with no
+intent. The next collect runs a fresh status check and host query, which appends
+controls, so the old receipt is no longer for the final control. Collection
+verifies it against the ledger prefix it names, which must still bind those exact
+rows, and keeps it under its content hash for archival only. Only the fresh
+receipt, which must be for the final control, authorizes the intent and the DELETE
+under its own deadline. A history copy kept by an earlier interrupted recovery is
+read back at the receipt's own bound (8 MiB for a v2 or v3 receipt), not 4 KiB.
+
 The drain proof is narrow. It can settle only a setup job whose host shows no
 Docker socket or daemon at query time (in practice one that failed before
 `docker-install`), with the guardian's exact deadline record archived, and that

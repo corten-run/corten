@@ -458,7 +458,7 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
 
 // The first bootstrap session stays open until its watcher misses its deadline, so the
 // exit archive holds a real watch-failure and no receipt for it.
-for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time"]) test({
+for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time", "receipt-expired", "receipt-expired-kept", "receipt-expired-rebound"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -467,6 +467,9 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "invalid-proof": "a drain query that exits zero with unusable proof refuses, and a restart sends no second query",
   "delete-expired": "a drain proof that expires during the DELETE's account preflight sends no DELETE, and a restart sends none either",
   "delete-in-time": "a drain proof still current after the DELETE's account preflight sends one DELETE with its own deadline",
+  "receipt-expired": "a drain proof that expires between its receipt and the intent is kept, and a restart deletes once on a fresh proof",
+  "receipt-expired-kept": "a restart whose earlier recovery already kept the interrupted receipt recovers it at the receipt's own bound",
+  "receipt-expired-rebound": "an interrupted receipt edited to name an earlier ledger prefix refuses, keeps nothing and sends no DELETE",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -589,6 +592,46 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     h.hosts([]);
     assert.equal(await h.task({ run }).collect(), 1);
     assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.ok(h.saved().destroyedAt);
+    return;
+  }
+  if (mode.startsWith("receipt-expired")) {
+    // The clock passes the proof's 60-second deadline once, just after its receipt is written
+    // and before the intent, so the receipt stays without an intent.
+    const receipt = join(h.local, "failed-setup-host.json"), real = Date.now;
+    let jumped = false;
+    t.mock.method(Date, "now", () => {
+      if (!jumped && existsSync(receipt)) { jumped = true; offset += 61000; }
+      return real() + offset;
+    });
+    const deletesSent = () => h.calls.filter(([binary, ...args]) => binary === "doctl" && args[2] === "delete").length;
+    await assert.rejects(h.task({ run }).collect(), /retirement proof expired before deletion/);
+    const interrupted = h.saved(), old = readFileSync(receipt), oldRecord = JSON.parse(old);
+    assert.ok(jumped); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(oldRecord.schema, "benchmark-failed-setup-retirement/v3"); assert.ok(old.length > 4096);
+    assert.equal(interrupted.retirement, undefined); assert.equal(interrupted.deletionIntentAt, undefined); assert.equal(existsSync(lock), false);
+    assert.equal(oldRecord.observation.control.requests.length, interrupted.control.ledger.length);
+    const kept = join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`);
+    // As if an earlier recovery kept the history copy, then stopped before removing the receipt.
+    if (mode === "receipt-expired-kept") writeFileSync(kept, old);
+    if (mode === "receipt-expired-rebound") {
+      // The prefix comes from the receipt, so it must still bind the exact ledger rows it names.
+      oldRecord.observation.control.requests.pop();
+      const rebound = `${JSON.stringify(oldRecord, null, 2)}\n`; writeFileSync(receipt, rebound);
+      await assert.rejects(h.task({ run }).collect(), { code: "ERR_ASSERTION" });
+      assert.equal(queries, 2); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+      assert.equal(readFileSync(receipt, "utf8"), rebound); assert.equal(existsSync(join(h.local, `failed-setup-host.interrupted-${digest(rebound)}.json`)), false);
+      assert.equal(h.saved().retirement, undefined); assert.equal(h.saved().deletionIntentAt, undefined);
+      return;
+    }
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved(), current = readFileSync(receipt), record = JSON.parse(current);
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(readFileSync(kept).equals(old)); assert.equal(s.retirement.evidenceSha256, digest(current));
+    assert.equal(record.schema, "benchmark-failed-setup-retirement/v3"); assert.notEqual(record.startedAtMs, oldRecord.startedAtMs);
+    // The fresh proof, not the kept one, is the final control and carries the DELETE's deadline.
+    assert.equal(record.observation.control.requests.length, s.control.ledger.length);
+    assert.ok(s.control.ledger.length > interrupted.control.ledger.length); assert.equal(deleteExpiry, record.startedAtMs + 60000);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }
   assert.equal(await h.task({ run }).collect(), 1);

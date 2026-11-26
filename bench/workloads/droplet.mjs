@@ -895,13 +895,22 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const exit = Number(marker.trim()); assert.ok(exit <= 255); return exit;
   };
   const retirementFile = (kind) => kind === "setup-failed" ? "failed-setup-host.json" : "unused-host.json";
-  const verifyRetirementRecord = (bytes, kind) => {
+  // `interrupted` verifies a receipt left without its intent for archival only: a retry
+  // has since appended controls, so it is checked against the ledger prefix it was
+  // written for. Only a receipt for the final control can authorize a DELETE.
+  const verifyRetirementRecord = (bytes, kind, interrupted = false) => {
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
     if (!setup) return verifyUnusedEvidence(record, state);
+    let bound = state;
+    if (interrupted && state.control) {
+      const length = record.observation?.control?.requests?.length;
+      assert.ok(Number.isSafeInteger(length) && length > 0 && length <= state.control.ledger.length, "interrupted receipt outside the saved ledger");
+      bound = { ...state, control: { ...state.control, ledger: state.control.ledger.slice(0, length) } };
+    }
     // The preserved archive selects the schema: v3 only beside an archived watcher failure.
-    const exit = setupExit(), failures = state.control && state.preBootstrapTerminal ? setupWatcherFailures(state, local) : [];
-    const expected = setupEvidence(raw, state, terminalSetupScript(state, exit, state.control ? record.observation.control.requests.length - 1 : undefined, failures), exit, record.startedAtMs, record.finishedAtMs, local);
+    const exit = setupExit(), failures = bound.control && bound.preBootstrapTerminal ? setupWatcherFailures(bound, local) : [];
+    const expected = setupEvidence(raw, bound, terminalSetupScript(bound, exit, bound.control ? record.observation.control.requests.length - 1 : undefined, failures), exit, record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
   const verifyRetirement = () => {
@@ -973,9 +982,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       // exact old record, but only this operation's fresh probe authorizes intent.
       assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
       const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
-      const prior = regular(path, limit), hash = digest(prior); verifyRetirementRecord(prior, kind);
+      const prior = regular(path, limit), hash = digest(prior); verifyRetirementRecord(prior, kind, true);
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
-      if (existsSync(retained)) assert.equal(digest(regular(retained, 4096)), hash, "interrupted retirement history differs");
+      if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
       else durable(retained, prior);
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
       unlinkSync(path); syncDirectory(local);
