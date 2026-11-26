@@ -602,7 +602,7 @@ test("isolated hardening adapter replays the captured edge configuration without
   writeFileSync(join(h.repo, edge), 'throw new Error("must not load replaced checkout");');
   const { nginxConf, edgeOffset } = await import("../fullstack/edge.mjs");
   assert.deepEqual(await validationTask(h.input, { snapshot }).result,
-    { adapter: "function", config: nginxConf([["target", { port: 8080 - edgeOffset }]], 1) });
+    { adapter: "function", config: nginxConf([["target", { port: 8080 - edgeOffset, publicAuthority: "localhost:8080" }]], 1) });
 });
 
 test("complete fixed native graph and pinned TypeScript evaluate captured bytes without package loaders", { timeout: 15000 }, async (t) => {
