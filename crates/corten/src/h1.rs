@@ -106,6 +106,10 @@ pub(crate) const OUT_FIRST: usize = 1024;
 /// nothing unsent: a larger one (an answer's head was that long, or the answers to a pipeline
 /// were written behind one that filled it) is freed there. A write's worth.
 pub(crate) const OUT_KEPT: usize = FLUSH_AT;
+/// How many header lines a connection that waits for a request keeps room to note the places of
+/// (32 bytes a line): more room, which a request with more lines made it take, is freed there.
+#[cfg(test)]
+pub(crate) const LINES_KEPT: usize = 64;
 /// The largest body piece copied into the buffer of answers; a larger one is written from where
 /// it is, with the buffer in one vectored write where the IO has one.
 const COPIED: usize = 8 * 1024;
@@ -120,8 +124,12 @@ std::thread_local! {
     /// The largest future [`serve`] has made on this thread, in bytes.
     pub(crate) static SERVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many times a connection of this thread began to wait for a request with nothing unread
-    /// and nothing unsent, and the most room its two buffers had as it did.
-    pub(crate) static IDLE: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// and nothing unsent, the most room its two buffers had as it did, and the most header lines
+    /// it had room to note the places of.
+    pub(crate) static IDLE: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
+    /// How many times a read buffer of this thread was moved to a new allocation with bytes in
+    /// it, and how many bytes were copied in all, for a test of the bound.
+    pub(crate) static MOVED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     /// The most bytes the buffer of answers of a connection of this thread has held as a send
     /// began, and the most room it had, for a test of the bound.
     pub(crate) static OUT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
@@ -242,6 +250,10 @@ impl Inbox {
             if roomy || !self.buf.try_reclaim(more) {
                 let mut fresh = BytesMut::with_capacity(self.buf.len() + more);
                 fresh.extend_from_slice(&self.buf);
+                #[cfg(test)]
+                if !self.buf.is_empty() {
+                    MOVED.set((MOVED.get().0 + 1, MOVED.get().1 + self.buf.len()));
+                }
                 self.grown = fresh.capacity() > KEPT_READ;
                 self.buf = fresh;
             }
@@ -495,8 +507,8 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         }
         #[cfg(test)]
         if self.inbox.is_empty() && sent {
-            let (waits, most) = IDLE.get();
-            IDLE.set((waits + 1, most.max(self.inbox.room() + self.out.capacity())));
+            let (waits, most, lines) = IDLE.get();
+            IDLE.set((waits + 1, most.max(self.inbox.room() + self.out.capacity()), lines.max(self.indices.capacity())));
         }
     }
 

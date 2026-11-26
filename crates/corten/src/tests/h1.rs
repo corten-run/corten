@@ -724,6 +724,16 @@ async fn an_answer_its_client_has_not_taken_stays_with_the_connection() {
 /// Answers made are sent before the connection closes: a pipeline that ends in a request the
 /// server refuses, in one that closes, or with the client's side closed, has every answer before
 /// that point reach the client, on both connections.
+///
+/// With the client's side closed, that point is the last request: it has the client's end right
+/// behind it, and a request read with nothing behind it but its client's end is answered by
+/// neither connection (each looks for the end before it answers: `h1_fuzz` has the rule over a
+/// pipe). So of five requests sent with the client's end to a server that holds the connection
+/// (it has answered a request on it and waits for the next), four are answered. On a connection
+/// just accepted the fifth may be answered too, by both alike: tokio takes an accepted socket for
+/// readable before its first event has come, so a first read can take the requests with nothing
+/// yet said of the client's end, which each connection then learns only when its task next
+/// waits. There the four are what is asserted, and that the fifth, where there is one, is whole.
 #[tokio::test]
 async fn answers_made_are_sent_before_the_connection_closes() {
     let mut answers = Vec::new();
@@ -737,11 +747,22 @@ async fn answers_made_are_sent_before_the_connection_closes() {
         got.push(served.closed(&closing).await);
         assert_eq!(statuses(&got[1]), [200; 6], "own: {own}");
         let mut client = TcpStream::connect(served.addr).await.unwrap();
+        client.write_all(GET.as_bytes()).await.unwrap();
+        let each = one(&mut client).await.len();
         client.write_all(GET.repeat(5).as_bytes()).await.unwrap();
         client.shutdown().await.unwrap();
         let (left, closed) = read(&mut client, SOON).await;
-        assert!(closed && statuses(&left) == [200; 5], "own: {own}: {left}");
+        assert!(closed && statuses(&left) == [200; 4], "own: {own}, a connection the server holds: {left}");
+        assert_eq!(left.len(), 4 * each, "own: {own}: four answers, whole");
         got.push(left);
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        client.write_all(GET.repeat(5).as_bytes()).await.unwrap();
+        client.shutdown().await.unwrap();
+        let (left, closed) = read(&mut client, SOON).await;
+        let answered = statuses(&left).len();
+        assert!(closed && (answered == 4 || answered == 5), "own: {own}, a connection just accepted: {left}");
+        assert_eq!(left.len(), answered * each, "own: {own}: {answered} answers, whole");
+        got.push(left[..4 * each].to_owned());
         answers.push(got.iter().map(|got| dateless(got)).collect::<Vec<_>>());
         served.stop().await;
     }
@@ -1370,17 +1391,19 @@ impl Dice {
 /// A connection that waits for a request with nothing unread and nothing unsent holds its two
 /// buffers with the room its client made them take: what a connection begins with for short
 /// requests and short answers, and no more than a bound whatever was read and written before,
-/// since a buffer that grew past it is freed as the connection begins to wait.
+/// since a buffer that grew past it is freed as the connection begins to wait. So with the third
+/// thing it keeps from one request to the next, the places of a head's lines: room for the few a
+/// short request has, and for no more than a bound after a request with a hundred.
 #[tokio::test]
 async fn a_connection_that_waits_for_a_request_holds_buffers_of_a_bounded_room() {
-    use crate::h1::{FIRST, HELD, IDLE, KEPT_READ, OUT_FIRST, OUT_KEPT};
+    use crate::h1::{FIRST, HELD, IDLE, KEPT_READ, LINES_KEPT, OUT_FIRST, OUT_KEPT};
     static LONG: [u8; 40_000] = [b'v'; 40_000];
     let table = Table::new()
         .route("/", get(|| async { "hi" }))
         .route("/wide", get(|| async { ([(header::ETAG, std::str::from_utf8(&LONG).unwrap())], "wide") }));
     let own = Served::start(App::new(Routes::from(table)).max_request_head(1 << 20), true).await;
     let settle = || tokio::time::sleep(Duration::from_millis(50));
-    IDLE.set((0, 0));
+    IDLE.set((0, 0, 0));
     let mut clients = Vec::new();
     for _ in 0..8 {
         clients.push(TcpStream::connect(own.addr).await.unwrap());
@@ -1393,9 +1416,10 @@ async fn a_connection_that_waits_for_a_request_holds_buffers_of_a_bounded_room()
         }
     }
     settle().await;
-    let (waits, most) = IDLE.get();
+    let (waits, most, lines) = IDLE.get();
     assert!(waits >= 480, "{waits} waits");
     assert!(most <= FIRST + OUT_FIRST, "{most} bytes of room after short requests");
+    assert!((1..=4).contains(&lines), "room for the places of {lines} lines after short requests");
     // Part of a head stays where it is until the rest has come.
     let rest = format!("TP/1.1\r\n{HOST}\r\n");
     for client in &mut clients {
@@ -1411,7 +1435,7 @@ async fn a_connection_that_waits_for_a_request_holds_buffers_of_a_bounded_room()
     // A read buffer that grew for a long head, and a buffer of answers that grew for one, are
     // not kept at that size.
     HELD.set(0);
-    IDLE.set((0, 0));
+    IDLE.set((0, 0, 0));
     let mut dice = Dice(9);
     for round in 0..48 {
         let cookie = "c".repeat(100_000 + dice.below(600_000));
@@ -1424,10 +1448,17 @@ async fn a_connection_that_waits_for_a_request_holds_buffers_of_a_bounded_room()
     clients[0].write_all(format!("GET /wide HTTP/1.1\r\n{HOST}\r\n").as_bytes()).await.unwrap();
     let got = one(&mut clients[0]).await;
     assert!(got.len() > 40_000 && got.ends_with("wide"));
+    // Nor is the room a head of a hundred lines made the connection take for their places.
+    let many = format!("GET / HTTP/1.1\r\n{HOST}{}\r\n", "x-a: 1\r\n".repeat(99));
+    for client in &mut clients[..2] {
+        client.write_all(many.as_bytes()).await.unwrap();
+        assert_eq!(statuses(&one(client).await), [200]);
+    }
     settle().await;
-    let (waits, most) = IDLE.get();
-    assert!(waits >= 49, "{waits} waits");
+    let (waits, most, lines) = IDLE.get();
+    assert!(waits >= 51, "{waits} waits");
     assert!(most <= KEPT_READ + OUT_KEPT, "{most} bytes of room after long heads");
+    assert!(lines <= LINES_KEPT, "room for the places of {lines} lines after a head of a hundred");
     own.stop().await;
 }
 
@@ -1997,6 +2028,33 @@ async fn a_handoff_follows_the_answers_before_it_however_the_socket_takes_them()
     }
 }
 
+/// A head that comes a byte a read is not copied whole for each read: the buffer it is read in
+/// makes room in steps that grow with what it holds, so a head of 250,000 bytes under a limit an
+/// app raised to 256 KiB is moved to a larger allocation a few times, and each of its bytes
+/// copied a few times at the most. (Before, room for half a read more was made once the head was
+/// longer than half a read, in a new allocation of just that size, at every read from there on:
+/// about 249,000 allocations and 31 GB copied for this head, which a client could have a server
+/// do for the price of sending it slowly.)
+#[tokio::test]
+async fn a_head_that_comes_a_byte_a_read_is_copied_a_bounded_number_of_times() {
+    use crate::h1::MOVED;
+    let head = format!("GET / HTTP/1.1\r\n{HOST}x-long: {}\r\n\r\n", "v".repeat(250_000));
+    let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (input, dice) = (head.clone().into_bytes(), Dice(3));
+    let io = Chopped { input, at: 0, output: output.clone(), dice, most: 1, vectored: true, fails_at: None };
+    let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
+    MOVED.set((0, 0));
+    let serving = crate::h1::serve(io, Hi(handled.clone()), 256 * 1024, &ending);
+    let handed = tokio::time::timeout(Duration::from_secs(300), serving).await.expect("the head is read and answered");
+    assert!(handed.is_none(), "no request here is hyper's");
+    let answers = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!((handled.load(SeqCst), statuses(&answers)), (1, vec![200]), "{answers}");
+    let (moves, copied) = MOVED.get();
+    assert!(moves >= 4, "the head outgrew its buffer: {moves} moves");
+    assert!(moves <= 32, "a head of {} bytes was moved {moves} times", head.len());
+    assert!(copied <= 4 * head.len(), "{copied} bytes were copied for a head of {}", head.len());
+}
+
 /// Shutdown that begins while the answers before a request that is hyper's wait for their client
 /// ends the connection when they have gone: the request is not handed to hyper to begin, as a
 /// request found behind an answer is not begun once shutdown has.
@@ -2158,6 +2216,85 @@ async fn the_500_in_place_of_an_interim_answer_has_none_of_the_answer_s_headers(
         assert_eq!(names, ["content-length", "date"], "own: {own}: {got}");
         answers.push(dateless(&got));
         served.stop().await;
+    }
+    assert_eq!(answers[1], answers[0]);
+}
+
+/// A header name longer than `http` takes one (65,535 bytes), which a head can hold only under a
+/// limit an app raised past 64 KiB, is refused by both connections and reaches no handler, and
+/// they differ in how. Corten's connection answers 400, as it answers any head it cannot take.
+/// hyper 1.12.0 answers nothing and closes: it takes a name `http` refuses for a fault of its own
+/// (`Parse::Internal`, which it has no answer for, and in a build with debug assertions a panic
+/// of the connection's task). `docs/design.md#choice-own-http1` names the difference beside the
+/// target's. A name of the longest length is taken by both.
+#[tokio::test]
+async fn a_header_name_longer_than_http_takes_is_answered_400_where_hyper_answers_nothing() {
+    let app = || App::new(routes()).max_request_head(128 * 1024);
+    let hyper = Served::start(app(), false).await;
+    let own = Served::start(app(), true).await;
+    let named = |length: usize| format!("GET / HTTP/1.1\r\n{HOST}{}: 1\r\n\r\n", "n".repeat(length));
+    let longer = named(65_536);
+    let (theirs, ours) = (hyper.closed(&longer).await, own.closed(&longer).await);
+    assert_eq!(statuses(&ours), [400], "{ours}");
+    assert!(ours.contains("connection: close\r\n"), "{ours}");
+    assert_eq!(theirs, "", "hyper answers nothing");
+    let longest = named(65_535) + &last();
+    let (theirs, ours) = (hyper.closed(&longest).await, own.closed(&longest).await);
+    assert_eq!(statuses(&ours), [200, 200], "{ours}");
+    assert_eq!(dateless(&ours), dateless(&theirs));
+    // The server is as it was: hyper's too, whose connection's task ended oddly.
+    for served in [&hyper, &own] {
+        assert_eq!(statuses(&served.closed(last()).await), [200]);
+    }
+    hyper.stop().await;
+    own.stop().await;
+}
+
+/// A connection over an IO of the app's own (the step `serve_wrapped` takes), one that holds what
+/// it is written and gives it to the socket as it is flushed, as a TLS stream does, is handed to
+/// hyper as a plain one is: requests with a body, behind requests without and in front of them,
+/// are each answered once and in order, with the bytes hyper's connection answers, in one write
+/// and one request at a time.
+///
+/// This is a stand-in and not TLS: the crate has no TLS library among its dependencies, those of
+/// its tests included, so a handoff under a real TLS stream has no test here
+/// (`docs/design.md#choice-own-http1` lists one among what would make the connection the default).
+#[tokio::test]
+async fn a_connection_over_a_wrapped_io_is_handed_to_hyper_as_a_plain_one_is() {
+    let post = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello");
+    let mut answers = Vec::new();
+    for own in BOTH {
+        let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+        let addr = listeners[0].local_addr().unwrap();
+        let step =
+            |tcp: TcpStream| std::future::ready(Ok::<_, std::convert::Infallible>((super::server::Held::unseen(tcp), ())));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(crate::app::run(listeners, step, App::new(routes()).own_http1(own), async {
+            let _ = stopped.await;
+        }));
+        let mut got = Vec::new();
+        // In one write: the answers of Corten's connection are behind the stand-in's flush when
+        // the connection becomes hyper's, and hyper's when it is closed.
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let sent = format!("{GET}GET /stream HTTP/1.1\r\n{HOST}\r\n{post}{GET}{post}{}", last());
+        client.write_all(sent.as_bytes()).await.unwrap();
+        let (all, closed) = read(&mut client, SOON).await;
+        assert!(closed, "own: {own}: the connection is closed: {all:.300}");
+        assert_eq!(statuses(&all), [200; 6], "own: {own}: {all:.300}");
+        assert_eq!(all.matches("\r\n\r\nread 5").count(), 2, "own: {own}: each body was read once");
+        got.push(dateless(&all));
+        // One request at a time: a request without a body, the one that makes the connection
+        // hyper's, and one of each behind it.
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        for request in [GET, post.as_str(), GET, post.as_str()] {
+            client.write_all(request.as_bytes()).await.unwrap();
+            let answer = one(&mut client).await;
+            assert_eq!(statuses(&answer), [200], "own: {own}: {answer}");
+            got.push(dateless(&answer));
+        }
+        answers.push(got);
+        let _ = stop.send(());
+        tokio::time::timeout(Duration::from_secs(10), server).await.expect("shutdown ends").unwrap().unwrap();
     }
     assert_eq!(answers[1], answers[0]);
 }

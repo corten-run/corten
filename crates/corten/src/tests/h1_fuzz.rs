@@ -155,8 +155,13 @@ fn app() -> App {
 /// A server for [`app`] with the connection `own` says and this limit on a head, and where to
 /// send it a connection.
 fn serve(own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSender<DuplexStream> {
+    serve_app(app(), own, head)
+}
+
+/// [`serve`], for an app of a test's own.
+fn serve_app(app: App, own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSender<DuplexStream> {
     let (connect, accepted) = tokio::sync::mpsc::unbounded_channel();
-    let app = app().own_http1(own).max_request_head(head);
+    let app = app.own_http1(own).max_request_head(head);
     tokio::spawn(crate::app::run(vec![Piped(accepted)], crate::app::plain, app, std::future::pending()));
     connect
 }
@@ -1173,6 +1178,22 @@ fn the_listed_class_is_of_the_head_that_was_refused() {
     // Nor a head a byte short of the limit, nor one where the requests before it cannot be told.
     assert!(!refused_head_reaches(&long.as_bytes()[..699], &outcome(0), 700));
     assert!(!refused_head_reaches(long.as_bytes(), &outcome(1), 700));
+    // Nor a short head that is whole, refused with requests behind it that are long together:
+    // the bytes from where it begins are as many as the limit, and it ends among the first of
+    // them. (The gate took this too for a head that reaches the limit, by counting to the end of
+    // everything sent.) So with a bare LF for a line end, and behind answered requests.
+    let whole = format!("GET / HTTP/1.1\r\nhost : x\r\n\r\n{}", get.repeat(30));
+    assert!(whole.len() > 700 + 28);
+    assert!(!refused_head_reaches(whole.as_bytes(), &outcome(0), 700));
+    assert!(!refused_head_reaches(whole.replace("\r\n", "\n").as_bytes(), &outcome(0), 700));
+    assert!(!refused_head_reaches(format!("{get}{post}{whole}").as_bytes(), &outcome(2), 700));
+    // A head that ends just past the limit reaches it, and so does one behind empty lines, which
+    // end no head.
+    let ends_past = format!("GET / HTTP/1.1\r\nhost: localhost\r\nx-long: {}\r\n\r\n{get}", "v".repeat(656));
+    assert_eq!(find(ends_past.as_bytes(), b"\r\n\r\n"), Some(697));
+    assert!(refused_head_reaches(ends_past.as_bytes(), &outcome(0), 700));
+    assert!(!refused_head_reaches(ends_past.replacen('v', "", 1).as_bytes(), &outcome(0), 700));
+    assert!(refused_head_reaches(format!("\r\n\r\n\n{long}").as_bytes(), &outcome(0), 700));
 }
 
 /// A run that stops finishing streams fails by the clock, though its own thread never sees time
@@ -1257,6 +1278,77 @@ async fn a_long_unread_body_is_cut_where_hypers_reads_end() {
         let (short, long) = if hypers { (&ours, &theirs) } else { (&theirs, &ours) };
         assert!(long.before.0.starts_with(&short.before.0), "{what}: the bytes before the cut differ");
         assert_eq!(hypers == owns, theirs == ours, "{what}");
+    }
+}
+
+/// An answer that waits for its client to read it is cut when the client closes its side, on
+/// both connections: hyper looks for the client's end each time its task is woken while a request
+/// is being answered and nothing the client sent is unread, before it writes any more, and gives
+/// up the request when it finds it; Corten's connection looks where a write of its has waited.
+/// So a client that reads some of a long answer and closes its side gets what the pipe held by
+/// then and no more, where a client that stays gets all of it: an answer of a known length, a
+/// stream, a stream that waits for its next piece, and an answer short enough that its
+/// connection has gone on to wait for the next request.
+/// The same number of bytes from both, whether the client's end comes with the room it made by
+/// reading (then nothing more is written) or a moment later (then that room is filled first).
+/// The gate's own clients read all the time, so no stream of it has this.
+#[tokio::test(start_paused = true)]
+async fn an_answer_that_waits_for_its_client_is_cut_when_the_client_closes_its_side() {
+    const PIPE: usize = 4_096;
+    const READ: usize = 2_000;
+    static PIECE: [u8; 20 * 1024] = [b'p'; 20 * 1024];
+    let app = || {
+        let pieces = |count: usize| {
+            futures_util::stream::iter((0..count).map(|_| Ok::<_, std::io::Error>(Bytes::from_static(&PIECE))))
+        };
+        // Its second piece comes long after a client of this test has closed its side.
+        let drip = move || async move {
+            let later = async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, std::io::Error>(Bytes::from_static(&PIECE))
+            };
+            Body::from_stream(futures_util::StreamExt::chain(pieces(1), futures_util::stream::once(later)))
+        };
+        let table = Table::new()
+            .route("/whole", get(|| async { vec![b'w'; 1 << 20] }))
+            .route("/stream", get(move || async move { Body::from_stream(pieces(52)) }))
+            .route("/drip", get(drip))
+            .route("/short", get(|| async { vec![b's'; 10 * 1024] }));
+        App::new(Routes::from(table))
+    };
+    let (hyper, own) = (serve_app(app(), false, 32 * 1024), serve_app(app(), true, 32 * 1024));
+    // What a client receives that reads `READ` bytes and then, if it does not stay, closes its
+    // side, at once or a moment later, and reads to the end.
+    let receive = |connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, path: &str, stays: bool, later: bool| {
+        let (mut client, server) = tokio::io::duplex(PIPE);
+        connect.send(server).expect("the server is listening");
+        let close = if stays { "connection: close\r\n" } else { "" };
+        let request = format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n{close}\r\n");
+        async move {
+            client.write_all(request.as_bytes()).await.unwrap();
+            let mut first = vec![0u8; READ];
+            client.read_exact(&mut first).await.unwrap();
+            if later {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            if !stays {
+                client.shutdown().await.unwrap();
+            }
+            let mut rest = Vec::new();
+            client.read_to_end(&mut rest).await.unwrap();
+            READ + rest.len()
+        }
+    };
+    let paths = [("/whole", 1 << 20), ("/stream", 52 * PIECE.len()), ("/drip", 2 * PIECE.len()), ("/short", 10 * 1024)];
+    for (path, least) in paths {
+        let (theirs, ours) = (receive(&hyper, path, true, false).await, receive(&own, path, true, false).await);
+        assert!(theirs > least && ours == theirs, "{path}, a client that stays: {ours} bytes and hyper's {theirs}");
+        for later in [false, true] {
+            let (theirs, ours) = (receive(&hyper, path, false, later).await, receive(&own, path, false, later).await);
+            let name = format!("{path}, the client's end {}", if later { "a moment later" } else { "at once" });
+            assert_eq!(ours, theirs, "{name}: bytes sent before the answer was cut");
+            assert!((PIPE..=PIPE + READ).contains(&ours), "{name}: {ours} bytes");
+        }
     }
 }
 
