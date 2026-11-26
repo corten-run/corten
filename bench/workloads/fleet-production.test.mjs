@@ -922,10 +922,11 @@ test("a settled continuation placement refusal leaves the unallocated slot avail
   assert.deepEqual(p.events(), []);
 });
 
-for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "cancel at provider", "new batch after intent", "state moved during replay"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
+for (const change of ["none", "after handoff", "after create intent", "cancel before dispatch", "cancel at provider", "new batch after intent", "state moved during replay", "external failure after intent"]) test(`a retired setup retry: ${change}`, { timeout: 60000 }, async (t) => {
   const group = "json-api", lockFile = "stream-recovery.lock", childDir = [group, group, "groups-r19"];
   const markers = { "after create intent": [...childDir, lockFile], "cancel before dispatch": [...childDir, "cancelled"],
-    "cancel at provider": [...childDir, "cancelled"], "new batch after intent": [group, ".fleet-operation.lock"] };
+    "cancel at provider": [...childDir, "cancelled"], "new batch after intent": [group, ".fleet-operation.lock"],
+    "external failure after intent": ["hardening", "hardening", "groups-r20", lockFile] };
   const cancel = { "cancel before dispatch": 2, "cancel at provider": 3 }[change];
   const dispatch = markers[change] ? { path: markers[change], cancel } : change === "state moved during replay"
     ? { path: [...childDir, "state.json"], move: true } : undefined;
@@ -948,7 +949,7 @@ for (const change of ["none", "after handoff", "after create intent", "cancel be
   fs.writeFileSync(path.join(dir, entries[0].name), entries[0].body);
   fs.writeFileSync(path.join(local, "results.tgz"), bytes);
   const state = { ...reservation({ round: "r19", commit, token: fleet.jobs[0].token, group, fleet }),
-    provider: fleet.provider, status: "retired", id: "701", ip: "192.0.2.1", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
+    provider: fleet.provider, status: "retired", id: "703", ip: "192.0.2.1", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
     evidence, extractionAttempts: [evidence], archiveSha256: digest(bytes), evidenceSha256: treeHash(dir), fullGroupQualified: false,
     retirement: { kind: "setup-failed", evidenceSha256: "a".repeat(64) } };
   const observation = JSON.stringify({ schema: "benchmark-failed-setup-host/v1", hostId: state.id, unit: state.unit,
@@ -956,6 +957,7 @@ for (const change of ["none", "after handoff", "after create intent", "cancel be
   const receipt = JSON.stringify(setupEvidence(observation, state, terminalSetupScript(state, 124), 124, ms, ms));
   fs.writeFileSync(path.join(local, "failed-setup-host.json"), receipt);
   fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({ ...state, retirement: { kind: "setup-failed", evidenceSha256: digest(receipt) } }));
+  if (change === "external failure after intent") await externalFailureFixture(p).seed("hardening", "r20");
 
   assert.equal(await prepare("r21"), 3);
   const approved = await approve("r21"), next = path.join(root, `${group}--r21`);
@@ -977,6 +979,12 @@ for (const change of ["none", "after handoff", "after create intent", "cancel be
     if (dispatch?.move) assert.ok(!fs.existsSync(lock) && fs.existsSync(lock + ".moved"));
     else assert.ok(fs.existsSync(lock));
     const nextState = p.saved(path.join(`${group}--r21`, group));
+    if (change === "external failure after intent") {
+      assert.ok(p.refusals().flat().some((message) => /external failure/.test(message)));
+      assert.ok(nextState.createIntentAt, "the existing external refusal retains the successor intent");
+      fs.unlinkSync(lock);
+      return;
+    }
     assert.equal(nextState.createIntentAt, undefined); assert.equal(nextState.status, "reserved");
     if (dispatch?.move) fs.renameSync(lock + ".moved", lock);
     else fs.unlinkSync(lock);

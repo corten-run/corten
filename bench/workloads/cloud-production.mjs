@@ -257,6 +257,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   try {
   let checkHistoricalDispatch;
+  const setupDispatchRefusals = new WeakSet();
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
     const creating = args[0] === "doctl" && args[1][0] === "compute" && args[1][1] === "droplet" && args[1][2] === "create";
@@ -274,7 +275,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     }
     if (creating && checkHistoricalDispatch) {
       try { checkHistoricalDispatch(); } catch (error) {
-        if (!setupRetirements.length) throw error; // Keep existing historical refusals unchanged.
+        if (!setupDispatchRefusals.has(error)) throw error;
         return unsentCreate;
       }
     }
@@ -372,7 +373,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       }
       if (beforeCreate !== "census") {
         for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
-        const setupIdleChecks = setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody));
+        const checkSetup = (check) => {
+          try { return check(); } catch (error) {
+            if (beforeCreate === "dispatch" && error instanceof Error) setupDispatchRefusals.add(error);
+            throw error;
+          }
+        };
+        const setupIdleChecks = checkSetup(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
@@ -384,8 +391,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
           assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
         }
         if (beforeCreate === "dispatch" && setupIdleChecks.length) {
-          recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
-          for (const stillIdle of setupIdleChecks) stillIdle();
+          checkSetup(() => {
+            recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+            for (const stillIdle of setupIdleChecks) stillIdle();
+          });
         }
       }
       return currentPeers;
