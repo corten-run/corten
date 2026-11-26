@@ -2251,17 +2251,13 @@ fn reg_name(name: &[u8]) -> bool {
     }
 }
 
-/// [`reg_name`] for a name it does not read in line: one longer than 16 bytes is read sixteen
-/// at a look, each 16 from its start and the last 16, which overlap the one before, for the
-/// same bytes; a shorter one, and one with any other byte, by the table below, which says the
-/// same of these.
+/// [`reg_name`] for a name it does not read in line: one longer than 16 bytes of letters,
+/// digits, `-` and `.` alone sixteen at a look ([`plain`]); a shorter one, and one with any
+/// other byte, by the table below, which says the same of these.
 #[inline(never)]
 fn spelled(name: &[u8]) -> bool {
-    if let Some(last) = name.last_chunk::<16>() {
-        let unlike = name.as_chunks::<16>().0.iter().fold(unlike_a_name(last), |unlike, each| unlike | unlike_a_name(each));
-        if name.len() > 16 && unlike == 0 {
-            return true;
-        }
+    if plain(name, unlike_a_name) {
+        return true;
     }
     // Few names hold a percent-encoded byte, so the name is read first for the bytes it holds
     // as they are, four to a look and then the one to three left over: a look at four costs
@@ -2272,6 +2268,17 @@ fn spelled(name: &[u8]) -> bool {
         return !name.is_empty();
     }
     encoded(name)
+}
+
+/// Whether `name` is longer than 16 bytes and all letters, digits, `-` and `.`, each 16 from its
+/// start and then the last 16, which overlap the one before, looked at by `unlike`
+/// ([`unlike_a_name`]; a test counts the looks). It stops at the first look that finds another
+/// byte, so a long `Host` that is no name is not read to its end before the table reads it,
+/// which stops at its first byte that no name holds.
+#[inline(always)]
+fn plain(name: &[u8], mut unlike: impl FnMut(&[u8; 16]) -> u8) -> bool {
+    let Some(last) = name.last_chunk::<16>() else { return false };
+    name.len() > 16 && name.as_chunks::<16>().0.iter().all(|each| unlike(each) == 0) && unlike(last) == 0
 }
 
 /// Nonzero when any of `bytes` is not a letter, a digit, `-` or `.`. Each byte is looked at with
@@ -3062,6 +3069,42 @@ mod tests {
             }
         }
         assert!(read > 100_000, "{read} values read");
+    }
+
+    /// A long `Host` that is no name is read sixteen bytes at a look only as far as the first look
+    /// that finds a byte no plain name has: `@` and 4,095 `a` is one look, where the old
+    /// reader stopped at its first byte as well, and a name that is one is read to its end.
+    #[test]
+    fn a_long_name_that_is_none_is_not_read_to_its_end() {
+        let looks = |name: &[u8]| {
+            let mut looks = 0;
+            let plain = plain(name, |each| {
+                looks += 1;
+                unlike_a_name(each)
+            });
+            (plain, looks)
+        };
+        let mut name = vec![b'a'; 4096];
+        assert_eq!(looks(&name), (true, 257));
+        assert!(reg_name(&name));
+        name[0] = b'@';
+        assert_eq!(looks(&name), (false, 1));
+        assert!(!reg_name(&name));
+        assert_eq!(any(&name), Asked::Malformed);
+        // A byte a name holds as written but a plain one does not: the table reads the rest.
+        name[0] = b'_';
+        assert_eq!(looks(&name), (false, 1));
+        assert!(reg_name(&name));
+        name[0] = b'a';
+        name[100] = b'@';
+        assert_eq!(looks(&name), (false, 7));
+        assert!(!reg_name(&name));
+        name[100] = b'a';
+        name[4095] = b'@';
+        assert_eq!(looks(&name), (false, 256));
+        assert!(!reg_name(&name));
+        // 16 bytes or fewer are none of its: `reg_name` reads them in line or by the table.
+        assert_eq!(looks(&name[..16]), (false, 0));
     }
 
     /// What a request asks for where no connection brought it (a test's, as these are): its
