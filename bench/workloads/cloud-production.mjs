@@ -273,7 +273,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
     if (creating && checkHistoricalDispatch) {
-      try { checkHistoricalDispatch(); } catch { return unsentCreate; }
+      try { checkHistoricalDispatch(); } catch (error) {
+        if (!setupRetirements.length) throw error; // Keep existing historical refusals unchanged.
+        return unsentCreate;
+      }
     }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
