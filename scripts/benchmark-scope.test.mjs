@@ -9,7 +9,7 @@ import { build } from "esbuild";
 import { parse } from "yaml";
 import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
-import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
+import { eventPaths, selectEvidence, selectKernel, selectRequestCost, selectScope } from "./benchmark-scope.mjs";
 import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -395,6 +395,69 @@ test("a base-side rename scopes the edited file where parity actually tests it",
   assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
 });
 
+for (const [name, paths, run] of [
+  ["the framework", ["crates/corten/src/router.rs"], true],
+  ["the macros", ["docs/guide/views.md", "crates/corten-macros/src/lib.rs"], true],
+  ["the feed", ["crates/corten-feed/src/lib.rs"], true],
+  ["the feed's protocol", ["crates/corten-protocol/src/lib.rs"], true],
+  ["a locked version", ["Cargo.lock"], true],
+  ["the workspace's manifest", ["Cargo.toml"], true],
+  ["the kit", ["bench/request-cost/probe/src/main.rs"], true],
+  ["the job", [".github/workflows/request-cost.yml"], true],
+  ["the scope script", ["scripts/benchmark-scope.mjs"], true],
+  ["the Node pin", [".node-version"], true],
+  ["an event with no diff to read", undefined, true],
+  ["what no request is built from", ["README.md", "docs/design.md", "CONTRIBUTING.md", "package.json", "examples/card-market/src/main.rs",
+    "crates/corten-cli/src/main.rs", "crates/corten-ui/src/lib.rs", "crates/corten-cluster/src/lib.rs", "crates/corten-macros.md",
+    "bench/fullstack/count.mjs", "bench/request-costs/README.md", ".github/workflows/ci.yml", "examples/watchlist/Cargo.toml"], false],
+]) {
+  test(`Request Cost ${run ? "counts" : "skips"} ${name}`, () => assert.equal(selectRequestCost(paths), run));
+}
+
+test("Request Cost's scope reads a pull request's merge against its first parent, not what the base alone changed", t => {
+  const { cwd, git, write, commit, merge } = fixture(t);
+  write("initial");
+  const fork = commit();
+  write("crates/corten/src/lib.rs");
+  commit();
+  const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
+  const output = join(cwd, "output");
+  const scope = (from, path) => {
+    git("switch", "--quiet", "--detach", from);
+    write(path);
+    writeFileSync(output, "");
+    const env = fixtureGitEnv({ ...prEvent(merge(commit())), GITHUB_OUTPUT: output });
+    execFileSync(process.execPath, [script, "request-cost"], { cwd, env });
+    return readFileSync(output, "utf8");
+  };
+  // The base changed the framework after the fork; the pull request changed a guide.
+  assert.equal(scope(fork, "docs/guide/views.md"), "run=false\n");
+  assert.equal(scope("main", "crates/corten-macros/src/lib.rs"), "run=true\n");
+});
+
+test("Request Cost runs for pull requests alone, always scopes, counts only what the scope selects and asks nothing of the token", () => {
+  const source = readFileSync(new URL(".github/workflows/request-cost.yml", root), "utf8");
+  const requestCost = parse(source);
+  assert.deepEqual(requestCost.on, { pull_request: null });
+  assert.deepEqual(requestCost.permissions, { contents: "read" });
+  const { scope, "request-cost": count } = requestCost.jobs;
+  assert.deepEqual(Object.keys(requestCost.jobs), ["scope", "request-cost"]);
+  assert.equal(scope.if, undefined);
+  assert.ok(scope.steps.some(step => step.run === "node scripts/benchmark-scope.mjs request-cost"));
+  assert.deepEqual(count.needs, "scope");
+  assert.equal(count.if, "needs.scope.outputs.run == 'true'");
+  for (const job of [scope, count]) {
+    assert.equal(job.permissions, undefined);
+    // The merge base is found in the history, and the token is not left in the checkout.
+    assert.deepEqual(job.steps.find(step => step.uses?.startsWith("actions/checkout@")).with, { "fetch-depth": 0, "persist-credentials": false });
+  }
+  // A fork's run has a token that reads and no secrets, and a description is whatever its author
+  // typed: it is read from the event's file, never written into a script.
+  assert.doesNotMatch(source, /secrets\.|github\.token|GITHUB_TOKEN/);
+  assert.deepEqual(source.match(/\$\{\{[^}]*\}\}/g).filter(expression => !/^\$\{\{ (github\.workflow|github\.ref|steps\.scope\.outputs\.run|runner\.temp) \}\}$/.test(expression)), []);
+  assert.ok(count.steps.some(step => step.run?.includes(`jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH"`)));
+});
+
 test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
   const { cwd, env: gitEnv, write, commit } = fixture(t);
   write("initial");
@@ -458,6 +521,7 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
 const toolchainJobs = {
   "catalog.yml": { node: ["scope", "harness", "parity", "json-harness", "json-aot"], upload: ["parity", "json-aot"] },
   "benchmark-evidence.yml": { node: ["scope", "evidence", "kernel"], upload: [] },
+  "request-cost.yml": { node: ["scope", "request-cost"], upload: [] },
 };
 
 function assertToolchain(workflows, pin) {
@@ -478,7 +542,7 @@ function assertToolchain(workflows, pin) {
   }
 }
 
-test("Catalog and Benchmark Evidence take Node from .node-version and upload-artifact from release.yml's pin", () => {
+test("Catalog, Benchmark Evidence and Request Cost take Node from .node-version and upload-artifact from release.yml's pin", () => {
   const read = (name) => parse(readFileSync(new URL(`.github/workflows/${name}`, root), "utf8"));
   const pins = new Set(Object.values(read("release.yml").jobs).flatMap((job) => job.steps ?? [])
     .map((step) => step.uses).filter((uses) => uses?.startsWith("actions/upload-artifact@")));

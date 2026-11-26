@@ -1,0 +1,146 @@
+# Counts what a request costs for a pull request against its base, with bench/request-cost, and
+# holds the change to the way its description declares (CONTRIBUTING.md, Pull requests, item 2.1):
+# instructions and allocations a request and the memory an idle connection holds, for the probe
+# built at the merge base and at the head, on one runner in one job, because a count can differ
+# between CPU models. The table is the job's summary. bench/request-cost/README.md (The hosted
+# job) says what it runs and how its verdict is read.
+name: Request Cost
+
+# A pull request alone: the comparison is of a change with its base. The description is read from
+# the event as it was when the run started, so a line added to it later is read by the next run
+# a push or a reopening starts, not by a rerun of this one.
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# A pull request from a fork has a token that reads and no secrets: the job needs neither.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scope:
+    name: request-cost scope
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - id: scope
+        run: node scripts/benchmark-scope.mjs request-cost
+
+  request-cost:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      # The whole history: the merge base is found in it, and build.sh archives each commit from it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      # The crates the probe's builds download and compile, in the directory named below.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ runner.temp }}/request-cost/probe -> ../target
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: valgrind, jemalloc and libzstd's headers
+        run: sudo apt-get update && sudo apt-get install -y valgrind libjemalloc2 pkg-config libzstd-dev
+      # The checkout is the pull request's merge with its base: its second parent is the head, and
+      # the merge base of its parents is where the head left the base's branch. The kit, and so
+      # the probe's source, is the checkout's for both builds. BUILDS is outside the checkout and
+      # any git repository, as build.sh requires, and one directory for both builds: where a crate
+      # is built is part of the binary.
+      - name: The two commits
+        run: |
+          if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+            echo "::error::the pull request's checkout is not a merge commit, so it has no base to count against"
+            exit 1
+          fi
+          echo "BASE_COMMIT=$(git merge-base 'HEAD^1' 'HEAD^2')" >> "$GITHUB_ENV"
+          echo "HEAD_COMMIT=$(git rev-parse 'HEAD^2')" >> "$GITHUB_ENV"
+          echo "BUILDS=$RUNNER_TEMP/request-cost" >> "$GITHUB_ENV"
+      # Base first. A probe that does not build against base (the change moved what the probe
+      # calls, and the probe with it) leaves base with no figure, which the comparison says; one
+      # that does not build against head fails the job.
+      - name: Build the probe against base, then against head, in one directory
+        run: |
+          began=$SECONDS
+          sh bench/request-cost/build.sh "$BASE_COMMIT" "$BUILDS" || echo "::warning::the probe did not build against base $BASE_COMMIT"
+          echo "build base $((SECONDS - began))" >> "$BUILDS/seconds"
+          began=$SECONDS
+          sh bench/request-cost/build.sh "$HEAD_COMMIT" "$BUILDS"
+          echo "build head $((SECONDS - began))" >> "$BUILDS/seconds"
+      # Each run of the kit that compare.mjs names, on base and then on head, on one CPU. A run the
+      # kit refuses gave no figure and is taken again, once; what the kit said is kept beside it.
+      # No run is taken again for its figure.
+      - name: Answers, counts, allocations and idle memory
+        shell: bash
+        run: |
+          kit=bench/request-cost
+          cpu=$(($(nproc) - 1))
+          echo "$(nproc) CPUs, the probe on CPU $cpu; open files $(ulimit -Sn) of $(ulimit -Hn)"
+          lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core)' || true
+          valgrind --version; rustc --version; node --version
+          sysctl net.ipv4.tcp_tw_reuse net.ipv4.ip_local_port_range net.core.somaxconn || true
+          probe() { if [ "$1" = base ]; then echo "$BUILDS/bin/$BASE_COMMIT"; else echo "$BUILDS/bin/$HEAD_COMMIT"; fi; }
+          began=$SECONDS
+          for side in base head; do
+            mkdir -p "$BUILDS/$side"
+            [ -x "$(probe "$side")" ] || continue
+            node "$kit/count.mjs" "$(probe "$side")" --cpu "$cpu" --answers "$BUILDS/$side/answers" || echo "::warning::no answers from $side"
+          done
+          if diff -r "$BUILDS/base/answers" "$BUILDS/head/answers"; then echo "the two builds answer the same"; fi
+          echo "answers $((SECONDS - began))" >> "$BUILDS/seconds"
+          began=$SECONDS
+          node "$kit/compare.mjs" --readings > "$BUILDS/readings"
+          while read -r file script options; do
+            for side in base head; do
+              [ -x "$(probe "$side")" ] || continue
+              out=$BUILDS/$side/$file
+              for attempt in 1 2; do
+                echo "$(date +%T) $side $file, attempt $attempt"
+                # shellcheck disable=SC2086 # the options are words
+                if node "$kit/$script" "$(probe "$side")" --cpu "$cpu" $options > "$out" 2> "$out.said" < /dev/null; then
+                  cat "$out"
+                  rm "$out.said"
+                  break
+                fi
+                cat "$out.said"
+                cat "$out.said" >> "$out.refused"
+                rm -f "$out" "$out.said"
+              done
+            done
+          done < "$BUILDS/readings"
+          echo "readings $((SECONDS - began))" >> "$BUILDS/seconds"
+          echo "sockets in TIME_WAIT: $(ss -Htan state time-wait | wc -l)"
+      # The description is the event's own copy, written to a file and read there: never text in
+      # a script. The comparison's exit status is the job's.
+      - name: The table and the verdict
+        shell: bash
+        run: |
+          jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/description.md"
+          status=0
+          node bench/request-cost/compare.mjs "$BUILDS/base" "$BUILDS/head" --description "$RUNNER_TEMP/description.md" --base "$BASE_COMMIT" --head "$HEAD_COMMIT" > "$RUNNER_TEMP/table.md" || status=$?
+          {
+            cat "$RUNNER_TEMP/table.md"
+            echo
+            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$BUILDS/seconds" | sed 's/,/, /g')."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
