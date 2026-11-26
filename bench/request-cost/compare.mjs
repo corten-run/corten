@@ -23,8 +23,9 @@
 // figure on either build, or a case either build gave no answer to, cannot be counted, which
 // sends the change to the measured way as a rise does.
 //
-// `--description` is the pull request's description, read for the way the change is decided: a
-// line of its own, `Request path: counted` or `Request path: measured` (`declared`). Exit status
+// `--description` is the pull request's description, read for the way the change is decided: its
+// one line that is `Request path: counted` or `Request path: measured` and nothing else
+// (`declared`); with no such line, or more than one, it declares nothing. Exit status
 // 1 when the rule does not hold and the description does not say `measured`, and when the probe
 // did not build against head: a change declared measured is reported and never failed on its
 // figures, and one that declares nothing fails only when the rule does not hold. Exit status 2
@@ -94,48 +95,20 @@ export function figure(text, expect) {
 }
 
 /**
- * The way a description says its change is decided: "counted" or "measured" when a line says one
- * of them, "both" when lines say both, and null when none does. The line is one a reader of the
- * description sees standing alone: `Request path: counted` or `Request path: measured` from the
- * line's first character, with nothing after it but spaces or tabs, outside a fenced code block
- * and an HTML comment, and not a block quote's (a line right under a quoted one is the quote's,
- * until a heading). This is not Markdown read whole: where it and Markdown differ, a line a
- * reader sees is not read, never the other way (README.md, The hosted job).
- * @param {string} description @returns {"counted" | "measured" | "both" | null}
+ * The way a description says its change is decided, and the numbers of its declaration lines. A
+ * declaration line is a line of the description's text, as written, that is
+ * `Request path: counted` or `Request path: measured` from its first character with nothing
+ * after it but spaces or a carriage return, wherever it stands: no Markdown is read, so a line
+ * in an example, a quote or a comment is one as well. The description declares a way only when
+ * it has exactly one: with none, or more than one whether or not they agree, `way` is null.
+ * @param {string} description @returns {{ way: "counted" | "measured" | null, lines: number[] }}
  */
 export function declared(description) {
-  const said = new Set();
-  /** The fence that opened the code block a line is in, the comment it is in, and the quote. */
-  let [fence, hidden, quoted] = ["", false, false];
-  for (const line of description.split(/\r?\n/)) {
-    if (fence !== "") {
-      // Closed only by a line of its own character, at least as many, and nothing after them.
-      const close = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
-      if (close?.[0] === fence[0] && close.length >= fence.length) fence = "";
-      continue;
-    }
-    const marks = hidden ? null : /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marks) {
-      fence = marks;
-      continue;
-    }
-    // What of the line is outside a comment: one opened on an earlier line, or within this one.
-    let seen = line;
-    if (hidden) {
-      const end = seen.indexOf("-->");
-      if (end < 0) continue;
-      [seen, hidden] = [seen.slice(end + 3), false];
-    }
-    seen = seen.replace(/<!--.*?-->/g, "");
-    const open = seen.indexOf("<!--");
-    if (open >= 0) [seen, hidden] = [seen.slice(0, open), true];
-    // A heading is never a quote's line: it ends the quote above it.
-    quoted = seen.trim() !== "" && !/^ {0,3}#{1,6}([ \t]|$)/.test(seen) && (quoted || /^ {0,3}>/.test(seen));
-    const way = /^Request path: (counted|measured)[ \t]*$/.exec(seen)?.[1];
-    if (way && !quoted) said.add(way);
-  }
-  if (said.size > 1) return "both";
-  return /** @type {"counted" | "measured" | null} */ ([...said][0] ?? null);
+  const found = description.split("\n").flatMap((line, at) => {
+    const way = /^Request path: (counted|measured)[ \r]*$/.exec(line)?.[1];
+    return way ? [{ way: /** @type {"counted" | "measured"} */ (way), line: at + 1 }] : [];
+  });
+  return { way: found.length === 1 ? /** @type {typeof found[number]} */ (found[0]).way : null, lines: found.map(({ line }) => line) };
 }
 
 /** Whether a case's instructions rose by more than the budget, 0.5% of base's. @param {number} base @param {number} head */
@@ -280,29 +253,33 @@ export function compare(base, head, { description = "", names = { base: "base", 
     differ.length + unread.length === 0 ? `Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
   ].filter(Boolean).join(" ");
 
-  const said = declared(description);
+  const { way, lines: declaring } = declared(description);
+  // What was read of the description, so that an author sees why a line did or did not count.
+  const read =
+    way !== null
+      ? `Read from the description: \`Request path: ${way}\`, at line ${declaring[0]}.`
+      : declaring.length === 0
+        ? "Read from the description: no declaration line."
+        : `Read from the description: ${declaring.length} declaration lines, at lines ${declaring.join(", ")}: a description holds one, so this one declares nothing.`;
   const holds = against.length === 0;
   const why = against.join("; ");
   const rule = "CONTRIBUTING.md (Pull requests, item 2.1)";
-  const line = "a line of its own in the description";
+  const line = "exactly one line of its own in the description";
   /** @type {0 | 1} */
   let status = 0;
   let verdict;
-  if (said === "counted" && holds) {
-    verdict = "**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case its answer.";
-  } else if (said === "counted") {
+  if (way === "counted" && holds) {
+    verdict = `**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case its answer. ${read}`;
+  } else if (way === "counted") {
     status = 1;
-    verdict = `**Does not pass as counted:** ${why}. By ${rule} the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`;
-  } else if (said === "measured") {
-    verdict = `**Declared measured: these counts are reported and decide nothing.** As counted they would ${holds ? "pass" : `not pass: ${why}`}.`;
+    verdict = `**Does not pass as counted:** ${why}. ${read} By ${rule} the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`;
+  } else if (way === "measured") {
+    verdict = `**Declared measured: these counts are reported and decide nothing.** As counted they would ${holds ? "pass" : `not pass: ${why}`}. ${read}`;
+  } else if (holds) {
+    verdict = `**Would pass as counted.** ${read} Say the way on ${line}, \`Request path: counted\` or \`Request path: measured\` (${rule}).`;
   } else {
-    const none = said === "both" ? "The description says both `Request path: counted` and `Request path: measured`, so it declares neither." : "The description does not say which way decides the change.";
-    if (holds) {
-      verdict = `**Would pass as counted.** ${none} Say it on ${line}, \`Request path: counted\` or \`Request path: measured\` (${rule}).`;
-    } else {
-      status = 1;
-      verdict = `**Does not pass as counted:** ${why}. ${none} By ${rule} such a change is measured: say \`Request path: measured\` on ${line}, and give what the measured way asks.`;
-    }
+    status = 1;
+    verdict = `**Does not pass as counted:** ${why}. ${read} By ${rule} such a change is measured: say \`Request path: measured\` on ${line}, and give what the measured way asks.`;
   }
   if (unbuilt.head !== undefined) {
     status = 1;

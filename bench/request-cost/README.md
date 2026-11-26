@@ -314,7 +314,8 @@ On one runner it does what [Running it](#running-it) says, the first three by
    each, the four at a depth of 16, the nine cases' allocations, and the three idle readings
    three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
    minutes have gone since the job's first step, which leaves six of the job's 30 for the
-   table. The checkout, the toolchain and the two builds are not held to those 24: a job
+   table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
+   seconds more to end. The checkout, the toolchain and the two builds are not held to those 24: a job
    they take past its 30 minutes ends there with no table. A run the kit refuses, or that
    does not end, gave no figure and is taken again, once, with why kept for each attempt (the
    kit's error, else the last thing the run said, else its exit status); no run is taken
@@ -343,20 +344,19 @@ The description's line says what a miss does:
 | --- | --- | --- |
 | `Request path: counted` | Passes | Fails, naming each case, and says the change is then measured |
 | `Request path: measured` | Passes: the counts are reported and decide nothing | The same |
-| Neither, or both | Passes, and names the line to add | Fails, and names the line to add |
+| No such line, or more than one | Passes, and names the line to add | Fails, and names the line to add |
 
-The line counts when a reader of the description sees it standing alone: `Request path: counted`
-or `Request path: measured` from the line's first character, with nothing after it but spaces
-or tabs. One in a fenced or indented code block, in an HTML comment, in a block quote or with
-other words on its line is not a declaration. The job does not read Markdown whole. Where the
-two differ, a line a reader sees goes unread, and nothing hidden is read: a line after an
-example fenced inside a list item, or after `<!--` written as code, is not read. So write the
-line where it is read whatever is around it: on a line of its own with a blank line above and
-below, not in a list, a quote or a block, and before any text that shows `<!--` or a fence.
-An unread line is no declaration: the job then fails on a miss as it does with none, and its
-summary says it read none. Builds that answer differently are named above the table and fail
-nothing: a change may be meant to change an answer, and the review weighs a count of two
-different jobs.
+A declaration line is a line of the description's text, as it is written, that is
+`Request path: counted` or `Request path: measured` from its first character with nothing
+after it but spaces. The description declares a way when it holds exactly one. The job reads
+no Markdown, so such a line counts wherever it stands, in an example's block, a quote or a
+comment as in the text, and a description that says the line and also quotes it whole in an
+example holds two: more than one is read as none, whether or not they agree. So write the
+line once, on a line of its own, and where the description speaks of the line, write it
+inside a sentence. The verdict says what was read: the way and its line's number, that there
+is no declaration line, or how many there are and at which lines. Builds that answer
+differently are named above the table and fail nothing: a change may be meant to change an
+answer, and the review weighs a count of two different jobs.
 
 The description is the one the event carried when the run started. A line added afterwards is
 read by the next run a push starts, not by a rerun, and an edit starts no run, since it would

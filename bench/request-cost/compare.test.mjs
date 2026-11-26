@@ -77,6 +77,9 @@ function builds(t, edit = () => {}) {
 
 const counting = "Request path: counted\n";
 const measuring = "Request path: measured\n";
+/** What a verdict says it read of `counting`, and of `measuring`. */
+const readCounted = "Read from the description: `Request path: counted`, at line 1.";
+const readMeasured = "Read from the description: `Request path: measured`, at line 1.";
 /** The verdict's line of a table. @param {string} markdown */
 const verdict = (markdown) => /** @type {string} */ (markdown.split("\n").find((line) => line.startsWith("**")));
 
@@ -144,47 +147,35 @@ test("a figure is a run's whole JSON, of the run asked for: cut short, of anothe
   for (const text of ["", "null", "[]", "2641", "2641 bytes a connection (5000 that sent nothing, opened in 0.6 s; 1 before, 2 after)\n"]) assert.equal(figure(text, idle), null, text);
 });
 
-test("the way is declared by a line a reader sees standing alone, and by nothing else", () => {
-  assert.equal(declared("What changed.\n\n## Measurements\n\nRequest path: counted\n\nThe counts.\n"), "counted");
-  assert.equal(declared("Request path: measured"), "measured");
+test("the way is declared by exactly one line that is the declaration and nothing else, wherever it stands", () => {
+  // First and last; and in an example's fence, a comment and under a quoted line, for no Markdown is read.
+  assert.deepEqual(declared("Request path: measured"), { way: "measured", lines: [1] });
+  assert.deepEqual(declared("What changed.\n\n## Measurements\n\nRequest path: counted\n"), { way: "counted", lines: [5] });
+  assert.deepEqual(declared("An example:\n\n```\nRequest path: measured\n```\n"), { way: "measured", lines: [4] });
+  assert.deepEqual(declared("<!--\nRequest path: measured\n-->\n"), { way: "measured", lines: [2] });
+  assert.deepEqual(declared("> The job says:\nRequest path: counted\n"), { way: "counted", lines: [2] });
   // As a browser's form sends a description, and with spaces left at the line's end.
-  assert.equal(declared("What changed.\r\nRequest path: measured\r\n\r\n## Checks\r\n"), "measured");
-  assert.equal(declared("Request path: counted  \n"), "counted");
-  assert.equal(declared(""), null);
-  // The template's own sentence, a line that says more, one that is listed, and other spellings.
-  assert.equal(declared("own: `Request path: counted` or `Request path: measured`.\n"), null);
-  assert.equal(declared("Request path: counted, as the job says\n- Request path: measured\n"), null);
-  assert.equal(declared("request path: counted\nRequest path: Counted\nRequest path: neither\nRequest path:  counted\n"), null);
-  assert.equal(declared("Request path: counted\nRequest path: counted\n"), "counted");
-  assert.equal(declared("Request path: counted\n\nRequest path: measured\n"), "both");
-  // An example in a fenced block, whatever its fence, and in an indented one.
-  for (const [open, close] of [["```", "```"], ["```text", "```"], ["~~~~", "~~~~"], ["   ````md", "````"]]) {
-    assert.equal(declared(`An example:\n\n${open}\nRequest path: measured\n${close}\n`), null, open);
-    // A shorter fence, or the other kind, does not close it; nor does the description's end.
-    assert.equal(declared(`${open}\n${open[3] === "~" ? "```" : "~~~"}\nRequest path: measured\n`), null, open);
-    assert.equal(declared(`${open}\nRequest path: measured\n${close}\n\nRequest path: counted\n`), "counted", open);
+  assert.deepEqual(declared("What changed.\r\nRequest path: measured  \r\n\r\n## Checks\r\n"), { way: "measured", lines: [2] });
+  // None; and more than one, the same or not.
+  assert.deepEqual(declared(""), { way: null, lines: [] });
+  assert.deepEqual(declared("Request path: counted\n\nRequest path: counted\n"), { way: null, lines: [1, 3] });
+  assert.deepEqual(declared("Request path: counted\n\n```\nRequest path: measured\n```\n"), { way: null, lines: [1, 4] });
+  // Not a declaration line: words after it, anything before it, and any other spelling.
+  for (const line of [
+    "Request path: counted, as the job says",
+    "Request path: counted <!-- the kit's page says why -->",
+    "Request path: counted\t",
+    " Request path: counted",
+    "> Request path: measured",
+    "- Request path: measured",
+    "own: `Request path: counted` or `Request path: measured`.",
+    "request path: counted",
+    "Request path: Counted",
+    "Request path:  counted",
+    "Request path: neither",
+  ]) {
+    assert.deepEqual(declared(`${line}\n`), { way: null, lines: [] }, line);
   }
-  // Nor does a line of both characters, a shorter one, or one with words after it close a fence.
-  for (const not of ["```~", "~~~`", "``", "``` and more"]) assert.equal(declared(`An example:\n\n\`\`\`\n${not}\nRequest path: measured\n\`\`\`\n`), null, not);
-  assert.equal(declared("````\n```\nRequest path: measured\n````\nRequest path: counted\n"), "counted");
-  assert.equal(declared("An example:\n\n    Request path: measured\n\tRequest path: measured\n"), null);
-  // A comment hides its lines, on one line or over several; what follows it is seen again.
-  assert.equal(declared("<!-- Request path: measured -->\n<!--\nRequest path: measured\n-->\n"), null);
-  assert.equal(declared("<!-- say one:\nRequest path: measured\n-->\nRequest path: counted\n"), "counted");
-  assert.equal(declared("Request path: counted <!-- the kit's page says why -->\n"), "counted");
-  assert.equal(declared("<!-- ```\n-->\nRequest path: counted\n"), "counted");
-  // A quote, and a line right under a quoted one, which is the quote's still.
-  assert.equal(declared("> Request path: measured\n   > Request path: measured\n"), null);
-  assert.equal(declared("> The job says:\nRequest path: measured\n"), null);
-  assert.equal(declared("> The job says to add a line.\n\nRequest path: measured\n"), "measured");
-  // A heading ends the quote above it, and is no declaration itself.
-  assert.equal(declared("> The job says:\n## Measurements\nRequest path: measured\n"), "measured");
-  assert.equal(declared("> The job says:\n#Request path: measured\nRequest path: measured\n# Request path: measured\n"), null);
-  // Where this is not Markdown, a line a reader sees is not read, and nothing hidden is: after
-  // an example fenced inside a list item, and after `<!--` written as code.
-  assert.equal(declared("- An example:\n  ```\n  Request path: counted\n  ```\n\nRequest path: measured\n"), "measured");
-  assert.equal(declared("- ```\n  Request path: counted\n  ```\n\nRequest path: measured\n"), null);
-  assert.equal(declared("A comment opens with `<!--`.\n\nRequest path: measured\n"), null);
 });
 
 test("the budget is more than 0.5% of base's instructions, and a rise of exactly that is inside it", () => {
@@ -220,7 +211,7 @@ test("a change inside the budget passes as counted, and the table gives every ru
   const { markdown, status, holds } = compare(base, head, { description: counting, names: { base: "a".repeat(40), head: "b".repeat(40) } });
   assert.deepEqual([status, holds], [0, true]);
   assert.match(markdown, /^## What a request costs: `bbbbbbbbb` against `aaaaaaaaa`$/m);
-  assert.equal(verdict(markdown), "**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case its answer.");
+  assert.equal(verdict(markdown), `**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case its answer. ${readCounted}`);
   assert.match(markdown, /^Both builds give the same answer, byte for byte with its `Date` and `ETag` masked, in all 9 cases\.$/m);
   // Each count, the longest window's seconds and the most the other threads ran in a window.
   assert.ok(markdown.includes("| `get` | 20,000 | 20,100 | +100 | +0.500% | 20000 20000 20001 (0.9 s; others 243 in 1) | 20100 20100 20101 (0.9 s; others 243 in 1) |  |"), markdown);
@@ -239,7 +230,7 @@ test("one case over the budget does not pass as counted, and the verdict names i
   });
   const { markdown, status, holds } = compare(base, head, { description: counting });
   assert.deepEqual([status, holds], [1, false]);
-  assert.equal(verdict(markdown), "**Does not pass as counted:** `unstaged` runs 101 more instructions a request than base's 20,002, over the budget of 100 (+0.5%). By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says `Request path: measured`, gives what the measured way asks, and keeps these counts.");
+  assert.equal(verdict(markdown), `**Does not pass as counted:** \`unstaged\` runs 101 more instructions a request than base's 20,002, over the budget of 100 (+0.5%). ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
   assert.equal(markdown.match(/\| over the budget \|/g)?.length, 1);
   // At a depth of 16 a case is held to the budget as well.
   const deep = builds(t, (_, build) => {
@@ -247,7 +238,7 @@ test("one case over the budget does not pass as counted, and the verdict names i
   });
   const at16 = compare(deep.base, deep.head, { description: counting });
   assert.equal(at16.status, 1);
-  assert.match(at16.markdown, /`text`, 16 at a time runs 48 more instructions a request than base's 9,500, over the budget of 47 \(\+0\.5%\)\. By /);
+  assert.match(at16.markdown, /`text`, 16 at a time runs 48 more instructions a request than base's 9,500, over the budget of 47 \(\+0\.5%\)\. Read from the description: `Request path: counted`, at line 1\. By /);
 });
 
 test("an allocation more does not pass, however few they are among the requests and however the instructions read", (t) => {
@@ -297,7 +288,7 @@ test("a run with no figure on one build cannot be counted, and why each attempt 
   writeFileSync(join(head, "idle-browser-2.json.refused"), "Killed\nnot attempted, the job's time for readings was spent\n");
   const { markdown, status, holds } = compare(base, head, { description: counting });
   assert.deepEqual([status, holds], [1, false]);
-  assert.ok(verdict(markdown).startsWith("**Does not pass as counted:** `get`'s instructions has no figure on head (`did not end in 120 s`); idle memory after three of a browser's requests, run 2, has no figure on head (`not attempted, the job's time for readings was spent`). By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured"), markdown);
+  assert.ok(verdict(markdown).startsWith(`**Does not pass as counted:** \`get\`'s instructions has no figure on head (\`did not end in 120 s\`); idle memory after three of a browser's requests, run 2, has no figure on head (\`not attempted, the job's time for readings was spent\`). ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured`), markdown);
   assert.ok(markdown.includes("| `get` | 20,000 | none |  |  | 20000 20000 20001 (0.9 s; others 243 in 1) | none | no figure |"), markdown);
   // No median of two runs: the rule's is of three.
   assert.ok(markdown.includes("| after three of a browser's requests | 9,100 | none |  |  |  | 9,100 9,100 9,104 | 9,100 none 9,104 | no figure |"), markdown);
@@ -340,7 +331,7 @@ test("output that is not the whole of the run its file is named for is no figure
   });
   const none = compare(base, head, { description: counting });
   assert.equal(none.status, 1);
-  assert.ok(verdict(none.markdown).includes("`text`'s allocations has no figure on base and head (`the run left no output`). By"), none.markdown);
+  assert.ok(verdict(none.markdown).includes(`\`text\`'s allocations has no figure on base and head (\`the run left no output\`). ${readCounted} By`), none.markdown);
   assert.ok(none.markdown.includes("| `text` | none | none |  |  | none | none | no figure |"), none.markdown);
 });
 
@@ -352,17 +343,17 @@ test("a probe that did not build is said once: against base it leaves the change
   const said = "the probe did not build against base (`error: could not compile 'probe' (bin \"probe\") due to 1 previous error`)";
   const counted = compare(empty, head, { description: counting });
   assert.equal(counted.status, 1);
-  assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
+  assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
   assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, 9 + 4 + 9 + 3);
   assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`\.$/m);
   const measured = compare(empty, head, { description: measuring });
   assert.deepEqual([measured.status, measured.holds], [0, false]);
-  assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}.`);
+  assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}. ${readMeasured}`);
   // Against head the job fails though the change is declared measured; what the built base lacks is still said.
   rmSync(join(base, "count-get.json"));
   const broken = compare(base, empty, { description: measuring });
   assert.equal(broken.status, 1);
-  assert.equal(verdict(broken.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said.replace("base", "head")}; \`get\`'s instructions has no figure on base (\`the run left no output\`). The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.`);
+  assert.equal(verdict(broken.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said.replace("base", "head")}; \`get\`'s instructions has no figure on base (\`the run left no output\`). ${readMeasured} The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.`);
   // A build with nothing in its directory and no word of why lacks every figure and every answer.
   rmSync(join(empty, "unbuilt"));
   assert.equal(verdict(compare(base, empty, { description: counting }).markdown).match(/ has no (figure|answer) on (base and )?head /g)?.length, 9 + 4 + 9 + 3 * RUNS + 9);
@@ -372,7 +363,7 @@ test("a probe that did not build is said once: against base it leaves the change
   writeFileSync(join(whole.base, "unbuilt"), "");
   const marked = compare(whole.base, whole.head, { description: counting });
   assert.equal(marked.status, 1);
-  assert.ok(verdict(marked.markdown).startsWith("**Does not pass as counted:** the probe did not build against base (`the build left no word of why`). By "), marked.markdown);
+  assert.ok(verdict(marked.markdown).startsWith(`**Does not pass as counted:** the probe did not build against base (\`the build left no word of why\`). ${readCounted} By `), marked.markdown);
   assert.equal(marked.markdown.match(/\| no figure \|$/gm)?.length, 9 + 4 + 9 + 3);
   assert.doesNotMatch(marked.markdown, /^\| `get` \| 20,000 /m);
   writeFileSync(join(whole.head, "unbuilt"), "");
@@ -387,28 +378,39 @@ test("a change declared measured is reported and never failed on its figures", (
   });
   const { markdown, status, holds } = compare(base, head, { description: measuring });
   assert.deepEqual([status, holds], [0, false]);
-  assert.equal(verdict(markdown), "**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: `page` runs 9,995 more instructions a request than base's 20,005, over the budget of 100 (+0.5%); `page` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: head's median, 9,000 bytes a connection, is above base's 2,643 by more than base's span of 4.");
+  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,995 more instructions a request than base's 20,005, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: head's median, 9,000 bytes a connection, is above base's 2,643 by more than base's span of 4. ${readMeasured}`);
   const inside = builds(t);
-  assert.equal(verdict(compare(inside.base, inside.head, { description: measuring }).markdown), "**Declared measured: these counts are reported and decide nothing.** As counted they would pass.");
+  assert.equal(verdict(compare(inside.base, inside.head, { description: measuring }).markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would pass. ${readMeasured}`);
+  // The one line is the declaration where it stands, an example's fence as well: the verdict says where it was read.
+  const fenced = compare(base, head, { description: "What changed.\n\n```\nRequest path: measured\n```\n" });
+  assert.equal(fenced.status, 0);
+  assert.ok(verdict(fenced.markdown).endsWith(" Read from the description: `Request path: measured`, at line 4."), fenced.markdown);
 });
 
-test("a description that declares no way fails only when the rule does not hold, and is told the line to add", (t) => {
+test("a description that declares no way fails only when the rule does not hold, and is told what was read and the line to add", (t) => {
   const inside = builds(t);
-  // A line that is only an example, in a fenced block, declares nothing.
-  const passes = compare(inside.base, inside.head, { description: "What changed and why.\n\n```\nRequest path: counted\n```\n" });
+  const one = "exactly one line of its own in the description";
+  // The line inside a sentence is no declaration line.
+  const passes = compare(inside.base, inside.head, { description: "What changed and why. The job reads `Request path: counted` from a line of its own.\n" });
   assert.equal(passes.status, 0);
-  assert.equal(verdict(passes.markdown), "**Would pass as counted.** The description does not say which way decides the change. Say it on a line of its own in the description, `Request path: counted` or `Request path: measured` (CONTRIBUTING.md (Pull requests, item 2.1)).");
+  assert.equal(verdict(passes.markdown), `**Would pass as counted.** Read from the description: no declaration line. Say the way on ${one}, \`Request path: counted\` or \`Request path: measured\` (CONTRIBUTING.md (Pull requests, item 2.1)).`);
   const high = builds(t, (_, build) => {
     build.count.get = [21_000, 21_000, 21_000];
   });
-  // No description at all is one that declares nothing; so is one whose only `measured` is hidden.
-  for (const description of [undefined, "", "Request path: counted\nRequest path: measured\n", "<!--\nRequest path: measured\n-->\n"]) {
+  // No description at all has no line; one that says the line and quotes it whole in an example
+  // has two, and so has one that says both ways.
+  const none = "no declaration line.";
+  const two = (/** @type {number[]} */ ...at) => `2 declaration lines, at lines ${at.join(", ")}: a description holds one, so this one declares nothing.`;
+  for (const [description, read] of /** @type {[string | undefined, string][]} */ ([
+    [undefined, none],
+    ["", none],
+    ["Request path: measured\n\nThe line is written so:\n\n```\nRequest path: measured\n```\n", two(1, 6)],
+    ["Request path: counted\nRequest path: measured\n", two(1, 2)],
+  ])) {
     const fails = compare(high.base, high.head, { description });
     assert.equal(fails.status, 1);
-    assert.match(verdict(fails.markdown), /^\*\*Does not pass as counted:\*\* `get` runs 1,000 more instructions a request than base's 20,000, over the budget of 100 \(\+0\.5%\)\. The description .*\. By CONTRIBUTING\.md \(Pull requests, item 2\.1\) such a change is measured: say `Request path: measured` on a line of its own in the description, and give what the measured way asks\.$/);
+    assert.equal(verdict(fails.markdown), `**Does not pass as counted:** \`get\` runs 1,000 more instructions a request than base's 20,000, over the budget of 100 (+0.5%). Read from the description: ${read} By CONTRIBUTING.md (Pull requests, item 2.1) such a change is measured: say \`Request path: measured\` on ${one}, and give what the measured way asks.`);
   }
-  assert.match(compare(high.base, high.head, { description: "Request path: counted\nRequest path: measured\n" }).markdown, /The description says both `Request path: counted` and `Request path: measured`, so it declares neither\./);
-  assert.match(compare(high.base, high.head).markdown, /The description does not say which way decides the change\./);
 });
 
 test("builds that answer differently are said to and fail nothing; a case either build gave no whole answer to is not a pass", (t) => {
@@ -442,11 +444,12 @@ test("compare.mjs prints the table and exits by the verdict, and refuses argumen
   });
   const description = join(dirname(base), "description.md");
   const run = (/** @type {string[]} */ ...args) => spawnSync(process.execPath, [join(kit, "compare.mjs"), ...args], { encoding: "utf8" });
-  writeFileSync(description, `What changed.\r\n\r\n${counting}`);
+  const written = `What changed.\r\n\r\n${counting}`;
+  writeFileSync(description, written);
   const failed = run(base, head, "--description", description, "--base", "c9666dc96", "--head", "the change");
   assert.equal(failed.status, 1, failed.stderr);
-  assert.equal(failed.stdout, compare(base, head, { description: counting, names: { base: "c9666dc96", head: "the change" } }).markdown);
-  assert.match(failed.stdout, /^## What a request costs: `the change` against `c9666dc96`\n\n\*\*Does not pass as counted:\*\* `text` runs /);
+  assert.equal(failed.stdout, compare(base, head, { description: written, names: { base: "c9666dc96", head: "the change" } }).markdown);
+  assert.match(failed.stdout, /^## What a request costs: `the change` against `c9666dc96`\n\n\*\*Does not pass as counted:\*\* `text` runs .* Read from the description: `Request path: counted`, at line 3\. By /);
   writeFileSync(description, measuring);
   assert.equal(run(base, head, "--description", description).status, 0);
   assert.equal(run(base, base, "--description", description).status, 0);
