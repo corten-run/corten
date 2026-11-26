@@ -91,8 +91,7 @@ function productionHarness(t, flags = {}) {
   return { h, calls, stdout, deps, args, approve };
 }
 
-test("a merged successor reconciles only a previously verified, absent host and replays its measured source", async (t) => {
-  const head = "b".repeat(40), flags = { active: true, reportStatus: "verified" };
+async function verifiedDeletionRetry(t, flags = { active: true, reportStatus: "verified" }) {
   const p = productionHarness(t, flags), { h } = p;
   await h.launch().launch();
   const closePath = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(closePath));
@@ -103,6 +102,20 @@ test("a merged successor reconciles only a previously verified, absent host and 
   const before = readFileSync(h.statePath), saved = h.saved();
   assert.equal(saved.validation.status, "verified"); assert.ok(saved.deletionIntentAt && !saved.destroyedAt);
   assert.equal(h.deletes, 1);
+  return { p, h, flags, before, saved };
+}
+
+const afterExactAbsence = (action) => {
+  let read = false;
+  return (bin, argv) => {
+    if (bin === "doctl" && argv[2] === "get" && argv[1] === "droplet") read = true;
+    else if (read && bin === "doctl" && argv[0] === "account") { read = false; action(); }
+  };
+};
+
+test("a merged successor reconciles only a previously verified, absent host and replays its measured source", async (t) => {
+  const head = "b".repeat(40);
+  const { p, h, flags, before, saved } = await verifiedDeletionRetry(t);
   Object.assign(flags, { wrongHead: true, remoteHead: head });
   flags.measuredRoot = join(h.temp, "measured"); mkdirSync(flags.measuredRoot);
   p.deps.compiler = root => root === flags.measuredRoot;
@@ -148,18 +161,16 @@ test("a merged successor reconciles only a previously verified, absent host and 
   await assert.rejects(run(() => writeFileSync(invalid, "{}")));
   unlinkSync(invalid); assert.deepEqual(readFileSync(h.statePath), before);
   const archivePath = join(h.local, "results.tgz"), archiveBytes = readFileSync(archivePath);
+  const terminalPath = join(h.local, "monitor-terminal.json"), terminalBytes = readFileSync(terminalPath);
   const operationLock = join(h.local, "operation.lock");
-  const whenAbsentAgain = (action) => {
-    let read = false;
-    return (bin, argv) => {
-      if (bin === "doctl" && argv[2] === "get" && argv[1] === "droplet") read = true;
-      else if (read && bin === "doctl" && argv[0] === "account") { read = false; action(); }
-    };
-  };
-  await assert.rejects(run(() => { flags.hook = whenAbsentAgain(() => writeFileSync(archivePath, "changed")); }), /archive changed/);
+  await assert.rejects(run(() => { flags.hook = afterExactAbsence(() => writeFileSync(archivePath, "changed")); }), /archive changed/);
   delete flags.hook; writeFileSync(archivePath, archiveBytes); assert.deepEqual(readFileSync(h.statePath), before);
+  await assert.rejects(run(() => { flags.hook = afterExactAbsence(() => {
+    writeFileSync(terminalPath, JSON.stringify({ ...JSON.parse(terminalBytes), campaign: "r21-fedcba9876543210" }));
+  }); }), /monitor campaign changed/);
+  delete flags.hook; writeFileSync(terminalPath, terminalBytes); assert.deepEqual(readFileSync(h.statePath), before);
   const replacement = "replacement lock\n";
-  await assert.rejects(run(() => { flags.hook = whenAbsentAgain(() => {
+  await assert.rejects(run(() => { flags.hook = afterExactAbsence(() => {
     renameSync(operationLock, operationLock + ".old"); writeFileSync(operationLock, replacement, { flag: "wx" });
   }); }), /operation lock changed/);
   delete flags.hook; assert.equal(readFileSync(operationLock, "utf8"), replacement); unlinkSync(operationLock);
@@ -167,9 +178,9 @@ test("a merged successor reconciles only a previously verified, absent host and 
   const now = performance.now.bind(performance); let elapsed = 0;
   const clock = t.mock.method(performance, "now", () => now() + elapsed);
   await assert.rejects(run(() => { elapsed = 26 * 60_000; }), e => e.controllerStage === "collect-native-replay-deadline");
-  assert.equal(replayed, 5); assert.deepEqual(readFileSync(h.statePath), before);
+  assert.equal(replayed, 6); assert.deepEqual(readFileSync(h.statePath), before);
   elapsed = 0;
-  assert.equal(await run(() => { elapsed = 16 * 60_000; }), 0); assert.equal(replayed, 6);
+  assert.equal(await run(() => { elapsed = 16 * 60_000; }), 0); assert.equal(replayed, 7);
   clock.mock.restore();
   const after = h.saved(); assert.ok(after.destroyedAt); delete after.destroyedAt;
   assert.deepEqual(after, saved);
@@ -180,6 +191,33 @@ test("a merged successor reconciles only a previously verified, absent host and 
     assert.ok(argv[0] === "account" && argv[1] === "get" || argv[0] === "auth" && argv[1] === "token"
       || argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "get" && argv[3] === saved.id);
   }
+});
+
+test("ordinary absence retry rechecks the saved archive after its final observation", async (t) => {
+  const { h, flags, before } = await verifiedDeletionRetry(t);
+  const path = join(h.local, "results.tgz"), bytes = readFileSync(path);
+  await assert.rejects(h.task({ inspect: async () => {
+    flags.hook = afterExactAbsence(() => writeFileSync(path, "changed"));
+    return h.report();
+  } }).collect(), /archive changed/);
+  delete flags.hook; writeFileSync(path, bytes);
+  assert.deepEqual(readFileSync(h.statePath), before);
+  assert.equal(await h.task().collect(), 0);
+  assert.ok(h.saved().destroyedAt); assert.equal(h.deletes, 1);
+});
+
+test("ordinary collection of a finalized result keeps the ordinary replay budget", async (t) => {
+  const { h } = await verifiedDeletionRetry(t);
+  assert.equal(await h.task().collect(), 0);
+  const before = readFileSync(h.statePath), now = performance.now.bind(performance);
+  let elapsed = 0;
+  t.mock.method(performance, "now", () => now() + elapsed);
+  await assert.rejects(h.task({ inspect: async () => {
+    elapsed = 16 * 60_000;
+    return h.report();
+  } }).collect(), e => e.controllerStage === "collect-native-replay-deadline");
+  assert.deepEqual(readFileSync(h.statePath), before);
+  assert.equal(h.deletes, 1);
 });
 
 function unusedBootstrapAttempt(t, flags = {}, script = "true") {

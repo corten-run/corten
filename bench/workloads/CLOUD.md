@@ -1916,10 +1916,11 @@ the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
 Local inspection has a 15-minute deadline including snapshot setup. With a saved
-DELETE intent and a previously verified, monitored result, a fresh collect may
-use up to 25 minutes for replay only after a same-account exact 404. It checks
-absence again before recording cleanup and never sends another DELETE. This
-does not change any deadline before deletion.
+DELETE intent, no recorded destruction and a previously verified, monitored
+result, a fresh collect may use up to 25 minutes for replay only after a
+same-account exact 404. It checks absence again and rechecks the archive,
+extracted evidence and terminal campaign and seal before recording cleanup.
+It never sends another DELETE. Other replay deadlines are unchanged.
 If ordinary collection at the measured commit cannot finish that replay, a
 reviewed merged successor can reconcile an already verified, successfully
 collected child with closed monitoring and a saved DELETE intent. Run the child

@@ -808,6 +808,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyArchive = () => {
     assert.equal(fileHash(archive), state.archiveSha256, "archive changed; preserve host");
   };
+  const verifyAbsentEvidence = (report, sealedMonitor) => {
+    verifyArchive();
+    assert.equal(treeHash(join(local, state.evidence)), state.evidenceSha256, "evidence changed after replay");
+    const { terminal } = sealedMonitor(local, state);
+    assert.ok(terminal.campaign === report.campaign, "monitor campaign changed after replay");
+    assert.ok(terminal.sealSha256 === report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
+  };
   async function validateEvidence(confirmedAbsent = false, start) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
@@ -1495,9 +1502,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         });
         assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
         await confirmDeleted(false);
-        assert.equal(sealedMonitor(local, state).terminal.sealSha256, report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
-        verifyArchive();
-        assert.equal(treeHash(join(local, state.evidence)), state.evidenceSha256, "evidence changed after replay");
+        verifyAbsentEvidence(report, sealedMonitor);
         original();
         state.destroyedAt = new Date().toISOString(); save(); return 0;
       });
@@ -1639,11 +1644,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (state.deletionIntentAt) {
           // A prior verified, monitored collection may have timed out after DELETE.
           // No longer replay budget until this exact host is proved absent.
-          const recoverAbsent = !options.r21MeasuredCheckout && state.status === "collected"
+          const recoverAbsent = !options.r21MeasuredCheckout && !state.destroyedAt && state.status === "collected"
             && state.validation?.status === "verified" && state.control?.monitor?.phase === "closed";
           if (recoverAbsent) await confirmDeleted();
-          verifyArchive(); await validateEvidence(recoverAbsent);
+          verifyArchive(); const report = await validateEvidence(recoverAbsent);
           await confirmDeleted();
+          if (recoverAbsent) verifyAbsentEvidence(report, (await import("./cloud-control-stream.mjs")).sealedMonitor);
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
         if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
