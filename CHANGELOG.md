@@ -7,9 +7,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 Pending entries are in [changelog.d/](changelog.d/).
 
-## 0.3.0 (2026-11-25)
+## 0.3.0 (2026-11-26)
 
-Upgrading from 0.2.0: each of the 57 entries under
+Upgrading from 0.2.0: each of the 59 entries under
 [Breaking changes](https://github.com/corten-run/corten/blob/v0.3.0/CHANGELOG.md#breaking-changes)
 says what to change; those marked "debug builds only" fail an app's debug builds and its own tests,
 not its release build. The largest are that the app keeps a `Public` page, and `Public` JSON, text and files
@@ -22,6 +22,8 @@ while values a script reads move from `data-` attributes to typed refs (copied `
 update with `corten ui add --merge <name>`, or `--all`). `corten check` refuses a missing or stale `Cargo.lock`,
 `data-on` is written single-quoted, and under `Policy::hsts` a plain-http page can no longer
 write to the app.
+Answers that are one visitor's alone, `NoStore` answers and Corten's failures no longer carry a
+middleware's CDN caching headers, and `NoStore` sends `private, no-store`.
 `corten build --profile-from <command>` makes a profile-guided release build, which the image `corten new`
 writes can use. Apps need Rust 1.89 or later and, with scripts, TypeScript 6.0 or later;
 `corten-cluster` apps move to async-nats 0.53. Entries about `bench/` and CI change nothing an app
@@ -218,6 +220,13 @@ builds against.
 
 - **Breaking:** The app keeps a `Public` file it compresses as it keeps `Public` JSON and text: a `Media` of a type it compresses (a CSV, an SVG) or a sitemap, of 1,024 bytes or more, with the `compress` feature, so its handler no longer runs for every such request. A PNG, a stream and a `Public::immutable` file are made each time as before (until the next entry). Upgrade such a route as a kept page above.
   ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
+
+- **Breaking:** `NoStore` and personal `no-store` answers send `private, no-store`; match the directives.
+  Personal answers, `NoStore` (the `/health/ready` 503 too), `Public` partials, refusals and Corten's failures drop CDN caching headers (unstaged: new only for `NoStore`)
+  ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
+
+- **Breaking:** `FormRejection::Invalid` has a third field, whether `Form` or `Params` made it, which only they set; make one with `FormRejection::new(status, text)` (the handler's own answer) and match it by field: `Invalid { 0: status, 1: text, .. }`.
+  ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
 
 - **Breaking:** The app keeps a `Public` body (JSON, text, a file) of 1,024 bytes or more whatever its type, also without `compress`: a `Public` PNG or PDF is held for its lifetime and its handler no longer runs for each request. Upgrade such a route as a kept page above, and send a large file that never changes at a URL that names its content (`Public::immutable`), which is not kept.
   ([#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877))
@@ -1165,6 +1174,9 @@ builds against.
 - Prepare an unlaunched benchmark group at a repaired commit in a higher round without allocating a host for the old round. [#1881 A prepared benchmark group that never launched cannot move to a repaired commit](https://github.com/corten-run/corten/issues/1881).
 
 - Independent grouped benchmark detach now names the stage of a pre-intent refusal without printing private details. [#1886 Mixed-production r29 stops before host creation with only fleet-operation-failed](https://github.com/corten-run/corten/issues/1886)
+
+- An MCP tool's answer to a caller `Tools::auth` found (any answer, with `Tools::authorization`) has no CDN caching headers, nor does one private for a cookie, caller, nonce or credentials, relayed inline. A handler's own `BodyError` or `UploadError` is a refusal.
+  ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
 
 - The browser benchmark can replay proved JS-enabled document replacement without
   inventing old-realm counts or relaxing same-document checks.
