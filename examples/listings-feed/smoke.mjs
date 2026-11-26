@@ -33,36 +33,45 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 const readyBy = performance.now() + 120_000;
 /** Whole milliseconds left before the 120 s run out; none once they have. */
 const remaining = () => Math.max(0, Math.floor(readyBy - performance.now()));
+/**
+ * One ask of the readiness route by Node's own client, which neither follows nor retries anything
+ * (fetch retries a 421 and reports a 101 or a 407 as a network error): the first final status as
+ * its headers arrive, whether its body came whole, or why no answer came.
+ * @param {number} within
+ * @returns {Promise<{ status?: number, whole: boolean, cause?: string }>}
+ */
+const ask = (within) =>
+  new Promise((resolve) => {
+    const req = http.get(`${base}/health/ready`, { signal: AbortSignal.timeout(within) });
+    req.on("upgrade", (/** @type {any} */ _res, /** @type {any} */ socket) => {
+      socket.destroy();
+      resolve({ status: 101, whole: false });
+    });
+    req.on("response", (res) => {
+      const status = res.statusCode;
+      if (status !== 200 && status !== 503) {
+        res.destroy();
+        resolve({ status, whole: false });
+        return;
+      }
+      res.on("error", (e) => resolve({ status, whole: false, cause: String(/** @type {any} */ (e).code ?? e.message) }));
+      res.on("aborted", () => resolve({ status, whole: false, cause: "aborted" }));
+      res.on("end", () => resolve({ status, whole: res.complete, cause: res.complete ? undefined : "cut short" }));
+      res.resume();
+    });
+    req.on("error", (e) => resolve({ whole: false, cause: String(/** @type {any} */ (e).code ?? e.message) }));
+  });
 const late = () => new Error(`${base}/health/ready did not answer 200 within 120 s (last: ${last})`);
 let last = "no answer";
 for (;;) {
   const left = remaining();
   if (left === 0) throw late();
-  /** @type {number | undefined} */
-  let status;
-  let whole = false;
-  try {
-    const res = await fetch(`${base}/health/ready`, { redirect: "manual", signal: AbortSignal.timeout(Math.min(5000, left)) });
-    // Nothing that arrives once the 120 s are over is read as an answer.
-    if (remaining() === 0) {
-      await res.body?.cancel().catch(() => {});
-      throw late();
-    }
-    status = res.status;
-    if (status !== 200 && status !== 503) {
-      await res.body?.cancel().catch(() => {});
-      throw new Error(`${base}/health/ready answered ${status}, not 200 or 503`);
-    }
-    await res.arrayBuffer();
-    whole = true;
-  } catch (/** @type {any} */ e) {
-    if (e instanceof Error && e.message.startsWith(`${base}/health/ready`)) throw e;
-    const cause = String(e.cause?.code ?? e.message);
-    last = status === undefined ? cause : `${status}, then its body broke off (${cause})`;
-  }
+  const { status, whole, cause } = await ask(Math.min(5000, left));
+  // Nothing that arrives once the 120 s are over is read as an answer.
   if (remaining() === 0) throw late();
+  if (status !== undefined && status !== 200 && status !== 503) throw new Error(`${base}/health/ready answered ${status}, not 200 or 503`);
   if (whole && status === 200) break;
-  if (whole) last = "503";
+  last = whole ? "503" : status === undefined ? String(cause) : `${status}, then its body broke off (${cause})`;
   const pause = Math.min(250, remaining());
   if (pause === 0) throw late();
   await new Promise((r) => setTimeout(r, pause));
