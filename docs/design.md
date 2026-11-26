@@ -10860,14 +10860,15 @@ rules something out.
     which nothing sizes; a cost inside the budget on the kit's probe, whose handlers do nearly
     nothing, is inside it in an app, though the kit's page says a count is of one program's
     binary and never to be compared with another's; the kit's probe builds against the last
-    release's tag often enough for a release's count to be taken, which was not tried; and the
+    release's tag often enough for a release's count to be taken, which was not tried; the
     trend is made, weekly and before a release, before counted costs add up past what a
     release can carry, its plan, command and page being in the placement kit and no such run
     having been made; its threshold, `main` at least +2% over the release on a workload by the
     lower bound, is a proposal no reading stands behind; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the
     handler add up to, though the release and `main` answer one of them differently, so part
-    of what a run reads there is the answer and not the path to it); measured (the kit's repeats as its page records them, 30 counts of one
+    of what a run reads there is the answer and not the path to it); measured (the kit's
+    repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
     and 22 counts of four cases on a slower, loaded machine, none taken again here; the
@@ -10910,7 +10911,14 @@ rules something out.
     [design Choice 72](#choice-placement-runs) read at `9e209a32f` for the default band, the
     hours a reading across placements takes, the fourth run's 0.5% and the first run's reading
     of the kept answer's change; 2026-11-25, `crates` searched at `9e209a32f` for a test that
-    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found.
+    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found; 2026-11-26, the
+    trend's plan resolved with the last release at `a833b4e3e` (the tag `v0.2.0`) and `main` at
+    `28cdc5bc7`, in a Debian 13 container the placement kit's `setup.sh` prepared (the date is
+    that run's, in UTC): the kit's example probe built on both sides with the plan's toolchain
+    and build command, `unstaged` answered the same on both, and `plain` differed in its
+    `corten-shell` header, the script hash of its policy and its body, 6,124 bytes on each,
+    all of it in a dry run of the trend's command with a stand-in for `perf`, which reads
+    nothing, no run having been made.
 
 ## Rules
 
