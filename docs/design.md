@@ -2620,22 +2620,30 @@ rules something out.
     [#2115 The Host check in #2037 costs an app that answers any host 111 to 312 instructions a request, and its cycles miss is not yet told apart from code arrangement](https://github.com/corten-run/corten/issues/2115):
     a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,
     `shop.example`) is read in line as its first and last eight bytes, which the compiler joins
-    into one look at sixteen; a longer one is read sixteen at a look out of line, and any other
-    name by the table as before; and the check at a route that says `unstaged` decides once
-    whether the app holds names, so the reader of an app that answers to any host holds none.
-    Counted over a socket against main and this change's base, the head of
+    into one look at sixteen; a longer one is read sixteen at a look out of line, as far as the
+    first look that finds another byte, and any other name by the table as before; and the
+    check at a route that says `unstaged` decides once whether the app holds names, so the
+    reader of an app that answers to any host holds none. Counted with `bench/request-cost`
+    (below), whose four cases of an app that answers to any host came with this change, at
+    `ea3983d0b` against its base `3d84f7de4`, which is main with #2037: such an app's unstaged
+    request costs 27 fewer with `Host` first and 28 fewer with it last of a browser's eight
+    lines, its `GET` through the stages 17 and 18 fewer, and every other case 1 to 9 fewer.
+    Measured over a socket on a bench app the repository does not hold, at `b52f57475` against
+    main before #2037 and against its head,
     [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)
-    (below), an unstaged request to an app that answers to any host costs 85 more than main
-    with `Host` first (0.75%), 227 with it second and 286 with it last of eight, where the base
-    cost 112, 255 and 312; a `GET` through the stages 84 (0.51%), 227 and 283, where it cost
-    102, 244 and 302; and a request to an app that names its hosts costs 2 to 9 fewer than the
-    base. Half a percent of the unstaged request (56) is still not reached, and what is left is
-    a read of every byte and the call to it. Of the 94 instructions the check runs for
-    `localhost:8080` first, by callgrind's count of each instruction, 11 are the call, 3 choose
-    the reader with no names, 10 find the line, 3 see that the target names no host, 8 look at
-    the value's shape (empty, `[`, its length), 35 take the port off the end, a byte at a time,
-    and 24 read the name, sixteen bytes in one look; the server's call counts 8 fewer than
-    main's. The port and the name come to 59, past half a percent on their own. With `Host` on
+    (below), as the difference of two builds' medians of three runs: an unstaged request to an
+    app that answers to any host costs 84.5 more than main with `Host` first (0.75%), 226.9
+    with it second and 285.6 with it last of eight, where #2037's head cost 111.4, 254.6 and
+    311.9 more; a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with it last of
+    eight, where it cost 102.0 and 302.1 more; and a request to an app that names its hosts
+    costs 2 to 9 fewer than #2037's head. Half a percent of the unstaged request (56) is still
+    not reached. Of the 94 instructions the check ran for `localhost:8080` first in that build,
+    by callgrind's count of each instruction, 11 are the call, 3 choose the reader with no names,
+    10 find the line, 3 see that the target names no host, 8 look at the value's shape (empty,
+    `[`, its length), 35 take the port off the end, a byte at a time, and 24 read the name,
+    sixteen bytes in one look; the server's call counts 8 fewer than main's. In that build the
+    port and the name come to 59, more than the 56 on their own; that is how this build's code
+    spends them, not the least a reader of every byte must. With `Host` on
     a later line the 140 to 200 more are the two searches for it that the check before this one
     already made (the server's read of the names for its mark, 66 with it last of eight, and the
     hashed one, about 130), which this change leaves as they were. Tried and not kept, each an
@@ -2659,7 +2667,7 @@ rules something out.
     was for a request whose first header line is `Host` in an app that names its hosts, the lane's
     and step 4's 98 and 94 still counted against it. For a request with `Host` on a later line or
     none it moves by what the refusals cost, the 19 to 60 counted, and in an app that answers to any
-    host by the 85 to 286 counted since `b52f57475` (111 to 311 at `5c7b006dc`), which is the read of `Host` every other app paid already (about
+    host by the 84.5 to 285.6 measured since `b52f57475` (111 to 311 at `5c7b006dc`), which is the read of `Host` every other app paid already (about
     400 of the host check's 494) come to it for the refusals; no further in either. The harness the
     bound's counts came from is not in the repository and was not run for this change, so what an
     unstaged route counts there now is not known; by the counts that were taken it is less than it
@@ -2962,8 +2970,8 @@ rules something out.
     with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
     through its lane, 7,030 and 7,076 since step 4), and over what its host check has cost
     since it refuses what HTTP does not allow (`5c7b006dc`: 19 to 49 for a request whose first
-    header line is not `Host`, and in an app that answers to any host 85 with `Host` first and
-    286 with it last of eight since `b52f57475`), when a control that shares no code with
+    header line is not `Host`, and in an app that answers to any host 84.5 with `Host` first and
+    285.6 with it last of eight since `b52f57475`, measured), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in

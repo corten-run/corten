@@ -1399,10 +1399,14 @@ it last of eight
 difference of the two builds' medians of three runs, with main built a
 second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
 55; [design Choice 28](../design.md#choice-fixed-stages)). Since its name is read sixteen bytes at a
-look, that is 85 more with `Host` first (0.75% of an unstaged request; 84 and 0.51% through the
-stages), 227 with it second and 286 with it last of eight, most of that for a later line the
-two searches for it; an app that names its hosts pays 2 to 9 fewer than before (`b52f57475`
-against `fca4ccd58` and main, counted the same way). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+look, an unstaged request to it costs 84.5 more than before the refusals with `Host` first
+(0.75%), 226.9 with it second and 285.6 with it last of eight, most of that for a later line the
+two searches for it, and a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with
+it last of eight; an app that names its hosts pays 2 to 9 fewer than with the first reader
+(`b52f57475` against `fca4ccd58` and main, measured the same way).
+[`bench/request-cost`](../../bench/request-cost/README.md) counts the same change, at
+`ea3983d0b` against `3d84f7de4`, as 17 to 28 fewer a request in an app that answers to any
+host and 1 to 9 fewer in one that names its hosts. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
