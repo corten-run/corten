@@ -205,6 +205,112 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
     assert!(<dyn crate::Href>::prefetch(&crate::Route::at(&print, QtyId)));
 }
 
+/// An entry whose page also answers at another address (an older one stored links still carry) is
+/// current there by the same rule and depth as at its own URL, its link still going to its own,
+/// and the other addresses name its group (#2119).
+#[test]
+fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    #[derive(crate::Route)]
+    #[route("/catalog")]
+    struct Catalog;
+    #[derive(crate::Route)]
+    #[route("/catalog/integrations/settings")]
+    struct Settings;
+    #[derive(crate::Route)]
+    #[route("/catalog/integrations/governance")]
+    struct Governance;
+    #[derive(crate::Route)]
+    #[route("/desk")]
+    struct Desk;
+    #[derive(crate::Route)]
+    #[route("/seller-desk")]
+    struct OldDesk;
+    let old = Local::parse("/old/settings?tab=a#b").unwrap();
+    let written = |path: &str, entries: Vec<NavTo>| {
+        nav_links(path, entries.into_iter().map(|e| (e, ())))
+            .links()
+            .map(|(link, ())| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out
+            })
+            .collect::<Vec<_>>()
+    };
+    let current = |path: &str| {
+        written(
+            path,
+            vec![
+                NavTo::section(&Catalog),
+                NavTo::page(&Settings).also(&Governance).also(&old),
+                NavTo::section(&Desk).also(&OldDesk),
+            ],
+        )
+        .iter()
+        .map(|link| link.contains(r#" aria-current="page""#))
+        .collect::<Vec<_>>()
+    };
+
+    // At the older address the entry, not the section above it, is current: its other address is
+    // deeper than the section, as its own URL is.
+    let links = written(
+        "/catalog/integrations/governance",
+        vec![NavTo::section(&Catalog), NavTo::page(&Settings).also(&Governance).also(&old)],
+    );
+    let group = &links[1].split(r#" data-nav-group=""#).nth(1).unwrap()[..8];
+    assert_eq!(links[0], format!(r#" href="/catalog" data-nav="section" data-nav-group="{group}""#));
+    assert_eq!(
+        links[1],
+        format!(
+            r#" href="/catalog/integrations/settings" data-nav data-nav-group="{group}" data-nav-also="/catalog/integrations/governance /old/settings" aria-current="page""#
+        ),
+        "the other addresses are written by their paths alone, the query and fragment left out"
+    );
+    assert_eq!(current("/catalog/integrations/governance"), [false, true, false]);
+    assert_eq!(current("/catalog/integrations/settings"), [false, true, false]);
+    assert_eq!(current("/old/settings"), [false, true, false], "a path from data takes part");
+    assert_eq!(current("/old/settings/more"), [false, false, false], "a page entry holds its addresses alone");
+    assert_eq!(current("/catalog/other"), [true, false, false]);
+    // A section is current under its other address as under its own.
+    assert_eq!(current("/seller-desk/money"), [false, false, true]);
+    assert_eq!(current("/seller-desk"), [false, false, true]);
+    assert_eq!(current("/elsewhere"), [false, false, false]);
+
+    // An entry with no other address writes no attribute, and the other addresses name the group.
+    let group = |links: Vec<String>| links[0].split(r#" data-nav-group=""#).nth(1).unwrap()[..8].to_string();
+    let plain = written("/", vec![NavTo::page(&Settings)]);
+    assert!(!plain[0].contains("data-nav-also"), "{plain:?}");
+    let also = group(written("/", vec![NavTo::page(&Settings).also(&Governance)]));
+    assert_ne!(group(plain), also);
+    assert_eq!(group(written("/catalog", vec![NavTo::page(&Settings).also(&Governance)])), also);
+    assert_ne!(group(written("/", vec![NavTo::page(&Settings).also(&old)])), also);
+    assert_ne!(
+        group(written("/", vec![NavTo::page(&Settings).also(&Governance), NavTo::page(&Desk)])),
+        group(written("/", vec![NavTo::page(&Settings), NavTo::page(&Desk).also(&Governance)])),
+        "which entry an address belongs to names the group too"
+    );
+
+    // A route written by hand whose path has a space is written with it encoded, as the browser
+    // asks for it, so the runtime can split the attribute on spaces.
+    struct Spaced;
+    impl crate::Route for Spaced {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old settings";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str("/old settings?x=a b");
+        }
+    }
+    let links = written("/old%20settings", vec![NavTo::page(&Settings).also(&Spaced).also(&Governance)]);
+    assert!(
+        links[0].contains(r#" data-nav-also="/old%20settings /catalog/integrations/governance" aria-current="page""#),
+        "{links:?}"
+    );
+}
+
 async fn steps() -> &'static str {
     "steps"
 }

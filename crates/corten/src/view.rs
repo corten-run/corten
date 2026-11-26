@@ -2328,8 +2328,8 @@ impl<T: Attrs> Attrs for Option<T> {
 /// The attributes a spread of pairs skips, compared as whole names in any case: the script
 /// wiring, `data-ref`, `data-ref-value`, `data-key`, `data-on` and `data-scope`, which only `ref=`,
 /// `key=`, `on:` and a component's root write, and `data-vars`, which only `style={..}` writes.
-/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group` and
-/// `data-corten-page` still pass through a spread.
+/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group`,
+/// `data-nav-also` and `data-corten-page` still pass through a spread.
 const PRINTED_BY_CORTEN: [&str; 6] = ["data-vars", "data-ref", "data-ref-value", "data-key", "data-on", "data-scope"];
 
 /// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's

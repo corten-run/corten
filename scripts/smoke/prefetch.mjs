@@ -5,18 +5,25 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
   if (swaps) {
     // data-nav="section": current on its page and every page under it. Of the links of one
     // data-nav-group (Req::nav_of), only the deepest that holds the page is current, wherever
-    // they are: group "a" is split between a <nav> and an <aside>; group "b" is another nav.
+    // they are: group "a" is split between a <nav> and an <aside>; group "b" is another nav. Group
+    // "c"'s second link goes to /latest and holds the page at the other paths of its data-nav-also
+    // (NavTo::also) too, ranked by the same rule: deeper than the section above it at /news.
     await page.evaluate(() => {
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="section-link" href="/" data-nav="section">All</a>'));
       document.querySelector("header")?.insertAdjacentHTML(
         "beforeend",
         __html('<nav><a id="group-all" href="/" data-nav="section" data-nav-group="a">All</a></nav>' +
           '<aside><a id="group-news" href="/news" data-nav data-nav-group="a">News</a></aside>' +
-          '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="b">All</a></nav>'),
+          '<nav><a id="other-all" href="/" data-nav="section" data-nav-group="b">All</a></nav>' +
+          '<nav><a id="also-all" href="/" data-nav="section" data-nav-group="c">All</a>' +
+          '<a id="also-latest" href="/latest" data-nav data-nav-group="c" data-nav-also="/old-news /news">Latest</a></nav>'),
       );
     });
-    await page.click('header a[href="/"]:not(#section-link, #group-all, #other-all)');
+    /** The aria-current of group "c"'s two links. */
+    const alsoMarks = () => page.evaluate(() => ["also-all", "also-latest"].map((id) => document.getElementById(id)?.getAttribute("aria-current") ?? "-").join(" "));
+    await page.click('header a[href="/"]:not(#section-link, #group-all, #other-all, #also-all)');
     await page.waitForFunction(() => document.title === "Stocks | Watchlist");
+    const atHome = await alsoMarks();
     await page.click('header nav a[href="/news"]');
     await page.waitForFunction(() => document.title === "News | Watchlist");
     const marks = await page.evaluate(() =>
@@ -24,13 +31,19 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
     );
     check(
       'data-nav="section" marks the link on pages under it',
-      marks.startsWith("page ") && (await page.getAttribute('header a[href="/"]:not(#section-link, #group-all, #other-all)', "aria-current")) === null,
+      marks.startsWith("page ") && (await page.getAttribute('header a[href="/"]:not(#section-link, #group-all, #other-all, #also-all)', "aria-current")) === null,
       marks,
     );
     check("in one data-nav-group only the deepest link that holds the page is current", marks === "page - page page", marks);
+    const atNews = await alsoMarks();
+    check(
+      "a nav link is current at a path of its data-nav-also after a client navigation, ranked as at its own",
+      atHome === "page -" && atNews === "- page",
+      `at /: ${atHome}; at /news: ${atNews}`,
+    );
     await page.evaluate(() => {
       document.getElementById("section-link")?.remove();
-      for (const id of ["group-all", "group-news", "other-all"]) document.getElementById(id)?.parentElement?.remove();
+      for (const id of ["group-all", "group-news", "other-all", "also-all"]) document.getElementById(id)?.parentElement?.remove();
     });
 
     // data-no-prefetch: hovering does not fetch; an ordinary link does (the control).
