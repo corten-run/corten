@@ -25,16 +25,31 @@ const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 
 // The app listens only once it has migrated, seeded and started its cluster, and until then the port
 // Docker publishes for it accepts a connection and closes it unanswered, which a page load reports as
-// net::ERR_EMPTY_RESPONSE (#2140). So the smoke begins when the app says it is ready, as CI's step and
-// a load balancer ask it.
-const readyBy = Date.now() + 120_000;
-for (let last = "no answer";;) {
-  const res = await fetch(`${base}/health/ready`, { signal: AbortSignal.timeout(5000) }).catch((/** @type {any} */ e) => e);
-  if (res instanceof Response) await res.arrayBuffer();
-  if (res instanceof Response && res.ok) break;
-  last = res instanceof Response ? `${res.status}` : String(res.cause?.code ?? res.message);
-  if (Date.now() > readyBy) throw new Error(`${base}/health/ready did not answer 200 within 120 s (last: ${last})`);
-  await new Promise((r) => setTimeout(r, 250));
+// net::ERR_EMPTY_RESPONSE (#2140). So the smoke begins when the app says it is ready, as a load
+// balancer asks it. A 503 (the database not answering yet), a refused or reset connection and an
+// answer whose body breaks off are waited out; any other status is a failure of the readiness route
+// itself and ends the smoke at once. The 120 s are kept by the monotonic clock, and no attempt or
+// pause runs past them.
+const readyBy = performance.now() + 120_000;
+for (let last = "no answer"; ; ) {
+  const left = readyBy - performance.now();
+  if (left <= 0) throw new Error(`${base}/health/ready did not answer 200 within 120 s (last: ${last})`);
+  /** @type {number | undefined} */
+  let status;
+  let whole = false;
+  try {
+    const res = await fetch(`${base}/health/ready`, { redirect: "manual", signal: AbortSignal.timeout(Math.min(5000, left)) });
+    status = res.status;
+    await res.arrayBuffer();
+    whole = true;
+  } catch (/** @type {any} */ e) {
+    const cause = String(e.cause?.code ?? e.message);
+    last = status === undefined ? cause : `${status}, then its body broke off (${cause})`;
+  }
+  if (whole && status === 200) break;
+  if (whole && status !== 503) throw new Error(`${base}/health/ready answered ${status}, not 200 or 503`);
+  if (whole) last = "503";
+  await new Promise((r) => setTimeout(r, Math.max(0, Math.min(250, readyBy - performance.now()))));
 }
 
 const browser = steady(await chromium.launch());
