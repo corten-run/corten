@@ -2242,17 +2242,19 @@ longer has counts as done. A 4xx patch that draws (a 422) moves it, and so does 
 (`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and so does
-one sent as a navigation to another page begins (by a script's `navigate` listener too). One that
+one sent while a navigation is on its way (by a script's `navigate` listener too). One that
 comes while the page reads itself again (`ReadAgain`), or after another form's answer was
 drawn in place, draws as usual, and the read starts again later at the new address. A script of
 the page whose `navigate` listener cancels the replace refuses the address, as does a browser
 that throws for it (WebKit past its limit of history updates): the runtime then reloads the page
 at the entry's address rather than leave the answer under it, and another marked answer on its
-way draws nothing. A GET pressed
+way draws nothing; a listener that cancels it to begin a navigation of its own has that
+navigation go on instead. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
-any submit of the form does, and is sent only if the user is still on that page. A press of
-the form a read drew in place of the one pressed drops a GET that one sent, or that waits for
-its Save, found by the form's id, as a press of the same form does; give the form a
+any submit of the form does, and is sent only if the user is still on that page. A newer press
+of the form, or of the one a patch drew in its place (found by the form's id), drops an older
+GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
+drawn; give the form a
 `#[derive(Id)]` id, as below. Two marked forms are not ordered against each other: their answers are drawn
 as they come.
 

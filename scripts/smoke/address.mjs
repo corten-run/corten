@@ -729,9 +729,13 @@ async function markedPatchVisits(browser, errors) {
       if (!String(input instanceof Request ? input.url : input).endsWith("?scope=week") || new Headers(init?.headers).get("corten") !== "action") return sent;
       window.fetch = fetch_;
       const ended = () => Object.assign(window, { __weekEnded: true });
+      // Ended once its body is read, or once its answer has come and a task has passed without the
+      // runtime reading it, which it does in the same task when it draws.
       sent.then((res) => {
         const text = res.text;
-        res.text = () => text.call(res).finally(ended);
+        let read = false;
+        res.text = () => ((read = true), text.call(res).finally(ended));
+        setTimeout(() => read || ended());
       }, ended);
       return sent;
     };
@@ -1013,6 +1017,167 @@ async function markedPatchVisits(browser, errors) {
     chainedNav && chainedStill0.shown === "day" && chainedAnswered && chainedDone && chainedStill.shown === "day" && chainedStill.at !== "?scope=week" &&
       chainedFinished === "finished" && chainedAfter.at === "?scope=month" && chainedAfter.shown === "month",
     JSON.stringify({ chainedNav, chainedStill0, chainedAnswered, chainedDone, chainedStill, chainedFinished, chainedAfter }),
+  );
+
+  // A page's own `navigate` listener, put on before the runtime's, that begins a navigation to the
+  // page elsewhere as it hears one to Month: the browser aborts Month, whose `navigate` the runtime
+  // hears only after the one that took its place. Week, pressed while that one waits for its page,
+  // draws nothing and lets it finish.
+  const elsewhere = `${base}/smoke/address-elsewhere`;
+  const nested = await browser.newPage();
+  nested.on("pageerror", (e) => errors.push(`nested: ${e.message}`));
+  await nested.addInitScript((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav?.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (new URL(event.destination.url).search !== "?scope=month" || /** @type {any} */ (window).__taken) return;
+      const next = nav.navigate(url);
+      next.committed.catch(() => {});
+      Object.assign(window, { __taken: next.finished.then(() => "finished", (/** @type {Error} */ error) => error.name) });
+    });
+  }, elsewhere);
+  await nested.goto(home);
+  /** @type {() => void} */
+  let releaseNested = () => {};
+  const nestedHeld = new Promise((resolve) => (releaseNested = () => resolve(undefined)));
+  await nested.route(elsewhere, async (route) => {
+    if (route.request().headers()["corten"] !== "nav") return route.continue();
+    await nestedHeld;
+    await route.continue().catch(() => {});
+  });
+  const nestedSent = nested.waitForRequest((r) => r.url() === elsewhere && r.headers()["corten"] === "nav", { timeout: 5000 }).then(() => true, () => false);
+  const monthAborted = await nested.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation.navigate(url);
+    nav.committed.catch(() => {});
+    return nav.finished.then(() => "finished", (/** @type {Error} */ error) => error.name);
+  }, month);
+  const nestedNav = await nestedSent;
+  const nestedState = () => nested.evaluate(() => ({ path: location.pathname, at: location.search, shown: document.querySelector("#smoke-address output")?.textContent ?? null }));
+  await nested.evaluate(() => Object.assign(window, { __form: document.getElementById("smoke-address-form") }));
+  const nestedAnswer = nested.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await nested.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const nestedAnswered = await nestedAnswer;
+  const nestedDone = await nested
+    .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await nested.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const nestedStill = await nestedState();
+  releaseNested();
+  const nestedFinished = await nested.evaluate(() => /** @type {any} */ (window).__taken).catch((/** @type {Error} */ e) => e.message);
+  await nested.unroute(elsewhere);
+  const nestedAfter = await nestedState().catch(() => null);
+  await nested.close();
+  check(
+    "a marked patch pressed while a navigation a navigate listener began in place of another is on its way draws nothing and lets it finish",
+    monthAborted === "AbortError" && nestedNav && nestedAnswered && nestedDone && nestedStill.shown === "all" && nestedStill.at !== "?scope=week" &&
+      nestedFinished === "finished" && nestedAfter?.path === "/smoke/address-elsewhere" && nestedAfter.shown === "all",
+    JSON.stringify({ monthAborted, nestedNav, nestedAnswered, nestedDone, nestedStill, nestedFinished, nestedAfter }),
+  );
+
+  // A `navigate` event another script dispatches, one it says can be intercepted, with a signal of
+  // its own, is no navigation: Week, pressed after it, draws and puts its address in the entry.
+  await page.goto(home);
+  const forged = await page.evaluate(async () => {
+    const nav = /** @type {any} */ (window).navigation;
+    /** @type {any} */
+    let destination;
+    const take = (/** @type {any} */ event) => (destination ??= event.destination);
+    nav.addEventListener("navigate", take);
+    await nav.navigate("#smoke-address").finished;
+    nav.removeEventListener("navigate", take);
+    const Event = /** @type {any} */ (window).NavigateEvent;
+    try {
+      nav.dispatchEvent(new Event("navigate", { destination, signal: new AbortController().signal, canIntercept: true, navigationType: "traverse" }));
+      return "dispatched";
+    } catch (error) {
+      return `not made: ${error}`;
+    }
+  });
+  if (forged !== "dispatched") skip("a marked patch draws after a navigate event another script dispatches", `no NavigateEvent constructor (${forged})`);
+  else {
+    await trackForm();
+    await press("Week");
+    const forgedDone = await finished();
+    const afterForged = await state();
+    check(
+      "a marked patch draws and puts its address in the entry after a navigate event another script dispatches",
+      forgedDone && afterForged.at === "?scope=week" && afterForged.shown === "week",
+      JSON.stringify({ forgedDone, afterForged }),
+    );
+  }
+
+  // Save's answer draws the form again and Week, which waited for it, is to be sent from the form
+  // it drew in a task of its own (held here). Day, pressed on that form meanwhile, is drawn before
+  // Week would be sent: Day is the newer press, so Week is not sent.
+  await page.goto(home);
+  const saveFirst = await hold(home, "action");
+  await page.evaluate(() => {
+    /** @type {string[]} */
+    const reads = [];
+    Object.assign(window, { __reads: reads, __saving: document.getElementById("smoke-address-form"), __retry: null });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && /^\?scope=(day|week)$/.test(url.search) && new Headers(init?.headers).get("corten") === "action") reads.push(url.search);
+      return fetch_.call(this, input, init);
+    };
+  });
+  await press("Save");
+  const saveFirstSent = await saveFirst.sent;
+  await press("Week");
+  await page.evaluate(() => {
+    const timeout = window.setTimeout;
+    /** @type {any} */ (window).setTimeout = function (/** @type {TimerHandler} */ fn, /** @type {number | undefined} */ delay, /** @type {any[]} */ ...args) {
+      if (delay !== undefined) return timeout.call(this, fn, delay, ...args);
+      window.setTimeout = timeout;
+      Object.assign(window, { __retry: fn });
+      return 0;
+    };
+  });
+  saveFirst.release();
+  const retryWaits = await wait(() => !!(/** @type {any} */ (window).__retry));
+  await saveFirst.clear();
+  const dayOnNew = await page.evaluate(() => {
+    const day = /** @type {HTMLButtonElement | null} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+    return !!day && day.form !== /** @type {any} */ (window).__saving && !day.form?.hasAttribute("aria-busy");
+  });
+  await press("Day");
+  const dayFirst = await wait(
+    () => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+  );
+  await page.evaluate(() => /** @type {any} */ (window).__retry?.());
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300))));
+  const dayKept = { reads: await page.evaluate(() => /** @type {any} */ (window).__reads), ...(await state()) };
+  check(
+    "a GET waiting to be sent again after its write's answer is dropped by a press of the drawn form whose answer came first",
+    saveFirstSent && retryWaits && dayOnNew && dayFirst && dayKept.reads.join() === "?scope=day" && dayKept.at === "?scope=day" && dayKept.shown === "day",
+    JSON.stringify({ saveFirstSent, retryWaits, dayOnNew, dayFirst, dayKept }),
+  );
+
+  // A page's own `navigate` listener that cancels the replacement and begins a navigation to Month
+  // in its place: that navigation is the page's now, so the entry's page is not read again over it.
+  await page.goto(home);
+  await page.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week" || /** @type {any} */ (window).__instead) return;
+      event.preventDefault();
+      const next = nav.navigate(url);
+      next.committed.catch(() => {});
+      Object.assign(window, { __instead: next.finished.then(() => "finished", (/** @type {Error} */ error) => error.name) });
+    });
+  }, month);
+  const insteadReload = page.waitForRequest((r) => r.resourceType() === "document", { timeout: 3000 }).then(() => true, () => false);
+  await press("Week");
+  const insteadFinished = await page
+    .waitForFunction(() => /** @type {any} */ (window).__instead, undefined, { timeout: 5000 })
+    .then(() => page.evaluate(() => /** @type {any} */ (window).__instead))
+    .catch((/** @type {Error} */ e) => e.message);
+  const reloadedOver = await insteadReload;
+  const instead = await state().catch(() => null);
+  check(
+    "a marked patch whose replacement a navigate listener cancels for a navigation of its own leaves that navigation to finish",
+    insteadFinished === "finished" && !reloadedOver && instead?.at === "?scope=month" && instead.shown === "month",
+    JSON.stringify({ insteadFinished, reloadedOver, instead }),
   );
 
   // A replacement the browser refuses with an exception (WebKit's SecurityError at its limit of

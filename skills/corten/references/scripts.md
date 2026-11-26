@@ -167,16 +167,18 @@ division: end statements with `;` and keep a division on the line it continues.
    link, Back or Forward, to another `#id` too) does not draw; an empty or incomplete patch or a
    drawn 5xx leaves the address, and a page answer drawn in place moves it as a patch does. A
    `navigate` listener that cancels the replace (or a browser that throws for it) makes the
-   runtime reload the entry's page, and no other marked answer then draws. Pick `data-keep-place`
+   runtime reload the entry's page, and no other marked answer then draws, unless that listener
+   begins a navigation of its own, which goes on. Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
    one part of a screen whose rest is costly to read. The patch draws everything the address
    changes, the form included, and any link or form that carries the scope (a `keep_query`
    form's hidden inputs keep the query it was drawn with); never mark a form whose patch appends
    (Load more), and never call `history.replaceState` or `pushState` for it yourself. Its
    submits queue as any `data-patch` form's: a GET pressed while a Save (`formmethod="post"`)
-   is on its way goes once the Save's answer is drawn, if the visit has not changed and no press
-   of the form drawn in its place came since. Give the form a `#[derive(Id)]` id: a press of the
-   form a patch drew finds the older one's submits by it.
+   is on its way goes once the Save's answer is drawn, if the visit has not changed and no newer
+   press of the form, or of the one drawn in its place, came since. Give the form a
+   `#[derive(Id)]` id: presses are counted by it, so a press of the form a patch drew drops the
+   older one's reads.
 
 ## Text a script computes
 

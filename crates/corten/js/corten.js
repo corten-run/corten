@@ -1087,7 +1087,7 @@ export function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
- * @param {() => boolean} [here] a marked answer draws only on the visit it was sent from ({@link send})
+ * @param {() => boolean} [here] a read draws only while it is still to be drawn ({@link pressed})
  * @param {() => void} [done] called in the same task once the patch drew without skipping an
  *   element: a `data-address` form's answer puts its address in the entry there ({@link send})
  */
@@ -1589,7 +1589,7 @@ function focusNear(el, root, fresh) {
  * @param {boolean} [wholePoll] a whole read again may be superseded by a visible write failure
  * @param {string} [drew] the address (`pageKey`) a navigation drew the page for; none for a
  *   submit's page, which stays the page on screen
- * @param {() => boolean} [here] a marked answer draws only on the visit it was sent from ({@link send})
+ * @param {() => boolean} [here] a read draws only while it is still to be drawn ({@link pressed})
  * @param {() => void} [done] called in the same task once the page is drawn: a `data-address`
  *   form's answer puts its address in the entry there ({@link send})
  * @returns {Promise<boolean>} false when it loaded the page in full instead, or drew nothing
@@ -2376,9 +2376,11 @@ function prefetch(target) {
 /** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
 let fetching = null;
 /**
- * Navigations on their way, each with whether it draws the whole page: a write's failure waits for
- * the last to end ({@link sayFailed}). The page reading itself again is not one: a whole read again
- * puts itself off while a failure is undrawn ({@link deferWholeRead}).
+ * Navigations on their way, each with whether it draws the whole page, from the start of its visit
+ * until the visit ends or is abandoned: a write's failure waits for the last to end
+ * ({@link sayFailed}), and a marked answer does not draw meanwhile ({@link onThisVisit}). The page
+ * reading itself again is not one: a whole read again puts itself off while a failure is undrawn
+ * ({@link deferWholeRead}).
  * @type {Set<{ whole: boolean }>}
  */
 const reading = new Set();
@@ -2412,6 +2414,9 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  * @param {Precommit} [precommit] where the address waits for the answer ({@link interceptVisit})
  */
 async function visit(url, signal, redirected, again, place, source, whole, through = writesIn, precommit) {
+  // Its navigation is dispatched: an answer pressed as a `navigate` listener heard it is for the
+  // page it leaves ({@link pageVisit}).
+  if (!again) pageVisit += 1;
   const key = pageKey(url);
   // A read again fetches the page on screen, which no prefetch takes.
   const going = again ? null : { key };
@@ -2524,7 +2529,6 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
       : await swapPage(html, signal, stay, notice, null, undefined, undefined, drew);
     if (swappedIn && !again) announce(notice);
   } finally {
-    if (moving === signal) moving = null;
     signal.removeEventListener("abort", idle);
     idle();
     if (fetching === going) fetching = null;
@@ -2622,23 +2626,16 @@ function readLater(seconds, wanted, read) {
 // The Navigation API, where the browser has it.
 const navigation = /** @type {Navigation | undefined} */ (window.navigation);
 /**
- * The visit on screen: each navigation the runtime takes to a page (a link, Back, a redirect it
- * follows) starts the next as it begins, and so does a change of entry the browser makes itself
- * (Back or Forward to an `#id` of the page, a link to one: `popstate`, `hashchange`), though it
- * comes back to the entry it left. A page drawn in place on the same entry (a form's answer, the
- * page reading itself again, a script's `replaceState`) is the same visit.
+ * The visit on screen, a count that only goes up: each navigation to another document or entry
+ * starts the next as the runtime's `navigate` listener hears it, whether a listener cancels it or
+ * not, and again as the runtime's visit for it starts, once its event is dispatched; so does a
+ * change of entry the browser makes itself (Back or Forward to an `#id` of the page, a link to
+ * one: `popstate`, `hashchange`), though it comes back to the entry it left, and the runtime
+ * loading the page again. A page drawn in place on the same entry (a form's answer, the page
+ * reading itself again, a script's `replaceState`) is the same visit.
  */
 let pageVisit = 0;
 for (const type of ["popstate", "hashchange"]) addEventListener(type, () => (pageVisit += 1));
-/**
- * The signal of the navigation that started the visit, until its own visit ends: from the
- * runtime's `navigate` listener on, before the browser shows it on its way (`navigation.transition`),
- * which it does only once every listener has run. A navigation that fails ends without its signal
- * aborting. Not by `navigatesuccess`: a listener of the page's heard before the runtime's can
- * begin another navigation as one ends, which this would then be.
- * @type {AbortSignal | null}
- */
-let moving = null;
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2794,13 +2791,17 @@ function fragmentOf(fragment) {
 
 // Only this module has these symbol keys; another script's info has none of them.
 navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ event) => {
-  // Any navigate aborts the one on its way: none is on its way to another page but this one, if it is.
-  moving = null;
+  // One another script dispatches is no navigation.
+  if (!event.isTrusted) return;
+  const again = event.info?.[READ_AGAIN];
+  if (!again && !(event.destination.sameDocument && event.navigationType !== "traverse" && !event.info?.[LOAD])) pageVisit += 1;
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
   const skip =
     !event.canIntercept ||
+    // Aborted as it is heard: a listener heard before the runtime's began another navigation.
+    event.signal.aborted ||
     !loaded ||
     // A navigation the server sent, or the page reading itself again, is fetched even when only
     // the `#id` differs from the address, or nothing does.
@@ -2811,8 +2812,6 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     sourceIn(event, "[data-reload]");
   if (skip) return;
   const url = new URL(event.destination.url);
-  const again = event.info?.[READ_AGAIN];
-  if (!again) (pageVisit += 1), (moving = event.signal);
   // The dwell of the link followed ends: the server may answer with another page (a redirect),
   // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
   if (!again) clearTimeout(hoverTimer);
@@ -3237,33 +3236,50 @@ addEventListener("pagehide", () => (left += 1));
  * so a version or a count the answer wrote goes out with it. Only after a 2xx (a bare 204 or 205
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
- * late reply never patches a page it was not meant for. A read the form sent before a read drew
- * it again in place (a patch must give it the same id) is dropped by a press of the new one too,
- * by that id; a write is not, nor waited for: it may be the page's before a navigation.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * late reply never patches a page it was not meant for. A read is also dropped by a newer press of
+ * the form drawn in its place ({@link pressed}).
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextPress?: (() => boolean) | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
 const sentFrom = new WeakSet();
 
-/** Whether the visit a marked GET waiting for a write was pressed on is still on screen, by where it was pressed. @type {WeakMap<Set<string>, () => boolean>} */
-const queuedVisits = new WeakMap();
-
 /**
  * Whether the visit on screen now is still on screen ({@link pageVisit}) on the history entry it
- * has now: false once the runtime takes a navigation to another page (Back, a link), or the entry
- * changes without one (Back to a `#id` of the page, even if Forward comes back to it; a script's
- * `pushState`, seen by its key where the Navigation API is). A page drawn in place, the page
- * reading itself again or a `replaceState` keeps both, and the runtime reloading it keeps neither.
- * Pressed while a navigation to another page is on its way (from the runtime's `navigate`
- * listener on: one a later listener sends too), for none: the page on screen is being left.
+ * has now, with no visit of the runtime's on its way ({@link reading}), whose page a replace would
+ * cancel; not the page reading itself again, which it may: false once a navigation to another page
+ * or entry begins (Back, a link, one a listener cancels), or the entry changes without one (Back
+ * to a `#id` of the page, even if Forward comes back to it; a script's `pushState`, seen by its
+ * key where the Navigation API is). A page drawn in place, the page reading itself again or a
+ * `replaceState` keeps it, and the runtime reloading the page ends it. Pressed while a navigation is
+ * on its way, for none: the page on screen is being left.
  * @returns {() => boolean}
  */
 function onThisVisit() {
-  if (moving && !moving.aborted) return () => false;
+  if (reading.size) return () => false;
   const visit = pageVisit;
   const key = navigation?.currentEntry?.key;
-  return () => visit === pageVisit && key === navigation?.currentEntry?.key;
+  return () => !reading.size && visit === pageVisit && key === navigation?.currentEntry?.key;
+}
+
+/** How many times a form of each id was pressed ({@link pressed}). @type {Map<string | null, number>} */
+const presses = new Map();
+
+/**
+ * Counts a press of `form` by its id, which the form a patch draws in its place keeps. For a read,
+ * whether it is still to be drawn: only while it is the latest press of a form with that id (a
+ * newer one, of this form or the one drawn in its place, drops it wherever it is: on its way,
+ * waiting for a write, about to be sent again), and for a `data-address` form only on the visit it
+ * was pressed on ({@link onThisVisit}). None for a write, which is never dropped.
+ * @param {HTMLFormElement} form @param {ReturnType<typeof sendsAs>} sends
+ * @returns {(() => boolean) | undefined}
+ */
+function pressed(form, sends) {
+  const id = idOf(form);
+  const n = (presses.get(id) ?? 0) + 1;
+  presses.set(id, n);
+  const visit = hasAttr(form, "data-address") && onThisVisit();
+  if (sends.method === "get") return () => (!id || presses.get(id) === n) && (!visit || visit());
 }
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
@@ -3326,12 +3342,9 @@ function asking(form, submitter) {
  * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @param {ReturnType<typeof sendsAs>} sends
  * @param {Set<string>} [within] where it was pressed ({@link asking}): read now, unless it waited
  *   for a write's answer, which read it at the press
+ * @param {(() => boolean) | null} [press] for one that waited, its press ({@link pressed}); none for a new press
  */
-async function send(form, submitter, sends, within = asking(form, submitter)) {
-  // A `data-address` GET's answer is the page at its address, for the visit it was sent from. One
-  // that comes once the user has left that visit draws nothing and says nothing, as a submit a
-  // navigation cuts off: the page it was for, and the form it would say so on, are gone.
-  const here = sends.method === "get" && hasAttr(form, "data-address") ? onThisVisit() : undefined;
+async function send(form, submitter, sends, within = asking(form, submitter), press) {
   sentFrom.add(form);
   const turn = turns;
   const data = new FormData(form, submitter);
@@ -3348,12 +3361,15 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
     previous.nextWithin = within;
-    if (here) queuedVisits.set(within, here);
+    previous.nextPress = press === undefined ? (pressed(form, sends) ?? null) : press;
     if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
   }
   if (previous?.key === key) return;
+  // A read dropped by a newer press, or whose `data-address` visit was left, draws nothing and says
+  // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
+  const here = (press === undefined ? pressed(form, sends) : press) ?? undefined;
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;
@@ -3367,7 +3383,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {(() => boolean) | null | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3387,14 +3403,6 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   // The submit this one replaces ends once this one holds the marks they share, so the form and a
   // button sending again are not cleared and marked again.
   previous?.controller.abort();
-  // So does a read the form this one was drawn in place of sent, or that waits for its write: an
-  // older press of the same form. The write and a write waiting for it stay.
-  const id = idOf(form);
-  if (id)
-    for (const [was, sending] of submits)
-      if (was !== form && idOf(was) === id)
-        if (!sending.write) sending.controller.abort();
-        else if (sending.next !== undefined && sendsAs(was, sending.next).method === "get") sending.next = undefined;
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {
@@ -3479,7 +3487,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       // for (the redirect's, with the `#id` of its action, which fetch leaves out), in place of the
       // entry's: as the browser's own GET puts it in, without adding an entry. A 5xx is no such page.
       const done =
-        here && res.status < 500
+        here && hasAttr(form, "data-address") && res.status < 500
           ? () => {
               const to = res.url + url.hash;
               const path = location.pathname;
@@ -3491,8 +3499,9 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
                 // Refused by the browser (WebKit throws past its limit of history updates).
               }
               // A page's `navigate` listener that cancels it, or the browser, refuses the address:
-              // what is on screen must be the page at the entry's, so that page is read again, whole.
-              if (location.href !== to) reload();
+              // what is on screen must be the page at the entry's, so that page is read again, whole;
+              // unless a listener that cancelled it began another visit, the page's to draw now.
+              if (location.href !== to) here() && reload();
               // Read again at the new address, which without the Navigation API goes by the path.
               else if (location.pathname !== path) readAgainLater();
             }
@@ -3569,8 +3578,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     if (current) {
       submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.
-      const { next, nextWithin } = pending;
-      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));
+      const { next, nextWithin, nextPress } = pending;
+      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin, nextPress));
     }
   }
 }
@@ -3627,12 +3636,13 @@ function sayFailed(form, detail, turn) {
  * longer on the page, whose values are the ones from before the answer.
  * The button is the one pressed, or the one the answer put in its place; where it was is where it
  * was pressed (`within`), not where the answer drew it.
+ * A read a newer press dropped while it waited, or one pressed on a visit the page has left, is not
+ * sent ({@link pressed}).
  * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
+ * @param {(() => boolean) | null} [press]
  */
-function sendAgain(form, submitter, within) {
-  // A marked GET pressed on a visit the page has since left is not sent.
-  const here = within && queuedVisits.get(within);
-  if (here && !here()) return;
+function sendAgain(form, submitter, within, press) {
+  if (press && !press()) return;
   const now = inPlaceOf(form);
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
@@ -3644,9 +3654,7 @@ function sendAgain(form, submitter, within) {
             localNameOf(el) === localNameOf(submitter) &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  const sends = by !== undefined && sendsAs(now, by);
-  // A read is dropped by a press of the form since its write's answer, as by one before it.
-  if (sends && !(sends.method === "get" && submits.has(now))) send(now, by, sends, within);
+  if (by !== undefined) send(now, by, sendsAs(now, by), within, press ?? null);
 }
 
 /**
