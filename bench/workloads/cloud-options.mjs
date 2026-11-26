@@ -5,6 +5,14 @@ import { roundName, savedLoadLayout, savedPlacement, selection, terminalUnit, va
 
 // A disposition of one fenced DELETE, not a diagnostic or permission to retry.
 export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
+export function quarantineCensusTargets(command) {
+  assert.deepEqual(command.slice(0, 4), ["compute", "droplet", "list", "--pre-create-census"]);
+  assert.deepEqual(command.slice(-2), ["--output", "json"]);
+  const pairs = command.slice(4, -2);
+  assert.ok(pairs.length >= 1 && pairs.length <= 12 && new Set(pairs).size === pairs.length
+    && pairs.every((pair) => /^[a-f0-9]{64}:[a-f0-9]{64}$/.test(pair)), "invalid create quarantine targets");
+  return pairs.map((pair) => pair.split(":"));
+}
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "account-capacity", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
@@ -20,6 +28,8 @@ const providerDetails = {
   "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
     "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "catalog-request": [...catalogClosureDetails, "internal-refusal", "connect", "send", "response-status", "body-limit", "deadline", "cancelled"],
+  "create-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
+    "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "create-link-href": ["non-string", "malformed-uri", "credentials-or-fragment", "foreign-origin",
     "semantically-same-canonical-uri", "query-or-trailing-slash", "wrong-action-or-resource"],
   "list-response-count": ["terminal-count-mismatch", "total-changed"],
@@ -76,13 +86,16 @@ export function fleetCatalogResult(result) {
   return JSON.parse(result.stdout);
 }
 
+const nativeReplayStages = ["collect-native-replay-start", "collect-native-replay-deadline", "collect-native-replay-interrupted",
+  "collect-native-replay-refused", "collect-native-report-refused", "collect-native-evidence-refused"];
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
   "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement",
   "setup-watcher-proof-missing", "setup-host-proof-refused",
   // Refusals whose supported operator route the CLI names (publicError).
-  "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
-// Collect-time stages that name a route survive the production wrapper's phase mark.
-export const routeStages = ["setup-watcher-proof-missing", "setup-host-proof-refused", "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished"];
+  "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished", ...nativeReplayStages];
+// Detailed collect-time stages survive the production wrapper's phase mark.
+export const routeStages = ["setup-watcher-proof-missing", "setup-host-proof-refused", "offline-never-started", "create-errored-contradicted", "create-contradiction-unpublished",
+  ...nativeReplayStages];
 export function controllerFailure(error) {
   const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
   return controllerStages.includes(stage) ? stage : undefined;
@@ -334,7 +347,7 @@ export function campaignOutcome(report, s, exitCode) {
   assert.equal(report.round, s.round); assert.equal(report.commit, s.commit);
   assert.deepEqual(report.selection, s.selection, "complete current native selection required");
   const loadLayout = savedLoadLayout(s);
-  assert.equal(report.loadLayout, loadLayout, "replayed catalog load layout differs from reservation");
+  assert.equal(report.loadLayout, loadLayout, "replayed group load layout differs from reservation");
   const placement = savedPlacement(s);
   assert.equal(report.placement, placement, "replayed host placement differs from reservation");
   full(report.campaign, new RegExp(`${s.round}-[a-f0-9]{16}`), "native campaign identity");

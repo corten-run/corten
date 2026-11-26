@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { inspect } from "node:util";
 import { fixedFixture } from "./fixed-test-fixtures.mjs";
 import { readFixedStream, readFixedStreamSync } from "./fixed-stream.mjs";
 import { joinFixedPrototype, prototypeLimits, verifyFixedPrototype } from "./fixed-prototype.mjs";
@@ -50,6 +51,29 @@ test("successor review F2: timed replay binds complete stderr bytes", async (t) 
   const raw = { schema: timedPhaseSchema, phase: "fixed", config: loadConfig({ duration: 1, rate: 3 }, "fixed"),
     k6: f.summary, clock: f.clock, command: { ...capture.command, stderrBytes: 67 }, logs: "", events: stream.receipt };
   assert.throws(() => deriveTimedObservation(raw, "fixed", { duration: 1, warmup: 1, rate: 3 }, { stream }), /stderr.*bytes/);
+});
+
+test("raw stream field names cannot stand in for two required fields", (t) => {
+  const file = join(directory(t), "events.jsonl"), f = fixedFixture();
+  writeFileSync(file, f.bytes());
+  assert.equal(readFixedStreamSync(file).receipt.events, f.entries.length);
+  const metric = f.entries.find((entry) => entry.type === "Metric");
+  const { submetrics, thresholds, ...fields } = metric.data;
+  metric.data = { ...fields, "submetrics,thresholds": [submetrics, thresholds] };
+  writeFileSync(file, f.bytes());
+  assert.throws(() => readFixedStreamSync(file), { message: "event fields differ" });
+});
+
+test("saved stream parse and type refusals do not reflect raw content", (t) => {
+  const file = join(directory(t), "events.jsonl"), canary = "SAVED_STREAM_TEXT_CANARY";
+  const f = fixedFixture(), metric = f.entries.find((entry) => entry.type === "Metric");
+  for (const [raw, message] of [
+    [`${canary}\n`, "invalid raw event JSON"],
+    [JSON.stringify({ ...metric, type: canary }) + "\n", "unknown raw output record"],
+  ]) {
+    writeFileSync(file, raw);
+    assert.throws(() => readFixedStreamSync(file), (error) => error.message === message && !inspect(error).includes(canary));
+  }
 });
 
 test("successor review F1: fixed percentiles independently match all raw samples", async (t) => {

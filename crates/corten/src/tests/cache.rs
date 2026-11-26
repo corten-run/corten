@@ -3670,8 +3670,12 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     assert_eq!(write(area).await, "store=true counted=true", "a Public page in an area");
     let off = App::new(Routes::from(edit().merge(kept_routes(&runs)))).kept_answers(0).router();
     assert_eq!(write(off).await, "store=false counted=false", "an app that keeps none");
+    // Under `corten dev` the store stands, keeping nothing, so what decides a release build's
+    // keeping runs as it does there (a page a write is made under says so).
     let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
-    assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
+    assert_eq!(write(dev.clone()).await, "store=true counted=true", "under corten dev");
+    fetch(&dev, "GET", "/", &[]).await;
+    assert!(!fetch(&dev, "GET", "/", &[]).await.1.contains_key(header::AGE), "and nothing is kept under corten dev");
 
     // A `Public` whole body is kept from a size, in every build: an app whose only `Public`
     // route answers one has a store, whether or not the body turns out large enough.
@@ -4311,6 +4315,650 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{asked:?}: {headers:?}");
     }
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "and neither took the kept page's place");
+}
+
+/// Under `corten dev` nothing is kept, and the log says instead, for a `GET` that shows nothing
+/// about who asks, whether a release build would keep a `Public` route's answer while its store
+/// has room, and if not the first reason, as the code that decides it found it: once for each
+/// route and verdict. Without dev, nothing of it is logged.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_whether_a_public_answer_is_kept_and_why_not() {
+    use crate::route::get as typed;
+    let minute = Duration::from_secs(60);
+    let home = || html! { <p>"home"</p> };
+    let routes = move || {
+        Table::new()
+            .route("/", typed(move |req: Req| async move { Public::new(minute, req.test_page_for("Home", home())) }).0)
+            .route(
+                "/flip",
+                typed(move |req: Req, uri: http::Uri| async move {
+                    let cookie = uri.query() == Some("cookie");
+                    let page = req.test_page_for("Flip", home()).map(|mut page| {
+                        if cookie {
+                            page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
+                        }
+                        page
+                    });
+                    Public::new(minute, page)
+                })
+                .0,
+            )
+            // Two reasons: the first a release build's checks come to is the one said.
+            .route(
+                "/both",
+                typed(move |req: Req| async move {
+                    let page = req.test_page_for("Both", home()).map(|mut page| {
+                        page.headers_mut().insert(header::ETAG, HeaderValue::from_static("\"own\""));
+                        page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
+                        page
+                    });
+                    Public::new(minute, page)
+                })
+                .0,
+            )
+            .route(
+                "/device",
+                typed(move |device: Device, req: Req| async move {
+                    let kind = if device.0 { "phone" } else { "desk" };
+                    Public::new(minute, req.test_page_for("Device", html! { <p>{kind}</p> }))
+                })
+                .0,
+            )
+            .route(
+                "/keyed",
+                typed(move |req: Req| async move {
+                    let form = html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+                    Public::new(minute, req.test_page_for("Keyed", form))
+                })
+                .0,
+            )
+            .route("/inline", typed(inline_page).0)
+            .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
+            .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+            .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
+            .route("/plain", typed(move |req: Req| async move { req.test_page("Plain", home()) }).0)
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    // What one request logged.
+    let logged = |router: Router, uri: &'static str, headers: &'static [(&'static str, &'static str)]| {
+        let lines = lines.clone();
+        async move {
+            lines.0.lock().unwrap().clear();
+            let (status, answer, _) = fetch(&router, "GET", uri, headers).await;
+            assert!(!answer.contains_key(header::AGE), "{uri}: nothing is given from the store");
+            let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+            (status, text)
+        }
+    };
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    let kept = "is Public, and a release build would keep its answer for 60 s while its store has room";
+    let not = "is Public, but a release build does not keep its answer: ";
+    let (_, text) = logged(dev.clone(), "/", &[]).await;
+    assert!(text.contains("INFO") && text.contains(&format!("corten: / {kept}")), "{text}");
+    // Said once for the route: the same verdict again says nothing.
+    assert!(logged(dev.clone(), "/", &[]).await.1.is_empty());
+    // Nor does a request a kept page would not answer (a cookie, a navigation): each asked of an
+    // app of its own, whose route has said nothing yet, and says what it says next.
+    for headers in [&[("cookie", "session=1")][..], &[("corten", "page")]] {
+        let fresh = App::new(Routes::from(routes())).dev(true).router();
+        let (_, text) = logged(fresh.clone(), "/", headers).await;
+        assert!(text.is_empty(), "{headers:?}: {text}");
+        let (_, text) = logged(fresh, "/", &[]).await;
+        assert!(text.contains(&format!("corten: / {kept}")), "{headers:?}, then none: {text}");
+    }
+    // An app that keeps no answers says so, whatever the route, of a request a kept answer could
+    // stand for: not of one signed in or a navigation, each asked of a route that has said
+    // nothing yet.
+    let off = || App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+    for headers in [&[("cookie", "session=1")][..], &[("corten", "page")]] {
+        let fresh = off();
+        let (_, text) = logged(fresh.clone(), "/", headers).await;
+        assert!(text.is_empty(), "kept_answers(0), {headers:?}: {text}");
+        let (_, text) = logged(fresh, "/", &[]).await;
+        assert!(
+            text.contains(&format!("corten: / {not}the app keeps no answers, since its bound is 0")),
+            "{headers:?}, then none: {text}"
+        );
+    }
+    for (uri, reason) in [
+        ("/both", "it sets a cookie"),
+        ("/device", "its handler takes an input the kept answer's key does not cover"),
+        ("/keyed", "it draws a form's new submit key (SubmitKey::field)"),
+        ("/inline", "its HTML has this request's CSP nonce"),
+        ("/now", "it has no lifetime a shared cache keeps it for"),
+        ("/text", "its body is 4 bytes, and a whole body is kept from 1024"),
+        ("/status", "its answer is neither a page nor a whole body"),
+    ] {
+        let (status, text) = logged(dev.clone(), uri, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(text.contains("WARN") && text.contains(&format!("corten: {uri} {not}{reason}")), "{uri}: {text}");
+        // The first reason alone. A page sent private for one also says so as it leaves (`settle`).
+        assert_eq!(text.matches("is Public").count(), 1, "{uri}: {text}");
+        let (_, text) = logged(dev.clone(), uri, &[]).await;
+        assert!(!text.contains("is Public"), "{uri}: said once: {text}");
+    }
+    // An answer that is not `Public` says nothing.
+    assert!(logged(dev.clone(), "/plain", &[]).await.1.is_empty());
+    // What a middleware did before the handler, as the route reads it: a caller it read for the
+    // request, a URL it changed. A request with a session's cookie is left to its handler anyway.
+    struct Reads;
+
+    impl crate::Middleware for Reads {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (mut parts, body) = req.into_parts();
+            if parts.headers.contains_key("viewer") {
+                let _ = Caller::<Viewer>::find(&parts, &()).await;
+            }
+            if parts.headers.contains_key("x-rewrite") {
+                parts.uri = "/?seen=1".parse().unwrap();
+            }
+            next.run(Request::from_parts(parts, body)).await
+        }
+    }
+    let read = App::new(Routes::from(routes())).middleware(Reads).dev(true).router();
+    let (_, text) = logged(read.clone(), "/", &[("viewer", "ada"), ("cookie", "session=1")]).await;
+    assert!(!text.contains("is Public"), "{text}");
+    let (_, text) = logged(read.clone(), "/", &[("viewer", "ada")]).await;
+    assert!(text.contains(&format!("corten: / {not}something read a Caller for the request")), "{text}");
+    let (_, text) = logged(read.clone(), "/", &[("x-rewrite", "1")]).await;
+    assert!(text.contains(&format!("{not}a middleware changed its URL after the router matched it")), "{text}");
+    let (_, text) = logged(read, "/", &[]).await;
+    assert!(text.contains(&format!("corten: / {kept}")), "{text}");
+    // Each verdict once for a route: a route that answers another way says the new one, and
+    // nothing when it answers a way it has said before.
+    let (_, text) = logged(dev.clone(), "/flip", &[]).await;
+    assert!(text.contains(&format!("corten: /flip {kept}")), "{text}");
+    let (_, text) = logged(dev.clone(), "/flip?cookie", &[]).await;
+    assert!(text.contains(&format!("corten: /flip {not}it sets a cookie")), "{text}");
+    for uri in ["/flip", "/flip?cookie"] {
+        let (_, text) = logged(dev.clone(), uri, &[]).await;
+        assert!(!text.contains("is Public"), "{uri}: {text}");
+    }
+    // Another app is another process's worth of routes, and says each again.
+    let again = App::new(Routes::from(routes())).dev(true).router();
+    assert!(logged(again, "/", &[]).await.1.contains(&format!("corten: / {kept}")));
+
+    // Without dev, the same requests log nothing (and the page is kept).
+    let release = App::new(Routes::from(routes())).dev(false).router();
+    for uri in ["/both", "/device", "/keyed", "/inline", "/now", "/text", "/status", "/flip?cookie", "/"] {
+        lines.0.lock().unwrap().clear();
+        fetch(&release, "GET", uri, &[]).await;
+        assert!(lines.0.lock().unwrap().is_empty(), "{uri}");
+    }
+    assert!(fetch(&release, "GET", "/", &[]).await.1.contains_key(header::AGE));
+}
+
+/// A body of a known size that fails when read.
+struct Failing(u64);
+
+impl http_body::Body for Failing {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        std::task::Poll::Ready(Some(Err(std::io::Error::other("the body broke"))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.0)
+    }
+}
+
+/// A `Public` page whose body, of a known size, fails when read is answered `500` by a release
+/// build, which reads it to keep it, and kept by none. Under `corten dev` the log says the body
+/// failed as it read it, and not that it is kept, nor what a release build answers, which reads it
+/// before the answer leaves; the answer leaves as it does with no store (`kept_answers(0)`), its
+/// body failing as it did.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_a_body_that_cannot_be_read_is_not_kept() {
+    use crate::route::get as typed;
+    let routes = || {
+        Table::new().route(
+            "/",
+            typed(|req: Req| async move {
+                let page = req.test_page_for("Broken", html! { <p>"broken"</p> }).map(|mut page| {
+                    *page.0.body_mut() = Body::new(Failing(64));
+                    page
+                });
+                Public::new(Duration::from_secs(60), page)
+            })
+            .0,
+        )
+    };
+    // Its status and headers, and whether its body could be read.
+    let answer = |router: Router| async move {
+        let res = router.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+        let (mut parts, body) = res.into_parts();
+        // Each app's shell has a hash of its own under `corten dev`.
+        parts.headers.remove("corten-shell");
+        (parts.status, parts.headers, body.collect().await.is_ok())
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    let (status, headers, read) = answer(dev).await;
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains(&format!("corten: / {UNREAD}")), "{text}");
+    assert!(!text.contains("would keep") && !text.contains("does not keep") && !text.contains("500"), "{text}");
+    let unkept = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+    assert_eq!((status, headers, read), answer(unkept).await, "as with no store");
+    let release = App::new(Routes::from(routes())).dev(false).router();
+    for _ in 0..2 {
+        let (status, headers, _) = answer(release.clone()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!headers.contains_key(header::AGE));
+    }
+}
+
+/// A body of a known size whose frames come in turn: the last waits for `gate`, if it has one,
+/// and the first draws a form's new submit key as it is read, if `draws`.
+struct Frames {
+    frames: std::collections::VecDeque<Result<http_body::Frame<bytes::Bytes>, std::io::Error>>,
+    length: u64,
+    gate: Option<tokio::sync::oneshot::Receiver<()>>,
+    draws: bool,
+}
+
+impl Frames {
+    /// `pieces` of data, then trailers (`Ok`) or a failure (`Err`), if any.
+    fn new(pieces: &[&'static str], end: Option<Result<HeaderMap, ()>>) -> Self {
+        let mut frames: std::collections::VecDeque<_> =
+            pieces.iter().map(|piece| Ok(http_body::Frame::data(bytes::Bytes::from_static(piece.as_bytes())))).collect();
+        match end {
+            Some(Ok(trailers)) => frames.push_back(Ok(http_body::Frame::trailers(trailers))),
+            Some(Err(())) => frames.push_back(Err(std::io::Error::other("the body broke"))),
+            None => {}
+        }
+        let length = pieces.iter().map(|piece| piece.len() as u64).sum();
+        Frames { frames, length, gate: None, draws: false }
+    }
+}
+
+impl http_body::Body for Frames {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        if std::mem::take(&mut this.draws) {
+            crate::SubmitKey::field(KeyedWrite::FIELDS.submit).render(&mut String::new());
+        }
+        if this.frames.len() == 1 {
+            if let Some(gate) = &mut this.gate {
+                let _ = std::task::ready!(std::future::Future::poll(std::pin::Pin::new(gate), cx));
+                this.gate = None;
+            }
+        }
+        std::task::Poll::Ready(this.frames.pop_front())
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.length)
+    }
+}
+
+/// A body's data, its trailers and whether it failed, read frame by frame.
+async fn frames_of(mut body: Body) -> (Vec<bytes::Bytes>, Option<HeaderMap>, bool) {
+    let (mut data, mut trailers) = (Vec::new(), None);
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else { return (data, trailers, true) };
+        match frame.into_data() {
+            Ok(piece) => data.push(piece),
+            Err(frame) => trailers = frame.into_trailers().ok(),
+        }
+    }
+    (data, trailers, false)
+}
+
+/// Under `corten dev` the body of a `Public` answer a release build would keep is not read to
+/// tell: its frames, trailers and failure reach the app's middleware and the client as they do
+/// with no store, as they come, and what a release build does with it is said as it ends. A key a
+/// body draws as it is read is not one a release build's watch sees (it reads the body after its
+/// handler), so neither is it said under `corten dev`.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_what_it_would_keep_as_the_body_is_read() {
+    use crate::route::get as typed;
+    let piece: &'static str = Box::leak("p".repeat(600).into_boxed_str());
+    // A page of `count` pieces of data, then `end`, drawing a key as it is read if `draws`.
+    let body = move |count: usize, end: Option<Result<HeaderMap, ()>>, draws: bool| {
+        move |req: Req| {
+            let frames = Frames { draws, ..Frames::new(&vec![piece; count], end.clone()) };
+            async move {
+                let page = req.test_page_for("Frames", html! { <p>"frames"</p> }).map(|mut page| {
+                    *page.0.body_mut() = Body::new(frames);
+                    page
+                });
+                Public::new(Duration::from_secs(60), page)
+            }
+        }
+    };
+    let mut trailers = HeaderMap::new();
+    trailers.insert("checksum", HeaderValue::from_static("abc"));
+    let routes = move || {
+        Table::new()
+            .route("/fails", typed(body(3, Some(Err(())), false)).0)
+            .route("/trailers", typed(body(2, Some(Ok(trailers.clone())), false)).0)
+            .route("/draws", typed(body(2, None, true)).0)
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    // Its status and headers, said before its body is read, then its frames, and what was said
+    // once they were read.
+    let answer = |router: Router, uri: &'static str| async move {
+        let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let before = text();
+        let (mut parts, body) = res.into_parts();
+        // Each app's shell has a hash of its own under `corten dev`.
+        parts.headers.remove("corten-shell");
+        let frames = frames_of(body).await;
+        (parts.status, parts.headers, frames, before, text())
+    };
+    for (uri, said) in [("/fails", UNREAD), ("/trailers", KEPT_IF_READ), ("/draws", KEPT_IF_READ)] {
+        let dev = App::new(Routes::from(routes())).dev(true).router();
+        let (status, headers, frames, before, after) = answer(dev, uri).await;
+        assert!(!before.contains("is Public"), "{uri}: nothing said before the body is read: {before}");
+        assert!(after.contains(&format!("corten: {uri} {said}")), "{uri}: {after}");
+        assert_eq!(after.matches("is Public").count(), 1, "{uri}: {after}");
+        let unkept = App::new(Routes::from(routes())).kept_answers(0).dev(true).router();
+        let (no_status, no_headers, no_frames, _, _) = answer(unkept, uri).await;
+        assert_eq!((status, headers, &frames), (no_status, no_headers, &no_frames), "{uri}: as with no store");
+        let pieces = if uri == "/fails" { 3 } else { 2 };
+        assert_eq!(frames.0.len(), pieces, "{uri}: each frame as it came: {frames:?}");
+        assert_eq!(frames.2, uri == "/fails", "{uri}: failing where it failed");
+        assert_eq!(frames.1.is_some(), uri == "/trailers", "{uri}: its trailers kept: {frames:?}");
+    }
+    // A release build reads the body after its handler's watch: a key drawn as it is read is not
+    // seen, and the answer is kept, as `corten dev` said.
+    let release = App::new(Routes::from(routes())).dev(false).router();
+    fetch(&release, "GET", "/draws", &[]).await;
+    assert!(fetch(&release, "GET", "/draws", &[]).await.1.contains_key(header::AGE), "a release build keeps it");
+    // A key the handler drew is seen by the same watch in both builds.
+    let keyed = || {
+        Table::new().route(
+            "/keyed",
+            typed(|req: Req| async move {
+                let form = html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+                Public::new(Duration::from_secs(60), req.test_page_for("Keyed", form))
+            })
+            .0,
+        )
+    };
+    // A refusal is said as the answer leaves the route, before its body is read.
+    let (_, _, _, before, _) = answer(App::new(Routes::from(keyed())).dev(true).router(), "/keyed").await;
+    assert!(
+        before
+            .contains("corten: /keyed is Public, but a release build does not keep its answer: it draws a form's new submit key"),
+        "{before}"
+    );
+    let release = App::new(Routes::from(keyed())).dev(false).router();
+    fetch(&release, "GET", "/keyed", &[]).await;
+    assert!(!fetch(&release, "GET", "/keyed", &[]).await.1.contains_key(header::AGE), "nor does a release build keep it");
+}
+
+/// Under `corten dev` a slow body is not waited for: the answer and its first frame leave before
+/// its last is made, and that a release build would keep it is said once the last is read.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_does_not_hold_a_slow_body() {
+    use crate::route::get as typed;
+    let piece: &'static str = Box::leak("s".repeat(600).into_boxed_str());
+    let (open, gate) = tokio::sync::oneshot::channel();
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(gate)));
+    let route = typed(move |req: Req| {
+        let gate = gate.lock().unwrap().take();
+        async move {
+            let page = req.test_page_for("Slow", html! { <p>"slow"</p> }).map(|mut page| {
+                *page.0.body_mut() = Body::new(Frames { gate, ..Frames::new(&[piece, piece], None) });
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
+    });
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let text = || String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    let dev = App::new(Routes::from(Table::new().route("/slow", route.0))).dev(true).router();
+    let wait = Duration::from_secs(10);
+    let request = Request::get("/slow").body(Body::empty()).unwrap();
+    let res = tokio::time::timeout(wait, dev.oneshot(request)).await.expect("the answer leaves before its body ends").unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mut body = res.into_body();
+    let first = tokio::time::timeout(wait, body.frame()).await.expect("and its first frame");
+    assert_eq!(first.unwrap().unwrap().into_data().unwrap().len(), 600);
+    assert!(!text().contains("is Public"), "nothing said before the body ends: {}", text());
+    open.send(()).unwrap();
+    let (rest, _, failed) = frames_of(body).await;
+    assert!(rest.len() == 1 && !failed, "{rest:?}");
+    assert!(text().contains(&format!("corten: /slow {KEPT_IF_READ}")), "{}", text());
+}
+
+/// A route whose answer is held whole for one request and sent as it is read for another says
+/// each once: a release build keeps the second only if it reads the body within the route's
+/// deadline, so that caveat is not hidden by the first having been said, nor the first by the
+/// second.
+#[cfg(feature = "log")]
+#[tokio::test]
+async fn corten_dev_says_a_held_and_a_sent_body_each_once_for_a_route() {
+    use crate::route::get as typed;
+    let piece: &'static str = Box::leak("w".repeat(600).into_boxed_str());
+    let routes = move || {
+        let route = typed(move |req: Req, uri: http::Uri| async move {
+            let sent = uri.query() == Some("sent");
+            let page = req.test_page_for("Switch", html! { <p>"switch"</p> }).map(|mut page| {
+                if sent {
+                    *page.0.body_mut() = Body::new(Frames::new(&[piece, piece], None));
+                }
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        });
+        Table::new().route("/switch", route.0)
+    };
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    let held = "corten: /switch is Public, and a release build would keep its answer for 60 s while its store has room, given";
+    let sent = format!("corten: /switch {KEPT_IF_READ}");
+    // What one request logged, its body read to its end.
+    let logged = |uri: &'static str| {
+        let (dev, lines) = (dev.clone(), lines.clone());
+        async move {
+            lines.0.lock().unwrap().clear();
+            fetch(&dev, "GET", uri, &[]).await;
+            String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap()
+        }
+    };
+    for (uri, said) in [("/switch", held), ("/switch?sent", sent.as_str())] {
+        let text = logged(uri).await;
+        assert!(text.contains(said) && text.matches("is Public").count() == 1, "{uri}: {text}");
+    }
+    // Each said once: neither again, in either order.
+    for uri in ["/switch", "/switch?sent", "/switch?sent", "/switch"] {
+        let text = logged(uri).await;
+        assert!(!text.contains("is Public"), "{uri}: said once: {text}");
+    }
+    // The other order, in an app of its own: the held body is said after the sent one.
+    let dev = App::new(Routes::from(routes())).dev(true).router();
+    lines.0.lock().unwrap().clear();
+    fetch(&dev, "GET", "/switch?sent", &[]).await;
+    fetch(&dev, "GET", "/switch", &[]).await;
+    let text = String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    assert!(text.contains(&sent) && text.contains(held) && text.matches("is Public").count() == 2, "{text}");
+}
+
+/// What `corten dev` says of a body it read as it was sent and that read whole.
+#[cfg(feature = "log")]
+const KEPT_IF_READ: &str =
+    "is Public, and a release build would keep its answer for 60 s while its store has room if it reads the body whole within the route's deadline";
+
+/// What `corten dev` says of a body that failed as it read it.
+#[cfg(feature = "log")]
+const UNREAD: &str = "is Public, and its body, of a known size, failed as corten dev read it, after the route answered: a release build reads it before the answer leaves, within the route's deadline, and keeps the answer only if the body reads whole there";
+
+/// A body of a known size: `piece`, then `piece` again once `wait` ends, or, if `signal` is
+/// given, `piece` while it has not ended and a failure once it has.
+struct Late {
+    piece: Option<bytes::Bytes>,
+    rest: u8,
+    wait: std::pin::Pin<Box<tokio::time::Sleep>>,
+    signal: Option<crate::Signal>,
+}
+
+impl http_body::Body for Late {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        if this.signal.as_ref().is_some_and(crate::Signal::is_aborted) {
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("the request's signal ended"))));
+        }
+        if this.rest == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        if this.rest == 1 {
+            std::task::ready!(std::future::Future::poll(this.wait.as_mut(), cx));
+        }
+        this.rest -= 1;
+        std::task::Poll::Ready(this.piece.clone().map(|piece| Ok(http_body::Frame::data(piece))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        let length = self.piece.as_ref().map_or(0, |piece| piece.len() as u64);
+        http_body::SizeHint::with_exact(length * u64::from(self.rest))
+    }
+}
+
+/// Under `corten dev` a body read as it is sent, after its route answered, is said as `corten dev`
+/// saw it, not as a release build fares with it, which reads it before the answer leaves. A body
+/// slower than the route's deadline is answered `503` by a release build and not kept, and
+/// `corten dev`, which read it whole, says it is kept only if that build reads it within the
+/// deadline. A body that fails once the request's signal has ended (it ends as an answer of a
+/// known size leaves) reads whole in a release build, which keeps it, and `corten dev`, where it
+/// failed, says so without saying what that build answers.
+#[cfg(feature = "log")]
+// The clock is paused, and moves only when every task waits on a timer: the deadline (50 ms)
+// always ends before the slow body's wait (300 ms), however busy the machine.
+#[tokio::test(start_paused = true)]
+async fn corten_dev_says_of_a_body_it_reads_only_what_it_saw() {
+    use crate::route::get as typed;
+    let piece = bytes::Bytes::from("l".repeat(600));
+    let routes = move || {
+        let (slow, ended) = (piece.clone(), piece.clone());
+        Table::new()
+            .route(
+                "/slow",
+                typed(move |req: Req| {
+                    let wait = Box::pin(tokio::time::sleep(Duration::from_millis(300)));
+                    let body = Late { piece: Some(slow.clone()), rest: 2, wait, signal: None };
+                    async move {
+                        let page = req.test_page_for("Slow", html! { <p>"slow"</p> }).map(|mut page| {
+                            *page.0.body_mut() = Body::new(body);
+                            page
+                        });
+                        Public::new(Duration::from_secs(60), page)
+                    }
+                })
+                .0,
+            )
+            .route(
+                "/ended",
+                typed(move |req: Req| {
+                    let wait = Box::pin(tokio::time::sleep(Duration::ZERO));
+                    let body = Late { piece: Some(ended.clone()), rest: 2, wait, signal: Some(req.signal().clone()) };
+                    async move {
+                        let page = req.test_page_for("Ended", html! { <p>"ended"</p> }).map(|mut page| {
+                            *page.0.body_mut() = Body::new(body);
+                            page
+                        });
+                        Public::new(Duration::from_secs(60), page)
+                    }
+                })
+                .0,
+            )
+    };
+    let deadline = Duration::from_millis(50);
+    let lines = Lines(std::sync::Arc::default());
+    let _logging = log_to(&lines);
+    let text = || String::from_utf8(std::mem::take(&mut *lines.0.lock().unwrap())).unwrap();
+    // Its status, whether its body read whole, and what was said once it was read.
+    let answer = |router: Router, uri: &'static str| async move {
+        let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let (status, (_, _, failed)) = (res.status(), frames_of(res.into_body()).await);
+        (status, !failed, text())
+    };
+    let dev = App::new(Routes::from(routes())).deadline(deadline).dev(true).router();
+    let (status, whole, said) = answer(dev.clone(), "/slow").await;
+    assert!(status == StatusCode::OK && whole, "under corten dev the body is read after the deadline's wait");
+    assert!(said.contains(&format!("corten: /slow {KEPT_IF_READ}")), "{said}");
+    let (status, whole, said) = answer(dev, "/ended").await;
+    assert!(status == StatusCode::OK && !whole, "under corten dev the signal ended before the body was read");
+    assert!(said.contains(&format!("corten: /ended {UNREAD}")), "{said}");
+    assert!(!said.contains("does not keep") && !said.contains("500"), "no status a release build answers: {said}");
+    // A release build reads each before the answer leaves: the slow one past its deadline, the
+    // other whole, while the signal stands.
+    let release = App::new(Routes::from(routes())).deadline(deadline).dev(false).router();
+    for _ in 0..2 {
+        let (status, headers, _) = fetch(&release, "GET", "/slow", &[]).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!headers.contains_key(header::AGE));
+    }
+    let (status, _, _) = fetch(&release, "GET", "/ended", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(fetch(&release, "GET", "/ended", &[]).await.1.contains_key(header::AGE), "a release build keeps it");
+}
+
+/// Under `corten dev` the answer the app's middleware sees after its handler is the one it saw
+/// with no store: a `Public` page that read its messages after it was built is named as varying
+/// on the language as it leaves the app, not before. A release build names it where it keeps the
+/// page, before the middleware sees it, as before.
+#[tokio::test]
+async fn corten_dev_leaves_the_head_a_middleware_sees_as_it_was() {
+    #[derive(Clone, Default)]
+    struct Seen(std::sync::Arc<std::sync::Mutex<Option<HeaderMap>>>);
+
+    impl crate::Middleware for Seen {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let res = next.run(req).await;
+            *self.0.lock().unwrap() = Some(res.headers().clone());
+            res
+        }
+    }
+    let routes = || {
+        let page = |req: Req| async move { Public::new(Duration::from_secs(60), late_words(&req)) };
+        Table::new().route("/", crate::route::get(page).0)
+    };
+    // The head the middleware saw after the handler, and the one the app sent.
+    let seen = |router: Router, seen: Seen| async move {
+        let (status, sent, body) = fetch(&router, "GET", "/", &[("accept-language", "fr")]).await;
+        assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{sent:?}");
+        names_once(&sent, &["accept-language"], "as sent");
+        let mut at = seen.0.lock().unwrap().take().expect("the middleware ran");
+        // Each app's shell has a hash of its own under `corten dev`.
+        at.remove("corten-shell");
+        (vary_names(&at).contains(&"accept-language".to_string()), at)
+    };
+    let app = |seen: &Seen| App::new(Routes::from(routes())).middleware(seen.clone());
+    let (dev, none) = (Seen::default(), Seen::default());
+    let (named, head) = seen(app(&dev).dev(true).router(), dev).await;
+    assert!(!named, "under corten dev the middleware sees no language named yet: {head:?}");
+    assert_eq!((named, head), seen(app(&none).kept_answers(0).dev(true).router(), none).await, "as with no store");
+    let release = Seen::default();
+    assert!(seen(app(&release).dev(false).router(), release).await.0, "a release build names it where it keeps the page");
 }
 
 /// A kept page is given until its lifetime ends, which `.shared(..)` sets for a shared cache and

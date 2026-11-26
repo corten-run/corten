@@ -14,6 +14,7 @@ import { inspectNative } from "./native-replay.mjs";
 import { composePhase } from "./composition.mjs";
 import { latestStableSchema } from "../latest-stable.mjs";
 import { jsonSources as boundSources, saveJsonFixture } from "./test-fixtures/json.mjs";
+import { c16Env } from "../../json-api/placement.mjs";
 
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
@@ -56,6 +57,9 @@ test("actual native raw functional replay can stage only an honestly blocked che
   assert.equal(auditSubject(plan, prepared, tree(native), manifest, images).subjectSha256, subject.subjectSha256);
   assert.equal(subject.qualified, false); assert.equal(subject.identities.length, 36);
   assert.throws(() => inspectPreparation({ ...binding, sources: undefined }, native), /producer commit/);
+  // An unmarked preparation cannot stage under a binding that requested the c-16 layout.
+  assert.throws(() => inspectPreparation({ ...binding, resources: { ...binding.resources, requestedCpuEnv: c16Env } }, native),
+    /JSON API load layout differs from binding/);
   for (const mutate of [(x) => { x.schema = "json-api-results/v1"; }, (x) => { x.attemptComplete = true; },
     (x) => { x.apps.corten.projections[descriptor().cases[0].key] = {}; }, (x) => { x.apps.corten.aggregates[descriptor().cases[0].key].fixed = {}; },
     (x) => x.cleanupFailures.push({ resource: "leaked" }), (x) => x.failures.pop(),

@@ -1,0 +1,2 @@
+- **Breaking:** Both `allow_origin` setters refuse at startup what no browser sends (no scheme,
+  a path, `?`, `#`, `file`, `null`), and `https://x:443` matches `https://x` ([#2090 Policy::allow_origin stores any string and compares it to Origin as typed, so a value with no scheme, a path or a default port is a 403 for every write from that site instead of a startup error, while Api::allow_origin checks its value](https://github.com/corten-run/corten/issues/2090)).
