@@ -562,12 +562,19 @@ if it drew its own `Saving...` within five seconds of its start by the page's cl
 moment it was drawn; asking the page to navigate and reading that note are bounded to 15 seconds
 each, so a draw in time does not fail because the note came back late. Each of these navigations'
 own fetch, and that of the check that a page reached by the runtime's navigation reads itself again
-in place, gets the server's own answer when that says `Saving...`, and the case fails unless it
-carries the server's read-again tags (the head's, and for a part, the part's reading again from the
-page's own address): a fixture never supplies a tag the server dropped. Only when the write has
-already landed, and the server says `Saved.`, does the stand-in answer as the server does while it
-lands. The leave-before-read case sets the server's tags' wait to its own longer one, changing no
-other part of them. The slow part's reads
+in place, gets the server's own answer byte for byte when that says `Saving...`, and the case fails
+unless it carries the server's read-again tags (the head's, and for a part, the part's reading again
+from the page's own address), each waiting the page's one second: a fixture never supplies a tag the
+server dropped or mends a wait it got wrong. Only when the write has already landed, and the server
+says `Saved.`, does the stand-in answer as the server does while it lands. Only the leave-before-read
+case changes the server's answer: once its tags are found waiting one second, it sets their wait to
+its own longer one, changing no other part of them. The check that a page reached by the runtime's
+navigation reads itself again in place then requires `Saved.` drawn, at the navigation's address, by
+the answer to one of the page's own reads of that address sent after the navigation's fetch, which
+the route marks as it answers them (a `Saved.` another receipt's read drew is not this page reading
+itself again), and the check that each read replaces the history entry counts only once that read's
+answer is drawn. Its route and request listener are removed however its cases end, each removal and
+each read of the page bounded. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
 the same, as its request listener is removed. The first check of a held slow part looks at it only
