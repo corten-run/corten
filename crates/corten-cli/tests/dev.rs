@@ -5,15 +5,20 @@ use std::{
 };
 
 /// The port `corten dev` hands the app: `--port`'s in either spelling over an inherited `PORT`,
-/// and `PORT`'s without the flag.
+/// `PORT`'s without the flag, and 3000 with neither.
 #[test]
 fn dev_gives_the_app_the_port_its_flag_names_over_port() {
     let base = stand_in("port");
-    let cases: &[(&[&str], &str)] = &[(&["--port", "4000"], "4000"), (&["--port=4000"], "4000"), (&[], "4500")];
+    let cases: &[(&[&str], Option<&str>, &str)] = &[
+        (&["--port", "4000"], Some("4500"), "4000"),
+        (&["--port=4000"], Some("4500"), "4000"),
+        (&[], Some("4500"), "4500"),
+        (&[], None, "3000"),
+    ];
     let mut seen = Vec::new();
-    for (at, (args, _)) in cases.iter().enumerate() {
+    for (at, (args, inherited, _)) in cases.iter().enumerate() {
         // An app of its own for each run, so no run copies over a binary another started.
-        seen.push(port_given(&base, &app(&base, at), args, &base.join(format!("port-{at}"))));
+        seen.push(port_given(&base, &app(&base, at), args, *inherited, &base.join(format!("port-{at}"))));
     }
     // A port is read only once `corten dev` has said its app exited, so with every port read and
     // every `corten dev` seen to exit nothing is left running in the directory and it is removed.
@@ -21,9 +26,9 @@ fn dev_gives_the_app_the_port_its_flag_names_over_port() {
     // removal is reported after the assertions, so it does not hide what the runs found.
     let done = seen.iter().all(|(port, _, stopped)| port.is_some() && stopped.is_ok());
     let removed = done.then(|| std::fs::remove_dir_all(&base));
-    for ((args, expected), (port, said, stopped)) in cases.iter().zip(&seen) {
+    for ((args, inherited, expected), (port, said, stopped)) in cases.iter().zip(&seen) {
         let kept = base.display();
-        assert_eq!(port.as_deref(), Some(*expected), "corten dev {args:?} with PORT=4500 said:\n{said}\n(kept {kept})");
+        assert_eq!(port.as_deref(), Some(*expected), "corten dev {args:?} with PORT={inherited:?} said:\n{said}\n(kept {kept})");
         assert!(stopped.is_ok(), "corten dev {args:?}: {stopped:?} (kept {kept})");
     }
     removed.expect("every run read its port and stopped").expect("removing the test's directory");
@@ -46,29 +51,28 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
         .stderr(std::fs::File::create(&said).unwrap())
         .spawn()
         .unwrap();
-    // Bounded: a `corten dev` that took the argument would run until stopped.
+    // Bounded: a `corten dev` that took the argument would run until stopped. A run still going
+    // after 30 s, or whose exit could not be read, is stopped, and whether it was seen to exit
+    // decides if its directory can go.
     let start = Instant::now();
-    let status = loop {
-        if let Some(status) = dev.try_wait().unwrap() {
-            break Some(status);
+    let (status, settled) = loop {
+        match dev.try_wait() {
+            Ok(Some(status)) => break (Some(status), Ok(())),
+            Ok(None) if start.elapsed() <= Duration::from_secs(30) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => break (None, stop(&mut dev)),
+            Err(error) => break (None, stop(&mut dev).map_err(|stopped| format!("reading its exit: {error}; {stopped}"))),
         }
-        if start.elapsed() > Duration::from_secs(30) {
-            // A run that took the argument: stopped, or said not to have stopped.
-            let stopped = stop(&mut dev);
-            assert!(stopped.is_ok(), "corten dev --prot 4000 ran on: {stopped:?} (kept {})", base.display());
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
     };
     let cargo_ran = ran.exists();
-    let stderr = std::fs::read_to_string(&said).unwrap();
-    // With `corten dev` exited and Cargo never run, nothing else was started in the directory.
-    // Otherwise the stand-in or the app may still be at work there, so the directory is kept.
-    let removed = (status.is_some() && !cargo_ran).then(|| std::fs::remove_dir_all(&base));
+    let stderr = std::fs::read_to_string(&said).unwrap_or_default();
+    // With `corten dev` seen to exit and Cargo never run, nothing else was started in the
+    // directory. Otherwise the stand-in or the app may still be at work there, so it is kept.
+    let removed = (settled.is_ok() && !cargo_ran).then(|| std::fs::remove_dir_all(&base));
+    assert!(settled.is_ok(), "corten dev --prot 4000: {settled:?} (kept {})", base.display());
     assert!(status.is_some_and(|status| !status.success()), "{status:?}: {stderr}\n(kept {})", base.display());
     assert!(stderr.contains(r#"corten dev takes --port <port> (or --port=<port>); not "--prot""#), "{stderr}");
     assert!(!cargo_ran, "Cargo ran for a refused argument (kept {})", base.display());
-    removed.expect("corten dev exited without running Cargo").expect("removing the test's directory");
+    removed.expect("corten dev was seen to exit without running Cargo").expect("removing the test's directory");
 }
 
 /// A directory holding `bin/cargo`, the stand-in for Cargo and the app (`fixtures/dev-cargo.rs`).
@@ -99,9 +103,12 @@ fn stand_in(name: &str) -> PathBuf {
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dev-cargo.rs"))
         .arg("-o")
         .arg(&cargo)
-        .status()
-        .unwrap();
-    assert!(status.success());
+        .status();
+    // `status` waits for rustc, so whatever it said, nothing is running in the directory now.
+    if !status.as_ref().is_ok_and(|status| status.success()) {
+        let removed = std::fs::remove_dir_all(&base);
+        panic!("compiling the stand-in: {status:?} (removing {}: {removed:?})", base.display());
+    }
     base
 }
 
@@ -116,14 +123,24 @@ fn app(base: &Path, at: usize) -> PathBuf {
 /// Runs `corten dev` with `args` until the app it starts has written its `PORT` to `out` and
 /// `corten dev` has said the app exited: that port, what `corten dev` wrote to stderr, and whether
 /// `corten dev` was seen to exit once stopped ([`stop`]).
-fn port_given(base: &Path, root: &Path, args: &[&str], out: &Path) -> (Option<String>, String, Result<(), String>) {
+fn port_given(
+    base: &Path,
+    root: &Path,
+    args: &[&str],
+    inherited: Option<&str>,
+    out: &Path,
+) -> (Option<String>, String, Result<(), String>) {
     let said = out.with_extension("stderr");
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_corten"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_corten"));
+    match inherited {
+        Some(port) => command.env("PORT", port),
+        None => command.env_remove("PORT"),
+    };
+    let mut dev = command
         .arg("dev")
         .args(args)
         .current_dir(root)
         .env("PATH", base.join("bin"))
-        .env("PORT", "4500")
         .env("DEV_PORT_OUT", out)
         // Only the refusal test asks the stand-in to mark that it ran, inside its own directory.
         .env_remove("DEV_CARGO_RAN")
@@ -138,7 +155,8 @@ fn port_given(base: &Path, root: &Path, args: &[&str], out: &Path) -> (Option<St
         if port.is_some() && reaped {
             break port;
         }
-        if start.elapsed() > Duration::from_secs(30) || dev.try_wait().unwrap().is_some() {
+        // An exit, or an exit that could not be read, ends the wait; [`stop`] then says which.
+        if start.elapsed() > Duration::from_secs(30) || !matches!(dev.try_wait(), Ok(None)) {
             break None;
         }
         std::thread::sleep(Duration::from_millis(20));

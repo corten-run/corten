@@ -8053,7 +8053,7 @@ rules something out.
     (`--port=<n>` was build's alone, and `dev` passed its value on to the app unchecked, a `0`
     included, which the app binds as a free port), and that was left for a change of its own,
     since made: `dev` reads it with build's reader and refuses any other argument
-    ([#2046 corten dev --port=<n> is passed over without a word and the app starts on 3000; corten build takes both spellings](https://github.com/corten-run/corten/issues/2046)); a copy's status after `SIGTERM` read as the
+    ([#2046 corten dev `--port=<n>` is passed over without a word and the app starts on 3000; corten build takes both spellings](https://github.com/corten-run/corten/issues/2046)); a copy's status after `SIGTERM` read as the
     build's failure, which would stop the build in the third timing above when the copy that
     could not bind exits with an error's status, and would refuse an app that exits non-zero on
     `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
