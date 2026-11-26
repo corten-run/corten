@@ -174,12 +174,13 @@ timestamp. Replay derives the schedule from the exact lifetime and requires a
 complete acquisition for each full slot. A final partial slot can contribute a
 sample only if the entire acquisition fits. A successful read that may have
 started before exit but whose bracket crosses it can be omitted only after its
-identity, clocks and CPU counter agree with the preceding read. A read whose
-bracket starts at or after exit fails the phase. A process or cgroup disappearance
-during a read fails the phase, even in the last partial slot. A PID directory
-already absent before any resource read can end sampling only if an exact,
-clean Docker exit for the same start is observed, the final receipt agrees,
-and no full slot is missing. No wall-clock inference excuses a failed read. The
+identity, clocks and CPU counter agree with the preceding read. A resource read
+whose bracket starts at or after exit fails the phase, as does a process or
+cgroup disappearance during the read, even in the last partial slot. Before
+reading any counters, an absent PID directory or an opening process check that
+finds the same process already exiting can end sampling. This requires an exact,
+clean Docker exit for the same start, a matching final receipt, and no missing
+full slot. No wall-clock inference excuses a failed counter read. The
 attached client's exit stops new reads without waiting for its output pipes to
 close. A late scheduler wake without a read is acceptable only if no full slot
 is missing. The existing

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { finalizeLoadResourceCapture, startLoadResourceCapture } from "./load-resource-capture.mjs";
-import { LoadResourceLifetimeEnded, loadResourceCaptureSchema } from "./load-resource-proof.mjs";
+import { acquireLoadResources, LoadResourceLifetimeEnded, loadResourceCaptureSchema, replayScheduledLoadResources } from "./load-resource-proof.mjs";
 
 const id = "a".repeat(64), epoch = Date.parse("2026-11-24T23:00:00Z"), stamp = (ms) => new Date(epoch + ms).toISOString();
 function info(status, edits = {}) {
@@ -99,6 +99,48 @@ test("a pre-read absent PID plus matching Docker exit permits only the unneeded 
     assert.deepEqual(f.ids, [id, id], "only the exact container is inspected at the ambiguous edge");
     if (qualifies) assert.equal(finalizeLoadResourceCapture(result, after).rows.length, 2);
     else assert.throws(() => finalizeLoadResourceCapture(result, after));
+  }
+});
+
+test("the same process already at exit can omit only an optional final acquisition", async () => {
+  const participant = { pid: 42, processObject: "1:2", startTicks: "3", groupObject: "4:5",
+    path: `/system.slice/docker-${id}.scope`, mount: "36 27 0:29 / /sys/fs/cgroup rw - cgroup2 cgroup rw", populated: true };
+  for (const [label, identity, ending, accepted] of [
+    ["optional tail", {}, { finishedAt: stamp(3004) }, true],
+    ["missing full slot", {}, { finishedAt: stamp(4000) }, false],
+    ["different process object", { processObject: "1:9" }, { finishedAt: stamp(3004) }, false],
+    ["different process start", { startTicks: "4" }, { finishedAt: stamp(3004) }, false],
+    ["wrong container", {}, { finishedAt: stamp(3004), containerId: "b".repeat(64) }, false],
+    ["unclean end", {}, { finishedAt: stamp(3004), oomKilled: true }, false],
+  ]) {
+    const f = fixture({ observations: [info("running")], collect(args) {
+      const monotonic = (args.sequence + 1) * 1000, at = epoch + monotonic;
+      const clock = { at, monotonic };
+      if (args.sequence < 2) return { sequence: args.sequence, begin: clock, end: clock, before: participant, after: participant,
+        usageUsec: 1000 * args.sequence, memoryCurrent: 4096, inactiveFile: 0 };
+      return acquireLoadResources(args, {
+        clock: () => clock,
+        withProcess(pid, read) {
+          assert.equal(pid, 42);
+          return read({
+            identity: () => identity.processObject ?? participant.processObject,
+            read(file) {
+              assert.equal(file, "stat", "no cgroup or counters can be read");
+              return `42 (exiting k6) Z ${Array(18).fill(0).join(" ")} ${identity.startTicks ?? participant.startTicks} 0\n`;
+            },
+          });
+        },
+        withGroup() { assert.fail("the opening process read failed before any counters"); },
+      });
+    } });
+    await new Promise(setImmediate);
+    const result = await f.capture.stop(), life = terminal(ending);
+    assert.deepEqual(f.ids, [id], "the already required terminal observation corroborates the exit");
+    if (accepted) {
+      const saved = finalizeLoadResourceCapture(result, life);
+      assert.equal(replayScheduledLoadResources(saved, life, { memoryBytes: 8192, quota: 4 }).samples, 2, label);
+      assert.equal(result.capture.rows.length, 2, "no synthetic row is saved");
+    } else assert.throws(() => finalizeLoadResourceCapture(result, life), undefined, label);
   }
 });
 
