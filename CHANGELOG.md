@@ -396,11 +396,10 @@ builds against.
   HTML unless `.mode(..)` is set, so an app's router test that sends a plain request (no
   `.mode(Mode::Action)`) to a handler answering only `req.patch` or `req.patch_with_status` now
   gets a 500, as does `corten dev` when a browser loads that route itself. To move: answer with
-  `req.patch_or(view, || async { .. })`, which draws the page or a redirect for a plain request,
-  or return the patch only when `req.mode == Mode::Action`; a test that means the runtime's
-  request sends `.mode(Mode::Action)`. (Later in this release `req.patch` and
-  `req.patch_with_status` are removed: a direct patch comes from `req.action()`, which a plain
-  request does not get; see that entry above.) A request whose fetch metadata says it is not a top-level
+  `req.patch_or(view, || async { .. }).await`, which draws the page or a redirect for a plain
+  request, or answer the patch from `req.action()`, which only the runtime's request gets
+  (`req.patch` and `req.patch_with_status` are removed later in this release; see that entry
+  above); a test that means the runtime's request sends `.mode(Mode::Action)`. A request whose fetch metadata says it is not a top-level
   navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
   `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends), a relayed upstream answer
   and an `unstaged` route are not checked, by this check or by the one for a page at a path with
@@ -441,9 +440,9 @@ builds against.
   against each other or the body.
 
 - **Breaking:** A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and
-  `data-ref-value`: a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref
-  is still taken as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
-  Write a key a spread carried as `key={..}` on the element.
+  `data-ref-value`: a key is `key={..}`'s to write. A `data-key=".."` written by hand is a compile
+  error, as `data-ref` is. Write a key a spread carried, or one written as `data-key`, as
+  `key={..}` on the element.
 
 - **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
   `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
@@ -477,8 +476,8 @@ builds against.
   an element of the markup shows the context ([design Limit 30](https://github.com/corten-run/corten/blob/v0.3.0/docs/design.md#limit-markup-context)).
 
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
-  handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
-  `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
+  handler returns `HtmlResult<Patches>`: an answer only `action.patch`, `action.patch_with_status`,
+  `req.patch_or`, `req.patch_or_with`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
   runtime's read of the route is a patch (what answers before the handler, a stage or an
   extractor such as a `Caller` refusal, a response replaced through `DerefMut`, and a handler
   that writes `req.mode` before `req.patch_or`, `req.invalid` or `req.invalid_with`, which
@@ -496,22 +495,23 @@ builds against.
   **Breaking:** an
   app that reads a part again says `patches` on its route and returns `HtmlResult<Patches>` from
   its `get` handler (a page or a redirect goes on `patch_or`'s other side); and `HtmlResponse`
-  has a second type parameter (`Kind`, `AnyAnswer` by default), which `req.patch`,
-  `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` take after
-  `For`. A handler's return type fixes it, around `Public::new(age, req.patch(..))` and
-  `NoStore::new(..)` too; a call that names `For` with a turbofish names `Kind` after it:
-  `req.patch::<ForOne, AnyAnswer>(..)` and `req.patch_with_status::<ForOne, AnyAnswer>(..)`
-  (were `::<ForOne>`), `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` and
+  has a second type parameter (`Kind`, `AnyAnswer` by default), which `action.patch`,
+  `action.patch_with_status`, `req.patch_or`, `req.patch_or_with`, `req.invalid` and
+  `req.invalid_with` take after `For` (`action` is the `Some` of `req.action()`, which replaces
+  `req.patch` and `req.patch_with_status`: see that entry above). A handler's return type fixes
+  it, around `Public::new(age, action.patch(..))` and `NoStore::new(..)` too; a call that names
+  `For` with a turbofish names `Kind` after it: `action.patch::<ForOne, AnyAnswer>(..)` and
+  `action.patch_with_status::<ForOne, AnyAnswer>(..)` (were `req.patch::<ForOne>(..)` and
+  `req.patch_with_status::<ForOne>(..)`), `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` and
   `req.invalid::<ForOne, AnyAnswer, _, _>(..)` (were `::<ForOne, _, _>`), and
   `req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(..)`, six type arguments with its lifetime
-  left out (was `::<ForOne, _, _, _, _>`). (`req.patch` and `req.patch_with_status` became
-  `action.patch` and `action.patch_with_status` later in this release, with the same type
-  arguments: see the `req.action()` entry above.) A closure handler whose result nothing else fixes
-  names them too, `get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(..) })`, and is
-  `E0283` (type annotations needed) without them, as is a handler that hides its answer,
+  left out (was `::<ForOne, _, _, _, _>`). A closure handler whose result nothing else fixes
+  names them too,
+  `get(|req: Req| async move { req.action().ok_or_else(corten::Error::not_found)?.patch::<ForOne, AnyAnswer>(..) })`,
+  and is `E0283` (type annotations needed) without them, as is a handler that hides its answer,
   `corten::Result<impl Answer<Inputs = AnyInputs>>`, and calls them directly (one that returns
-  a helper's `HtmlResult` is fine): `req.patch::<ForOne, AnyAnswer>(..)` or
-  `req.patch_or::<ForOne, AnyAnswer, _, _>(..)` there. `Answer` requires `Sized` and has an
+  a helper's `HtmlResult` is fine): `action.patch::<ForOne, AnyAnswer>(..)` or
+  `req.patch_or::<ForOne, AnyAnswer, _, _>(..).await` there. `Answer` requires `Sized` and has an
   associated type, `Kind`: an answer type of an app's own says `type Kind = AnyAnswer;`, even
   one that holds a patch or wraps another answer, since only `HtmlResult<Patches>` and
   `Public` or `NoStore` of it can be `Patches` (`type Kind = Patches;` or
