@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { appBefore, appInstance, checkFixture, cpuModelDigest, cpuModelLimit, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
+import { appBefore, appInstance, checkFixture, cpuModelDigest, cpuModelLimit, fixedRateLoad, convergenceLines, convergenceSchema, failureCodes, flattenPoint, flattenRule, heldThrough, intervalSchedule, parseSaved, parseSteadyArgs, readDropped, reconcileCell, readEvents, readWindows, ruleText, savedValue, soakArrivals, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedWarmupVus, unlikeRound, validateConvergence, validateSoak, verdictText } from "./steady-contract.mjs";
 import { savedPass } from "./steady-saved-fixture.mjs";
 import { cpuSettings, resultSchema, v5Schema } from "./run-contract.mjs";
 import { convergenceReport, soakReport, steadyReport } from "./steady-report.mjs";
@@ -533,6 +533,32 @@ test("a convergence cell whose tolerance reading gave none (a zero last-60 s med
   assert.deepEqual(checksIn(convergenceReport(oneZero).split("\n")), [`Container checks (7 of 8 cells have a reading): ${containerChecks}.`]);
   assert.deepEqual(checksIn(convergenceLines(likeRound(90), ["corten", "aspnet"], oneZero)), [`Container checks: ${containerChecks}.`]);
 });
+test("a cell that did not fail sent a request: replay refuses a saved cell with none, by the rule capture applies, and a zero last-60 s median after earlier requests stays no reading", () => {
+  const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
+  // A soak that started nothing: no arrival, no request, every scheduled slot dropped. Its memory
+  // and restart observations would otherwise read as a measured cell.
+  const idle = { app: "corten", source: "fixture", target: "page", ...summarizeSoak({ rate: 150, droppedIterations: 270000, failedRequests: 0, windows: windows(Array(30).fill(0), () => 10, 60),
+    tail: 0, unrecorded: 0, requests: 0, iterations: 0, latencyMaxMs: null, memory: Array.from({ length: 1800 }, (_, i) => ({ atSeconds: i, mib: 60 })), before: held, after: held, events: [], arrivals: Array(30).fill(0) }) };
+  const soakOptions = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
+  const soak = savedPass(soakOptions, [idle], { commit: "d".repeat(40) });
+  for (const read of [validateSoak, soakReport, steadyReport]) assert.throws(() => read(structuredClone(soak)), /^Error: corten fixture page: load sent no requests$/);
+  // Capture checks the same rule: the runner calls reconcileCell on every cell it measured.
+  assert.throws(() => reconcileCell(idle, fixedRateLoad.maxVUs), /: load sent no requests$/);
+  // A convergence cell with no request at all is refused the same way, on replay and capture.
+  const options = parseSteadyArgs(["convergence", "w10", "--apps", "corten", "--targets", "page", "--sources", "fixture", "--minutes", "3"], apps, groupApps);
+  const w = windows(Array(12).fill(0));
+  const none = { app: "corten", source: "fixture", target: "page", windows: w, tail: 0, unrecorded: 0, requests: 0, iterations: 0, latencyMaxMs: null, failedRequests: 0, verdict: flattenPoint(w) };
+  const empty = savedPass(options, [none]);
+  for (const read of [validateConvergence, convergenceReport, (x) => convergenceLines(likeRound(90), ["corten"], x)]) assert.throws(() => read(structuredClone(empty)), /^Error: corten fixture page: load sent no requests$/);
+  assert.throws(() => reconcileCell(none, timedWarmupVus), /: load sent no requests$/);
+  // Requests earlier in the pass and none in its last 60 s: valid, and "no reading".
+  const zeroTail = { ...none, ...cellOf("corten", "fixture", "page", [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 0, 0, 0, 0]), tail: 0 };
+  zeroTail.requests -= 3; zeroTail.iterations -= 3;
+  reconcileCell(zeroTail, timedWarmupVus);
+  const late = savedPass(options, [zeroTail]);
+  assert.equal(validateConvergence(late).cells[0].verdict.reason, "no-throughput");
+  assert.ok(convergenceLines(likeRound(90), ["corten"], late).includes("Reading: corten fixture page: no reading: the last 60 s median is zero."));
+});
 test("a soak report lists only the observed events that qualify for the cell, never claiming the whole stream", () => {
   const options = parseSteadyArgs(["soak", "w9", "--apps", "corten", "--targets", "page", "--sources", "fixture"], apps, groupApps);
   const held = { id: "a".repeat(64), startedAt: "2026-11-20T00:00:00Z", restartCount: 0, running: true, oomKilled: false };
@@ -890,6 +916,27 @@ test("a pass is compared with a round only for the cells it has readings for, an
   assert.equal(apiLines[2], "No cell of this round has a reading in the pass that is compared (an API-source cell's is not), so the pass is not compared with this round on any input.");
   assert.ok(!apiLines.slice(0, -1).some((l) => /like-for-like/.test(l)), apiLines.join("\n"));
   assert.ok(apiLines.includes("Reading: corten api json: within the stated tolerance from the window ending at 15 s (not compared with this round: the pass does not record that this cell's requests reached the upstream)."));
+});
+test("only the timed warmups of the profiles a pass is compared on decide whether it is like-for-like", () => {
+  // A fixture and API JSON pass: its fixture JSON reading is compared, its API JSON one is listed only.
+  const options = parseSteadyArgs(["convergence", "w3", "--apps", "corten", "--minutes", "3", "--targets", "json"], apps, groupApps);
+  const pass = savedPass(options, options.sources.map((source) => cellOf("corten", source, "json", Array(12).fill(1000))), { commit: "c".repeat(40) });
+  const withRuns = (extra) => { const round = likeRound(90); Object.assign(round.apps.corten.runs, extra); return round; };
+  const like = /^The pass is like-for-like with this round for its 1 cell with a reading only, on every input compared for them: /;
+  assert.match(convergenceLines(likeRound(90), ["corten"], pass)[2], like);
+  // Failures only in warmups it is not compared on (the API JSON one, or the fixture page one) do
+  // not change the fixture JSON reading's verdict.
+  for (const round of [withRuns({ "api-json": [{ warmup: { requests: 1000, failed: 3 } }] }), { ...likeRound(90), apps: { corten: { imageId: imageIds.corten, runs: runs(3) } } }]) {
+    const lines = convergenceLines(round, ["corten"], pass);
+    assert.match(lines[2], like);
+    assert.ok(!lines.some((l) => /failed requests for corten/.test(l)), lines.join("\n"));
+  }
+  // Failures in the compared profile's own warmup still make it not like-for-like.
+  const covered = convergenceLines(withRuns({ "fixture-json": [{ warmup: { requests: 1000, failed: 3 } }] }), ["corten"], pass);
+  assert.match(covered[2], /^The pass is not like-for-like with this round for its 1 cell with a reading. Differing or missing inputs: this round's timed warmup had 3 failed requests for corten in 1 run, so it is not comparable.$/);
+  // A round with no warmup for the compared profile, only for others, is not like-for-like either.
+  const elsewhere = convergenceLines({ ...likeRound(90), apps: { corten: { imageId: imageIds.corten, runs: { "fixture-rotating-page": [{ warmup: { requests: 1000, failed: 0 } }], "api-json": [{ warmup: { requests: 1000, failed: 0 } }] } } } }, ["corten"], pass);
+  assert.match(elsewhere[2], /this round records no timed warmup for corten.$/);
 });
 
 test("a convergence cell refuses an app that stopped, restarted, was replaced or was OOM-killed", () => {

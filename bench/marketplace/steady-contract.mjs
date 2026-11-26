@@ -656,6 +656,10 @@ export const loadVus = (options) => (options.kind === "convergence" ? options.vu
 // iterations a load started, at most its VUs are unfinished. reconcileCell applies it to the
 // iterations whose request k6 counted; a soak (soakArrivals) also to every iteration it started.
 const unfinishedWithin = (started, completed, vus) => started - completed <= vus;
+// A cell that did not fail sent at least one request: capture refuses a load with none
+// (readLoadSummary: "load sent no requests"), and replay applies the same rule here, so a saved cell
+// with no request at all is never read as measured. A convergence cell whose last 60 s served
+// nothing, after requests earlier in the pass, still reads "no reading" (flattenPoint).
 // A cell's windows, graceful-stop tail and unrecorded requests must add up to k6's own request total;
 // its unfinished iterations are at most the load's VUs (loadVus); no window's latency may be above
 // k6's aggregate maximum; and k6's aggregate failures are at least the windows' and at most the
@@ -664,6 +668,7 @@ const unfinishedWithin = (started, completed, vus) => started - completed <= vus
 export function reconcileCell(c, vus) {
   assert.ok(Number.isSafeInteger(vus) && vus > 0, "the load's VUs");
   assert.ok(Number.isSafeInteger(c.requests) && Number.isSafeInteger(c.iterations) && c.iterations >= 0 && c.iterations <= c.requests, `${cellKey(c)}: k6 request and iteration totals`);
+  assert.ok(c.requests > 0, `${cellKey(c)}: load sent no requests`);
   assert.ok(unfinishedWithin(c.requests, c.iterations, vus), `${cellKey(c)}: more unfinished iterations than the load has VUs`);
   assert.ok(Number.isSafeInteger(c.tail) && c.tail >= 0 && Number.isSafeInteger(c.unrecorded) && c.unrecorded >= 0, `${cellKey(c)}: tail and unrecorded requests`);
   assert.equal(c.windows.reduce((sum, w) => sum + w.requests, 0) + c.tail + c.unrecorded, c.requests, `${cellKey(c)}: windows, tail and unrecorded requests do not add up to k6's request total`);
@@ -1053,12 +1058,15 @@ const cpuRoles = ["app", "load", "api"];
  * page warmup rotated locales as the pass does and whose measured adapters' timed warmups had no
  * failed request. A value either side does not record cannot be matched, so it is a difference: an
  * unpinned container's CPU placement is not recorded. A split round ran on several droplets.
+ * The warmups checked are those of `cells`, the adapter, source and target cells compared
+ * (convergenceLines passes those with a reading; by default every one the pass names for `apps`):
+ * another profile's warmup is not the load those cells' readings are compared with.
  * Each reason is fixed text naming the input (and, for counts, a validated number): neither side's
  * values are quoted, since the round's and the pass's are read from saved files. `apps` are the
  * adapters compared, and `pages` whether page cells are (convergenceLines passes those with a
  * reading); the locale profiles are compared only for pages.
  */
-export function unlikeRound(round, apps, c, { pages = c.options.targets.includes("page") } = {}) {
+export function unlikeRound(round, apps, c, { pages = c.options.targets.includes("page"), cells = coveredBy(apps, c.options) } = {}) {
   const reasons = [], o = c.options;
   const side = (value) => (value == null ? "not recorded" : "recorded");
   const same = (what, pass, timed) => {
@@ -1094,9 +1102,10 @@ export function unlikeRound(round, apps, c, { pages = c.options.targets.includes
   const known = typeof round.schema === "string" && readable(round.schema);
   const fixedLocales = pages && (!known || timedProfilesFor(round.schema).some((p) => p.target === "page" && p.locale !== "rotating"));
   if (fixedLocales) reasons.push(`this round's page warmup ${known ? "used one locale per profile" : "does not record its locale profiles"}, while the pass rotates locales as ${resultSchema} does`);
-  // A timed warmup that itself failed requests is not the served load the pass measured.
+  // A timed warmup that itself failed requests is not the served load the pass measured. Only the
+  // compared cells' profiles are read: a failure in another profile's warmup says nothing about them.
   for (const app of apps) {
-    const runs = Object.values(round.apps?.[app]?.runs ?? {}).flatMap((list) => (Array.isArray(list) ? list : []).map((run) => run?.warmup?.failed));
+    const runs = cells.filter((cell) => cell.app === app).flatMap(({ source, target }) => profileRuns(round.apps?.[app]?.runs, source, target)).map((run) => run?.warmup?.failed);
     const unknown = runs.filter((failed) => !nonNegative(failed)).length, failed = runs.filter((n) => nonNegative(n) && n > 0);
     if (!runs.length) reasons.push(`this round records no timed warmup for ${app}`);
     if (unknown) reasons.push(`this round does not record the failed requests of ${app}'s timed warmup in ${unknown} run${unknown === 1 ? "" : "s"}`);
@@ -1105,6 +1114,13 @@ export function unlikeRound(round, apps, c, { pages = c.options.targets.includes
   return reasons;
 }
 const readable = (schema) => { try { timedProfilesFor(schema); return true; } catch { return false; } };
+// Every adapter, source and target cell the pass names for `apps`.
+const coveredBy = (apps, o) => apps.flatMap((app) => o.sources.flatMap((source) => o.targets.map((target) => ({ app, source, target }))));
+// A round's runs of the profiles of one source and target. A profile key is `${source}-${locale}-${target}`
+// (run-contract.mjs profiles; report.mjs refuses any other key): a v6 round has one profile for each
+// source and target, an earlier round one for each page locale. The key only selects runs and is never printed.
+const profileRuns = (runs, source, target) => Object.entries(runs ?? {})
+  .filter(([key, list]) => key.startsWith(`${source}-`) && key.endsWith(`-${target}`) && Array.isArray(list)).flatMap(([, list]) => list);
 // The tolerance reading's own "no reading" outcomes (flattenPoint steps 1 and 2).
 const noReading = (verdict) => !verdict.withinTolerance && (verdict.reason === "too-few-windows" || verdict.reason === "no-throughput");
 /**
@@ -1157,7 +1173,7 @@ export function convergenceLines(round, apps, convergence) {
   else {
     // Inputs are compared for the cells with a reading only, and the statement says which.
     const pages = read.some((r) => r.cell.target === "page");
-    const reasons = unlikeRound(round, apps.filter((app) => read.some((r) => r.cell.app === app)), c, { pages });
+    const reasons = unlikeRound(round, apps.filter((app) => read.some((r) => r.cell.app === app)), c, { pages, cells: read.map((r) => r.cell) });
     const scope = complete ? "with this round" : `with this round for its ${read.length} cell${read.length === 1 ? "" : "s"} with a reading`;
     const inputs = `commit, group, adapter images, fixture, upstream and k6 images, CPU quota and pinning for each role, host CPU, kernel, online CPUs, startup timeout, memory limits, response encoding, the timed warmup's ${timedWarmupVus} users, the cold start before the load, ${pages ? "rotating page locales and " : ""}a timed warmup with no failed request`;
     lines.push(reasons.length ? `The pass is not like-for-like ${scope}. Differing or missing inputs: ${reasons.join("; ")}.`

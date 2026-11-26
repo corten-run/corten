@@ -1335,7 +1335,7 @@ test("a host's CPU model is saved only as its digest, even in a form a pass once
   // report.mjs --convergence's lines: a round on the same model matches by digest, one on another
   // differs, and neither model's text is printed.
   const round = { schema: resultSchema, commit, options: { warmup: 10, startupTimeout: 120 }, host: { cpu: model, release: s.host.kernel, onlineCpus: s.host.onlineCpus }, measurement: s.measurement,
-    fixtureSha256: s.fixtureSha256, tools: s.tools, apps: { corten: { imageId: s.images.corten, runs: { "fixture-json": [{ warmup: { failed: 0 } }] } } } };
+    fixtureSha256: s.fixtureSha256, tools: s.tools, apps: { corten: { imageId: s.images.corten, runs: { "fixture-rotating-page": [{ warmup: { failed: 0 } }] } } } };
   const same = convergenceLines(round, ["corten"], s);
   assert.match(same[0], /Host CPU model: compared by its SHA-256, not printed\./);
   assert.match(same[2], /^The pass is like-for-like with this round for its 1 cell with a reading only/);

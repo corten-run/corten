@@ -281,7 +281,10 @@ event stream could not be read or did not show the marker's starts around its lo
 reportable, each of them reading "no reading" with its code's text. A saved cell that has a reading
 but records a failed request is refused. k6's engine clock is checked as a timed
 phase's is (`validateLoadExecution`). A saved pass is refused if it finished at another commit,
-if its cleanup failed or is not confirmed complete, if its window totals do not add up to k6's
+if its cleanup failed or is not confirmed complete, if a cell that did not fail records no request
+at all (capture refuses such a load as "load sent no requests", and replay applies the same rule
+in `reconcileCell`; a convergence cell with requests earlier in the pass and none in its last 60 s
+is valid and reads "no reading"), if its window totals do not add up to k6's
 request count, if k6's requests less its completed iterations are more than the load's VUs (a
 convergence pass's users, a soak's 1,000; each VU has at most one unfinished iteration, which a
 captured cell's `vus_max` already bounds), if a window's p95 or p99 is above k6's aggregate latency maximum, if k6's aggregate
@@ -523,7 +526,10 @@ adapter, the fixture hash, the upstream and k6 image IDs, the CPU quota and pinn
 (an unpinned side counts as missing), the host CPU model (by digest), kernel release and online CPU set, the
 startup timeout, the app and upstream memory limits, the response encoding, the timed warmup's 32
 users, the cold start before the load, a page warmup that rotated locales (results schema v6), and
-a timed warmup with no failed request (a round whose warmup had failures is not comparable).
+a timed warmup with no failed request (a round whose warmup had failures is not comparable). The
+timed warmups checked are those of the profiles compared, the source and target of each cell with
+a reading: a failure only in another profile's warmup (an API-source one, or a page one for a
+JSON-only reading) does not change the verdict for those cells.
 With `--convergence` nothing read from either file reaches the output unless it validated: the
 round's CPU model is not printed (its header line says so, and the pass's model is compared with
 it only by digest); each adapter is named by
