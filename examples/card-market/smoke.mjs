@@ -950,6 +950,7 @@ try {
     [`GET /api/items/item_5 HTTP/1.1\r\nhost: ${host}\r\n`, ""],
     [`HEAD /api/items/item_5 HTTP/1.1\r\nhost: ${host}\r\n`, ""],
     [write(), alert],
+    // An item the fixture does not have: the answer behind the body is a 404, unlike the first.
     [`GET /api/items/item_6 HTTP/1.1\r\nhost: ${host}\r\n`, ""],
   ];
   const closing = "connection: close\r\n";
@@ -963,7 +964,7 @@ try {
   const same = less(together) === alone.map(less).join("");
   check(
     "requests sent in one write, one with a body among them, are each answered in order as each is alone",
-    lines === "200 200 401 200" && same,
+    lines === "200 200 401 404" && same,
     `${lines} alone; ${together.length} bytes together, ${alone.map((sent) => sent.length).join(" + ")} alone, ${same ? "the same" : "not the same"} but for Date and Connection`,
   );
 
