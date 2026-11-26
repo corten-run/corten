@@ -30,7 +30,7 @@ item 2 asks for cycles under load as well, which this kit does not give.
 
 Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
 API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
-to the names an app answers to by default (`localhost` and IP addresses) but in the six cases
+to the names an app answers to by default (`localhost` and IP addresses) but in the seven cases
 with `-any` in their name, where the probe is started with `HOSTS=*` and answers to any
 host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 
@@ -47,6 +47,7 @@ host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 | `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
 | `unstaged-any-name` | `api`, `HOSTS=*` | As `unstaged` to `Host: shop-2.example-cdn.region-9.example.test` and the port, a name of 40 bytes | `3` |
 | `unstaged-any-long` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,095 `a` and a `_` and the port | `3` |
+| `unstaged-any-encoded` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,093 `a` and `%4a` and the port | `3` |
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
@@ -56,7 +57,9 @@ Every request has a `Host` line and nothing else it does not need. An app that a
 reads its `Host` by itself and not against names, and finds it on a later line by other searches
 than on the first: the cases of `HOSTS=*` count those reads, with `Host` first and last, and with
 names longer than `localhost`: one of the letters, digits, `-` and `.` most names are made of, and
-one whose last byte is none of those, which is read to its end before that byte is found. Every answer is checked
+one whose last byte is none of those, which is read to its end before that byte is found, and one
+whose last three bytes are a percent-encoded byte, which is read from the look that found the `%`
+and not again from the name's start. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16

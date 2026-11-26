@@ -21,9 +21,13 @@ const hosted = (path, name) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, `H
 const post = (path, type, body) => (port) =>
   Buffer.from([`POST ${path} HTTP/1.1`, `Host: localhost:${port}`, `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
 
-/** A name of 40 bytes, as a site's host on a CDN is, and one of 4,096 that ends in `_`. */
+/**
+ * A name of 40 bytes, as a site's host on a CDN is, one of 4,096 that ends in `_`, and one of
+ * 4,096 that ends in a percent-encoded byte.
+ */
 const NAME = "shop-2.example-cdn.region-9.example.test";
 const LONG = `${"a".repeat(4095)}_`;
+const ENCODED = `${"a".repeat(4093)}%4a`;
 
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
@@ -60,6 +64,9 @@ export const cases = {
   // and `.`, and one of 4,095 `a` and a `_`, which a name holds but is none of those, last.
   "unstaged-any-name": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", NAME), body: "3" },
   "unstaged-any-long": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", LONG), body: "3" },
+  // 4,093 `a` and `%4a`: the percent-encoded byte is read from the look that found the `%`, the
+  // last 16 bytes, and a reader that read it from the name's start would read 4,080 bytes more.
+  "unstaged-any-encoded": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", ENCODED), body: "3" },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */

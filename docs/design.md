@@ -2800,7 +2800,7 @@ rules something out.
     read of the names in turn, for its mark, and then by the hashed search. So half a percent of
     such a request (64 of an unstaged one's 12,709) is not reached by a reader that looks at
     every byte, and one that looked at fewer would answer a `Host` that is none.
-    Read again at `b52f57475` for
+    Read again for
     [#2115 The Host check in #2037 costs an app that answers any host 111 to 312 instructions a request, and its cycles miss is not yet told apart from code arrangement](https://github.com/corten-run/corten/issues/2115):
     a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,
     `shop.example`) is read in line as its first and last eight bytes, which the compiler joins
@@ -2808,19 +2808,27 @@ rules something out.
     first look that finds another byte, and the table reads on from where that look starts; any
     other name is read by the table as before; and the
     check at a route that says `unstaged` decides once whether the app holds names, so the
-    reader of an app that answers to any host holds none. Counted with `bench/request-cost`
+    reader of an app that answers to any host holds none. That came in three commits:
+    `b52f57475` read the short name in line, decided once at `unstaged`, and read a longer name
+    sixteen at a look to its end, then one with another byte by the table again from its start;
+    `ecb6e2bd6` stopped at the first look that finds another byte; and the table reads on from
+    that look since `a0cd728aa`, which only the hosted job's table on #2134 (below) measures.
+    Counted with `bench/request-cost`
     (below), whose four cases of an app that answers to any host came with this change, at
     `ea3983d0b` against its base `3d84f7de4`, which is main with #2037: such an app's unstaged
     request costs 27 fewer with `Host` first and 28 fewer with it last of a browser's eight
     lines, its `GET` through the stages 17 and 18 fewer, and every other case 1 to 9 fewer.
     Those figures are of that earlier tree, whose `security.rs` and `Cargo.lock` are not those
     merged: it read a long name with another byte from its start again by the table, and it had
-    no case with a name longer than `localhost`. The two cases that came after it,
-    `unstaged-any-name` (a name of 40 bytes) and `unstaged-any-long` (4,095 `a` and a `_`), and
-    the verdict for what was merged are the hosted job's table on the head of
+    no case with a name longer than `localhost`. The three cases that came after it,
+    `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`) and
+    `unstaged-any-encoded` (4,093 `a` and `%4a`, where a table that read the percent-encoded
+    byte from the name's start would read 4,080 bytes more), and the verdict for what was merged
+    are the hosted job's table on the head of
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134).
-    Measured over a socket on a bench app the repository does not hold, at `b52f57475` against
-    main before #2037 and against its head,
+    Measured over a socket on a bench app the repository does not hold, at `b52f57475`, so of
+    its reader with neither the stop nor the read on, against main before #2037 and against its
+    head,
     [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)
     (below), as the difference of two builds' medians of three runs: an unstaged request to an
     app that answers to any host costs 84.5 more than main with `Host` first (0.75%), 226.9
@@ -11410,11 +11418,12 @@ rules something out.
     over fewer decides nothing. The figures a
     connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
-    head's first run read 1 byte a connection above base's three equal figures, which says
-    neither that head grew by a page more than base nor that it grew by none, and its growths in
-    bytes were not recorded
+    head's first run's rounded figure a connection differed by 1 byte from base's three equal
+    figures; a rounded figure cannot say how head's growth in bytes stands to base's, and those
+    growths were not recorded
     ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)),
-    so that run decides nothing and the hosted job's growths on its head decide it. No run is taken again for its
+    so that run's idle verdict is indeterminate, in neither direction, and the hosted job's
+    growths on its head decide it. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
