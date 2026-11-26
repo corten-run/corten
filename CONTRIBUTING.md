@@ -557,7 +557,8 @@ establish a general ranking.
       case's instructions a request rise by more than +0.5% of base's (the budget, by the
       medians the kit prints), no case's allocations a request rise, and idle memory does not
       rise: each idle reading is taken three times on each build, all six with the same
-      connections, case, requests and page size (each run prints them), and the median of head's three growths of
+      connections, case, requests and page size (each run prints them) and the same `--addresses`
+      (which it does not print, so the description names it), and the median of head's three growths of
       resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
       than the larger of base's three span and one page (the size it prints, the step resident
       memory is reported in); the figures a connection are rounded and do not decide it. The

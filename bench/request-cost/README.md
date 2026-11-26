@@ -205,7 +205,7 @@ the answers, and waits a second. The growth of the process's `VmRSS` over those 
 divided by their number, is the figure. The kernel's socket buffers are not the process's and
 are not in it. Resident memory moves a page at a time (`getconf PAGESIZE`, 4,096 bytes on
 x86-64 Linux), so two readings differ by whole pages, and one page, under a byte a connection
-over 5,000, is the least they can differ by: the step of the reading, not a measured bound on
+over 5,000 with 4,096-byte pages (13 with 65,536-byte ones), is the least they can differ by: the step of the reading, not a measured bound on
 its accuracy. The run prints the growth in bytes and the page
 size beside the figure, and CONTRIBUTING's gate compares the growths, not the figures, which are
 rounded: two pages more can round to one byte a connection more. [`idleRise`](figures.mjs) is

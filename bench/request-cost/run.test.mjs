@@ -83,7 +83,10 @@ async function running(script, args, asked = {}) {
   const stand = standIns();
   try {
     const run = spawnSync(process.execPath, [join(kit, script), stand.probe, "--cpu", "3", "--port", String(await free()), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
-    return { ...run, started: existsSync(join(stand.directory, "started.json")) };
+    // The requests the probe was sent, which the stand-in notes as it stops.
+    const noted = join(stand.directory, "parts.json");
+    const served = existsSync(noted) ? /** @type {{ requests: number }[]} */ (JSON.parse(readFileSync(noted, "utf8"))).reduce((sum, part) => sum + part.requests, 0) : null;
+    return { ...run, started: existsSync(join(stand.directory, "started.json")), served };
   } finally {
     stand.remove();
   }
@@ -190,6 +193,8 @@ test("idle.mjs prints the case and the requests an active run sent", { skip }, a
   const run = await running("idle.mjs", ["--connections", "40", "--case", "get-browser", "--requests", "3"]);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that answered 3 get-browser, opened in /m);
+  // The 50 warm requests, then 3 on each of the 40 connections.
+  assert.equal(run.served, 50 + 40 * 3);
 });
 
 test("idle.mjs names the case a silent run's probe was set up and warmed for", { skip }, async () => {
@@ -197,6 +202,8 @@ test("idle.mjs names the case a silent run's probe was set up and warmed for", {
     const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", name]);
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, new RegExp(`^-?\\d+ bytes a connection \\(40 that sent nothing to the probe for ${name}, opened in `, "m"));
+    // The 50 warm requests alone.
+    assert.equal(run.served, 50, name);
   }
 });
 
