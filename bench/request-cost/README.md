@@ -123,7 +123,8 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
 for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--json`, on a
 count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
 with what was measured, unrounded: each window's instructions, seconds and other threads, the
-allocator's calls and the requests they are over, a run's bytes and connections. It is what
+allocator's calls and the requests they are over, an idle run's bytes a connection, its
+connections, its before and after, its growth and its page size. It is what
 [`compare.mjs`](compare.mjs) reads; the text is for people. A count of several cases prints
 each case's line as it is counted, so one that fails at a later case has printed the earlier
 ones: the hosted job counts one case an invocation. `idle.mjs` prints its line once the probe
@@ -332,20 +333,31 @@ On one runner it does what [Running it](#running-it) says, the first three by
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
    the percent, every count of every run with its longest window and the most that other
-   threads ran in one, the allocator's calls, each attempt that gave no figure, and one line of
-   verdict. Its exit status is the job's.
+   threads ran in one, the allocator's calls, every idle run's growth in bytes with its rounded
+   figure a connection and what base's runs allow, each attempt that gave no figure, and one
+   line of verdict. Its exit status is the job's.
 
 `compare.mjs` holds the figures to the rule of
 [CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests) (Pull requests, item 2.1, Counted): no
 case's instructions a request more than +0.5% over base's by the kit's medians, no case's
 allocations up (by the allocator's calls over the same requests, so 16,004 against 16,000 in
-1,000 requests is a rise, though both print as 16.00), and no idle reading whose median of
-three on head is above base's by more than base's three span. A figure is read only from the
-whole JSON of the run asked for: its case, depth, requests and 5,000 connections from one
-address, three counts whose median is the one stated. An answer is a capture that is one
+1,000 requests is a rise, though both print as 16.00), and no idle reading that rises by
+[`idleRise`](figures.mjs): the median of head's three growths of resident memory, each run's
+after less its before in bytes, above base's by more than the larger of base's three span and
+one page. The figures a connection are rounded and do not decide it: one page more over base's
+three equal 62,812,160 bytes passes, though the figures read 12,562 and 12,563, and two pages
+more fail, though their figures can also be one byte a connection apart. A figure is read only from the whole JSON of the run asked
+for: its case, depth, requests and 5,000 connections from one address, three counts whose
+median is the one stated, and for an idle run its growth equal to its after less its before
+and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
+growth is not guessed from its figure. The job's connections stay 5,000: on a runner whose page
+has more bytes than that (65,536-byte pages), a page is more than a byte a connection, and
+`idleRise` refuses the reading, as it does six runs not all of one page size, so the reading is
+not decided and cannot be counted. An answer is a capture that is one
 whole answer, by its `Content-Length`, with nothing after it, and the case's. Anything else
 is no figure or no answer, and a reading with no figure on either build, a case either build
-gave no answer to, and a base that did not build are each a case that cannot be counted. The
+gave no answer to, an idle reading not decided, and a base that did not build are each a case
+that cannot be counted. The
 job fails when the head does not build, whatever is declared.
 The description's line says what a miss does:
 
@@ -419,12 +431,16 @@ with valgrind 3.26.0 and rustc 1.100.0:
    2,657 to 2,662.
 
 The idle rule can read a rise between two builds that are the same, since it compares two
-medians of three by a span of three: base's 12,523 12,524 12,523 and a head of 12,524 12,525
-12,525 would be one. A model says how often, not the runners: with every run drawn
-independently from one distribution it does so in 8.7% of comparisons and 23.8% of jobs, a
-job being three readings, when the draws are normal, and in 5.5% and 15.7% when they are
-normal with a standard deviation of 1.5 bytes and rounded to whole bytes (simulated, 1,000,000
-jobs). None of the five runs read one. A job that fails on idle memory alone, by a byte or
+medians of three by a span of three, or one page when that is more: base's growths a page
+apart and a head two pages above base's median would be one. A model says how often, not the
+runners. When the rule compared the figures a connection by base's span alone, with every run
+drawn independently from one distribution, it did so in 8.7% of comparisons and 23.8% of jobs,
+a job being three readings, when the draws are normal, and in 5.5% and 15.7% when they are
+normal with a standard deviation of 1.5 bytes a connection and rounded to whole bytes. By the
+growths, with that standard deviation over 5,000 connections (7,500 bytes, 1.8 pages of 4,096)
+and each draw rounded to whole pages, it does so in 5.4% and 15.3% (each simulated, 1,000,000
+jobs): the one page allowed adds little at that spread. None of the five runs read one, whose
+figures were compared, not their growths, which those runs did not print. A job that fails on idle memory alone, by a byte or
 two, is to be read with that in mind; by the rule its runs are still not taken again for
 their result.
 
@@ -442,7 +458,7 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory above base's span and inside it, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one page over base's agreeing three passing, two pages failing, more than base's span failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux

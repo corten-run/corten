@@ -11499,8 +11499,10 @@ rules something out.
     code was placed, which a count cannot tell from a change); the hosted job reads idle
     memory to rise between two builds of the same crates, so it fails a change for what the
     runner did (three runs a build drawn from one distribution read a rise in about one
-    comparison in twelve, simulated, not a rate seen on runners, which the rule's idle
-    statistic was not chosen against); a job comes to tell the kinds a count cannot judge
+    comparison in twelve by the figures and base's span alone, and in about one in nineteen by
+    growths in 4,096-byte pages with the one page allowed, at a spread of 1.5 bytes a
+    connection, each simulated, not a rate seen on runners, which the rule's idle statistic was
+    not chosen against); a job comes to tell the kinds a count cannot judge
     from a diff, so the line says nothing the job does not know and can be dropped; or a reading
     across placements comes to cost what a count does, so cycles can be asked of every change.
 
