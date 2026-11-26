@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, pause, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, pause, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -156,7 +156,7 @@ export async function pageWrites(page, browser) {
           },
         ),
       );
-      await own.goto(`${base}${path}`);
+      await actWithin("the write case's page load", own.goto(`${base}${path}`));
       await within(
         5000,
         "the write case's page was not marked within 5 s",
@@ -169,24 +169,23 @@ export async function pageWrites(page, browser) {
     }
   };
   const brand = (/** @type {string} */ body) => body.replace(">Watchlist</span>", ">Watchlist, written</span>");
-  /** What the page shows of the layout. @param {import("@playwright/test").Page} own */
+  /** What the page shows of the layout, read within 5 s (`readWithin`). @param {import("@playwright/test").Page} own */
   const shownOf = (own) =>
-    own.evaluate(() => ({
+    readWithin("what the page shows of the layout", own.evaluate(() => ({
       brand: document.querySelector("header span")?.textContent,
       section: document.getElementById("sector-nav")?.textContent ?? null,
       same: (/** @type {any} */ (window)).__marker === 1,
       path: location.pathname,
       title: document.title,
-    }));
-  const writtenIn = (/** @type {import("@playwright/test").Page} */ own) =>
-    own
-      .waitForFunction(() => document.querySelector("main")?.textContent?.includes("Written by the form's own page.") && !document.querySelector("[aria-busy]"), null, {
+    })));
+  /** Whether the write's own page comes in, within 5 s by the smoke's clock (`cameWithin`). @param {import("@playwright/test").Page} own */
+  const writtenIn = (own) =>
+    cameWithin(
+      5000,
+      own.waitForFunction(() => document.querySelector("main")?.textContent?.includes("Written by the form's own page.") && !document.querySelector("[aria-busy]"), null, {
         timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
-      );
+      }),
+    );
   /**
    * What became of a press (`pressThen`): `ok`, or the step that failed (`failed`), so a check's
    * details say whether the press task stalled, failed or found nothing, or what it led to did not
@@ -409,7 +408,7 @@ export async function pageWrites(page, browser) {
   {
     const { own, seen } = await writtenPage(brand);
     const first = await shownOf(own);
-    await own.click("main form button");
+    await actWithin("the press of the form's button", own.click("main form button"));
     const drawn = await writtenIn(own);
     const shown = await shownOf(own);
     check(
@@ -425,7 +424,7 @@ export async function pageWrites(page, browser) {
         shown.title === "Written | Watchlist",
       JSON.stringify({ first: first.brand, drawn, asked: seen.asked, page: seen.answered["corten-page"] ?? null, shown }),
     );
-    await own.context().close();
+    await closeContext(own.context(), "the whole write case's context");
   }
   // Left while the write's own page is on its way (its modules still loading), by a link to a page
   // in the same area and layout, which a navigation swaps in: the write is done, so that page is
@@ -452,18 +451,16 @@ export async function pageWrites(page, browser) {
           await route.fallback().catch(() => {});
         }),
       );
-      await own.click("main form button");
+      await actWithin("the press of the form's button", own.click("main form button"));
       const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await own.click('main a[href="/smoke/quoted"]');
+      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
       release();
-      const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
+      const arrived = await cameWithin(
+        5000,
+        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
           timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
-        );
+        }),
+      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         leftName,
@@ -517,27 +514,23 @@ export async function pageWrites(page, browser) {
           document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
         ),
       );
-      await own.click("main form button");
-      await own.click("#second-go");
+      await actWithin("the press of the form's button", own.click("main form button"));
+      await actWithin("the press of the second form's button", own.click("#second-go"));
       // The second write's page has come and waits for the module; then the first's comes and draws.
       const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
       answerFirst();
-      const drewFirst = await own
-        .waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 })
-        .then(
-          () => true,
-          () => false,
-        );
-      await own.click('main a[href="/smoke/quoted"]');
+      const drewFirst = await cameWithin(
+        5000,
+        own.waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 }),
+      );
+      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
       release();
-      const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+      const arrived = await cameWithin(
+        5000,
+        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
           timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
-        );
+        }),
+      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         bothName,
@@ -567,13 +560,7 @@ export async function pageWrites(page, browser) {
     let reached = () => {};
     const done = new Promise((resolve) => (reached = () => resolve(true)));
     seen.hold = (writes) => (writes === 1 ? (reached(), first) : undefined);
-    const brandIs = (/** @type {string} */ text) =>
-      own
-        .waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 })
-        .then(
-          () => true,
-          () => false,
-        );
+    const brandIs = (/** @type {string} */ text) => cameWithin(5000, own.waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 }));
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
       await within(
@@ -583,21 +570,19 @@ export async function pageWrites(page, browser) {
           document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
         ),
       );
-      await own.click("main form button");
+      await actWithin("the press of the form's button", own.click("main form button"));
       const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await own.click("#second-go");
+      await actWithin("the press of the second form's button", own.click("#second-go"));
       const drewSecond = await brandIs("Count 2");
       answerFirst();
       const drewFirst = await brandIs("Count 1");
-      await own.click('main a[href="/smoke/quoted"]');
-      const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+      const arrived = await cameWithin(
+        5000,
+        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
           timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
-        );
+        }),
+      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         laterName,
@@ -625,18 +610,16 @@ export async function pageWrites(page, browser) {
     seen.hold = () => (reached(), held);
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
-      await own.click("main form button");
+      await actWithin("the press of the form's button", own.click("main form button"));
       // The server has done the write; its answer is held.
       const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await own.click('main a[href="/smoke/quoted"]');
-      const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+      const arrived = await cameWithin(
+        5000,
+        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
           timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
-        );
+        }),
+      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       release();
       check(
@@ -752,14 +735,8 @@ export async function pageWrites(page, browser) {
       await closeContext(own.context(), "the failed write case's context");
     }
   }
-  /** Whether the brand comes to read `text`. @param {import("@playwright/test").Page} own @param {string} text */
-  const brandBecomes = (own, text) =>
-    own
-      .waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
-      );
+  /** Whether the brand comes to read `text`, within 5 s by the smoke's clock (`cameWithin`). @param {import("@playwright/test").Page} own @param {string} text */
+  const brandBecomes = (own, text) => cameWithin(5000, own.waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 }));
   // A write that answers a patch for an element of the layout, beside a write whose own page is
   // whole, from two forms. The stand-in gives the brand an id, so a patch can draw it: the server's
   // count of writes is drawn by each whole page, and by the second write's patch.
@@ -796,8 +773,8 @@ export async function pageWrites(page, browser) {
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
       await within(5000, "the second form was not added within 5 s", secondForm(own));
-      await own.click("main form button");
-      await own.click("#second-go");
+      await actWithin("the press of the form's button", own.click("main form button"));
+      await actWithin("the press of the second form's button", own.click("#second-go"));
       const patched = await brandBecomes(own, "Count 2");
       answerFirst();
       const drewOver = await brandBecomes(own, "Count 1");
@@ -828,8 +805,8 @@ export async function pageWrites(page, browser) {
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
       await within(5000, "the second form was not added within 5 s", secondForm(own));
-      await own.click("main form button");
-      await own.click("#second-go");
+      await actWithin("the press of the form's button", own.click("main form button"));
+      await actWithin("the press of the second form's button", own.click("#second-go"));
       const drewFirst = await brandBecomes(own, "Count 1");
       answerSecond();
       const patched = await brandBecomes(own, "Count 2");
@@ -1032,10 +1009,7 @@ export async function pageWrites(page, browser) {
       /** @type {Since | undefined} */
       let releasedAt;
       if (overlap && sent.ok) {
-        bodyAsked = await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function", null, { timeout: 5000 }).then(
-          () => true,
-          () => false,
-        );
+        bodyAsked = await cameWithin(5000, own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function", null, { timeout: 5000 }));
         drewOver = false;
         if (bodyAsked) {
           seen.status = 0;
@@ -1284,7 +1258,7 @@ export async function pageWrites(page, browser) {
       await watchMarks(own);
       // The whole poll that reads the page a second after the write's page is drawn asks for the
       // stylesheet, within 5 s from just before the press.
-      const asset = own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }).then(() => true, () => false);
+      const asset = cameWithin(5000, own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }));
       got.sent = await pressWrite(own, seen, "main form button");
       got.drew = got.sent.ok && (await writtenSeen(own));
       got.waiting = await asset;
@@ -1333,17 +1307,12 @@ export async function pageWrites(page, browser) {
       find(brand(headers ? body.replace("<button>Write</button>", `${"<br>".repeat(200)}<input name="price" aria-invalid="true" value="1.2"><button>Write</button>`) : body));
     const { own, seen } = await writtenPage(refusal, find);
     seen.status = 422;
-    const entries = await own.evaluate(() => history.length);
-    await own.fill("#smoke-find", "abcdef");
-    await own.click("main form button");
-    const drawn = await own
-      .waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 })
-      .then(
-        () => true,
-        () => false,
-      );
+    const entries = await readWithin("the page's history length", own.evaluate(() => history.length));
+    await actWithin("the layout field's fill", own.fill("#smoke-find", "abcdef"));
+    await actWithin("the press of the form's button", own.click("main form button"));
+    const drawn = await cameWithin(5000, own.waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 }));
     const shown = await shownOf(own);
-    const state = await own.evaluate(() => {
+    const state = await readWithin("the refused page's state", own.evaluate(() => {
       const findIn = /** @type {HTMLInputElement | null} */ (document.getElementById("smoke-find"));
       const field = document.activeElement?.getBoundingClientRect();
       return {
@@ -1353,7 +1322,7 @@ export async function pageWrites(page, browser) {
         inView: !!field && field.bottom > 0 && field.top < innerHeight,
         scrolled: scrollY > 0,
       };
-    });
+    }));
     check(
       "a write's own page that refuses it keeps the document, address and history, focuses the field it marked, in view, and keeps what the user typed in the layout",
       drawn &&
@@ -1366,7 +1335,7 @@ export async function pageWrites(page, browser) {
         state.scrolled,
       JSON.stringify({ drawn, shown, entries, state }),
     );
-    await own.context().close();
+    await closeContext(own.context(), "the refused write case's context");
   }
   // A write's own page whose frame differs from the page's draws <main> alone, and the layout's
   // elements that are the page's (the sector links, `page` in `html!`) with it, as a navigation
@@ -1383,7 +1352,7 @@ export async function pageWrites(page, browser) {
       });
     const { own } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
     const first = await shownOf(own);
-    await own.click("main form button");
+    await actWithin("the press of the form's button", own.click("main form button"));
     const drawn = await writtenIn(own);
     const shown = await shownOf(own);
     check(
@@ -1391,7 +1360,7 @@ export async function pageWrites(page, browser) {
       first.section === "Old section" && drawn && shown.section === "New section" && shown.same && shown.path === "/smoke/written",
       JSON.stringify({ first: first.section, drawn, shown }),
     );
-    await own.context().close();
+    await closeContext(own.context(), "the other frame case's context");
   }
   // A write sent without its `Prefer: corten-draws=whole`, as a runtime from before it sends one (a tab open across
   // the deploy that brought it): the server answers <main> alone, as it did then, which that
@@ -1402,35 +1371,37 @@ export async function pageWrites(page, browser) {
   if (!(await hasNavigation())) skip(oldName, "without the Navigation API a link is a full load");
   else {
     const { own, seen } = await writtenPage(brand);
-    seen.draws = false;
-    await own.evaluate(() => addEventListener("corten:error", () => ((/** @type {any} */ (window)).__failed = true)));
-    await own.click("main form button");
-    const drawn = await writtenIn(own);
-    const between = await shownOf(own);
-    await own.click('main a[href="/smoke/quoted"]');
-    const arrived = await own
-      .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
-        timeout: 5000,
-      })
-      .then(
-        () => true,
-        () => false,
+    // Each step bounded by the smoke's clock, and the page closed (bounded) however the case ends.
+    try {
+      seen.draws = false;
+      await within(5000, "the page's failure listener was not set within 5 s", own.evaluate(() => addEventListener("corten:error", () => ((/** @type {any} */ (window)).__failed = true))));
+      await actWithin("the press of the form's button", own.click("main form button"));
+      const drawn = await writtenIn(own);
+      const between = await readWithin("what the page shows after the write", shownOf(own));
+      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+      const arrived = await cameWithin(
+        5000,
+        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+          timeout: 5000,
+        }),
       );
-    const failed = await own.evaluate(() => !!(/** @type {any} */ (window)).__failed);
-    const shown = await shownOf(own);
-    check(
-      oldName,
-      drawn &&
-        "corten-page" in seen.answered &&
-        between.brand === "Watchlist" &&
-        !failed &&
-        arrived &&
-        shown.brand === "Watchlist, written" &&
-        shown.same &&
-        seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ drawn, page: seen.answered["corten-page"] ?? null, between: between.brand, failed, arrived, asked: seen.asked, shown }),
-    );
-    await own.context().close();
+      const failed = await readWithin("whether the page said a write failed", own.evaluate(() => !!(/** @type {any} */ (window)).__failed));
+      const shown = await readWithin("what the page shows after the link", shownOf(own));
+      check(
+        oldName,
+        drawn &&
+          "corten-page" in seen.answered &&
+          between.brand === "Watchlist" &&
+          !failed &&
+          arrived &&
+          shown.brand === "Watchlist, written" &&
+          shown.same &&
+          seen.asked.includes("GET /smoke/quoted page"),
+        JSON.stringify({ drawn, page: seen.answered["corten-page"] ?? null, between: between.brand, failed, arrived, asked: seen.asked, shown }),
+      );
+    } finally {
+      await closeContext(own.context(), "the old write case's context");
+    }
   }
   // A real mixed deployment has different runtime bytes and therefore a different shell key.
   // Keep the shell guard: reload the current URL, without drawing or resending the refusal.
@@ -1442,18 +1413,18 @@ export async function pageWrites(page, browser) {
     });
     seen.draws = false;
     seen.status = 422;
-    const reloaded = own.waitForEvent("framenavigated", { predicate: (frame) => frame === own.mainFrame(), timeout: 5000 }).then(() => true, () => false);
-    await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+    const reloaded = cameWithin(5000, own.waitForEvent("framenavigated", { predicate: (frame) => frame === own.mainFrame(), timeout: 5000 }));
+    await readWithin("the press of the form's button", own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click()));
     const loaded = await reloaded;
     const shown = await shownOf(own);
-    const refused = await own.locator("main").textContent();
+    const refused = await readWithin("the refused page's main", own.locator("main").textContent());
     check(
       "a legacy action answer with a different shell key reloads without drawing or resending the refusal",
       loaded && "corten-page" in seen.answered && !shown.same && shown.path === "/smoke/written" && seen.writes === 1 &&
         seen.asked.filter((ask) => ask === "GET /smoke/written -").length === 2 && !refused?.includes("refused this write"),
       JSON.stringify({ loaded, shown, writes: seen.writes, asked: seen.asked, refused }),
     );
-    await own.context().close();
+    await closeContext(own.context(), "the shell key case's context");
   }
   // A write that answers a patch (here one for an element of the layout) is done once its answer
   // comes, but drawn only once the scripts the patch names load. Left by a link in that window,
@@ -1551,18 +1522,16 @@ export async function pageWrites(page, browser) {
         }),
       );
       await watchPatch();
-      await own.click("main form button");
+      await actWithin("the press of the form's button", own.click("main form button"));
       const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await own.click('main a[href="/smoke/quoted"]');
+      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
       release();
-      const arrived = await own
-        .waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+      const arrived = await cameWithin(
+        5000,
+        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
           timeout: 5000,
-        })
-        .then(
-          () => true,
-          () => false,
-        );
+        }),
+      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       const section = await sectionOf();
       const patch = await patchDrawn();
@@ -1600,14 +1569,12 @@ export async function pageWrites(page, browser) {
           "the page was not sent back to /smoke/written within 5 s",
           own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written")),
         );
-        const returned = await own
-          .waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+        const returned = await cameWithin(
+          5000,
+          own.waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
             timeout: 5000,
-          })
-          .then(
-            () => true,
-            () => false,
-          );
+          }),
+        );
         const reads = seen.asked.slice(sinceReturn).filter((a) => a.startsWith("GET /smoke/written "));
         const kept = await sectionOf();
         const after = await patchDrawn();

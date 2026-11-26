@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, opened, closeContext } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -120,8 +120,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
        * @param {number} count
        */
       const routeSaw = async (count) => (await pollFor(5000, async () => reads >= count)) === true;
-      await held.goto(`${base}/`);
-      await held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 }).catch(() => {});
+      await actWithin("the held part's page load", held.goto(`${base}/`));
+      await within(5000, "the part was not busy within 5 s", held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 })).catch(() => {});
       const readInTime = await routeSaw(1);
       const loaded = { ...(await placeholder()), readInTime };
       // Busy: the runtime ran and sent the read, which the route holds unanswered.
@@ -132,10 +132,14 @@ export async function partReads(page, browser, swaps, noSwaps) {
       );
       if (swaps) {
         held.on("request", onDocument);
-        await held.click('header nav a[href="/news"]');
-        await held.waitForFunction(() => document.title === "News | Watchlist");
-        await held.click('header nav a[href="/"]');
-        await held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }).catch(() => {});
+        await actWithin("the press of the link to News", held.click('header nav a[href="/news"]'));
+        await within(30_000, "the News page was not drawn within 30 s", held.waitForFunction(() => document.title === "News | Watchlist"));
+        await actWithin("the press of the link home", held.click('header nav a[href="/"]'));
+        await within(
+          5000,
+          "the part was not busy on the page drawn within 5 s",
+          held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }),
+        ).catch(() => {});
         const readInTime = await routeSaw(2);
         const drawn = { ...(await placeholder()), documents, readInTime };
         check("and so does it in a page a client navigation drew", readInTime && drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
@@ -164,8 +168,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
       const emptyFailed = new Promise((resolve) =>
         emptyPage.on("requestfailed", (r) => r === emptied[0] && resolve(new Error(r.failure()?.errorText || "the request failed"))),
       );
-      const emptyRead = emptyPage
-        .waitForResponse((r) => r.request() === emptied[0], { timeout: 5000 })
+      const emptyRead = emptyBody
+        .step(() => emptyPage.waitForResponse((r) => r.request() === emptied[0], { timeout: 5000 }))
         .then(
           (r) => {
             const answer = { status: r.status(), patch: r.headers()["corten-patch"] ?? null };
@@ -178,9 +182,9 @@ export async function partReads(page, browser, swaps, noSwaps) {
           },
           () => null,
         );
-      await emptyPage.goto(`${base}/`);
+      await actWithin("the empty patch case's page load", emptyPage.goto(`${base}/`));
       const emptyAnswer = await emptyRead;
-      await emptyPage.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+      await within(5000, "the part was not done within 5 s", emptyPage.waitForFunction(() => !document.querySelector("#picks[aria-busy]"), null, { timeout: 5000 })).catch(() => {});
       const kept = await placeholder(emptyPage);
       check(
         "a read whose patch leaves the part as it was marks it failed, as it did not bring it",
@@ -194,8 +198,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
       await within(30_000, "the empty patch case's page was not closed within 30 s", emptyPage.close());
       fresh = null;
       answer = "abort";
-      await held.goto(`${base}/`);
-      await held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+      await actWithin("the held part's page load", held.goto(`${base}/`));
+      await within(5000, "the part was not marked failed within 5 s", held.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 })).catch(() => {});
       const failed = await placeholder();
       check("a slow part whose read failed links to the page with it read in, in place of its line", failed.failed === "" && failed.busy === null && !failed.line && failed.link, JSON.stringify(failed));
       // Followed only when shown, so a link that is not fails the checks, not the run. Pressed in the
@@ -239,12 +243,10 @@ export async function partReads(page, browser, swaps, noSwaps) {
         }
         listed =
           linkOpened &&
-          (await held
-            .waitForFunction(() => document.querySelectorAll("ul#picks li").length === 2 && !document.querySelector("template[data-corten-read-now]"), null, { timeout: 5000 })
-            .then(
-              () => true,
-              () => false,
-            ));
+          (await cameWithin(
+            5000,
+            held.waitForFunction(() => document.querySelectorAll("ul#picks li").length === 2 && !document.querySelector("template[data-corten-read-now]"), null, { timeout: 5000 }),
+          ));
       }
       check(
         "the page it links to has the slow part read in, with JavaScript too",

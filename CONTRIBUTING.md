@@ -611,18 +611,32 @@ replaces the history entry counts only once that read's answer is drawn. The che
 place (`#alert-status`) reads itself again has the page's load of its receipt answered still saving
 whatever the store says by then, so a write that landed before the load cannot pass it, and
 requires `Saved.` drawn at the place by the answer to a later read of that receipt within six
-seconds the same way: with the Navigation API, the runtime's read in the document the case loaded,
-which a mark set on it shows is still there (a full load of the receipt is not the page reading
-itself again in place); without it, a load of the receipt. Its route and request listener are
+seconds the same way: with the Navigation API, the runtime's read in the document the case loaded
+(a full load of the receipt is not the page reading itself again in place); without it, a load of
+the receipt. That document is told by an init script added before the load, which numbers each
+document the tab makes from then on in the order they are made (a count in the page's session
+storage, which a reload keeps): the document once the load returns and once the wait ends must both
+be the first, so a full load at any moment after the case's own, even one before Playwright's load
+returns, fails it. The init script and its count are removed however the case ends, each bounded to
+five seconds. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
 for News are each bounded to 30 seconds by the smoke's clock, as is sending the alert until it says
 `Saving...` in the patch cases, so a driver that never answers ends the run with its reason rather
-than keeping the case from its cleanup. The check that a read the server fails stops the reads
-requires that read sent within five seconds of the press and its 502 answer received in full (the
-browser finished loading that exact request) within five seconds of the check seeing it sent; only
+than keeping the case from its cleanup. Every other driver action the cases of a page reading
+itself again, of a patch's reads (its refusals included), of a write's own page and of the held slow
+part make before a check or its cleanup (a click, fill, key press or load) is bounded the same way
+to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
+own time by the smoke's clock, so one whose answer comes late or never counts as one that did not
+come. The check that a read the server
+fails stops the reads requires that read sent within five seconds of the press, counted from just
+before the check asks for the key press, and its 502 answer received in full (the browser finished
+loading that exact request) within five seconds of that read being sent, each judged by the time
+the check heard the browser's event (the request sent, and finished), not by when it looked, so a
+read or an answer heard after its five seconds fails it however soon the check then sees it; only
 then do its 2.2 s with no further read start, so a read still on its way cannot pass for one that
-failed. The slow part's reads
+failed. Its route and its listeners are removed however it ends, each removal tried even if one
+before it fails. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
 the same, as its request listener is removed. The first check of a held slow part looks at it only

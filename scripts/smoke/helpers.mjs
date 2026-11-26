@@ -136,6 +136,27 @@ const within = (ms, what, work) => {
 const readWithin = (what, work) => within(5000, `${what} was not read within 5 s`, work);
 
 /**
+ * `work`, a driver action that waits on the page (a click, fill, focus, key press or `goto`),
+ * within 30 s, Playwright's own timeout for an action, by the smoke's clock (`within`), or a
+ * rejection saying `what` was not done: an action whose answer never comes would otherwise keep a
+ * case from its `finally`. @template T @param {string} what @param {Promise<T>} work @returns {Promise<T>}
+ */
+const actWithin = (what, work) => within(30_000, `${what} was not done within 30 s`, work);
+
+/**
+ * Whether `waiting`, a driver's wait on the page (`waitForFunction`, `waitForSelector`,
+ * `waitForRequest` and the like), came within `ms` of this call by the smoke's own clock
+ * (`within`): the driver's own timeout counts from when it receives the wait, which a delayed
+ * dispatch moves later, so one that comes after the `ms`, or never, is false.
+ * @param {number} ms @param {Promise<unknown>} waiting @returns {Promise<boolean>}
+ */
+const cameWithin = (ms, waiting) =>
+  within(ms, `not within ${ms} ms`, waiting).then(
+    () => true,
+    () => false,
+  );
+
+/**
  * Waits `ms` by a timer of the smoke's own. A driver command (`page.waitForTimeout`) has no bound
  * on its answer: one whose answer never comes would keep a case from its cleanup.
  * @param {number} ms
@@ -429,4 +450,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, pause, steps, pollFor, cleanUp, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, opened, closeContext };

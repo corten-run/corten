@@ -1,4 +1,4 @@
-import { base, shadowing, skip, check, within, readWithin, pause, steps, pollFor, cleanUp } from "./helpers.mjs";
+import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp } from "./helpers.mjs";
 
 /**
  * The seconds the watchlist's alerts part waits before it reads itself again while a write lands
@@ -258,17 +258,20 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             { url, token },
           ),
         );
-        // A full load ends the wait too: its document has no record of this navigation.
-        await page
-          .waitForFunction(
+        // A full load ends the wait too: its document has no record of this navigation. The wait only
+        // ends the look (the page's clock decides), bounded to 15 s as the rest of the plumbing is.
+        await within(
+          15000,
+          "the wait for the navigation's draw was not answered within 15 s",
+          page.waitForFunction(
             (token) => {
               const note = (/** @type {any} */ (window)).__smokeGo;
               return note?.token !== token || note.saving === true;
             },
             token,
             { timeout: 5000 },
-          )
-          .catch(() => {});
+          ),
+        ).catch(() => {});
         return await within(
           15000,
           "the navigation's record was not read within 15 s",
@@ -384,8 +387,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       await within(30_000, "the link to News was not pressed within 30 s", page.click('header a[href="/news"]'));
       await within(30_000, "the News page was not drawn within 30 s", page.waitForFunction(() => document.title === "News | Watchlist"));
     };
+    /**
+     * Waits up to 6 s, by the smoke's clock (`within`), for the status line to say `Saved.`: the
+     * wait only ends the look, and what the page says is read after it.
+     */
     const savedSoon = () =>
-      page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
+      within(6000, "Saved. was not drawn within 6 s", page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 })).catch(() => {});
     /**
      * What `probe`, run in the page, returns once that is truthy, if the wait sees it within `ms` of
      * this call by the smoke's own monotonic clock (`within`), else null. The driver's own timeout
@@ -681,9 +688,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // Bounded, as its removal below is.
           await within(5000, "the part route was not set within 5 s", page.route(partReads, partRead));
           page.on("request", onPart);
-          initial = (await page.goto(url))?.request() ?? null;
+          initial = (await actWithin("the pending write's page load", page.goto(url)))?.request() ?? null;
           const waiting = await readWithin("the status line once the page loaded", saved());
-          await page.fill("input[name=above]", "123.45");
+          await actWithin("the form's fill", page.fill("input[name=above]", "123.45"));
           await within(
             5000,
             "the page was not marked within 5 s",
@@ -1148,12 +1155,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                   ),
                 );
                 await goTo(to, LEAVE_SECONDS);
+                // Bounded as `leaveForNews` is (30 s each): whether the attempt left in time is the
+                // page's own note above, so a slow draw of News only spends time, not the check.
                 await within(
-                  5000,
-                  "the page's link to the news page was not pressed within 5 s",
+                  30_000,
+                  "the page's link to the news page was not pressed within 30 s",
                   page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click()),
                 );
-                await within(5000, "the news page was not drawn within 5 s of the press", page.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }));
+                await within(30_000, "the news page was not drawn within 30 s of the press", page.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 30_000 }));
                 const times = await readWithin(
                   "when the page's part tag was drawn and left",
                   page.evaluate(() => {
@@ -1354,7 +1363,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     try {
       await within(5000, "the whole-read route was not set within 5 s", page.route("**/alerts?saved=*", wholeOnly));
       page.on("request", onSaved);
-      await page.goto(await readWithin("the pending write's page", pending()));
+      await actWithin("the pending write's page load", page.goto(await readWithin("the pending write's page", pending())));
       const waiting = await readWithin("the status line once the page loaded", saved());
       await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 5)));
       await savedSoon();
@@ -1370,9 +1379,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // says by then, so a write that landed before the load cannot pass the case; then `Saved.` must
       // be drawn, seen within 6 s by the smoke's clock (`seenWithin`), by the answer to a later read
       // of that receipt (`pollTarget` marks those answers), with the page still at the place. With
-      // the Navigation API that read is the runtime's own, in the document the case loaded (its mark
-      // still set): a full load of the receipt there is not the page reading itself again in place.
-      // Without it, a load of the receipt is how the page reads itself again, and counts.
+      // the Navigation API that read is the runtime's own, in the document the case loaded: an init
+      // script, added before the load, numbers each document the tab makes from then on, in the
+      // order they are made (a count in `sessionStorage`, which a reload keeps), and both the
+      // document read once the load returns and the one read after the wait must be the first, so a
+      // full load at any moment after the case's own, even before `goto` returns, fails it. A full
+      // load of the receipt is not the page reading itself again in place. Without the Navigation
+      // API, a load of the receipt is how the page reads itself again, and counts.
       {
         const target = await readWithin("the pending write's page", pending());
         const address = new URL(target).pathname + new URL(target).search;
@@ -1382,9 +1395,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         pollTarget = address;
         /** The place in `wholeReads` of the read whose answer drew `Saved.`, as the wait saw it. @type {unknown} */
         let poll = null;
+        /** The `sessionStorage` key of the case's count of documents, its own each run. */
+        const documentKey = `smoke-fragment-documents-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        /** The number of the page's document once the load returned, and after the wait: 1 is the load's own. */
+        let loadedAs = /** @type {number | null} */ (null);
+        let endedAs = /** @type {number | null} */ (null);
+        const numbering = page.addInitScript((key) => {
+          if (window !== window.top) return;
+          try {
+            const n = Number(sessionStorage.getItem(key) ?? "0") + 1;
+            sessionStorage.setItem(key, String(n));
+            /** @type {any} */ (window).__smokeDocument = n;
+          } catch {}
+        }, documentKey);
+        numbering.catch(() => {});
+        /** The number of the page's document, or null for one made before the count started. */
+        const documentNumber = () =>
+          readWithin("the page's document number", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokeDocument ?? null)));
         try {
-          await page.goto(`${target}#alert-status`);
-          await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 6)));
+          await within(5000, "the fragment case's count of documents was not set within 5 s", numbering);
+          await actWithin("the receipt's load at its place", page.goto(`${target}#alert-status`));
+          loadedAs = await documentNumber();
           poll = await seenWithin(
             6000,
             "Saved. drawn at the place by an answer to a later read of the receipt",
@@ -1394,15 +1425,21 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             },
             address,
           );
+          endedAs = await documentNumber();
         } finally {
           placeLoads = null;
           pollTarget = null;
+          await cleanUp(
+            () => within(5000, "the fragment case's count of documents was not removed within 5 s", numbering.then((s) => s.dispose())),
+            () => within(5000, "the fragment case's count of documents was not cleared within 5 s", page.evaluate((key) => sessionStorage.removeItem(key), documentKey)),
+          );
         }
         const by = typeof poll === "string" ? wholeReads[Number(poll)] : undefined;
         const laterRead = by !== undefined && Number(poll) >= readFrom && by.address === address && !by.navigation && by.saved === true;
-        // With the Navigation API: the runtime's read (not a load), in the document the case loaded.
+        // With the Navigation API: the runtime's read (not a load), in the document the case loaded,
+        // the first the tab made after the count started, with no other made by the end of the wait.
         const inPlace = !swaps || (laterRead && !by?.load);
-        const sameDocument = !swaps || (await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 6)));
+        const sameDocument = !swaps || (loadedAs === 1 && endedAs === 1);
         const ownRead = laterRead && inPlace && sameDocument;
         const later = wholeReads.slice(readFrom).filter((r) => r.address === address).length;
         const shown = laterRead
@@ -1410,13 +1447,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           : await readWithin("the status line after the wait for Saved.", page.evaluate(() => document.getElementById("alert-status")?.textContent ?? null));
         const drawnBy = !laterRead
           ? "not drawn by an answer to a later read of the receipt within 6 s"
-          : `drawn by read ${Number(poll) - readFrom + 1} of the case${by?.load ? " (a load)" : ""}${inPlace ? "" : ", a full load where the Navigation API reads in place"}${sameDocument ? "" : ", in another document than the one the case loaded"}`;
-        check("a page at a place (#id) reads itself again too", !!loadAnswer?.saving && ownRead, `${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${shown} at ${page.url()}, ${drawnBy}; ${later} reads of the receipt after its load`);
+          : `drawn by read ${Number(poll) - readFrom + 1} of the case${by?.load ? " (a load)" : ""}${inPlace ? "" : ", a full load where the Navigation API reads in place"}`;
+        const documents = sameDocument ? "" : `; document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`;
+        check("a page at a place (#id) reads itself again too", !!loadAnswer?.saving && ownRead, `${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${shown} at ${page.url()}, ${drawnBy}; ${later} reads of the receipt after its load${documents}`);
       }
       // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
       // read again with the page, so the page read again draws what is on screen.
       {
-        await page.goto(await readWithin("the pending write's page", pending()));
+        await actWithin("the pending write's page load", page.goto(await readWithin("the pending write's page", pending())));
         const from = reads.length;
         await readWithin(
           "the page's replaced address",
@@ -1555,10 +1593,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               next.searchParams.set("shown", "2");
               expected = next.href;
               served = { status: got.status, headers: Object.fromEntries(got.headers.filter(([header]) => !/^content-(encoding|length)$/i.test(header))), body };
-              await page.goto("about:blank");
+              await actWithin("the blank page's load", page.goto("about:blank"));
               recording = true;
               await within(5000, "the held-read route was not set within 5 s", page.route(alerts, slow));
-              await page.goto(address);
+              await actWithin("the held page's load", page.goto(address));
               await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__replayed = 7)));
               waiting = (await readWithin("the status line once the held page loaded", saved())) ?? "";
               const held = await steps(5000, "no read held within 5 s").step(() => isHeld).catch(() => false);
@@ -1735,7 +1773,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       r.method() === "GET" && r.url().includes("/alerts?saved=") && r.headers()["corten"] === "action" && again.push(r.url());
     page.on("request", onAgain);
     const save = 'form[action="/alerts"] button';
-    /** Sends the alert from its form, until the page says `Saving...`, all within 30 s by the smoke's clock. */
+    /** When `submit` last asked for the key press that sends the alert, by the smoke's clock (`performance.now()`). */
+    let pressedAt = 0;
+    /**
+     * Sends the alert from its form, until the page says `Saving...`, all within 30 s by the smoke's
+     * clock, noting the moment just before it asks for the key press (`pressedAt`).
+     */
     const submit = () =>
       within(
         30_000,
@@ -1743,16 +1786,17 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         (async () => {
           await page.fill("input[name=above]", "150");
           await page.focus(save);
+          pressedAt = performance.now();
           await page.keyboard.press("Enter");
           await page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saving...");
         })(),
       );
-    await page.goto(`${base}/alerts`);
+    await actWithin("the alerts page's load", page.goto(`${base}/alerts`));
     // A price the server refuses: the form comes back with the field marked and its message,
     // and focus on it.
     const errorsAtRefusal = errors.length;
-    await page.fill("input[name=above]", "1.234");
-    const belowFold = await page.locator(save).evaluate((button) => {
+    await actWithin("the refused price's fill", page.fill("input[name=above]", "1.234"));
+    const belowFold = await readWithin("the refused form's press", page.locator(save).evaluate((button) => {
       const submit = /** @type {HTMLButtonElement} */ (button);
       const field = document.querySelector("input[name=above]");
       const spacer = document.createElement("div");
@@ -1764,9 +1808,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const below = !!field && field.getBoundingClientRect().top >= innerHeight;
       submit.click();
       return below;
-    });
-    await page.waitForSelector('input[name=above][aria-invalid="true"]', { timeout: 5000 }).catch(() => {});
-    const refused = await page.evaluate(() => {
+    }));
+    await cameWithin(5000, page.waitForSelector('input[name=above][aria-invalid="true"]', { timeout: 5000 }));
+    const refused = await readWithin("the refused field", page.evaluate(() => {
       const field = /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"));
       const rect = field?.getBoundingClientRect();
       const result = {
@@ -1777,7 +1821,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       };
       document.getElementById("smoke-refusal-spacer")?.remove();
       return result;
-    });
+    }));
     check(
       "a refused patch field below the fold comes back marked, with its message and focus in view",
       belowFold && refused.inView && refused.message === "Enter a price in dollars and cents, such as 129.99." && refused.focused && refused.value === "1.234",
@@ -1791,23 +1835,24 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // (whether it is on the page and holds focus): focus goes from its button to the marked field.
     // Sent by keys: Playwright's own fill and click read the form's getAttribute.
     const errorsAtShadowed = errors.length;
-    await page.evaluate((names) => {
+    await readWithin("the shadowed form's controls", page.evaluate((names) => {
       const form = /** @type {Element} */ (document.getElementById("alert-form"));
       form.insertAdjacentHTML("afterbegin", __html(names.map((name) => `<input type="hidden" name="${name}" value="x" disabled>`).join("")));
       /** @type {HTMLInputElement} */ (Element.prototype.querySelector.call(form, "input[name=above]")).value = "1.235";
       /** @type {HTMLElement} */ (Element.prototype.querySelector.call(form, "button")).focus();
-    }, shadowing);
-    await page.keyboard.press("Enter");
-    const shadowRefused = await page
-      .waitForFunction(
+    }, shadowing));
+    await actWithin("the shadowed form's key press", page.keyboard.press("Enter"));
+    const shadowRefused = await cameWithin(
+      5000,
+      page.waitForFunction(
         () => {
           const field = document.querySelector('#alert-form input[name=above][aria-invalid="true"]');
           return !!field && document.activeElement === field && !document.querySelector("#alert-form input[name=hasAttribute]");
         },
         null,
         { timeout: 5000 },
-      )
-      .then(() => true, () => false);
+      ),
+    );
     const shadowLogs = errors.slice(errorsAtShadowed);
     check(
       "a refused field in a form with controls named after the members the runtime reads on it gets focus",
@@ -1815,33 +1860,35 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       shadowLogs.join(" | "),
     );
     errors.splice(errorsAtShadowed);
-    await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7));
+    await readWithin("the page's mark", page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7)));
     await submit();
     await savedSoon();
+    const patchedTo = await readWithin("the status line after the wait for Saved.", saved());
     check(
       "a patch waiting for a write is read again from its route until the write is in",
-      (await saved()) === "Saved." && again.length > 0 && page.url() === `${base}/alerts` && (await page.evaluate(() => (/** @type {any} */ (window)).__marker === 7)),
-      `${await saved()} after ${again.length} reads at ${page.url()}`,
+      patchedTo === "Saved." && again.length > 0 && page.url() === `${base}/alerts` && (await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 7))),
+      `${patchedTo} after ${again.length} reads at ${page.url()}`,
     );
-    check("reading a patch again keeps focus", await page.evaluate(() => document.activeElement?.textContent === "Save alert"));
+    check("reading a patch again keeps focus", await readWithin("the focused element", page.evaluate(() => document.activeElement?.textContent === "Save alert")));
     // The list read again with the status line shows the alert once it is in; a remove is a write
     // of its own, read again until the list no longer has it. The list is the browser's, kept under
     // its visitor cookie, which this browser does not send over http.
-    const listed = () => page.$$eval("#alert-list li span", (spans) => spans.map((s) => s.textContent));
+    const listed = () => readWithin("the alerts listed", page.$$eval("#alert-list li span", (spans) => spans.map((s) => s.textContent)));
     if (signsIn) {
       // The writes above saved ACME at $175.00; this one, at $150.00, is the only such alert.
       const shown = await listed();
       check("a saved alert is listed once it lands", shown.filter((s) => s === "ACME above $150.00").length === 1, shown.join(", "));
-      await page.click("#alert-list li:last-child button");
-      await page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saving...", null, { timeout: 5000 }).catch(() => {});
+      await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
+      await within(5000, "Saving... was not drawn within 5 s", page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saving...", null, { timeout: 5000 })).catch(() => {});
       await savedSoon();
       const left = await listed();
-      check("a removed alert leaves the list once the removal lands", left.length === shown.length - 1 && (await saved()) === "Saved.", `${shown.length} -> ${left.length}`);
+      const removedTo = await readWithin("the status line after the wait for Saved.", saved());
+      check("a removed alert leaves the list once the removal lands", left.length === shown.length - 1 && removedTo === "Saved.", `${shown.length} -> ${left.length}`);
     } else {
       for (const name of ["a saved alert is listed once it lands", "a removed alert leaves the list once the removal lands"]) skip(name, "the browser does not send Secure cookies over http");
     }
     // The save after the refusal above answered the whole form, so the field is no longer marked.
-    const cleared = await page.evaluate(() => !document.querySelector("#alert-form [aria-invalid]") && !document.getElementById("alert-form-above-error"));
+    const cleared = await readWithin("the field's error", page.evaluate(() => !document.querySelector("#alert-form [aria-invalid]") && !document.getElementById("alert-form-above-error")));
     check("a save after a refusal clears the field's error", cleared);
     const done = again.length;
     await pause(2200);
@@ -1853,58 +1900,83 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     check("navigating away stops a patch's reads", again.length === away, `${again.length - away} more reads`);
     // A read the server fails (its error page, not a patch) stops the reads without a console
     // error: the server logged the failure, and the part stays as it was. The page's first part read
-    // after the press must be sent within 5 s of it and its 502 answer received in full (the browser
-    // finished loading that exact request) within 5 s of the check seeing it sent; only then do the
-    // 2.2 s with no further read start, so a read still on its way cannot pass for one that failed.
+    // after the press must be sent within 5 s of the press (the smoke's clock just before it asks for
+    // the key press, `pressedAt`), and its 502 answer received in full (the browser finished loading
+    // that exact request) within 5 s of that read being sent, each by the time the check heard of
+    // the event (`performance.now()` in its listener), not when the check looked: an event heard after
+    // its 5 s fails the case, however soon the check then sees it. Only then do the 2.2 s with no
+    // further read start, so a read still on its way cannot pass for one that failed. The route and
+    // listeners are removed however the case ends, each removal tried even if one before it fails.
     const errorsBefore = errors.length;
     const failRead = (/** @type {import("@playwright/test").Route} */ route) =>
       route.request().headers()["corten"] === "action" ? route.fulfill({ status: 502, contentType: "text/html", body: "<p>Bad gateway</p>" }) : route.fallback();
-    await within(5000, "the failing read's route was not set within 5 s", page.route("**/alerts?saved=*", failRead));
-    await within(30_000, "the alerts page was not loaded within 30 s", page.goto(`${base}/alerts`));
-    const readsBefore = again.length;
-    /** The page's first part read after the press, the status of its answer once it came, and whether it finished loading. */
+    /** The page's first part read after the press, when the check heard it sent, the status of its answer, and when it heard that it finished loading. */
     let failing = /** @type {import("@playwright/test").Request | null} */ (null);
+    let failingAt = 0;
     let failingStatus = /** @type {number | null} */ (null);
-    let failingDone = false;
+    let failingDoneAt = /** @type {number | null} */ (null);
     const onFailing = (/** @type {import("@playwright/test").Request} */ r) => {
-      if (failing === null && r.method() === "GET" && r.url().includes("/alerts?saved=") && r.headers()["corten"] === "action") failing = r;
+      if (failing !== null || r.method() !== "GET" || !r.url().includes("/alerts?saved=") || r.headers()["corten"] !== "action") return;
+      failingAt = performance.now();
+      failing = r;
     };
     const onFailingAnswer = (/** @type {import("@playwright/test").Response} */ res) => res.request() === failing && (failingStatus = res.status());
-    const onFailingDone = (/** @type {import("@playwright/test").Request} */ r) => r === failing && (failingDone = true);
-    page.on("request", onFailing);
-    page.on("response", onFailingAnswer);
-    page.on("requestfinished", onFailingDone);
-    await submit();
-    const sent = (await pollFor(5000, async () => failing !== null)) === true;
-    const answered = sent && (await pollFor(5000, async () => failingDone && failingStatus === 502)) === true;
-    const failedAt = again.length;
-    if (answered) await pause(2200);
-    page.off("request", onFailing);
-    page.off("response", onFailingAnswer);
-    page.off("requestfinished", onFailingDone);
-    // The browser itself reports the 502 as a failed resource; Corten adds nothing.
-    const logged = errors.slice(errorsBefore).filter((e) => !e.includes("502"));
-    const failure = !sent
-      ? "no part read sent within 5 s of the press"
-      : answered
-        ? "its 502 received"
-        : `its answer ${failingStatus === null ? "not come" : `with status ${failingStatus}`}${failingDone ? "" : ", not finished loading"} within 5 s`;
-    check(
-      "a read the server fails stops the reads, without a console error",
-      answered && failedAt === readsBefore + 1 && again.length === failedAt && (await readWithin("the status line", saved())) === "Saving..." && logged.length === 0,
-      `${failure}; ${failedAt - readsBefore} then ${again.length - failedAt} reads, ${logged.join(" | ")}`,
-    );
-    errors.splice(errorsBefore);
-    await within(5000, "the failing read's route was not removed within 5 s", page.unroute("**/alerts?saved=*", failRead));
-    page.off("request", onAgain);
+    const onFailingDone = (/** @type {import("@playwright/test").Request} */ r) => r === failing && failingDoneAt === null && (failingDoneAt = performance.now());
+    try {
+      await within(5000, "the failing read's route was not set within 5 s", page.route("**/alerts?saved=*", failRead));
+      await within(30_000, "the alerts page was not loaded within 30 s", page.goto(`${base}/alerts`));
+      const readsBefore = again.length;
+      page.on("request", onFailing);
+      page.on("response", onFailingAnswer);
+      page.on("requestfinished", onFailingDone);
+      await submit();
+      const sentBy = pressedAt + 5000;
+      if (failing === null) await pollFor(Math.max(0, sentBy - performance.now()), async () => failing !== null);
+      const sent = failing !== null && failingAt <= sentBy;
+      const finishedBy = failingAt + 5000;
+      if (sent && failingDoneAt === null) await pollFor(Math.max(0, finishedBy - performance.now()), async () => failingDoneAt !== null);
+      const finished = sent && failingDoneAt !== null && failingDoneAt <= finishedBy;
+      const answered = finished && failingStatus === 502;
+      const failedAt = again.length;
+      if (answered) await pause(2200);
+      // The browser itself reports the 502 as a failed resource; Corten adds nothing.
+      const logged = errors.slice(errorsBefore).filter((e) => !e.includes("502"));
+      const late = (/** @type {number} */ at, /** @type {number} */ from) => `${Math.round(at - from)} ms after`;
+      const failure =
+        failing === null
+          ? "no part read sent within 5 s of the press"
+          : !sent
+            ? `its part read sent ${late(failingAt, pressedAt)} the press, not within 5 s`
+            : answered
+              ? "its 502 received"
+              : failingDoneAt === null
+                ? `its answer ${failingStatus === null ? "not come" : `with status ${failingStatus}`}, not finished loading within 5 s of its read`
+                : !finished
+                  ? `its answer finished loading ${late(failingDoneAt, failingAt)} its read, not within 5 s`
+                  : `its answer with status ${failingStatus}, not 502`;
+      check(
+        "a read the server fails stops the reads, without a console error",
+        answered && failedAt === readsBefore + 1 && again.length === failedAt && (await readWithin("the status line", saved())) === "Saving..." && logged.length === 0,
+        `${failure}; ${failedAt - readsBefore} then ${again.length - failedAt} reads, ${logged.join(" | ")}`,
+      );
+      errors.splice(errorsBefore);
+    } finally {
+      await cleanUp(
+        () => within(5000, "the failing read's route was not removed within 5 s", page.unroute("**/alerts?saved=*", failRead)),
+        () => page.off("request", onFailing),
+        () => page.off("response", onFailingAnswer),
+        () => page.off("requestfinished", onFailingDone),
+        () => page.off("request", onAgain),
+      );
+    }
   }
 
   // data-reload: the link loads the whole document instead of swapping <main>.
-  await page.evaluate(() => {
+  await readWithin("the reload link's addition", page.evaluate(() => {
     (/** @type {any} */ (window)).__marker = 4;
     document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<a id="reload-link" href="/" data-reload>Home</a>'));
-  });
-  await page.click("#reload-link");
-  await page.waitForFunction(() => document.title === "Stocks | Watchlist");
-  check("data-reload loads the whole document", await page.evaluate(() => (/** @type {any} */ (window)).__marker === undefined));
+  }));
+  await actWithin("the press of the reload link", page.click("#reload-link"));
+  await within(30_000, "the reloaded Stocks page was not drawn within 30 s", page.waitForFunction(() => document.title === "Stocks | Watchlist"));
+  check("data-reload loads the whole document", await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === undefined)));
 }
