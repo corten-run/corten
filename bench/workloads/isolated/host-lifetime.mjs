@@ -335,7 +335,7 @@ function justStarted(startedAt) {
   const age = Date.now() - Date.parse(time);
   return age >= 0 && age <= startupWindowMs;
 }
-function stoppedDockerState(state, endedAt, earliest = -Infinity) {
+function stoppedDockerState(state, endedAt, earliest) {
   if ((state.Status !== "exited" && state.Status !== "removing") || state.Pid !== 0
     || ["Running", "Paused", "Restarting", "Dead"].some((key) => state[key] !== false)
     || typeof state.OOMKilled !== "boolean" || !Number.isSafeInteger(state.ExitCode) || state.ExitCode < 0) return false;
@@ -937,6 +937,7 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
     for (const s of samples.filter((s) => s.at >= startedAt && s.at <= endedAt))
       if (!s.docker.participants.some((r) => r.container.id === p.id)) return false;
     let identity, previousEnd = -1, phase = 0;
+    let stopped = p.terminal.state.Running ? undefined : p.terminal.state;
     const live = [], accounting = new Map(), ancestorControls = new Map();
     for (const r of records) {
       assert.ok(Number.isSafeInteger(r.startedAt) && Number.isSafeInteger(r.endedAt) && r.endedAt >= r.startedAt
@@ -959,8 +960,9 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
         assert.ok(stoppedDockerState(c.state, r.endedAt, live.at(-1).endedAt), "invalid stopped Docker observation");
         phase = 2;
         if (r.endedAt < endedAt - maximumSampleGapMs) return false;
-        if (!p.terminal.state.Running) for (const key of ["ExitCode", "OOMKilled", "FinishedAt"])
-          assert.equal(c.state[key], p.terminal.state[key]);
+        stopped ??= c.state;
+        assert.ok(["ExitCode", "OOMKilled", "FinishedAt"].every((key) => c.state[key] === stopped[key]),
+          "stopped Docker observations disagree");
         continue;
       }
       assert.ok(r.kernel && typeof r.kernel === "object" && !Array.isArray(r.kernel), "invalid Docker kernel observation");
@@ -1022,13 +1024,15 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       if (cpus && !participantCpuSetsWithin(k, path, cpus[p.role])) return false;
       live.push(r);
     }
-    // Browser ends its window at the recorded terminal receipt. Live
-    // Delivery sets this boundary before it inspects the container.
-    if (terminalClockAfterInspect && !p.terminal.state.Running)
-      assert.ok(stoppedDockerState(p.terminal.state, endedAt), "invalid Browser Docker terminal receipt");
+    const lastLive = live.at(-1);
     if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
       || live[0].startedAt > startedAt + maximumSampleGapMs
-      || live.at(-1).endedAt < endedAt - maximumSampleGapMs) return false;
+      || lastLive.endedAt < endedAt - maximumSampleGapMs) return false;
+    // Browser ends its window at the recorded terminal receipt. Live
+    // Delivery sets this boundary before it inspects the container.
+    if (!p.terminal.state.Running)
+      assert.ok(stoppedDockerState(p.terminal.state, terminalClockAfterInspect ? endedAt : Infinity, lastLive.endedAt),
+        terminalClockAfterInspect ? "invalid Browser Docker terminal receipt" : "invalid Live Docker terminal receipt");
     for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
       && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
   }

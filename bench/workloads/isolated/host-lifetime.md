@@ -104,11 +104,14 @@ startup retries do not use this path.
 
 Replay counts only verified kernel records as live coverage. An `exited` or
 `removing` row must have a finish between the end of the last verified running
-capture and the end of its own capture. Later stopped rows can report the same
-finish; they do not extend live coverage. Fullstack Browser also bounds an
-exited terminal receipt by its post-inspect timestamp (`window.endedAt`).
-Live Delivery records its window end before the inspect, so that boundary
-does not constrain the receipt's finish. Docker timestamps retain nanoseconds,
+capture and the end of its own capture. Stopped rows for the same container
+generation must agree on finish, exit code and OOM status, even if the terminal
+receipt still showed it running. Stopped rows do not extend live coverage.
+An exited terminal receipt must also have a valid finish no earlier than the
+last verified running capture, even without a stopped row. Fullstack Browser
+bounds it by its post-inspect timestamp (`window.endedAt`). Live Delivery records
+its window end before the inspect, so that boundary does not constrain the
+receipt's finish. Docker timestamps retain nanoseconds,
 but comparisons to observation or receipt clocks truncate to milliseconds.
 A finish in the last millisecond of a bound is admitted.
 

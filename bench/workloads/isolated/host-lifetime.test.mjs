@@ -413,6 +413,40 @@ for (const workload of ["fullstack-browser", "live-delivery"]) {
       : inspectLiveActors(f.bound, observation, { node, browser }, participants,
         [{ app: "corten", startedAt: 900, endedAt: 1100, renderer: null }]);
   };
+  for (const [label, finishedAt] of [
+    ["predates the last running capture", new Date(3650).toISOString()],
+    ["has an impossible date", "2026-02-29T00:00:00Z"],
+  ]) test(`r95 replay: ${workload} refuses an exited receipt that ${label} without a stopped sample`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { workload });
+    const [{ terminal }] = f.native.hostSubject.participants;
+    f.observation.samples = f.observation.samples.filter((s) => s.at !== 3800);
+    Object.assign(terminal.state, { Status: "exited", Running: false, Pid: 0, ExitCode: 137,
+      FinishedAt: new Date(3750).toISOString() });
+    assert.equal(proof(f), true);
+    terminal.state.FinishedAt = finishedAt;
+    assert.throws(() => proof(f), { code: "ERR_ASSERTION",
+      message: workload === "fullstack-browser" ? "invalid Browser Docker terminal receipt" : "invalid Live Docker terminal receipt" });
+  });
+  for (const [field, different] of [
+    ["FinishedAt", new Date(3815).toISOString()],
+    ["ExitCode", 1],
+    ["OOMKilled", true],
+  ]) test(`r95 replay: ${workload} binds stopped ${field} after a running receipt`, (t) => {
+    const f = lifecycleBoundaryFixture(t, { workload });
+    let removing;
+    for (const [sampleAt, at, status] of [[3700, 3820, "exited"], [3800, 3860, "removing"]]) {
+      const sample = f.observation.samples.find((s) => s.at === sampleAt);
+      const [r] = sample.docker.participants;
+      sample.at = at;
+      Object.assign(r, { startedAt: at, endedAt: at + 3, kernel: null });
+      Object.assign(r.container.state, { Status: status, Running: false, Pid: 0,
+        ExitCode: 137, FinishedAt: new Date(3810).toISOString() });
+      if (status === "removing") removing = r.container.state;
+    }
+    assert.equal(proof(f), true, "exited then removing with the same outcome is valid");
+    removing[field] = different;
+    assert.throws(() => proof(f), { code: "ERR_ASSERTION", message: "stopped Docker observations disagree" });
+  });
   for (const [label, finishedAt, valid] of [
     ["finish during the receipt's last millisecond", new Date(3800).toISOString().replace("Z", "999999Z"), true],
     ["finish 35 ms after the receipt boundary", new Date(3835).toISOString(), workload === "live-delivery"],
