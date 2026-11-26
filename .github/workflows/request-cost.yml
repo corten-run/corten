@@ -87,6 +87,7 @@ jobs:
           began=$SECONDS
           sh bench/request-cost/build.sh "$HEAD_COMMIT" "$BUILDS"
           echo "build head $((SECONDS - began))" >> "$BUILDS/seconds"
+          sha256sum "$BUILDS"/bin/*
       # Each run of the kit that compare.mjs names, on base and then on head, on one CPU. A run the
       # kit refuses gave no figure and is taken again, once; what the kit said is kept beside it.
       # No run is taken again for its figure.
@@ -141,6 +142,6 @@ jobs:
           {
             cat "$RUNNER_TEMP/table.md"
             echo
-            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$BUILDS/seconds" | sed 's/,/, /g')."
+            echo "Run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, on $(lscpu | sed -n 's/^Model name: *//p' | head -n 1), $(valgrind --version), $(rustc --version | cut -d' ' -f1-2). Seconds: $(paste -sd, "$BUILDS/seconds" | sed 's/,/, /g'). The description was read as it stood when this run started: a line added to it since is read by the next run a push starts, not by a rerun of this one."
           } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$status"
