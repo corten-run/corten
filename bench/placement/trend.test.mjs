@@ -288,7 +288,7 @@ test("past the threshold: a draft of an issue, with the row, the pull requests a
   const first = issue({ ...at(readings), line, prs: [] });
   assert.ok(first.body.includes("The page has no row before this one.") && first.body.includes("Merged from v0.2.0 to this run, 0 on `main`'s first-parent line.") && first.body.includes("\n- none: `main` has no commit in that interval\n"));
   // A row before it that the list cannot start from is said, and the list is from the release.
-  const note = "The row before this one (2026-11-25) names `c6e9be955`, a commit this run's head does not descend from (`main` was moved back or rewritten since), so the list below is from v0.2.0.";
+  const note = "The row before this one (2026-11-25) names `c6e9be955`, a commit this run's head does not descend from (`main` was moved back or rewritten since), so the list below is from v0.2.0: the commits `main` has that the release does not.";
   const lacking = issue({ ...at(readings), line, note, prs: PRS });
   assert.ok(lacking.body.includes(`${note}\n`) && lacking.body.includes("Merged from v0.2.0 to this run, 4 on") && !lacking.body.includes("The page has no row before this one."));
   // History that could not be read is said to be that, never "none".
@@ -327,15 +327,17 @@ test("the bodies a part's placements answered with are the two the check kept, e
   assert.ok(stray(res, [...pilot, { comparison: "pilot-plain", i: 3 }], "plain", kept).startsWith("pilot-plain p003 answered with other bodies than the run recorded before any turn (no bodies.txt as the kit writes it;"));
 });
 
-// git as the command asks it: the checkout's top, whether it is shallow or partial, its tags, a
-// ref's commit, whether the head descends from a commit (under: the commits it does descend
-// from; apart: those the checkout has that it does not) and a range's log.
+// git as the command asks it: the checkout's top, whether it is shallow or partial (promisor:
+// its remotes' promisor values as git gives booleans; extension: extensions.partialClone; each
+// the text, or the status of a git that gave none), its tags, a ref's commit, whether the head
+// descends from a commit (under: the commits it does descend from; apart: those the checkout
+// has that it does not) and a range's log.
 const TAGS = "evidence/placement-kit\nv0.1.9\nv0.2.0\n";
-function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, partial = 1, commits = {}, under = [EARLIER], apart = [], log = { status: 0, text: LOGTEXT }, calls = [] } = {}) {
+function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, promisor = 1, extension = 1, commits = {}, under = [EARLIER], apart = [], log = { status: 0, text: LOGTEXT }, calls = [] } = {}) {
   const a = args.slice(2), ok = (stdout) => ({ status: 0, stdout, stderr: "" }), failed = (status = 1) => ({ status, stdout: "", stderr: "fatal: it failed\n" });
   if (a[1] === "--show-toplevel") return ok(`${root}\n`);
   if (a[1] === "--is-shallow-repository") return shallow.status === 0 ? ok(shallow.text) : failed(shallow.status);
-  if (a[0] === "config") return a[2] !== "^remote\\..*\\.promisor$" ? failed(2) : partial === 0 ? ok("remote.origin.promisor true\n") : failed(partial);
+  if (a[0] === "config") { const v = { "--type=bool --get-regexp ^remote\\..*\\.promisor$": promisor, "--get extensions.partialclone": extension }[a.slice(1).join(" ")] ?? 2; return typeof v === "string" ? ok(v) : failed(v); }
   if (a[0] === "merge-base") { assert.deepEqual([a[1], a[3]], ["--is-ancestor", HEAD]); return under.includes(a[2]) ? ok("") : failed(apart.includes(a[2]) ? 1 : 128); }
   if (a[0] === "tag") return tags === null ? failed(128) : ok(tags);
   if (a[0] === "log") { calls.push(`git log ${a.at(-1)}`); return log.status === 0 ? ok(log.text) : failed(log.status); }
@@ -356,7 +358,7 @@ function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, part
 //   late     workloads whose answers check was stopped at its time limit
 const DIFF = "5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes\n";
 let made = 0;
-function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
+function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
   writeFileSync(page, before ? insert(BLANK, before) : BLANK);
   const env = { ...process.env, ...(dry ? { DRYRUN: "1" } : {}) };
@@ -398,6 +400,8 @@ function command({ reports = {}, differ = ["plain"], real = false, silent = {}, 
       const given = join(work, /turns\.sh" "\$1\/([a-z]+)" "\$W" 0 /.exec(args[1])[1], "answers");
       mkdirSync(given, { recursive: true });
       writeFileSync(join(given, "bodies.txt"), BODY(DIGEST.base, mine));
+      // The same answers leave an empty diff.txt (undiffed: none, or with "dir" one that cannot be read).
+      if (undiffed[w] === "dir") mkdirSync(join(given, "diff.txt")); else if (!undiffed[w]) writeFileSync(join(given, "diff.txt"), "");
       if (!differ.includes(w)) return out(0, "answers: same\n");
       writeFileSync(join(given, "diff.txt"), DIFF);
       return out(1, `${DIFF}turns: ${w}: A and B answer differently\n`);
@@ -479,7 +483,7 @@ test("a run past its threshold: exit 1, and a draft of an issue with the pull re
   for (const [asked, word] of [[{ under: [], apart: [EARLIER] }, "a commit this run's head does not descend from (`main` was moved back or rewritten since)"], [{ under: [] }, "a commit git could not place before this run's head in the run's checkout"]]) {
     const lacking = command({ reports: { ...PASS, plain: report("plain", 0.03, 0.04) }, before, log: { status: 0, text: "" }, ...asked });
     assert.equal(lacking.calls.at(-1), `git log ${BASE}..${HEAD}`);
-    assert.ok(lacking.issue.body.includes(`The row before this one (2026-11-25) names \`c6e9be955\`, ${word}, so the list below is from v0.2.0.`) && lacking.issue.body.includes("Merged from v0.2.0 to this run, 0 on"), lacking.issue.body);
+    assert.ok(lacking.issue.body.includes(`The row before this one (2026-11-25) names \`c6e9be955\`, ${word}, so the list below is from v0.2.0: the commits \`main\` has that the release does not.`) && lacking.issue.body.includes("Merged from v0.2.0 to this run, 0 on"), lacking.issue.body);
   }
   // A log git could not give, or one that is not a list of commits, is no list: never "none".
   for (const [log, word] of [[{ status: 128 }, "git log ended with status 128"], [{ status: 0, text: "warning: something else\n" }, "git log's output is not a list of commits"]]) {
@@ -523,6 +527,13 @@ test("not read, never a pass: a side the kit refuses, answers not compared, a pi
   assert.equal(late.exit, 3);
   assert.deepEqual(late.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("unstaged")]);
   assert.ok(late.line.includes("`plain` not read: the two sides' answers were not compared within a placement's time limit, 600 s, and the check was stopped; `unstaged` -0.20% to +0.30%"), late.line);
+  // A comparison that ended with status 0 and left no diff.txt, or one that cannot be read, found
+  // nothing the run can read as "the same": that workload is not read, the other is, and the row is written.
+  for (const [how, word] of [[true, "ENOENT"], ["dir", "EISDIR"]]) {
+    const bare = command({ reports: PASS, undiffed: { unstaged: how } });
+    assert.deepEqual([bare.exit, rows(bare.page).length, bare.file("row.md").includes(bare.line), bare.calls], [3, 1, true, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("plain")]]);
+    assert.ok(bare.line.includes(`${PLAIN}, answers differ as recorded; \`unstaged\` not read: what the check before any turn left could not be read (${word}: `) && bare.line.endsWith("| not read: `unstaged` |"), bare.line);
+  }
   // A pilot that sizes no K: the gated part is not resolved, built or run. What plan.mjs said
   // is the row's reason, less the run's directory, which is the host's.
   const unsized = command({ reports: PASS, sizes: { plain: "sizes no K for plain: the workload is not read across placements under this plan" } });
@@ -644,8 +655,12 @@ test("refused before anything is made or run", () => {
   // The checkout: full, with a release tag and the plan's branch, and git answering as asked.
   refused({ shallow: { status: 0, text: "true\n" } }, "the checkout is shallow, so the commits main merged since a row cannot all be listed from it");
   refused({ shallow: { status: 128 } }, "git could not say whether the checkout is shallow");
-  refused({ partial: 0 }, "the checkout is a partial clone (a remote of it is a promisor), which lacks objects and fetches them as they are read");
-  refused({ partial: 128 }, "git could not say whether the checkout is a partial clone");
+  // Partial by a remote whose promisor is true or by the older extension; a promisor that is
+  // false is a full clone's, and is not refused.
+  refused({ promisor: "remote.fork.promisor false\nremote.origin.promisor true\n" }, "the checkout is a partial clone (a remote of it is a promisor), which lacks objects and fetches them as they are read");
+  refused({ extension: "origin\n" }, "the checkout is a partial clone");
+  refused({ promisor: 128 }, "git could not say whether the checkout is a partial clone");
+  run({ ...quiet, dir: join(tmp, "promisor-false"), exec: (cmd, args) => (cmd === "git" ? git(args, { promisor: "remote.origin.promisor false\n" }) : { status: 1, stdout: "", stderr: "" }) });
   refused({ tags: "evidence/placement-kit\n" }, "the checkout has no release tag vX.Y.Z: fetch the tags");
   refused({ tags: null }, "git could not list the checkout's tags");
   refused({ commits: { "refs/tags/v0.2.0": undefined, "v0.2.0": BASE } }, "v0.2.0 names no commit");

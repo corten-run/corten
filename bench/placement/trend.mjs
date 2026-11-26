@@ -365,7 +365,9 @@ function within(root, p) {
  */
 export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOString().slice(0, 10), env = process.env, exec = execute, say = console.log }) {
   const refuse = (why) => { const e = new Error(why); e.refused = true; throw e; };
-  const git = (...args) => { const r = exec("git", ["-C", here, ...args], { env }); return r.status === 0 ? String(r.stdout ?? "").trim() : null; };
+  // git as this command asks it, never fetching an object the checkout lacks: a partial clone the check below misjudges fails there.
+  const asks = (...args) => exec("git", ["-C", here, ...args], { env: { ...env, GIT_NO_LAZY_FETCH: "1" } });
+  const git = (...args) => { const r = asks(...args); return r.status === 0 ? String(r.stdout ?? "").trim() : null; };
   const commit = (ref, missing) => {
     const out = git("rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
     if (out === null) refuse(missing);
@@ -379,8 +381,10 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
   if (within(physical(top), dir)) refuse(`${dir} is inside the checkout: a run's directory is outside it`);
   const shallow = git("rev-parse", "--is-shallow-repository");
   if (shallow !== "false") refuse(shallow === "true" ? "the checkout is shallow, so the commits main merged since a row cannot all be listed from it: use a full clone (git fetch --unshallow)" : "git could not say whether the checkout is shallow");
-  const partial = exec("git", ["-C", here, "config", "--get-regexp", "^remote\\..*\\.promisor$"], { env }).status;
-  if (partial !== 1) refuse(partial === 0 ? "the checkout is a partial clone (a remote of it is a promisor), which lacks objects and fetches them as they are read, so a run would build and list from what it does not hold: use a full clone" : "git could not say whether the checkout is a partial clone");
+  // A partial clone has a remote whose promisor is true, as git reads a boolean, or the older extensions.partialClone.
+  const promisor = asks("config", "--type=bool", "--get-regexp", "^remote\\..*\\.promisor$"), extension = asks("config", "--get", "extensions.partialclone").status;
+  if (promisor.status > 1 || promisor.status < 0 || extension > 1 || extension < 0) refuse("git could not say whether the checkout is a partial clone");
+  if (extension === 0 || /^remote\..*\.promisor true$/m.test(String(promisor.stdout ?? ""))) refuse("the checkout is a partial clone (a remote of it is a promisor), which lacks objects and fetches them as they are read, so a run would build and list from what it does not hold: use a full clone");
   let t, bad;
   try { t = JSON.parse(readFileSync(plan, "utf8")); bad = problems(t); } catch (e) { refuse(`${plan} cannot be read as a trend plan: ${e.message}`); }
   if (bad.length) refuse(`${plan} is not a usable trend plan:\n  ${bad.join("\n  ")}`);
@@ -416,8 +420,9 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
   const kit = (f) => join(here, f), why = {}, expect = {}, expected = {}, kept = {};
 
   // Check: both sides built once for each workload with nothing turned, and their answers compared.
+  // Whatever it left that cannot be read leaves that workload not read, and the check goes on.
   const check = write("check.json");
-  for (const w of names) {
+  for (const w of names) try {
     const work = join(dir, `check-${w}`);
     let failed = step(`check-${w}-plan`, process.execPath, [kit("plan.mjs"), check, "gated", w, work], { env: { ...env, DRYRUN: "1" } });
     if (failed) { why[w] = `plan.mjs refused the plan: ${failed.said}`; continue; }
@@ -433,7 +438,8 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
     }
     failed = step(`check-${w}-answers`, "sh", ["-c", ANSWERS, "sh", work]);
     if (failed && (failed.status === 124 || failed.status === 137)) { why[w] = `the two sides' answers were not compared within a placement's time limit, ${t.plan.placementSeconds} s, and the check was stopped`; continue; }
-    const at = join(work, "compare", "answers"), diff = existsSync(join(at, "diff.txt")) ? readFileSync(join(at, "diff.txt"), "utf8") : "";
+    // A comparison that found the answers the same left a diff.txt, an empty one: none is nothing to read.
+    const at = join(work, "compare", "answers"), diff = failed && !existsSync(join(at, "diff.txt")) ? "" : readFileSync(join(at, "diff.txt"), "utf8");
     const differs = Boolean(failed) && diff !== "" && /A and B answer differently/.test(readFileSync(failed.log, "utf8"));
     if (failed && !differs) { why[w] = `the two sides' answers could not be compared: ${failed.said}`; continue; }
     const b = bodies(join(at, "bodies.txt"));
@@ -445,7 +451,7 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
       writeFileSync(join(dir, expect[w]), diff);
       say(`${w}: ${tag} and ${t.head} answer differently. The run records this difference, which nobody reviewed, and every placement must show it and no other:\n${diff}`);
     }
-  }
+  } catch (e) { why[w] = `what the check before any turn left could not be read (${clean(e?.message ?? e)})`; }
 
   // The plan the parts are read from, and what it declares.
   const file = write("plan.json", expect), sha = createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -490,9 +496,9 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
   let made = null;
   if (!dry && readings.some((r) => r.state === "past")) {
     // From the row before this one when this run's head descends from its commit, and else from the release.
-    const prior = earlier[0] ?? null, placed = prior && exec("git", ["-C", here, "merge-base", "--is-ancestor", prior.head, head], { env }).status, since = placed === 0 ? prior : null;
-    const note = prior && !since ? `The row before this one (${prior.date}) names \`${short(prior.head)}\`, ${placed === 1 ? "a commit this run's head does not descend from (`main` was moved back or rewritten since)" : "a commit git could not place before this run's head in the run's checkout"}, so the list below is from ${tag}.` : null;
-    const log = exec("git", ["-C", here, "log", "--first-parent", "--format=%H%x1f%s%x1f%b%x1e", `${since ? since.head : base}..${head}`], { env });
+    const prior = earlier[0] ?? null, placed = prior && asks("merge-base", "--is-ancestor", prior.head, head).status, since = placed === 0 ? prior : null;
+    const note = prior && !since ? `The row before this one (${prior.date}) names \`${short(prior.head)}\`, ${placed === 1 ? "a commit this run's head does not descend from (`main` was moved back or rewritten since)" : "a commit git could not place before this run's head in the run's checkout"}, so the list below is from ${tag}: the commits \`main\` has that the release does not.` : null;
+    const log = asks("log", "--first-parent", "--format=%H%x1f%s%x1f%b%x1e", `${since ? since.head : base}..${head}`);
     const records = log.status === 0 ? history(String(log.stdout ?? "")) : null;
     made = issue({ ...at, line, since, note, prs: records && merged(records), unread: log.status === 0 ? "git log's output is not a list of commits" : `git log ended with status ${log.status}`, expected });
     writeFileSync(join(dir, "issue.md"), `${made.title}\n\n${made.body}`);

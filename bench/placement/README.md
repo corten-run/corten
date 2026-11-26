@@ -172,8 +172,10 @@ give, with the rules that give it. A field that is not in this table is refused.
 
 Before anything is made or run the command refuses, with exit 2: a run directory that is not as
 above, a shallow checkout (the commits `main` merged since a row cannot all be listed from one)
-or a partial one (it lacks objects and fetches them as they are read, so a run would build and
-list from what it does not hold), a plan that cannot be read or used or whose probe is not
+or a partial one (a remote whose `promisor` is true, or `extensions.partialClone`: it lacks
+objects and fetches them as they are read, so a run would build and list from what it does not
+hold; the command's own git calls are made with `GIT_NO_LAZY_FETCH=1`, so one the check
+misjudges fails at the object it lacks), a plan that cannot be read or used or whose probe is not
 there, a page that is not the table the command writes with its rows newest first, or whose
 newest row is of today's date or a later one (a dry run, which adds none, is not refused for
 the date), and a checkout without a release tag or the plan's branch. Then, in order, each step
@@ -212,7 +214,8 @@ lower bound of the change, `main` against the release, is at or above the thresh
 otherwise. A pass says the run did not show a rise of at least the threshold. It does not say
 the cost is under it: a lower bound of +1.9% under a bound of +5% is a pass. Anything else is
 "not read", with the reason in the row, never a pass: a probe that does not build at the
-release tag, answers not compared in time, a pilot that sizes no K, a step that failed whatever
+release tag, answers not compared in time or a comparison that left no `diff.txt` that can be
+read (one that found the answers the same leaves an empty one), a pilot that sizes no K, a step that failed whatever
 report it left, a report that cannot be read, a placement with another body, an A/A that does
 not resolve, a comparison without a bound. One workload not read leaves the other to be read
 and the row to be written. Nothing is run again for its result. The kit's own page for a gated
@@ -237,7 +240,7 @@ empty.
 | 1 | A workload is past the threshold, and every workload was read. |
 | 3 | A workload was not read, whatever another read: 3 outranks 1, and the issue is still drafted for a workload that is past. |
 | 2 | Refused, with nothing run, nothing made and no row. |
-| 4 | `trend.mjs` itself failed: a defect in it, or a page that changed while the run was made so that its row cannot be added. Once the parts have run, the row is in `<run dir>/row.md` before the page is touched. That is all there is for two runs that would publish to one page: the later one ends here with its row kept. |
+| 4 | `trend.mjs` itself failed: a defect in it, or a page that changed while the run was made so that its row cannot be added. Once the parts have run, the row is in `<run dir>/row.md` before the page is touched. Publishing a row is one run at a time, which is the operator's to keep: this exit is given for a changed page only when the command, reading the page again before it writes, finds a row of this run's date or a later one. Two runs that read the same page before either writes both write it, and the page keeps one row; each row is still in its run's directory. |
 
 `DRYRUN=1` makes every part a dry run: the row goes to `<run dir>/row.md` alone, marked, the
 page is left as it was and no issue is drafted, whatever a report holds. It exits 0 when every
