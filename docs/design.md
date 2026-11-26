@@ -9895,7 +9895,7 @@ rules something out.
     Pull requests, a band that moves after a reading does not reopen it, and a plan declared
     before `main` gave a band is read without one, so nobody is held to a rule `main` did not
     show them and no reading changes what it decided. The band is the same whatever reads the
-    workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
+    workload, the catalog count (`bench/fullstack/count-pairs.mjs`) or a probe, so nothing is gained against it by
     choosing one (but for the catalog's two targets, below). The test gives what it gives with a
     spread of the setup's own. A negative
     control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
@@ -9922,9 +9922,13 @@ rules something out.
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
 
-    The catalog's `page` and `json`. Pull requests (item 2.1) has a change that the catalog's
-    item page or item JSON exercises counted with `bench/fullstack/count.mjs`, targets `page`
-    and `json`: one build of each side, in the image that script starts. Under the default band
+    The catalog's `page` and `json`. When this case was decided, Pull requests (item 2.1) had a
+    change that the catalog's item page or item JSON exercises counted with
+    `bench/fullstack/count.mjs`, targets `page` and `json`: one build of each side, in the image
+    that script starts, with no A/A of the count's own and a bound outside the band binding by
+    itself. It is now counted with `bench/fullstack/count-pairs.mjs`, which runs that script on
+    one build of each side beside an A/A of its own, and binds only where that A/A resolves (The
+    count's own A/A, below). Under the default band
     a count whose bound's distance from its threshold is inside the band is not decided, does
     not pass and is to be read across placements, and nothing reads that image across
     placements: `bench/placement` reads a probe Cargo builds, and nothing else in the tree
@@ -10010,7 +10014,7 @@ rules something out.
     That changes what passes: before it, a count above the band held its pull request; now a miss
     whose run's A/A does not resolve no longer holds by itself, and is reported as not decided,
     since that run did not show it could tell a change from nothing. An A/A with no bound (an
-    invocation that failed, too few pairs) is a failed count, as a change with no bound is: it
+    invocation that failed, pair 0's included, too few pairs) is a failed count, as a change with no bound is: it
     returns to the maintainer and does not pass until the maintainer decides, since a run that
     did not take its own A/A has not shown what it can read. A plan declared before this rule
     was on `main` is read by the rule as it then stood. That

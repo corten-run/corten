@@ -9,13 +9,15 @@
 // started, tagged `cb-corten` first. For each target, pair i is two comparisons of two
 // invocations each: the change, sides `base` (the base's image) and `head` (the head's), and its
 // A/A, the same two names with the base's image under both. Pair 0 is not recorded; pairs 1 to
-// <pairs> are. In odd pairs the side named `base` goes first and the A/A before the change; in
+// <pairs> (5 to 999) are. Pair 0 gives no sample, but an invocation of it that is not valid fails
+// its comparison as any other does. In odd pairs the side named `base` goes first and the A/A before the change; in
 // even pairs `head` and the change. So a run is four invocations a pair and target where a count
 // without its A/A is two: twice the time.
 //
 // A pair's change is the second side over the first less 1 (`head` / `base` - 1) in user plus
 // kernel cycles a request; the bound is the j-th smallest of the n recorded changes, j the
-// smallest rank with P(Binomial(n, 1/2) >= j) <= 5% (the 59th of 100). The A/A is read twice, as
+// smallest rank with P(Binomial(n, 1/2) >= j) <= 5% (the 59th of 100), ordered and read against the
+// band exactly from the whole cycle counts (an end of the band is inside). The A/A is read twice, as
 // recorded and with its labels swapped (`base` / `head` - 1), as bench/placement reads one. It
 // resolves when both of its bounds less +1% are inside the default band; then the change's bound
 // less +1% is read against the band as item 2 reads it: above, a miss; below, it meets +1%;
@@ -24,19 +26,26 @@
 // change has no bound (an invocation not valid, too few pairs), the count failed: it returns to
 // the maintainer and does not pass until the maintainer decides.
 //
-// The run's ledger is `<results>/<prefix>/`: `run.json` (the image IDs, the schedule and every
-// setting count.mjs is given, written before the first invocation; a run going on refuses if any
-// differs) and `invocations.jsonl` (each invocation as it starts and ends). No invocation is run
-// again: the command run again goes on from the first not started. `run.lock` in the ledger and a
-// lock on the shared `cb-corten` tag (and the `fsw-corten` container count.mjs starts) keep two
-// runners apart. It writes `report.json` and prints the report when every invocation has been
-// started.
+// The run's ledger is `<results>/<prefix>/`: `run.json` (the image IDs, the schedule, every
+// setting count.mjs is given, the SHA-256 of every file the count runs and of the fixture it
+// mounts, and the host: the Docker daemon's ID and address, the docker and perf on the count's
+// PATH and their versions, the kernel, Node and the k6 image; written before the first invocation,
+// and a run going on refuses if any differs or cannot be established) and `invocations.jsonl`
+// (each invocation as it starts and as it ends, with the SHA-256 and size of the row, the k6
+// summary and the launched image it is read from: a replay reads those bytes or none). No
+// invocation is run again: the command run again goes on from the first not started.
+// `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
+// that only one runner can make (the lock on the daemon's `cb-corten` tag and the `fsw-corten`
+// container count.mjs starts, whatever directory a runner starts from) keep two runners apart.
+// It writes `report.json` and prints the report once every invocation has ended, unless it was
+// asked to stop.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { hostname } from "node:os";
+import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { k6Image } from "../load-tool.mjs";
 import { median, pct, upperRank } from "../placement/stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,6 +75,11 @@ export const COUNT_ARGS = Object.freeze(["1", "corten"]);
 export const TAG = "cb-corten";
 /** The fewest recorded pairs whose changes give a 95% bound (P(Binomial(5, 1/2) >= 5) = 1/32). */
 export const MIN_PAIRS = (() => { let n = 1; while (upperRank(n) > n) n += 1; return n; })();
+/** The most: a pair's number is three digits in its round names, so every name has one length. */
+export const MAX_PAIRS = 999;
+/** The container on the Docker daemon that stands for the lock on its `cb-corten` tag and `fsw-corten` container. */
+export const DAEMON_LOCK = "corten-count-pairs-lock";
+const HOLDER = "run.corten.count-pairs.holder";
 /** User plus kernel cycles a request, the measure the count is read in. */
 export const cycles = (/** @type {Record<string, number>} */ row) => row.userCyclesPerRequest + row.kernelCyclesPerRequest;
 
@@ -75,8 +89,9 @@ export const cycles = (/** @type {Record<string, number>} */ row) => row.userCyc
  */
 export function optionsError(o) {
   if (typeof o.prefix !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(o.prefix)) return "the prefix is letters, digits, - and _, starting with a letter or digit";
-  if (typeof o.last !== "number" || !Number.isInteger(o.last)) return "the pair count is a whole number";
+  if (typeof o.last !== "number" || !Number.isSafeInteger(o.last)) return `the pair count is a whole number from ${MIN_PAIRS} to ${MAX_PAIRS}`;
   if (o.last < MIN_PAIRS) return `${o.last} recorded pairs give no 95% bound: at least ${MIN_PAIRS}`;
+  if (o.last > MAX_PAIRS) return `${o.last} pairs: at most ${MAX_PAIRS}, so every round name has one length`;
   if (!Array.isArray(o.targets) || o.targets.length === 0) return "no target: page, json or both";
   for (const t of o.targets) if (t !== "page" && t !== "json") return `unknown target ${JSON.stringify(t)}; expected page or json`;
   if (new Set(o.targets).size !== o.targets.length) return `a target is named twice: ${o.targets.join(",")}`;
@@ -118,7 +133,7 @@ const isCount = (/** @type {unknown} */ x) => typeof x === "number" && Number.is
 
 /**
  * Why one invocation's row is not valid, or [] when it is.
- * @param {{ row?: any, summary?: any, want: string, before?: string, after?: string, rc?: number | null,
+ * @param {{ row?: any, summary?: any, launched?: any, want: string, before?: string, after?: string, rc?: number | null,
  *   signal?: string | null, tagRc?: number | null, fresh?: boolean, interrupted?: boolean }} inv
  */
 export function invalid(inv) {
@@ -127,6 +142,7 @@ export function invalid(inv) {
   if (inv.tagRc !== 0) return [`docker tag exited ${inv.tagRc ?? "-"}, so count.mjs was not run`];
   const why = [];
   if (inv.before !== inv.want || inv.after !== inv.want) why.push("the image counted was not the side's");
+  if (inv.rc === 0 && (inv.launched?.image !== inv.want || !/^[0-9a-f]{64}$/.test(String(inv.launched?.container)))) why.push("the container counted was not started from the side's image");
   if (inv.rc !== 0) why.push(inv.signal ? `count.mjs was stopped by ${inv.signal}` : `count.mjs exited ${inv.rc ?? "-"}`);
   const row = inv.row;
   if (row == null) return [...why, "no row"];
@@ -137,7 +153,9 @@ export function invalid(inv) {
   if (r.failed !== 0) why.push(`${r.failed} failed requests`);
   for (const [field, event] of Object.entries(COUNTS)) {
     const v = r[field];
+    // count-perf.mjs rounds each count a request to a whole number, so sums and ratios of them are exact.
     if (!isCount(v)) why.push(`${field} is ${typeof v === "string" ? JSON.stringify(v) : String(v)}, not a number`);
+    else if (!Number.isSafeInteger(v) || v < 0) why.push(`${field} is ${v}, not a whole count`);
     const running = r.perfRunningPct?.[event];
     if (typeof running !== "number") why.push(`perf's running percentage for ${event} is not recorded`);
     else if (running !== 100) why.push(`perf ran ${event} ${running}% of its enabled time, not 100%`);
@@ -152,34 +170,79 @@ export function invalid(inv) {
   return why;
 }
 
-/** The bound of a set of changes: the upper rank's, or null with too few. */
-function boundOf(/** @type {number[]} */ changes) {
-  const s = [...changes].sort((a, b) => a - b), j = upperRank(s.length);
-  return { rank: j <= s.length ? j : null, bound: j >= 1 && j <= s.length ? /** @type {number} */ (s[j - 1]) : null, min: s[0] ?? null, max: s.at(-1) ?? null };
+/**
+ * A finite double as the exact fraction it is, [numerator, denominator], the denominator a
+ * positive power of two: the cycle counts and the bounds are compared to the band in these, so an
+ * end of the band is read as inside whatever floating-point subtraction would round it to.
+ */
+function exact(/** @type {number} */ x) {
+  if (!Number.isFinite(x)) throw new Error(`${x} is not a finite number`);
+  if (x === 0) return [0n, 1n];
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, x);
+  const bits = view.getBigUint64(0), biased = Number((bits >> 52n) & 0x7ffn);
+  const mantissa = (bits & 0xfffffffffffffn) | (biased ? 1n << 52n : 0n);
+  const power = (biased || 1) - 1075, n = bits >> 63n ? -mantissa : mantissa;
+  return power >= 0 ? [n << BigInt(power), 1n] : [n, 1n << BigInt(-power)];
+}
+/** A constant as it is written (the band's ends, the margin), its shortest decimal, as an exact fraction. */
+function decimal(/** @type {number} */ x) {
+  const m = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/.exec(String(x));
+  if (!m) throw new Error(`${x} is not a decimal`);
+  const digits = BigInt((m[1] ? "-" : "") + m[2] + (m[3] ?? "")), scale = (m[3] ?? "").length - Number(m[4] ?? 0);
+  return scale >= 0 ? [digits, 10n ** BigInt(scale)] : [digits * 10n ** BigInt(-scale), 1n];
+}
+const minus = (/** @type {bigint[]} */ [a, b], /** @type {bigint[]} */ [c, d]) => [a * d - c * b, b * d];
+const signOf = (/** @type {bigint[]} */ [n, d]) => (n === 0n ? 0 : (n > 0n) === (d > 0n) ? 1 : -1);
+/** num / den as an exact fraction, both positive. */
+const ratio = (/** @type {number} */ num, /** @type {number} */ den) => { const [a, b] = exact(num), [c, d] = exact(den); return [a * d, b * c]; };
+
+/**
+ * Where a bound less +1% falls against the band: -1 below its low end, 0 inside (either end
+ * inside), 1 above its high end. The bound is a number, or { num, den } for num / den - 1 read
+ * exactly from the cycle counts it is the ratio of.
+ * @param {number | { num: number, den: number }} bound
+ */
+export function position(bound, band = BAND) {
+  const b = typeof bound === "number" ? exact(bound) : minus(ratio(bound.num, bound.den), [1n, 1n]);
+  const d = minus(b, decimal(MARGIN));
+  if (signOf(minus(d, decimal(band.low))) < 0) return -1;
+  return signOf(minus(d, decimal(band.high))) > 0 ? 1 : 0;
 }
 
 /**
  * One comparison's reading from its recorded pairs, each `{ base, head }` in cycles a request
- * (null where the pair is not valid). A pair not valid leaves the comparison with no bound.
+ * (null where the pair is not valid). A pair not valid leaves the comparison with no bound, and
+ * so does any of its pair 0 invocations not valid (`unrecordedFailed`), though pair 0 gives no
+ * sample. The bound is the j-th smallest `head` / `base` - 1, ordered exactly; with the labels
+ * swapped, the j-th smallest `base` / `head` - 1.
  * @param {{ pair: number, base: number | null, head: number | null }[]} pairs recorded pairs only
  */
-export function compare(pairs) {
-  const valid = pairs.filter((p) => isCount(p.base) && isCount(p.head) && /** @type {number} */ (p.base) > 0 && /** @type {number} */ (p.head) > 0);
-  const complete = pairs.length > 0 && valid.length === pairs.length;
-  const changes = valid.map((p) => /** @type {number} */ (p.head) / /** @type {number} */ (p.base) - 1);
-  const swapped = valid.map((p) => /** @type {number} */ (p.base) / /** @type {number} */ (p.head) - 1);
-  const rec = boundOf(changes), sw = boundOf(swapped);
+export function compare(pairs, unrecordedFailed = 0) {
+  /** @type {{ base: number, head: number }[]} */
+  const valid = /** @type {any[]} */ (pairs.filter((p) => isCount(p.base) && isCount(p.head) && /** @type {number} */ (p.base) > 0 && /** @type {number} */ (p.head) > 0));
+  const complete = pairs.length > 0 && valid.length === pairs.length && unrecordedFailed === 0;
+  const order = [...valid].sort((p, q) => signOf(minus(ratio(p.head, p.base), ratio(q.head, q.base))));
+  const n = order.length, j = upperRank(n), has = complete && j >= 1 && j <= n;
+  const at = has ? order[j - 1] : null, swapped = has ? order[n - j] : null;
+  const changes = valid.map((p) => p.head / p.base - 1);
   return {
-    n: pairs.length, valid: valid.length, complete, rank: rec.rank,
-    median: changes.length ? median(changes) : null, min: rec.min, max: rec.max,
-    bound: complete ? rec.bound : null,
-    swappedBound: complete ? sw.bound : null,
+    n: pairs.length, valid: valid.length, unrecordedFailed, complete, rank: j <= n ? j : null,
+    median: changes.length ? median(changes) : null,
+    min: n ? order[0].head / order[0].base - 1 : null, max: n ? /** @type {any} */ (order.at(-1)).head / /** @type {any} */ (order.at(-1)).base - 1 : null,
+    bound: at ? at.head / at.base - 1 : null,
+    swappedBound: swapped ? swapped.base / swapped.head - 1 : null,
+    // The same two bounds as the cycle counts they are the ratios of, for reading them exactly.
+    exact: { bound: at ? { num: at.head, den: at.base } : null, swappedBound: swapped ? { num: swapped.base, den: swapped.head } : null },
     changes,
   };
 }
 
-/** Whether a bound's distance from +1% is inside the band, either end inside. */
-export const inside = (/** @type {number} */ bound, band = BAND) => bound - MARGIN >= band.low && bound - MARGIN <= band.high;
+/** Whether a bound's distance from +1% is inside the band, either end inside, read exactly. */
+export const inside = (/** @type {number | { num: number, den: number }} */ bound, band = BAND) => position(bound, band) === 0;
+
+/** A comparison's bound, or its swapped bound, exactly where compare() gave it. */
+const boundOf = (/** @type {any} */ c, /** @type {"bound" | "swappedBound"} */ which) => c.exact?.[which] ?? c[which];
 
 /**
  * The A/A's resolution: "resolved" when both of its bounds less +1% are inside the band, "not
@@ -188,7 +251,7 @@ export const inside = (/** @type {number} */ bound, band = BAND) => bound - MARG
  */
 export function resolution(aa, band = BAND) {
   if (!aa.complete || aa.bound == null || aa.swappedBound == null) return "no bound";
-  return inside(aa.bound, band) && inside(aa.swappedBound, band) ? "resolved" : "not resolved";
+  return inside(boundOf(aa, "bound"), band) && inside(boundOf(aa, "swappedBound"), band) ? "resolved" : "not resolved";
 }
 
 /**
@@ -205,19 +268,20 @@ export function reading(change, aa, band = BAND) {
   const aaIs = resolution(aa, band);
   if (aaIs === "no bound") return failed("failed: the count's A/A has no bound, so the count does not pass until the maintainer decides");
   if (aaIs === "not resolved") return { verdict: "not decided: the count's A/A does not resolve the default band, so the change is read as one inside the band, neither held nor cleared", decided: false, holds: false, clears: false, failed: false };
-  const d = change.bound - MARGIN;
-  if (d > band.high) return { verdict: "a miss", decided: true, holds: true, clears: false, failed: false };
-  if (d < band.low) return { verdict: "meets +1%", decided: true, holds: false, clears: true, failed: false };
+  const where = position(boundOf(change, "bound"), band);
+  if (where > 0) return { verdict: "a miss", decided: true, holds: true, clears: false, failed: false };
+  if (where < 0) return { verdict: "meets +1%", decided: true, holds: false, clears: true, failed: false };
   return { verdict: "inside the default band: not decided", decided: false, holds: false, clears: false, failed: false };
 }
 
 const COMPARISON = { ab: "the change", aa: "its A/A" };
 
 /**
- * Reads a run's records: each invocation's row and summary from count.mjs's results.
+ * Reads a run's records: each invocation's row, summary and launched image from count.mjs's
+ * results, as `load` gives them from the invocation's record (and why it could not).
  * @param {ReturnType<typeof schedule>} plan
  * @param {Map<string, any>} records invocation records by name
- * @param {(name: string, target: string) => { row?: any, summary?: any }} load
+ * @param {(name: string, target: string, record: any) => { row?: any, summary?: any, launched?: any, why?: string[] }} load
  */
 export function readRun(plan, records, load) {
   /** @type {Record<string, Record<string, any[]>>} */
@@ -225,8 +289,8 @@ export function readRun(plan, records, load) {
   for (const inv of plan) {
     const rec = records.get(inv.name);
     const ended = rec?.ended != null;
-    const got = ended && rec.fresh !== false ? load(inv.name, inv.target) : {};
-    const why = rec ? invalid({ ...got, ...pick(rec), interrupted: !ended }) : ["not run"];
+    const got = ended && rec.fresh !== false && rec.tagRc === 0 ? load(inv.name, inv.target, rec) : {};
+    const why = rec ? [...(got.why ?? []), ...invalid({ ...got, ...pick(rec), interrupted: !ended })] : ["not run"];
     const row = Array.isArray(got.row) && got.row.length === 1 ? got.row[0] : null;
     const value = why.length === 0 && row ? cycles(row) : null;
     const byTarget = (pairs[inv.target] ??= {});
@@ -240,7 +304,10 @@ export function readRun(plan, records, load) {
   const targets = {};
   for (const [target, byComparison] of Object.entries(pairs)) {
     const recorded = (/** @type {any[]} */ list) => list.filter((p) => p.recorded);
-    const change = compare(recorded(byComparison.ab ?? [])), aa = compare(recorded(byComparison.aa ?? []));
+    // Pair 0 gives no sample, but an invocation of it that is not valid fails its comparison, as any other does.
+    const unrecordedFailed = (/** @type {any[]} */ list) => list.filter((p) => !p.recorded && (p.why.length > 0 || p.base == null || p.head == null)).length;
+    const of = (/** @type {any[]} */ list) => compare(recorded(list), unrecordedFailed(list));
+    const change = of(byComparison.ab ?? []), aa = of(byComparison.aa ?? []);
     const diagnostics = Object.fromEntries(Object.entries(byComparison).map(([c, list]) => [c, split(recorded(list))]));
     targets[target] = { change, aa, resolution: resolution(aa), reading: reading(change, aa), diagnostics, pairs: byComparison };
   }
@@ -327,17 +394,144 @@ export function lock(file, what) {
   };
 }
 
-/** The run's settings as the ledger keeps them: what decides which experiment it is. */
-export function settingsOf(/** @type {{ prefix: string, images: { base: string, head: string }, last: number, targets: string[], env: Record<string, string | undefined> }} */ o, /** @type {{ base: string, head: string }} */ ids, /** @type {ReturnType<typeof schedule>} */ plan) {
+const sha256 = (/** @type {Buffer} */ bytes) => createHash("sha256").update(bytes).digest("hex");
+const own = fileURLToPath(import.meta.url);
+
+/**
+ * The files a count runs, kit-relative with `/`: count.mjs and every module it imports by a
+ * relative specifier, the k6 script it loads and that script's relative imports, the fixture it
+ * mounts into the app, and this runner and its own imports. Bare specifiers (`node:` modules, k6's
+ * own) are the Node and k6 the environment and images pin. Throws where a file is missing.
+ * @param {string} kit the directory count.mjs is in
+ */
+export function kitOf(kit) {
+  /** @type {Record<string, { sha256: string, bytes: number }>} */
+  const out = {};
+  const seen = new Set();
+  const visit = (/** @type {string} */ file, /** @type {boolean} */ code) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const name = relative(kit, file).split(sep).join("/");
+    if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`cannot establish what the count runs: ${name} is missing`);
+    const bytes = readFileSync(file);
+    out[name] = { sha256: sha256(bytes), bytes: bytes.length };
+    if (!code) return;
+    const text = bytes.toString("utf8");
+    for (const m of text.matchAll(/\b(?:import|export)\s[^"';]*?\bfrom\s*["']([^"']+)["']|\bimport\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g)) {
+      const spec = /** @type {string} */ (m[1] ?? m[2] ?? m[3]);
+      if (spec.startsWith("./") || spec.startsWith("../")) visit(resolve(dirname(file), spec), true);
+    }
+  };
+  visit(join(kit, "count.mjs"), true);
+  visit(join(kit, "ssr-load.js"), true);
+  visit(join(kit, "fixtures", "items.json"), false);
+  visit(own, true);
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/** The file a command name runs from PATH, as a spawn finds it, or null. */
+export function onPath(/** @type {string} */ name, /** @type {Record<string, string | undefined>} */ env = process.env, platform = process.platform) {
+  const key = platform === "win32" ? Object.keys(env).find((k) => k.toUpperCase() === "PATH") : "PATH";
+  const exts = platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+  for (const dir of (key ? env[key] ?? "" : "").split(platform === "win32" ? ";" : delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      const file = join(dir, name + ext);
+      if (existsSync(file) && statSync(file).isFile()) return file;
+    }
+  }
+  return null;
+}
+
+const DAEMON = '{"id":{{json .ID}},"version":{{json .ServerVersion}},"kernel":{{json .KernelVersion}},"name":{{json .Name}}}';
+
+/**
+ * What can change a count on the host it runs on, as the count's environment reaches it: the
+ * Docker daemon (by its ID) and how it is addressed, the docker and perf commands PATH gives and
+ * their versions, the kernel, Node, and the k6 image count.mjs loads with (by digest). Throws,
+ * naming the probe, where any cannot be established.
+ * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => { status: number | null, stdout?: string }} exec
+ * @param {Record<string, string | undefined>} env
+ * @param {(name: string) => string | null} which
+ */
+export function environmentOf(exec, env, which) {
+  const run = (/** @type {string} */ cmd, /** @type {string[]} */ args) => {
+    const r = exec(cmd, args, { env });
+    const out = r.status === 0 ? (r.stdout ?? "").trim() : "";
+    if (!out) throw new Error(`cannot establish the host the count runs on: ${[cmd, ...args.slice(0, 1)].join(" ")} gave nothing (exit ${r.status ?? "-"})`);
+    return out;
+  };
+  const path = (/** @type {string} */ name) => {
+    const found = which(name);
+    if (!found) throw new Error(`cannot establish the host the count runs on: no ${name} on the count's PATH`);
+    return found;
+  };
+  /** @type {any} */
+  let daemon;
+  const info = run("docker", ["info", "--format", DAEMON]);
+  try { daemon = JSON.parse(info); } catch { daemon = null; }
+  if (!daemon?.id || !daemon?.version) throw new Error("cannot establish the host the count runs on: docker info gave no daemon ID");
   return {
-    version: 1,
+    dockerHost: env.DOCKER_HOST ?? null,
+    dockerContext: env.DOCKER_CONTEXT ?? null,
+    daemon,
+    docker: { path: path("docker"), client: run("docker", ["version", "--format", "{{.Client.Version}}"]) },
+    perf: { path: path("perf"), version: run("perf", ["--version"]) },
+    kernel: run("uname", ["-r"]),
+    node: { version: process.version, path: process.execPath },
+    k6: k6Image,
+  };
+}
+
+/**
+ * Takes the daemon's lock on its `cb-corten` tag and `fsw-corten` container: a container named
+ * DAEMON_LOCK, made (never started) from `image`, which the daemon lets only one runner make
+ * whatever directory each runs from. Throws, naming its holder, where one is there. Its release
+ * removes the container by the ID it was made with, so never one another runner made after it.
+ * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => { status: number | null, stdout?: string }} exec
+ * @param {Record<string, string | undefined>} env
+ * @param {string} image
+ * @param {string} ledger
+ */
+export function daemonLock(exec, env, image, ledger) {
+  const holder = `process ${process.pid} on ${hostname()}, since ${new Date().toISOString()}, for ${ledger}`;
+  const made = exec("docker", ["create", "--name", DAEMON_LOCK, "--label", `${HOLDER}=${holder}`, "--label", `run.corten.count-pairs.token=${randomUUID()}`, image], { env });
+  const id = (made.stdout ?? "").trim();
+  if (made.status === 0 && /^[0-9a-f]{64}$/.test(id)) return () => exec("docker", ["rm", id], { env }).status === 0;
+  if (made.status === 0) throw new Error(`docker create ${DAEMON_LOCK} gave no container ID; remove it with docker rm ${DAEMON_LOCK} and run again`);
+  const seen = exec("docker", ["inspect", "-f", "{{json .Config.Labels}}", DAEMON_LOCK], { env });
+  if (seen.status !== 0) throw new Error(`could not take the daemon's lock: docker create ${DAEMON_LOCK} exited ${made.status ?? "-"}`);
+  /** @type {string | undefined} */
+  let by;
+  try { by = JSON.parse(seen.stdout ?? "")?.[HOLDER]; } catch {}
+  throw new Error(`the ${TAG} tag and the fsw-corten container on this Docker daemon are locked by ${by ?? "an unlabeled holder"} (container ${DAEMON_LOCK}). Another runner holds it; if none is running, the lock is stale: remove it with docker rm ${DAEMON_LOCK} and run again`);
+}
+
+/** The outputs of one invocation that its reading is made from, sealed when it ends. */
+export const artifactsOf = (/** @type {string} */ target) => ["instructions.json", `count-corten-${target}-0.json`, "count-images.json"];
+
+/** Each of an invocation's outputs as it is now: its SHA-256 and size, or null where it is not there. */
+export function seal(/** @type {string} */ dir, /** @type {string[]} */ names) {
+  return Object.fromEntries(names.map((name) => {
+    const file = join(dir, name);
+    if (!existsSync(file) || !statSync(file).isFile()) return [name, null];
+    const bytes = readFileSync(file);
+    return [name, { sha256: sha256(bytes), bytes: bytes.length }];
+  }));
+}
+
+/** The run's settings as the ledger keeps them: what decides which experiment it is. */
+export function settingsOf(/** @type {{ prefix: string, images: { base: string, head: string }, last: number, targets: string[], env: Record<string, string | undefined> }} */ o, /** @type {{ base: string, head: string }} */ ids, /** @type {ReturnType<typeof schedule>} */ plan, /** @type {ReturnType<typeof kitOf>} */ kit, /** @type {ReturnType<typeof environmentOf>} */ environment) {
+  return {
+    version: 2,
     prefix: o.prefix,
     images: { base: o.images.base, head: o.images.head },
     ids: { base: ids.base, head: ids.head },
     pairs: o.last,
     targets: [...o.targets],
-    count: { script: "bench/fullstack/count.mjs", args: ["<round>", ...COUNT_ARGS, "<target>"], tag: TAG, node: process.version },
+    count: { script: "count.mjs", args: ["<round>", ...COUNT_ARGS, "<target>"], tag: TAG },
     env: Object.fromEntries(COUNT_ENV.map((k) => [k, o.env[k] ?? null])),
+    kit,
+    environment,
     requests: REQUESTS,
     band: { ...BAND },
     margin: MARGIN,
@@ -345,15 +539,17 @@ export function settingsOf(/** @type {{ prefix: string, images: { base: string, 
   };
 }
 
-/** The top-level keys whose values differ between two settings. */
-const differences = (/** @type {Record<string, unknown>} */ a, /** @type {Record<string, unknown>} */ b) =>
-  [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+/** The keys whose values differ between two settings, with the entries that differ in `kit` and `environment`. */
+const differences = (/** @type {Record<string, any>} */ a, /** @type {Record<string, any>} */ b) => {
+  const keys = (/** @type {Record<string, any>} */ x, /** @type {Record<string, any>} */ y) => [...new Set([...Object.keys(x ?? {}), ...Object.keys(y ?? {})])].filter((k) => JSON.stringify(x?.[k]) !== JSON.stringify(y?.[k]));
+  return keys(a, b).map((k) => ((k === "kit" || k === "environment") && a[k] && typeof a[k] === "object" ? `${k} (${keys(a[k], b[k]).join(", ")})` : k));
+};
 
 /**
  * Runs a count's invocations not yet started, then reads them all.
  * @param {{ prefix: string, images: { base: string, head: string }, last: number, targets: string[], results: string,
  *   exec: (cmd: string, args: string[], options?: { log?: string, env?: Record<string, string | undefined> }) => { status: number | null, signal?: string | null, stdout?: string },
- *   env?: Record<string, string | undefined>, tagLock?: string, stop?: () => boolean,
+ *   env?: Record<string, string | undefined>, kit?: string, which?: (name: string) => string | null, stop?: () => boolean,
  *   now?: () => number, log?: (line: string) => void }} o
  */
 export async function runPairs(o) {
@@ -361,32 +557,40 @@ export async function runPairs(o) {
   if (error) throw new Error(error);
   const now = o.now ?? Date.now, log = o.log ?? (() => {}), env = o.env ?? process.env;
   const dir = join(o.results, o.prefix);
+  const id = (/** @type {string} */ image) => {
+    const r = o.exec("docker", ["image", "inspect", "-f", "{{.Id}}", image], { env });
+    return r.status === 0 ? (r.stdout ?? "").trim() : "";
+  };
   mkdirSync(join(dir, "inv"), { recursive: true });
   const releases = [lock(join(dir, "run.lock"), dir)];
   try {
-    releases.push(lock(o.tagLock ?? join(tmpdir(), "corten-bench-cb-corten.lock"), `the ${TAG} tag and the fsw-corten container (${dir})`));
-    return await locked(o, { dir, now, log, env });
+    // The daemon's lock is a container made from the base's image, so the base's ID is read first; a
+    // new run refuses one image for both sides before it takes the lock, a run going on in locked().
+    const base = id(o.images.base), head = id(o.images.head);
+    if (!base || !head) throw new Error("no image for a side");
+    if (base === head && !existsSync(join(dir, "run.json"))) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
+    const release = daemonLock(o.exec, env, base, dir);
+    releases.push(() => { if (!release()) log(`the daemon's lock was not removed: remove it with docker rm ${DAEMON_LOCK} if no runner is going`); });
+    return await locked(o, { dir, now, log, env, id });
   } finally {
     for (const release of releases.reverse()) release();
   }
 }
 
-async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined> }} */ { dir, now, log, env }) {
+async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string }} */ { dir, now, log, env, id }) {
   const file = join(dir, "invocations.jsonl"), runFile = join(dir, "run.json");
-  const id = (/** @type {string} */ image) => {
-    const r = o.exec("docker", ["image", "inspect", "-f", "{{.Id}}", image]);
-    return r.status === 0 ? (r.stdout ?? "").trim() : "";
-  };
+  const kitDir = o.kit ?? here;
   const plan = schedule(o.last, o.targets, o.prefix);
+  const kit = kitOf(kitDir), environment = environmentOf(o.exec, env, o.which ?? ((name) => onPath(name, env)));
   /** @type {{ base: string, head: string }} */
   let ids;
   if (existsSync(runFile)) {
     const saved = JSON.parse(readFileSync(runFile, "utf8"));
     ids = { base: saved.ids?.base, head: saved.ids?.head };
     const current = { base: id(o.images.base), head: id(o.images.head) };
-    const differ = differences(saved, settingsOf({ ...o, env }, ids, plan));
+    const differ = differences(saved, settingsOf({ ...o, env }, ids, plan, kit, environment));
     if (current.base !== ids.base || current.head !== ids.head) differ.push(`the images' IDs now (${o.images.base} ${current.base || "none"}, ${o.images.head} ${current.head || "none"})`);
-    if (differ.length) throw new Error(`${runFile} is another experiment's: ${differ.join(", ")} differ from it. Go on with the same images, settings and environment, or use a new prefix`);
+    if (differ.length) throw new Error(`${runFile} is another experiment's: ${differ.join(", ")} differ from it. Go on with the same images, kit, host, settings and environment, or use a new prefix`);
   } else {
     if (existsSync(file)) throw new Error(`${file} has no run.json beside it, so what it ran is not known: use a new prefix`);
     ids = { base: id(o.images.base), head: id(o.images.head) };
@@ -394,7 +598,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     if (ids.base === ids.head) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
     const taken = plan.filter((i) => existsSync(join(o.results, i.name)));
     if (taken.length) throw new Error(`${taken.length} of the run's output paths exist already (${join(o.results, taken[0].name)}): use a new prefix`);
-    writeFileSync(runFile, JSON.stringify(settingsOf({ ...o, env }, ids, plan), null, 1) + "\n", { flag: "wx" });
+    writeFileSync(runFile, JSON.stringify(settingsOf({ ...o, env }, ids, plan, kit, environment), null, 1) + "\n", { flag: "wx" });
   }
   const records = readRecords(file);
   for (const inv of plan) {
@@ -408,13 +612,14 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     let end;
     if (existsSync(out) || existsSync(logFile)) end = { ...start, ended: now(), fresh: false };
     else {
-      const tag = o.exec("docker", ["tag", want, TAG]);
+      const tag = o.exec("docker", ["tag", want, TAG], { env });
       const before = id(TAG);
       if (tag.status !== 0) end = { ...start, ended: now(), fresh: true, tagRc: tag.status, before };
       else {
-        const r = o.exec(process.execPath, [join(here, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env });
+        const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env });
         const after = id(TAG);
-        end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: r.signal ?? null, before, after };
+        // The bytes the reading is made from, so a replay reads these or none.
+        end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: r.signal ?? null, before, after, artifacts: seal(out, artifactsOf(inv.target)) };
       }
     }
     appendFileSync(file, JSON.stringify(end) + "\n");
@@ -424,9 +629,20 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     // A signal sent to this process alone is handled between invocations.
     await new Promise((resolve) => setImmediate(resolve));
   }
-  const load = (/** @type {string} */ name, /** @type {string} */ target) => {
-    const at = (/** @type {string} */ f) => (existsSync(join(o.results, name, f)) ? JSON.parse(readFileSync(join(o.results, name, f), "utf8")) : undefined);
-    return { row: at("instructions.json")?.[`corten/${target}`], summary: at(`count-corten-${target}-0.json`) };
+  if (o.stop?.()) throw new Error("stopped before the report was written; run the command again to read it");
+  const load = (/** @type {string} */ name, /** @type {string} */ target, /** @type {any} */ record) => {
+    /** @type {string[]} */
+    const why = [];
+    const at = (/** @type {string} */ f) => {
+      const sealed = record.artifacts?.[f], path = join(o.results, name, f);
+      if (!sealed) return void why.push(`${f} was not there when the invocation ended`);
+      if (!existsSync(path)) return void why.push(`${f} is gone since the invocation ended`);
+      const bytes = readFileSync(path);
+      if (bytes.length !== sealed.bytes || sha256(bytes) !== sealed.sha256) return void why.push(`${f} changed since the invocation ended`);
+      try { return JSON.parse(bytes.toString("utf8")); } catch { return void why.push(`${f} is not JSON`); }
+    };
+    const [rows, summary, images] = artifactsOf(target).map(at);
+    return { row: rows?.[`corten/${target}`], summary, launched: images?.[`corten/${target}`], why };
   };
   const targets = readRun(plan, records, load);
   const json = { prefix: o.prefix, images: o.images, ids, last: o.last, band: BAND, margin: MARGIN, targets };
@@ -464,7 +680,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let stopped = false;
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stopped = true; });
   const exec = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {{ log?: string, env?: Record<string, string | undefined> }} */ opts = {}) => {
-    if (!opts.log) return spawnSync(cmd, args, { encoding: "utf8" });
+    if (!opts.log) return spawnSync(cmd, args, { encoding: "utf8", env: opts.env });
     const fd = openSync(opts.log, "wx");
     try { return spawnSync(cmd, args, { stdio: ["ignore", fd, fd], env: opts.env }); } finally { closeSync(fd); }
   };

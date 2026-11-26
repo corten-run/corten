@@ -95,6 +95,10 @@ if (probe.status !== 0 || !/^\d+,[^,]*,instructions:u/m.test(probe.stderr)) {
 // Merged into the round's earlier counts, so one app can be counted again on its own.
 const file = join(dir, "instructions.json");
 const results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+// The image each counted container was started from, by ID, read before its warmup: which build
+// was counted, whatever its tag names now (count-pairs.mjs checks it against the side's).
+const imagesFile = join(dir, "count-images.json");
+const images = existsSync(imagesFile) ? JSON.parse(readFileSync(imagesFile, "utf8")) : {};
 for (const name of appsArg.split(",")) {
   if (!catalog[name]) throw new Error(`unknown app ${name}`);
   for (const target of targets) {
@@ -110,6 +114,9 @@ for (const name of appsArg.split(",")) {
       writeFileSync(file, JSON.stringify(results, null, 1));
       continue;
     }
+    const container = run.stdout.trim();
+    images[`${name}/${target}${suffix}`] = { container, image: docker("inspect", "-f", "{{.Image}}", container).stdout?.trim() ?? "" };
+    writeFileSync(imagesFile, JSON.stringify(images, null, 1));
     const path = target === "json" ? "/api/items/item_1" : "/items/item_1";
     let up = false;
     for (let i = 0; i < 2400 && !up; i += 1) {

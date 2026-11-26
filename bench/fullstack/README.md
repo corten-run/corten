@@ -2048,29 +2048,48 @@ both, in the same run.
 BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=4-7 node bench/fullstack/count-pairs.mjs <prefix> cb-corten-base cb-corten-head [pairs=100] [page,json]
 ```
 
-Pair 0 of each target is not recorded and pairs 1 to 100 are. A pair is four invocations: the
+Pair 0 of each target is not recorded and pairs 1 to 100 are; pair 0 gives no sample, but an
+invocation of it that is not valid fails its comparison as any other does. A pair is four invocations: the
 change's two and its A/A's two, the side named `base` and the A/A first in odd pairs, `head` and
 the change first in even ones. Each comparison's bound is the 59th smallest of its 100 changes in
 user plus kernel cycles a request, `head` over `base` less 1, and the A/A is read as recorded and
-with its labels swapped. The pair count is a whole number of at least 5, the fewest that give a
-95% bound, and each target is named once; anything else is refused before Docker is called.
+with its labels swapped. The changes are ordered, and each bound less +1% is read against the
+band, exactly from the whole cycle counts a request (`count-perf.mjs` rounds each to a whole
+number), so a bound at an end of the band is inside. The pair count is a whole number from 5, the
+fewest that give a 95% bound, to 999, so every round name has one length, and each target is
+named once; anything else is refused before a lock is taken or Docker is called.
 
 Its records are in `results/<prefix>/`: `run.json`, written before the first invocation, with both
-images' IDs, the ordered schedule and what `count.mjs` is given (its arguments, the `BENCH_*` settings
-it reads, Node's version); `invocations.jsonl`, each invocation as it starts and ends; each
-invocation's log under `inv/`; and `report.json`. Each invocation's own output is
+images' IDs, the ordered schedule, what `count.mjs` is given (its arguments and the `BENCH_*`
+settings it reads), the SHA-256 and size of each file the count runs (`count.mjs` and every module
+it imports, the k6 script, `fixtures/items.json` it mounts into the app, and `count-pairs.mjs` and
+its imports), and the host as the count's environment reaches it (the Docker daemon's ID, version
+and name, `DOCKER_HOST` and `DOCKER_CONTEXT`, the `docker` and `perf` the count's PATH gives with
+their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl`, each invocation
+as it starts and as it ends, with the SHA-256 and size of the three files it is read from (its
+`instructions.json` row, its k6 summary and `count-images.json`); each invocation's log under
+`inv/`; and `report.json`. A wrapper that starts `count-pairs.mjs`, as a kit's `run.sh` does, is
+not among the files it binds; what it runs is. Each invocation's own output is
 `results/<round>/` as `count.mjs` writes it, and must not exist before it runs, since `count.mjs`
 merges into an `instructions.json` it finds: the run refuses to start if any does, and an
 invocation whose path appeared since is recorded as not valid and not run. An invocation is valid
-only when its tag succeeded and named the side's image before and after it, `count.mjs` exited 0,
+only when its tag succeeded and named the side's image before and after it, the container
+`count.mjs` counted was started from the side's image by ID (`count.mjs` records it in
+`count-images.json` before the warmup), `count.mjs` exited 0,
 and its one row has 5,000 requests, none failed, each of its five counts a finite number with
-perf's running percentage at 100%, and all of k6's checks passed. An invocation that was started
-is never started again: the command run again goes on from the first one not started, and
-refuses if the images' IDs, the schedule or a setting differ from `run.json`; one interrupted
-leaves its comparison with no bound. `run.lock` in the ledger and a lock on the shared `cb-corten`
-tag (in the temporary directory) keep two runners apart: each is made only where none is, and
-removed only by the runner that made it, so one left by a runner that was killed is removed by
-hand, as its message says. The report gives each comparison's bounds and, as diagnostics, each
+perf's running percentage at 100%, all of k6's checks passed, and the three files it is read
+from are the bytes sealed when it ended: one replaced, removed or never written leaves it not
+valid. An invocation that was started is never started again: the command run again goes on from
+the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
+count runs or the host differ from `run.json`, or the host cannot be established; one
+interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
+honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a
+container named `corten-count-pairs-lock` (made from the base's image and never started) keep two
+runners apart, whatever directory each starts from: the daemon makes that container for one
+runner only, and the lock stands for its `cb-corten` tag and the `fsw-corten` container
+`count.mjs` starts. Each lock is made only where none is and removed only by the runner that made
+it (the container by the ID it was made with), so one left by a runner that was killed is removed
+by hand, as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it. The report gives each comparison's bounds and, as diagnostics, each
 side's median user cycles, kernel cycles, user and kernel instructions and user L1
 instruction-cache misses a request, with the median per-pair change in each; a pair not valid
 is named by its comparison, pair and side.
@@ -2081,7 +2100,7 @@ its bounds, less +1%, are inside the default band (-2.98% to +3.33%, as
 is read against the band as item 2 reads it: above, a miss; below, it meets +1%; inside, not
 decided. Where the A/A has both bounds and either is outside the band, the change is "not
 decided", read as one inside the band is, whatever its own bound: a miss there no longer holds
-the pull request by itself. Where the A/A has no bound (an invocation that failed, too few
+the pull request by itself. Where the A/A has no bound (an invocation that failed, pair 0's included, too few
 pairs), the count failed, as one whose change has no bound has: it returns to the maintainer and
 does not pass until the maintainer decides. The A/A doubles a run's time: 808 invocations for
 both targets where the change alone is 404, about 7.8 hours at the 34.8 s an invocation took on

@@ -616,7 +616,7 @@ establish a general ranking.
       reading on that target is "not decided", read as one inside the band is, whatever the
       change's own bound. This changes what passes: a miss whose run's A/A does not resolve no
       longer holds the pull request by itself, and is reported as not decided. Where the A/A has
-      no bound (an invocation that failed, too few pairs), the count failed, as one whose change
+      no bound (an invocation that failed, pair 0's included, too few pairs), the count failed, as one whose change
       has no bound has: it returns to the maintainer and does not pass until the maintainer
       decides. A plan declared before this rule was on `main` is read by the rule as it then
       stood. The A/A doubles a run's time. Its page
@@ -752,7 +752,7 @@ establish a general ranking.
       **default band**: from the lowest low end to the highest high end among the spreads the
       Choice records, as the Choice prints the band on `main` when the plan is declared (-2.98%
       to +3.33% today), whatever a later run records and whatever reads the workload,
-      `bench/fullstack/count.mjs` as much as a probe. The test is one: a single-build bound's
+      the catalog count (`bench/fullstack/count-pairs.mjs`) as much as a probe. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
       worthwhile reduction for a CPU-cost win) is **inside** the spread that applies, or the
       default band where none does, when it is at
@@ -785,7 +785,7 @@ establish a general ranking.
       otherwise held as any other workload is, under the case only if its A/A resolves and its
       bound is under +1%.
       `page` and `json`, whichever the change exercises, are still counted, once
-      for that plan, with `count.mjs`: one build of each side, declared in the plan with its
+      for that plan, with `count-pairs.mjs`: one build of each side, declared in the plan with its
       pairs and its checks before the plan's first turn and before the count is taken, and each
       bound reported with where its distance from +1% lands against the default band as `main`
       prints it when the plan is declared, beside its own A/A's two bounds; a count an earlier
@@ -797,8 +797,9 @@ establish a general ranking.
       from passing. Where the A/A has no bound, the count failed, as below. Inside is reported as
       "inside the default band: not decided" and, for these two workloads under such a plan, does
       not keep the pull request from passing. No win is claimed from either count. A count is not
-      taken again for its result, and one that fails (a failed request or invocation, a counter
-      under 100%, too few pairs, in the change's pairs or its A/A's, so that either has no bound)
+      taken again for its result, and one that fails (a failed request or invocation, pair 0's
+      as much as a recorded pair's, a counter under 100%, too few pairs, in the change's pairs or
+      its A/A's, so that either has no bound)
       returns to the maintainer and does not pass until the maintainer decides; the author runs
       nothing again. A plan declared before this case was on
       `main` is read by the rule as it then stood (the Choice names four exceptions), and one

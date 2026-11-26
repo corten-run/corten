@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import * as countPairs from "./count-pairs.mjs";
 import { BAND, compare, complete, COUNTS, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
 
 /** n recorded pairs whose changes are spread evenly from lo to hi. */
@@ -19,18 +20,43 @@ const aaFailed = "failed: the count's A/A has no bound, so the count does not pa
 const changeFailed = "failed: the change's pairs have no bound, so the count does not pass until the maintainer decides";
 
 /**
- * A stand-in host: Docker images by name and ID, the tag count.mjs reads, and count.mjs, which
- * writes its round's records as the real one does. `row(round, image, target)` gives each count's row
- * (cycles 6% more on the head's image by default), `rc` its exit status, and `tagRc` the tag's.
+ * A stand-in host: Docker images by name and ID, the tag count.mjs reads, the daemon and the
+ * containers made on it, perf and the kernel, and count.mjs, which writes its round's records as
+ * the real one does. `row(round, image, target)` gives each count's row (cycles 6% more on the
+ * head's image by default), `rc` its exit status, `tagRc` the tag's, and `launch(round)` the
+ * image the counted container was started from (the tagged one by default).
  */
-function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCount = () => {} } = {}) {
+function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCount = () => {}, launch = () => null } = {}) {
   const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
-  const state = { tagged: "", counted: [], tags: [], calls: 0 };
+  const state = { tagged: "", counted: [], tags: [], calls: 0, daemon: { id: "daemon-1", version: "29.1.0", kernel: "6.8.0-test", name: "bench" }, perf: "perf version 6.8.12", kernel: "6.8.0-test", containers: new Map(), made: 0 };
+  const paths = { docker: "/usr/bin/docker", perf: "/usr/bin/perf" };
+  const hex = (n) => n.toString(16).padStart(64, "0");
   const exec = (cmd, args, options = {}) => {
     state.calls += 1;
+    if (cmd === "perf") return state.perf ? { status: 0, stdout: state.perf + "\n" } : { status: 1, stdout: "" };
+    if (cmd === "uname") return { status: 0, stdout: state.kernel + "\n" };
     if (cmd === "docker" && args[0] === "image") {
       const id = args[4] === "cb-corten" ? state.tagged : ids[args[4]] ?? "";
       return { status: id ? 0 : 1, stdout: id };
+    }
+    if (cmd === "docker" && args[0] === "info") return state.daemon ? { status: 0, stdout: JSON.stringify(state.daemon) } : { status: 1, stdout: "" };
+    if (cmd === "docker" && args[0] === "version") return { status: 0, stdout: "29.1.0\n" };
+    if (cmd === "docker" && args[0] === "create") {
+      const name = args[args.indexOf("--name") + 1];
+      if (state.containers.has(name)) return { status: 125, stdout: "" };
+      const labels = {};
+      for (let i = 0; i < args.length; i++) if (args[i] === "--label") { const [k, ...v] = args[i + 1].split("="); labels[k] = v.join("="); }
+      const id = hex(++state.made);
+      state.containers.set(name, { id, labels, image: args.at(-1) });
+      return { status: 0, stdout: id + "\n" };
+    }
+    if (cmd === "docker" && args[0] === "inspect") {
+      const c = state.containers.get(args.at(-1));
+      return c ? { status: 0, stdout: JSON.stringify(c.labels) } : { status: 1, stdout: "" };
+    }
+    if (cmd === "docker" && args[0] === "rm") {
+      for (const [name, c] of state.containers) if (c.id === args[1]) { state.containers.delete(name); return { status: 0 }; }
+      return { status: 1 };
     }
     if (cmd === "docker" && args[0] === "tag") {
       state.tags.push(args[1]);
@@ -45,21 +71,30 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     mkdirSync(dir, { recursive: true });
     const image = state.tagged;
     const n = state.counted.length;
-    const r = goodRow({ userCyclesPerRequest: (image === "sha256:head" ? 106000 : 100000) * (1 + 0.001 * ((n % 5) - 2)), kernelCyclesPerRequest: 0, ...row(round, image, target) });
+    const r = goodRow({ userCyclesPerRequest: Math.round((image === "sha256:head" ? 106000 : 100000) * (1 + 0.001 * ((n % 5) - 2))), kernelCyclesPerRequest: 0, ...row(round, image, target) });
     writeFileSync(join(dir, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [r] }));
     writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
+    writeFileSync(join(dir, "count-images.json"), JSON.stringify({ [`corten/${target}`]: { container: hex(1000 + n), image: launch(round) ?? image } }));
     return { status: rc(round) };
   };
-  return { ids, state, exec };
+  return { ids, state, exec, paths, which: (name) => paths[name] ?? null };
 }
 
-/** A temporary results directory and tag lock for one test. */
+/** A temporary results directory and count kit for one test. */
 function scratch() {
   const results = mkdtempSync(join(tmpdir(), "count-pairs-"));
-  return { results, tagLock: join(results, "cb-corten.lock"), done: () => rmSync(results, { recursive: true, force: true }) };
+  const kit = join(results, "kit");
+  mkdirSync(join(kit, "fixtures"), { recursive: true });
+  writeFileSync(join(kit, "count.mjs"), 'import { apps } from "./apps.mjs";\nimport { join } from "node:path";\n');
+  writeFileSync(join(kit, "apps.mjs"), "export const apps = {};\n");
+  writeFileSync(join(kit, "ssr-load.js"), 'import http from "k6/http";\n');
+  writeFileSync(join(kit, "fixtures", "items.json"), "[]\n");
+  return { results, kit, done: () => rmSync(results, { recursive: true, force: true }) };
 }
 const env = { BENCH_APP_CPUS: "1", BENCH_LOAD_CPUS: "4-7", PATH: "/usr/bin" };
-const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, tagLock: s.tagLock, exec: h.exec, env, now: () => 0, ...over });
+const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, kit: s.kit, exec: h.exec, which: h.which, env, now: () => 0, ...over });
+/** The calls that change what is counted: a tag or a count. */
+const counts = (h) => h.state.tags.length + h.state.counted.length;
 
 test("a run is four invocations a pair and target, the A/A the change with the base's image under both names", () => {
   const plan = schedule(100, ["page", "json"], "p1");
@@ -80,7 +115,7 @@ test("a run is four invocations a pair and target, the A/A the change with the b
 
 test("an invocation is valid only with a clean tag, exit 0, 5,000 requests, none failed, every count a number at 100%, its k6 checks and the side's image", () => {
   const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { row: [goodRow()], summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", rc: 0, tagRc: 0, fresh: true };
+  const ok = { row: [goodRow()], summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid(ok), []);
   assert.deepEqual(invalid({ ...ok, after: "sha256:b" }), ["the image counted was not the side's"]);
   assert.deepEqual(invalid({ ...ok, rc: 1 }), ["count.mjs exited 1"]);
@@ -183,7 +218,7 @@ test("the runner pins each image's ID, tags by it, runs each invocation once and
     assert.deepEqual([ledger.pairs, ledger.targets, ledger.env.BENCH_APP_CPUS, ledger.env.BENCH_LOAD_CPUS, ledger.env.BENCH_TIER, ledger.count.args], [6, ["json"], "1", "4-7", null, ["<round>", "1", "corten", "<target>"]]);
     assert.equal(ledger.schedule.length, 7 * 4);
     // Both locks are gone once it ends.
-    assert.ok(!existsSync(join(s.results, "t1", "run.lock")) && !existsSync(s.tagLock));
+    assert.ok(!existsSync(join(s.results, "t1", "run.lock")) && h.state.containers.size === 0);
     // Run again, nothing is counted again.
     await runPairs(options(s, h));
     assert.equal(h.state.counted.length, 7 * 4);
@@ -310,30 +345,57 @@ test("a run going on refuses another experiment's ledger: other images, pairs, t
   }
 });
 
-test("two runners cannot share a ledger or the cb-corten tag, and a lock is removed only by the runner that made it", async () => {
-  const s = scratch();
+test("two runners cannot share a ledger, or one daemon's cb-corten tag whatever their temporary directories, and a lock is removed only by the runner that made it", async () => {
+  const s = scratch(), other = scratch();
   try {
-    const h = host(s.results);
-    const other = lock(s.tagLock, "another run's ledger");
-    await assert.rejects(runPairs(options(s, h)), /is locked by process \d+ on .*, for another run's ledger .*remove .* by hand/);
-    assert.equal(h.state.calls, 0);
-    // Its lock stays, and the ledger lock it took is released.
-    assert.ok(existsSync(s.tagLock));
-    assert.ok(!existsSync(join(s.results, "t1", "run.lock")));
-    other();
-    assert.ok(!existsSync(s.tagLock));
-    mkdirSync(join(s.results, "t1"), { recursive: true });
-    writeFileSync(join(s.results, "t1", "run.lock"), "left by a runner that is gone\n");
-    await assert.rejects(runPairs(options(s, h)), /t1.run\.lock\)\. .*stale/);
-    assert.equal(readFileSync(join(s.results, "t1", "run.lock"), "utf8"), "left by a runner that is gone\n");
-    assert.ok(!existsSync(s.tagLock));
-    // A release does not remove a lock someone else has put in its place.
-    const release = lock(s.tagLock, "mine");
-    writeFileSync(s.tagLock, JSON.stringify({ token: "theirs" }));
+    // A second runner, its ledger and temporary directory elsewhere, starts on the same daemon while the first counts.
+    let second, starting = false, during = -1;
+    const h = host(s.results, { onCount: (round) => {
+      if (starting) return;
+      starting = true;
+      const before = counts(h);
+      // tagLock is where 30411fdf7 kept its lock, under each runner's temporary directory; it is no longer read.
+      second = runPairs({ ...options(other, h), tagLock: join(other.results, "cb-corten.lock") }).then(() => assert.fail("the second runner was not refused"), (e) => { throw e; });
+      second.catch(() => {});
+      during = counts(h) - before;
+      assert.ok(round);
+    } });
+    await runPairs({ ...options(s, h), tagLock: join(s.results, "cb-corten.lock") });
+    await assert.rejects(second, /locked by process \d+ on .*, since .*, for .*t1.*remove it with docker rm corten-count-pairs-lock/);
+    assert.equal(during, 0);
+    assert.ok(!existsSync(join(other.results, "t1", "run.lock")));
+    assert.equal(h.state.containers.size, 0);
+    // The lock is a container named on the daemon, made from the base's pinned image and removed by its ID.
+    const stale = { id: "e".repeat(64), labels: {}, image: "sha256:base" };
+    h.state.containers.set("corten-count-pairs-lock", stale);
+    await assert.rejects(runPairs(options(other, h)), /locked by an unlabeled holder/);
+    assert.equal(h.state.containers.get("corten-count-pairs-lock"), stale);
+    h.state.containers.clear();
+    mkdirSync(join(s.results, "t2"), { recursive: true });
+    writeFileSync(join(s.results, "t2", "run.lock"), "left by a runner that is gone\n");
+    const before = counts(h);
+    await assert.rejects(runPairs(options(s, h, { prefix: "t2" })), /t2.run\.lock\)\. .*stale/);
+    assert.equal(readFileSync(join(s.results, "t2", "run.lock"), "utf8"), "left by a runner that is gone\n");
+    assert.equal(counts(h), before);
+    assert.equal(h.state.containers.size, 0);
+    // A release does not remove a lock someone else has put in its place: it removes the ID it made.
+    let swapped = false;
+    const h3 = host(other.results, { onCount: () => {
+      if (swapped) return;
+      swapped = true;
+      h3.state.containers.set("corten-count-pairs-lock", { id: "f".repeat(64), labels: {}, image: "x" });
+    } });
+    await runPairs(options(other, h3, { prefix: "t3" }));
+    assert.equal(h3.state.containers.get("corten-count-pairs-lock")?.id, "f".repeat(64));
+    // And the ledger's file lock likewise.
+    const file = join(s.results, "file.lock");
+    const release = lock(file, "mine");
+    writeFileSync(file, JSON.stringify({ token: "theirs" }));
     release();
-    assert.ok(existsSync(s.tagLock));
+    assert.ok(existsSync(file));
   } finally {
     s.done();
+    other.done();
   }
 });
 
@@ -362,7 +424,7 @@ test("the runner refuses one image for both sides, since the A/A is the run's ow
   const s = scratch();
   try {
     const exec = () => ({ status: 0, stdout: "sha256:same" });
-    await assert.rejects(runPairs({ prefix: "t3", images: { base: "a", head: "b" }, last: 5, targets: ["page"], results: s.results, tagLock: s.tagLock, exec }), /one image/);
+    await assert.rejects(runPairs({ prefix: "t3", images: { base: "a", head: "b" }, last: 5, targets: ["page"], results: s.results, kit: s.kit, exec }), /one image/);
   } finally {
     s.done();
   }
@@ -371,4 +433,178 @@ test("the runner refuses one image for both sides, since the A/A is the run's ow
 test("the report says the count failed where it has no bound, and not decided where its A/A does not resolve", () => {
   const md = markdown({ json: { change: of(0.04, 0.08), aa: of(0.05, 0.15), resolution: "not resolved", reading: reading(of(0.04, 0.08), of(0.05, 0.15)), diagnostics: {}, pairs: {} } }, { prefix: "p", base: "b", head: "h" });
   assert.match(md, /## `json`: not decided: the count's A\/A does not resolve the default band, so the change is read as one inside the band/);
+});
+
+test("an invocation's row, summary and launched image are sealed when it ends: bytes replaced, removed or never written give no bound on replay", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    const first = await runPairs(options(s, h));
+    assert.equal(first.targets.json.reading.verdict, "a miss");
+    const counted = h.state.counted.length;
+    const end = [...readFileSync(join(s.results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))].find((r) => r.name === "t1-json-ab-002-head" && r.ended != null);
+    assert.deepEqual(Object.keys(end.artifacts).sort(), ["count-corten-json-0.json", "count-images.json", "instructions.json"]);
+    assert.match(end.artifacts["instructions.json"].sha256, /^[0-9a-f]{64}$/);
+    // Every change's head row replaced by one at the base's level: a run that read them would clear the change.
+    for (let pair = 1; pair <= 6; pair++) {
+      const dir = join(s.results, `t1-json-ab-${String(pair).padStart(3, "0")}-head`);
+      writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "corten/json": [goodRow({ userCyclesPerRequest: 90000, kernelCyclesPerRequest: 0 })] }));
+    }
+    const again = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, counted);
+    assert.equal(again.targets.json.change.bound, null);
+    assert.equal(again.targets.json.reading.failed, true);
+    assert.ok(again.targets.json.pairs.ab.find((p) => p.pair === 2).why.includes("the change, pair 2, side head: instructions.json changed since the invocation ended"));
+    // A summary removed is as bad.
+    const s2 = scratch();
+    try {
+      const h2 = host(s2.results);
+      await runPairs(options(s2, h2));
+      rmSync(join(s2.results, "t1-json-aa-003-base", "count-corten-json-0.json"));
+      const read = await runPairs(options(s2, h2));
+      assert.equal(read.targets.json.aa.bound, null);
+      assert.ok(read.targets.json.pairs.aa.find((p) => p.pair === 3).why.includes("its A/A, pair 3, side base: count-corten-json-0.json is gone since the invocation ended"));
+    } finally {
+      s2.done();
+    }
+  } finally {
+    s.done();
+  }
+});
+
+test("a run going on refuses where what the count runs or the host it runs on is not the ledger's, or cannot be established", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 3 })), /stopped before/);
+    const before = counts(h);
+    const ledger = JSON.parse(readFileSync(join(s.results, "t1", "run.json"), "utf8"));
+    for (const file of ["count.mjs", "apps.mjs", "ssr-load.js", "fixtures/items.json"]) assert.match(ledger.kit[file]?.sha256 ?? "", /^[0-9a-f]{64}$/, file);
+    assert.ok(Object.keys(ledger.kit).some((f) => f.endsWith("count-pairs.mjs")) && Object.keys(ledger.kit).some((f) => f.endsWith("placement/stats.mjs")));
+    assert.deepEqual([ledger.environment.daemon.id, ledger.environment.docker.path, ledger.environment.perf.version, ledger.environment.kernel], ["daemon-1", "/usr/bin/docker", "perf version 6.8.12", "6.8.0-test"]);
+    const kit = (f) => join(s.kit, ...f.split("/"));
+    const refused = [
+      [() => writeFileSync(kit("apps.mjs"), "export const apps = { x: 1 };\n"), () => writeFileSync(kit("apps.mjs"), "export const apps = {};\n"), /kit \(apps\.mjs\) differ/],
+      [() => writeFileSync(kit("fixtures/items.json"), "[1]\n"), () => writeFileSync(kit("fixtures/items.json"), "[]\n"), /kit \(fixtures\/items\.json\) differ/],
+      [() => writeFileSync(kit("ssr-load.js"), 'import http from "k6/http";\nimport "./more.js";\n'), () => writeFileSync(kit("ssr-load.js"), 'import http from "k6/http";\n'), /cannot establish what the count runs: more\.js is missing/],
+      [() => { h.state.daemon = { ...h.state.daemon, id: "daemon-2" }; }, () => { h.state.daemon = { ...h.state.daemon, id: "daemon-1" }; }, /environment \(daemon\) differ/],
+      [() => { h.paths.docker = "/opt/bin/docker"; }, () => { h.paths.docker = "/usr/bin/docker"; }, /environment \(docker\) differ/],
+      [() => { h.state.kernel = "6.9.0"; }, () => { h.state.kernel = "6.8.0-test"; }, /environment \(kernel\) differ/],
+      [() => { h.state.perf = ""; }, () => { h.state.perf = "perf version 6.8.12"; }, /cannot establish the host the count runs on: perf --version/],
+      [() => { h.state.daemon = null; }, () => { h.state.daemon = { id: "daemon-1", version: "29.1.0", kernel: "6.8.0-test", name: "bench" }; }, /cannot establish the host the count runs on: docker info/],
+    ];
+    for (const [change, restore, why] of refused) {
+      change();
+      await assert.rejects(runPairs(options(s, h)), why);
+      restore();
+    }
+    await assert.rejects(runPairs(options(s, h, { env: { ...env, DOCKER_HOST: "tcp://elsewhere:2375" } })), /environment \(dockerHost\) differ/);
+    assert.equal(counts(h), before);
+    // Restored, it goes on.
+    await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4);
+  } finally {
+    s.done();
+  }
+  // A run whose kit lacks its fixture does not start.
+  const s2 = scratch();
+  try {
+    rmSync(join(s2.kit, "fixtures", "items.json"));
+    const h2 = host(s2.results);
+    await assert.rejects(runPairs(options(s2, h2)), /cannot establish what the count runs: fixtures\/items\.json is missing/);
+    assert.equal(counts(h2), 0);
+    assert.ok(!existsSync(join(s2.results, "t1", "run.json")));
+  } finally {
+    s2.done();
+  }
+});
+
+test("an invocation whose counted container was started from another image than the side's is not valid, whatever the tag read before and after", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results, { launch: (round) => (round === "t1-json-ab-004-base" ? "sha256:head" : null) });
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(targets.json.change.bound, null);
+    assert.equal(targets.json.reading.verdict, changeFailed);
+    assert.ok(targets.json.pairs.ab.find((p) => p.pair === 4).why.includes("the change, pair 4, side base: the container counted was not started from the side's image"));
+  } finally {
+    s.done();
+  }
+});
+
+test("a pair 0 invocation that fails fails its comparison, though pair 0 gives no sample", async () => {
+  for (const round of ["t1-json-ab-000-head", "t1-json-aa-000-base"]) {
+    const s = scratch();
+    try {
+      const h = host(s.results, { rc: (r) => (r === round ? 1 : 0) });
+      const { targets } = await runPairs(options(s, h));
+      const json = targets.json, comparison = round.includes("-ab-") ? json.change : json.aa;
+      assert.equal(comparison.n, 6, round);
+      assert.equal(comparison.bound, null, round);
+      assert.equal(json.reading.failed, true, round);
+      assert.ok(!complete(targets), round);
+      assert.ok(Object.values(json.pairs).flat().some((p) => p.pair === 0 && p.why.some((w) => w.endsWith("pair 0, side " + round.split("-").at(-1) + ": count.mjs exited 1"))), round);
+    } finally {
+      s.done();
+    }
+  }
+});
+
+test("a stop asked for after the last invocation is honored before the report is written", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 7 * 4 })), /stopped before the report/);
+    assert.equal(h.state.counted.length, 7 * 4);
+    assert.ok(!existsSync(join(s.results, "t1", "report.json")));
+    assert.equal(h.state.containers.size, 0);
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4);
+    assert.equal(targets.json.reading.verdict, "a miss");
+    assert.ok(existsSync(join(s.results, "t1", "report.json")));
+  } finally {
+    s.done();
+  }
+});
+
+test("the pair count is a safe whole number from 5 to 999, checked before a lock or a directory is made", async () => {
+  assert.equal(countPairs.MAX_PAIRS, 999);
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    for (const [last, why] of [[1000, /1000 pairs: at most 999/], [2 ** 53 + 2, /whole number/], [1e21, /whole number/], [parsePairs("99999999999999999999"), /whole number/]]) {
+      assert.match(/** @type {string} */ (optionsError(options(s, h, { last }))), why, String(last));
+      await assert.rejects(runPairs(options(s, h, { last })), why);
+    }
+    assert.equal(h.state.calls, 0);
+    assert.ok(!existsSync(join(s.results, "t1")));
+    assert.equal(optionsError(options(s, h, { last: 999 })), null);
+    assert.equal(new Set(schedule(999, ["page"], "p").map((i) => i.name.length)).size, 1);
+  } finally {
+    s.done();
+  }
+});
+
+test("the band's ends are read exactly from the cycle counts: a bound at an end is inside, one count past it is outside", () => {
+  const five = (head, base) => compare(Array.from({ length: 5 }, (_, i) => ({ pair: i + 1, base, head })));
+  const aa = of(-0.02, 0.02);
+  // 9802 / 10000 - 1 is -1.98%, less +1% exactly the band's low end, -2.98%.
+  assert.equal(inside({ num: 9802, den: 10000 }), true);
+  assert.equal(reading(five(9802, 10000), aa).verdict, "inside the default band: not decided");
+  assert.equal(reading(five(9801, 10000), aa).verdict, "meets +1%");
+  // 10433 / 10000 - 1 is +4.33%, less +1% exactly the high end, +3.33%.
+  assert.equal(reading(five(10433, 10000), aa).verdict, "inside the default band: not decided");
+  assert.equal(reading(five(10434, 10000), aa).verdict, "a miss");
+  // An A/A at the low end, its labels swapped +1.02% less +1%: resolved.
+  assert.equal(resolution(five(9802, 10000)), "resolved");
+  assert.equal(resolution(five(9801, 10000)), "not resolved");
+  // Sums of user and kernel cycles: whole counts, so the bound is exact too.
+  const split = compare(Array.from({ length: 5 }, (_, i) => ({ pair: i + 1, base: 6000 + 4000, head: 5802 + 4000 })));
+  assert.equal(reading(split, aa).verdict, "inside the default band: not decided");
+  // A count that is not a whole number is not valid.
+  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
+  const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelCyclesPerRequest: 60000.5 })] }), ["kernelCyclesPerRequest is 60000.5, not a whole count"]);
 });
