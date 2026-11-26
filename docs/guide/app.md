@@ -222,35 +222,61 @@ are hyper's, as all are with the switch off. So a request's body is read by hype
 a WebSocket's handshake and a tunnel are hyper's too: a route sees the same `Upgrade` and the same
 socket.
 
-The app sees the same requests and its clients the same answers, byte for byte but `Date`: a
-test sends both connections the same streams of bytes, well formed and not, and compares what
-comes back. Every limit above holds as it does with hyper: the header and send timeouts, the size
-of a head and its 100 headers, the cap on connections, the deadline, and shutdown's grace. The
-host check answers these requests as it answers any other ([below](#host-names)). Three things
-differ:
+The app is given the same requests, and its clients are answered in correct HTTP with the head
+hyper writes: the same lines in the same order. This is not a promise of hyper's bytes for every
+answer. A test sends both connections the same streams of bytes, well formed and not, and
+compares what comes back byte for byte, `Date` aside; what it sends and what it does not is in
+the Choice, and the differences known are the ones listed here. Every limit above holds as it
+does with hyper: the header and send timeouts, the size of a head and its 100 headers, the cap on
+connections, the deadline, and shutdown's grace. The host check answers these requests as it
+answers any other ([below](#host-names)). What differs:
 
 1. The answers to requests that arrived together (a pipeline) leave in one write, where hyper
    writes each as it is made. No answer waits for a request that has not come: what is written is
    sent before the connection waits for anything.
-2. An answer's trailers are not sent, and a status's reason phrase is always its own. A head
-   that reaches `max_request_head` unfinished and is malformed further on is refused by both, but
-   may get 400 from one and 431 from the other, since the two read the socket in pieces of
-   different sizes.
-3. A client that pipelines requests and reads no answer holds a little more of the server's
-   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,185 to
-   2,371 MiB with the switch on and 2,092 to 2,153 MiB with it off (measured at `f02d8511f`,
-   nine runs each). Most of either is socket buffers, which `send_timeout` and
-   `max_connections` bound. This is why the switch is off unless set; behind a proxy that does
+2. An answer's trailers are not sent, nor a `Trailer` line with them, and a status's reason
+   phrase is always its own.
+3. A head that reaches `max_request_head` unfinished and is malformed further on is refused by
+   both, but may get 400 from one and 431 from the other, since the two read the socket in pieces
+   of different sizes. For the same reason a head that is malformed on one line and has not ended
+   may be refused at once by one and only at its end, or at the header timeout, by the other,
+   when its bytes come in several pieces: each looks through an unfinished head again only when
+   its last line may have come. A head that came at once is refused by both at once.
+4. A body that fails. An answer whose body fails before any of the answer had to be sent is not
+   sent at all, the answers before it are, and the connection is closed. With hyper that is a
+   body that fails within its first 16 pieces or about 400 KB; here it is one that fails at
+   once, behind pieces that fit a 16 KiB buffer, or behind one larger piece. A body that gives
+   more than that without a wait and then fails has an answer cut short here (its head and some
+   of its body, then a closed connection) where hyper would have sent none of it. A client takes
+   neither for a whole answer.
+5. A request whose body its handler did not read. hyper keeps such a connection only if one more
+   read of the socket finishes the body, and otherwise closes it behind the answer. That is
+   hyper's rule with the switch on or off, but where its reads end is not the same: with the
+   switch on they are counted from the request with the body, the ones before it having been
+   answered without hyper. So behind an unread body too long for hyper's next read to finish
+   (16 KiB or more beyond what came with its head), a connection may be kept with the switch on
+   where it would have been closed with it off, or closed where it would have been kept. Nothing
+   is answered twice or out of order, and a client that sends its next request again on a new
+   connection, as HTTP has it do when a connection is closed on it, sees no difference.
+6. A client that pipelines requests and reads no answer holds a little more of the server's
+   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,106 to
+   2,272 MiB with the switch on and 2,094 to 2,142 MiB with it off (measured at `8dbd3db5f`,
+   nine runs each). Most of either is socket buffers: `max_connections` bounds how many
+   connections hold one, and `send_timeout` how long a connection that takes nothing is kept.
+   This is why the switch is off unless set; behind a proxy that does
    not pipeline to the app it does not arise. And a connection that has been handed to hyper
    holds about 1.6 KiB more while it waits than one hyper served from the start (10,083 bytes
    against 8,469), so an app whose connections mostly carry bodies gains nothing in memory.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
-connection, at `f02d8511f`): an unstaged route's short answer goes from 10,564 to 8,984, a staged API route's
-`GET` from 18,376 to 16,789, and a 12 KB page from 43,144 to 41,726, each with three allocations
-fewer; a request with a body costs what it did. A connection waiting for a request holds 7,423
-bytes where hyper's holds 8,471. No time has been measured yet, so this is less work for a
-request and not yet a claim that it is faster.
+connection, at `8dbd3db5f`): the shortest request the counting kit sends, to a route that says
+`unstaged` and answers two bytes, goes from 10,563 to 9,310, a staged API route's `GET` from
+18,345 to 17,084, and a 12 KB page from 43,107 to 42,012, each with three allocations fewer. A
+request with the header lines a browser sends costs as many instructions as it did, to a
+quarter of a percent either way (the same `GET` 23,884 and 23,826, a compressed page 221,717
+and 221,858), with the three allocations fewer; a request with a body costs what it did. A
+connection waiting for a request holds 7,423 bytes where hyper's holds 8,472. No time has been
+measured yet, so this is less work for a short request and not yet a claim that it is faster.
 
 ## Access logs
 

@@ -11149,17 +11149,23 @@ rules something out.
     where a server's worst bugs live and nothing measured pointed at it. This reopens that step
     for the one kind of request that frames nothing, because something measured now does. Counted
     over a socket with [`bench/request-cost`](../bench/request-cost/README.md), the shortest
-    request the kit sends (an unstaged route's two bytes) costs the serving thread 10,564
-    instructions and 11 allocations on hyper's connection and 8,984 and 8 on Corten's own, 15.0%
-    fewer instructions; sixteen written at a time cost 8,369 and 6,865 each, 18.0% fewer. A
-    staged API route's `GET` goes from 18,376 to 16,789 (8.6%) and a 12 KB page from 43,144 to
-    41,726 (3.3%), each with three allocations fewer; with a browser's header lines the same
-    `GET` goes from 23,917 to 23,532 (1.6%) and the page, compressed, from 221,755 to 221,569
-    (0.1%). A request with a body costs the same on both (22,834 and 22,824, 19 allocations),
-    since hyper answers it on both. A connection that waits for a request holds 7,423 bytes
-    against 8,471 after one short request, 7,557 against 12,562 after three with a browser's
-    header lines, and 2,279 against 2,694 before its client has sent a byte (the median of three
-    readings of each). These are
+    request the kit sends (its `pipeline` case: a route that says `unstaged` and answers two
+    bytes) costs the serving thread 10,563 instructions and 11 allocations on hyper's connection
+    and 9,310 and 8 on Corten's own, 11.9% fewer instructions; sixteen written at a time cost
+    8,370 and 6,929 each, 17.2% fewer. A staged API route's `GET` goes from 18,345 to 17,084
+    (6.9%) and a 12 KB page from 43,107 to 42,012 (2.5%), each with three allocations fewer.
+    With a browser's header lines nothing of that is left in instructions, though the three
+    allocations are: the same `GET` goes from 23,884 to 23,826 (0.2% fewer), a text answer from
+    25,861 to 25,924 (0.2% more) and the page, compressed, from 221,717 to 221,858 (0.06% more).
+    A request with a body costs the same on both (22,801 and 22,791, 19 allocations), since
+    hyper answers it on both. A connection that waits for a request holds 7,423 bytes against
+    8,472 after one short request, 7,557 against 12,562 after three with a browser's header
+    lines, and 2,278 against 2,694 before its client has sent a byte (the median of three
+    readings of each). The counts with the switch on were lower when this Choice was first
+    written (8,984, 16,789 and 41,726, and 23,532 and 221,569 with a browser's lines): a request
+    sent alone now costs 286 to 326 more, 285 to 287 of it a look at the socket for the client's
+    end that hyper makes too and Corten's connection did not (below), the rest what two reviews
+    had fixed. These are
     instructions, allocations and bytes, which measure work and memory and not speed. The change
     is one [Choice 76](#choice-counted-or-measured) has measured and not counted: with the switch
     on a connection writes to its socket at other times than hyper's does, no case of the kit asks
@@ -11173,10 +11179,16 @@ rules something out.
     request's head, calls the connection's service with it, writes the answer into one buffer and
     goes on to the next request. A head is read by `httparse`, the parser hyper reads requests
     with, given the settings hyper's server gives it and made into the same `http` types by the
-    same constructors, so what it refuses is what hyper refuses at the same byte; the crate was in
-    the tree through hyper and is now a dependency by name. An answer's head is written as
+    same constructors, so what it refuses is what hyper refuses at the same byte. An unfinished
+    head is looked through again when its end may have come, as hyper looks, and once more
+    without its end where the bytes came with no wait between them, as far as hyper's first read
+    of 8,192 bytes would have reached: a line that is wrong in a head that came at once is
+    refused at once by both, though Corten's first read is of 2,560 bytes (found by a review: it
+    was refused by hyper and waited for here). An answer's head is written as
     hyper's encoder writes it: the same lines in the same order, `content-length` from the body's
-    size, `connection` and `date` chosen the same way. The buffer is written to the socket and the
+    size, `connection` chosen the same way, and `date` written by `httpdate`, the crate hyper
+    writes its own with. Both crates were in the tree through hyper and are now dependencies by
+    name; the connection has no parser and no calendar of its own. The buffer is written to the socket and the
     socket flushed before the connection's task waits for anything (the rest of a head, the
     handler, the next piece of a body, another task's turn after 16 requests) and when it holds
     16 KiB, so no byte is held while the server is idle and the answers to requests that arrived
@@ -11186,6 +11198,59 @@ rules something out.
     cap, the request's deadline and shutdown. It brings no rule for `Host`: the host check that
     answers every request ([the app guide](guide/app.md#host-names)) answers these, and the service marks an
     HTTP/1.1 request with no `Host` line for it by the function it uses for hyper's.
+
+    **What it holds, and what it does when an answer cannot be finished.** The buffer of answers
+    holds less than 16 KiB that has not gone to the client when more is written into it, and so
+    at most that, one answer's head and one piece of a body. In front of that it keeps less than
+    16 KiB that has gone: what has gone is dropped when all of it has, and when 16 KiB of it has.
+    That second rule came from a review. Without it a client that read one answer and sent one
+    request, over and over, kept in the buffer every byte it had been sent since the buffer was
+    last empty: the reviewer measured 144 MB held with under 6 KiB unsent, and neither timeout
+    ends such a connection, since its writes go through. A test now holds a buffer partly unsent
+    for 3,000 rounds against the bound
+    (`the_buffer_of_answers_holds_what_is_unsent_and_no_more`). A body is asked for one piece
+    ahead of what is sent, and that piece is held where it is and not copied. So an answer whose
+    body fails before any of the answer had to go is not begun: the answers before it are sent
+    and the connection is closed, as hyper closes it. hyper draws that line further on, since it
+    holds up to 16 pieces or about 400 KB before it must write, so an answer hyper would not
+    have begun is cut short here when its body gives more than this connection holds and then
+    fails without a wait. To match hyper there the connection would hold as much before its
+    first write, which is the memory it is here to not hold, and either way the client has a
+    closed connection and no answer it can take for whole. A body's panic is caught where the
+    body is polled and ends its answer as a failure does, so the answers before it are sent; a
+    handler's panic is the router's to answer, as on hyper's connection. Shutdown is asked about
+    when an answer's head is written and again when the answer is whole, and before a connection
+    is handed to hyper, so a request that waited behind a streaming answer, or behind the answers
+    before a handoff, is not begun once the drain has (both found by a review, each with a test
+    that failed before: `shutdown_begun_while_an_answer_streams_ends_the_connection_at_that_answer`,
+    `shutdown_begun_before_a_handoff_ends_the_connection_at_the_answers_before_it`). The time an
+    answer's `Date` says is brought up to date whenever the connection's task has waited, a
+    write that waited for its client included.
+
+    **A client that closes its side.** hyper answers nothing more to a client that has closed
+    its side of the connection: it looks at the socket each time it has read a head with nothing
+    behind it, and while a request is being answered, and a request whose client has left is
+    dropped unanswered (its `half_close` setting, which Corten leaves off, would have it
+    answer). Corten's connection does the same. It looks before it asks a handler, whenever
+    nothing the client sent waits to be read, and while a handler or a body waits; the answers
+    before that request are sent first. It first looked only while a handler waited, and the
+    gate found the rest as soon as one of its handlers did wait: a request read behind one
+    whose handler waited was answered after its client had left (24 streams of the long run),
+    and a look made only where the connection's task had waited since its last read still
+    answered a request that came with its client's end behind it (8 streams). The look that is
+    left is one for every request sent alone, a second pass through the socket's readiness. It
+    costs 285 to 287 instructions a request, counted on either side of it (`7076a0c95` and
+    `8dbd3db5f`, which differ in nothing else that is compiled: the shortest request 9,024 and
+    9,310, the staged `GET` 16,797 and 17,084, the same with a browser's lines 23,540 and
+    23,826), and 23 a request where sixteen came together. hyper makes the same look, so it is
+    not work hyper's connection is spared, and it takes a fifth of what this connection saved
+    on the shortest request (15.0% fewer became 11.9%) and all of it on a text answer with a
+    browser's lines. Leaving it out was weighed and not chosen: Corten's connection would answer
+    a request hyper does not, which is the one direction the gate allows no difference in, and
+    the gate's list would have to grow by a class that says so. What it would buy is in the
+    counts here for whoever reopens it. Tests:
+    `a_request_whose_client_has_closed_its_side_by_its_turn_is_not_answered`,
+    `a_request_that_comes_with_its_clients_end_is_answered_by_neither`.
 
     **Where a connection becomes hyper's.** A request is hyper's, with the rest of its connection,
     when its method is `CONNECT`, or its head has a header named `Content-Length`,
@@ -11202,7 +11267,13 @@ rules something out.
     protocols gets hyper's `OnUpgrade` and `Upgraded` whichever connection read the requests
     before. The read that gives hyper the last of those bytes goes on to the socket for the room
     it has left, since hyper keeps a connection whose handler left a body unread only if one more
-    read finishes the body, and Corten's reads end sooner than hyper's.
+    read finishes the body, and Corten's reads end sooner than hyper's. hyper's reads are then
+    counted from the request with the body and not from the connection's first byte, which leaves
+    one difference in what a connection with an unread body does next: behind a body too long
+    for hyper's next read to finish, a connection may be kept with the switch on where hyper's
+    own would have been closed, or closed where it would have been kept. Nothing is answered
+    twice or out of order either way, and
+    `a_long_unread_body_is_cut_where_hypers_reads_end` fixes both sides of it.
 
     **A switch on `App`, off.** `own_http1(enabled)` sits with `header_timeout`, `send_timeout`,
     `max_request_head` and `max_connections`, a boolean as `access_log(enabled)` is, named for
@@ -11211,61 +11282,105 @@ rules something out.
     workspace two servers to test and a dependency the power to turn it on. With it off a
     connection takes one more branch when it is accepted and nothing more a request: the same
     path through hyper, and byte-identical answers from the kit's nine requests. The compiled
-    program is not the same, though, and the kit counts 3 to 48 instructions a request more than
-    `main` with the switch off (10,560 to 10,564 on the shortest request, 43,096 to 43,144 on the
-    page; allocations the same; of the bytes an idle connection holds, no median of three
-    readings above `main`'s), 0.27% of a
-    case's count at most, which is inside the +0.5%
-    [Choice 76](#choice-counted-or-measured) gives a counted change, from two causes that were
-    each found. Up to 37 of them come from the manifest alone, on the requests
-    that go through the stages: `main` with this change's `Cargo.toml` and `Cargo.lock` and no
-    other line of it counts 0 to 37 more: two lookups in a request's extensions each compare one
-    entry more (16 instructions each, read from the instructions that ran), as a change in the
-    type ids that map is keyed by would make them; the ids themselves were not read.
-    The other 2 to 12 are the compiler's: a function with one caller is inlined where one with two
+    program is not the same, though, and the kit counts 2 to 11 instructions a request more than
+    `main` with the switch off (10,560 and 10,563 on the shortest request, 43,097 and 43,107 on
+    the page; allocations the same; of the bytes an idle connection holds, no median of three
+    readings more than a byte from `main`'s), 0.05% of a case's count at most, which is inside
+    the +0.5% [Choice 76](#choice-counted-or-measured) gives a counted change. Where they come
+    from was read from the instructions that ran and is likely, not proven for each. At an
+    earlier head (`f02d8511f`) the count was 3 to 48 more (0.26% at most), and `main` with that
+    head's `Cargo.toml` and `Cargo.lock` and no other line of it counted 0 to 37 of those, on
+    the requests that go through the stages: two lookups in a request's extensions each compared
+    one entry more (16 instructions each), as a change in the type ids that map is keyed by
+    would make them. The ids themselves were not read, and which line of the manifest moved
+    them was not found. With this head's manifest, which names `httpdate` too, `main` counts
+    what it counts without it, to the 1 its repeats differ by: that fits a matter of where the
+    ids fall and not of code, and does not prove it. The 2 to 11 that are left are likely the
+    compiler's: a function with one caller is inlined where one with two
     may not be, and the second connection gave functions on hyper's path a second caller. Sharing
     its types with hyper's path cost 64 to 156 a request in all (`f92fb906d` against `main` at
-    `ba6a7fe56`); the 2 to 12 are what is left with types
+    `ba6a7fe56`); the 2 to 11 are what is left with types
     of its own for Corten's connection and for hyper's once a connection is handed over
     (`crates/corten/src/h1/handoff.rs`), and with the router's future, its fix and the mark for a
     missing `Host` inlined always. What is left is the drop of the router's future, kept out of
     line, and hyper's connection future laid out otherwise.
 
     **The gate** (`crates/corten/src/tests/h1_fuzz.rs`). The same bytes are sent to one app served
-    by hyper's connection and by Corten's own, in the test's own thread over pipes in memory with
-    time paused, and what each sends back is compared. A stream is one to four requests made from
+    by hyper's connection and by Corten's own, over pipes in memory with time paused, and what
+    each sends back is compared as the bytes it was, with nothing passed over but the value of an
+    answer's own `Date`. A stream is one to four requests made from
     a grammar of what clients and attackers send, changed at random three times in ten, cut into
     several writes one time in three, with a request every server answers sent behind it to show
     where each took the last message to end; before those come fixed streams cut and ended at
-    every byte. Two limits on a head are run, 32 KiB and 700 bytes. It fails on any stream where
+    every byte. Three streams in ten go over a pipe that holds 64 bytes to 20 KB each way, so
+    the server's writes are taken in parts and wait for the client, and one route's handler waits
+    before it answers, so requests arrive while one is being answered. Two limits on a head are
+    run, 32 KiB and 700 bytes. It fails on any stream where
     Corten's connection is laxer than hyper's (it answers more requests, or the app answers one
-    hyper refused), on a difference in any byte but `Date` that is not on the list, on a panic and
-    on a hang. The list has one class: a head that reaches the app's limit unfinished and is
+    hyper refused), on a difference in any byte that is not on the list, on a panic and
+    on a hang, which the test's own thread tells by the clock when no stream has finished in two
+    minutes (time on a run's thread is paused, and a server that never stops working would keep
+    it from passing). The list has one class: a head that reaches the app's limit unfinished and is
     malformed further on is refused by both, with 400 by one and 431 by the other, since which of
     the two hyper answers depends on where its reads ended, and Corten's connection reads a head
-    no further than the limit. A difference of any other class fails the run, so the list grows
+    no further than the limit. The class is of the head that was refused and not of the stream:
+    the bytes sent from where the first request neither server answered begins are as many as
+    the limit. (Two reviews found the gate had compared the whole stream's length, which let a
+    short head's refusal through behind requests that were long together, and had compared text
+    read leniently, which lets bytes that only read alike through. And the handler that waits
+    found a difference of the first kind in its first long run, which is fixed: a client that
+    closes its side, above.) A difference of any other
+    class fails the run, so the list grows
     only by a change to this Choice. The suite runs 3,000 streams made at random behind the fixed
     ones on every `cargo test`, and a run of 250,000, with the same seed, is an ignored test the
-    pull request that changes the connection reports. What the gate does not send: a stream longer
-    than one of hyper's reads (8,192 bytes) but for heads at the limit, so where hyper cuts a body
-    its handler left unread, in a stream that long, is reasoned and not tested; TLS; and anything
-    in real time, which the tests of the timeouts cover on a socket.
+    pull request that changes the connection reports. What the gate does not send is listed
+    under what would make the connection the default, below.
+
+    **What the gate met in hyper.** Over the pipes that hold little, two streams of the first
+    run differed for a reason that is hyper 1.12.0's own, on both servers, since a request with
+    a body is hyper's on either. A handler leaves a chunked body unread, and its answer waits
+    for the client in hyper's queue of buffers (it writes with `writev`). hyper then finishes
+    reading the body after the answer is whole and before it has gone, and takes the connection
+    for idle. It reads the next request with the answer before still queued, and from there two
+    things were seen. It does not write that next request's answer until something else wakes
+    the connection, having asked to be woken for nothing: hyper's own server stayed so for the
+    rest of the stream, while the connection Corten's handed over went on when the gate's last
+    request arrived, only because the read made behind the handed bytes had left a wake for the
+    socket. And where the next request is one hyper refuses, its `400` is written into the buffer
+    for heads, which is sent ahead of the queue: a debug build stops at hyper's own assertion
+    (`can_write_head`), and a release build wrote 103 bytes more ahead of the 514 queued bytes of
+    the answer before (read from the sizes of its writes; the bytes themselves were not looked
+    at). Both need a client that pipelines behind a chunked body its handler does not read and
+    takes the answer slowly enough to fill the socket, and neither is changed by the switch. The
+    gate sends no body over a pipe that holds little, so that it compares the two connections
+    and not hyper with hyper's timing; the defect is recorded here and has not been reported to
+    hyper.
 
     **What is not done, and the limit that keeps it off.** Corten's connection sends no trailers
     (an answer's are dropped, and no `Trailer` line is written) and no reason phrase but the
     status's own. And a client that pipelines requests and reads no answer holds more of the
     server's memory than on hyper's connection: under the public HttpArena harness's
-    pipelining flood, a 4 GiB container on two CPUs peaked at 2,185 to 2,371 MiB with the switch
-    on (median 2,283) and 2,092 to 2,153 MiB with it off (median 2,120), nine runs each. Most of
-    both is the kernel's socket buffers, which `App::send_timeout` and `App::max_connections`
-    bound, and the difference is small beside the total, but it is a difference in the wrong
+    pipelining flood, a 4 GiB container on two CPUs peaked at 2,106 to 2,272 MiB with the switch
+    on (median 2,219) and 2,094 to 2,142 MiB with it off (median 2,107), nine runs each at
+    `8dbd3db5f`. Two more sets of nine, at the heads either side of that one, read medians of
+    2,253 and 2,236 with it on against 2,117 and 2,120 with it off. Before the buffer of answers
+    dropped what had gone (above), the same runs read 2,185 to 2,371 (median 2,283) against
+    2,092 to 2,153 (median 2,120): the difference at the median went from 163 MiB to between 112
+    and 136, and is not closed. What the rest of it is has not been found. Most of both peaks is
+    the kernel's socket buffers. `App::max_connections` bounds how many connections there are and
+    `App::send_timeout` how long one that takes nothing is kept; neither bounds what one
+    connection's own buffer holds, which the connection bounds itself (above; the first version
+    of this Choice said the two settings bounded the flood's memory, and for a client that kept
+    taking a little they did not). The difference is small beside the total, but it is a
+    difference in the wrong
     direction on an attack, so it is recorded here as a known limit for an app that opts in and is
     to be fixed before the switch is on by default. An app behind a proxy that does not pipeline
     to its origin does not meet it. A second cost is smaller and by design: a connection handed
     to hyper holds 10,083 bytes while it waits where hyper's own holds 8,469, the task it began in
     and hyper's connection in an allocation of its own, which keeps a connection that is never
     handed over at 7,423. The harness's attacks that send a body, whose connections are hyper's
-    from their first request, show it: huge-chunk peaked at 977 to 997 MiB against 905 to 939 and
+    from their first request, show it (these and the attacks below were run at `f02d8511f` and
+    not again): huge-chunk peaked at 977 to 997 MiB against 905 to 939 and
     large-upload at 1,393 to 1,577 against 1,286 to 1,535 (nine runs each), and four more of the
     nine such attacks were 21 to 58 MiB higher in the runs made (one each, chunk-extension-flood
     five). The ten attacks that send no body and are not the flood all peaked lower with the
@@ -11280,8 +11395,19 @@ rules something out.
     request bodies are read on Corten's connection, or the handoff has been shown to cost a
     connection with bodies nothing in cycles and no more memory than hyper's own; a placement run reads a CPU-cost win on the
     requests without a body and meets +1% on the others; a security review of the connection and
-    the gate has been made by someone who wrote neither; and the gate has run on every change to
-    either connection since with no new class. It is taken out again if a difference from hyper
+    the gate has been made by someone who wrote neither, with nothing it found left open; the
+    gate, or a fixed test where the gate cannot, covers what it does not send today; and the gate
+    has run on every change to either connection since with no new class. What the gate does not
+    send today, each named by a review: an answer whose body fails, has trailers, or is cut by
+    its handler, a `1xx` and a head a handler makes that cannot be sent (fixed tests cover a
+    failing and a panicking body, trailers and a `101` nobody asked for, on both connections);
+    a request with a body over a pipe that holds little (above); a stream longer than one of
+    hyper's reads, 8,192 bytes, but for heads at the limit (one fixed test crosses it, with a
+    body left unread); more than one change to a stream, more than two limits on a head, and a
+    target over 65,534 bytes; a client's end that comes with its request, but where a handler's
+    wait ends as its client closes (a fixed test sends it); a write that fails; TLS; shutdown;
+    several connections at once;
+    and anything in real time, which the tests of the timeouts cover on a socket. It is taken out again if a difference from hyper
     is found that the gate cannot be made to hold, if hyper's own connection comes within the
     counts above (its server gains a flush rule that is safe for pipelines, or stops allocating
     for a request without a body), or if a year passes with no app asking for it and none of the
@@ -11299,59 +11425,73 @@ rules something out.
     Stands on: measured (instructions and allocations a request and bytes an idle connection
     holds, by `bench/request-cost` as it is on `main`, callgrind over a socket with jemalloc
     preloaded, three counts of each case that agree within 1 and three runs of each idle figure
-    over 5,000 connections, for `main` at `8270df196`, for this change at `f02d8511f` with the
-    switch off and on (on by one call added to the kit's probe), and for `8270df196` with this
-    change's two manifest files alone; the figures are in the text above; no cycles or times
-    taken);
-    measured (the gate's long run, seed 20261124, at `f02d8511f`: 252,454 streams, 252,221 answered
-    alike, the app answering in 175,462 of them, 233 in the one listed class, none failed; one
-    run, which the same seed repeats);
+    over 5,000 connections, for `main` at `aa526350f`, for this change at `8dbd3db5f` with the
+    switch off and on (on by one call added to the kit's probe), and for `aa526350f` with this
+    change's two manifest files alone; between `8dbd3db5f` and the commit that wrote this, the
+    files under `crates/` differ in tests and in a comment; the figures are in the text above,
+    and the ones of earlier heads it names (`f02d8511f`, `7076a0c95`) were taken the same way;
+    no cycles or times taken);
+    measured (the gate's long run, seed 20261124, at `a6cb2efe7`: 252,454 streams, 252,282
+    answered alike, the app answering in 177,817 of them, 172 in the one listed class, none
+    failed; one run, which the same seed repeats; and at `7076a0c95` and `423722c21`, which
+    looked for a client's end less often, 24 and 8 streams failed, as told above);
     measured (peak memory under the HttpArena harness's attacks, each in a fresh 4 GiB container
-    on CPUs of its own, Corten at `f02d8511f` under an app for that harness that is not in this
+    on CPUs of its own, under an app for that harness that is not in this
     repository, with jemalloc as the starter image preloads it but a 64 KiB thread cache: the
-    figures above, the pipelining flood, huge-chunk, large-upload and header-bomb nine runs each,
-    with the switch on first in five and off first in four, chunk-extension-flood five and every
-    other attack one; and what a connection holds after a request with a body, by
-    `bench/request-cost`'s idle reading over 5,000 connections, three runs each: 10,082 and
-    10,083 twice with the switch on, 8,469 twice and 8,470 with it off, 8,469 three times on
-    `main`);
+    pipelining flood nine runs at `8dbd3db5f`, at `7076a0c95` and at `423722c21`, with the
+    switch on first in five and off first in four, and before those at `f02d8511f`, where
+    huge-chunk, large-upload and header-bomb were run nine times each, chunk-extension-flood
+    five and every other attack once, none of them again since; and what a connection holds
+    after a request with a body, by `bench/request-cost`'s idle reading over 5,000 connections,
+    three runs each at `8dbd3db5f`: 10,082, 10,083 and 10,084 with the switch on, 8,469 twice
+    and 8,470 with it off, 8,468 twice and 8,470 on `main`);
     platform (hyper 1.12.0 reads a request's head with httparse 1.10.1 under the settings and
     constructors `crates/corten/src/h1/head.rs` copies, writes an answer's head as that file
-    writes it, reads 8,192 bytes at first, and keeps a connection after an unread body only if
-    one more read ends the body; it has no public constructor for `OnUpgrade` or `Upgraded`,
+    writes it and its `Date` with httpdate 1.0.3, reads 8,192 bytes at first, keeps a
+    connection after an unread body only if one more read ends the body, looks at the socket
+    for its client's end after each head with nothing behind it and while a request is
+    answered, answering nothing to a client that has closed its side unless `half_close` is
+    set, and holds up to 16 buffers or about 400 KB of an answer before it must write; it has
+    no public constructor for `OnUpgrade` or `Upgraded`,
     which is why a switch is handed to it; RFC 9112 6.3 ends a request with neither
     `Content-Length` nor `Transfer-Encoding` at its head);
     reasoned (a header told by its name alone cannot be read differently by two servers, so the
     handoff rule cannot disagree with hyper about whether a body follows; the bytes hyper is given
     are the ones the client sent, since none is taken before the rule has decided; in a stream
-    longer than one of hyper's reads the cut of an unread body can still fall elsewhere, which
-    only changes whether the requests behind it are answered or the connection closed);
-    reasoned (the extra instructions with the switch off are not code the change runs for a
-    request: the entries compared are in a hash map keyed by type ids, which is read from the
-    instructions that differ and not from the ids, and the functions that differ are the same
-    source inlined otherwise);
+    longer than one of hyper's reads the cut of an unread body falls elsewhere, as one test
+    fixes, which only changes whether the requests behind it are answered or the connection
+    closed);
+    reasoned (the extra instructions with the switch off are likely not code the change runs for
+    a request: at an earlier head the entries compared were in a hash map keyed by type ids,
+    which was read from the instructions that differed and not from the ids, and the functions
+    that differ are the same source inlined otherwise; neither was proven for each instruction);
     bet (an app that turns this on before the flood's memory is fixed sits behind a proxy that
     does not pipeline, or bounds connections with `App::max_connections`; and fewer instructions
     here will read as fewer cycles, which nothing has measured);
     value (fast and proven fast, with a number behind the claim and none claimed that was not
     taken, Value 1; correctness before speed, which is why bodies and switches stay hyper's and a
-    differential test gates the rest; small surface and deliberate dependencies, one method and a
-    crate already in the tree, Value 6).
+    differential test gates the rest, and why the look for a client's end stays at what it
+    costs; small surface and deliberate dependencies, one method and two crates already in the
+    tree, Value 6).
 
     Revisit when: any condition for the default above comes true, or all of them; the gate meets
     a difference that is not on its list, which is fixed or argued here before the list grows;
     hyper changes how it reads a head, writes one, cuts an unread body or flushes (a new hyper is
     read against `crates/corten/src/h1/head.rs` and the gate run on it); `httparse` in hyper's
     tree and Corten's part versions; request bodies on this connection are proposed, which
-    rewrites the handoff rule; or a count with the switch off moves away from `main` by more than
-    the 48 instructions recorded here.
+    rewrites the handoff rule; a count with the switch off moves away from `main` by more than
+    the 48 instructions it was at an earlier head; the look for a client's end is found to be more
+    than hyper's own, or a way is found to know the client's end without it; or hyper is fixed
+    where the gate met it, which lets the gate send bodies over pipes that hold little.
 
-    Last checked: 2026-11-25, the counts and idle figures with `bench/request-cost` at
-    `8270df196`, on that commit and on `f02d8511f` with the switch off and on; 2026-11-25, the
-    gate's long run and the suite on both connections at `f02d8511f`; 2026-11-25, the attack list
-    with `MDA2AV/HttpArena@3388e45` on `f02d8511f`; 2026-11-25, hyper 1.12.0 and httparse 1.10.1
-    as `Cargo.lock` has them, hyper's server parse, encoder and read strategy read against
-    `crates/corten/src/h1/head.rs` at `f02d8511f`.
+    Last checked: 2026-11-26, the counts and idle figures with `bench/request-cost`, on
+    `aa526350f` and on `8dbd3db5f` with the switch off and on; 2026-11-26, the
+    gate's long run and the suite on both connections at `a6cb2efe7`; 2026-11-26, the pipelining
+    flood with `MDA2AV/HttpArena@3388e45` on `8dbd3db5f`, and 2026-11-25, the rest of that
+    attack list on `f02d8511f`; 2026-11-26, hyper 1.12.0, httparse 1.10.1 and httpdate 1.0.3
+    as `Cargo.lock` has them, hyper's server parse, encoder, read strategy, write queue and its
+    look for a client's end read against `crates/corten/src/h1.rs` and
+    `crates/corten/src/h1/head.rs` at `a6cb2efe7`.
 
 ## Rules
 

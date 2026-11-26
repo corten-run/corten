@@ -1271,15 +1271,21 @@ impl<M: Middleware> App<M> {
     /// the connection are hyper's, as every request is with this off: a request's body, a
     /// WebSocket's handshake and a tunnel are read by hyper either way.
     ///
-    /// The app sees the same requests and its clients the same answers, and every limit here
-    /// holds as it does with hyper: [`App::header_timeout`], [`App::send_timeout`],
+    /// The app is given the same requests, and its clients are answered in correct HTTP with the
+    /// head hyper writes, which is not a promise of hyper's bytes for every answer. Every limit
+    /// here holds as it does with hyper: [`App::header_timeout`], [`App::send_timeout`],
     /// [`App::max_request_head`], [`App::max_connections`], the [deadline](App::deadline) and
-    /// [`App::shutdown_grace`]. What differs: the answers to requests that arrived together
-    /// (pipelined) leave in one write, where hyper writes each as it is made; an answer's
-    /// trailers are not sent; and a client that pipelines requests and reads no answer holds
-    /// more of the server's memory than it does with hyper, which is why this is off unless an
-    /// app asks (`docs/design.md#choice-own-http1`, with what was measured and what would make
-    /// it the default). Behind a proxy that does not pipeline, that last does not arise.
+    /// [`App::shutdown_grace`]. What is known to differ (the app guide lists each): the answers
+    /// to requests that arrived together (pipelined) leave in one write, where hyper writes each
+    /// as it is made; an answer's trailers are not sent; a head refused at the limit, or before
+    /// its end has come, may be refused with the other of 400 and 431, or sooner or later; an
+    /// answer whose body fails after more than a buffer of it was ready is cut short where hyper
+    /// would have sent none of it; behind a long body its handler left unread, a connection may
+    /// be kept where hyper alone would have closed it, or closed where it would have been kept;
+    /// and a client that pipelines requests and reads no answer holds more of the server's
+    /// memory than it does with hyper, which is why this is off unless an app asks
+    /// (`docs/design.md#choice-own-http1`, with what was measured and what would make it the
+    /// default). Behind a proxy that does not pipeline, that last does not arise.
     pub fn own_http1(mut self, enabled: bool) -> Self {
         self.connections.own = enabled;
         self

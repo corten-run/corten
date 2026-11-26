@@ -35,7 +35,9 @@ bench/request-cost/  Instructions and allocations a request costs over a socket,
 ```
 
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
-protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), `http-body`
+protocols, HTTP/1.1 only), `httparse` and `httpdate` (the parser hyper reads a request's head
+with and the formatter it writes `Date` with, both in its tree: `App::own_http1`'s connection
+uses the same two), `http` (the HTTP types apps name as `corten::http`), `http-body`
 (the body trait hyper and its clients share), `bytes` (bodies and multipart pieces),
 `matchit` (the router's path matching) and `percent-encoding` (its parameters), `tokio`
 (sockets, signals, timers), `futures-util`, `pin-project-lite` (bodies and streams without
