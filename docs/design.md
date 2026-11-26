@@ -11157,7 +11157,10 @@ rules something out.
     and build command, `unstaged` answered the same on both, and `plain` differed in its
     `corten-shell` header, the script hash of its policy and its body, 6,124 bytes on each,
     all of it in a dry run of the trend's command with a stand-in for `perf`, which reads
-    nothing, no run having been made.
+    nothing, no run having been made; 2026-11-26, that dry run made again with `main` at
+    `aa526350f` and the command as it reads after its first review: both sides built, the
+    same difference on `plain` and none on `unstaged`, and each of the 36 placements answered
+    with the bodies the check had recorded for its sides, by their digests.
 
 ## Rules
 
