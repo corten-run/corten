@@ -456,6 +456,18 @@ export async function dataAddress(browser) {
       popped.moved === "#smoke-address" && popped.drawn && popped.at === "?scope=week" && popped.shown === "week",
       JSON.stringify(popped),
     );
+    const becameRead = await postThenRead(plain, false);
+    check(
+      "without the Navigation API a marked POST waiting for a write is sent as a read when the write's answer draws its form with method get, and puts its address in the entry",
+      becameRead.saveSent && becameRead.drawn && becameRead.sent.join() === "POST scope=saved,?scope=week" && becameRead.at === "?scope=week" && becameRead.shown === "week",
+      JSON.stringify(becameRead),
+    );
+    const leftRead = await postThenRead(plain, true);
+    check(
+      "without the Navigation API a marked POST waiting for a write, sent again as a read, is not sent once the page has moved to an #id of it",
+      leftRead.saveSent && leftRead.moved === "#smoke-address" && leftRead.drawn && leftRead.sent.join() === "POST scope=saved" && leftRead.at === "#smoke-address" && leftRead.shown === "saved",
+      JSON.stringify(leftRead),
+    );
     // Nothing of the page can cancel a replacement without the API: one not in the entry is refused.
     const silent = await silentRefusal(plain);
     check(
@@ -1218,9 +1230,16 @@ async function markedPatchVisits(browser, errors) {
   // once, and its answer draws and puts its address in the entry.
   await page.goto(home);
   const twin = await hold(week, "action");
-  let twinStarts = 0;
-  const countTwin = (/** @type {import("@playwright/test").Request} */ r) => void (r.url() === week && r.headers()["corten"] === "action" && (twinStarts += 1));
-  page.on("request", countTwin);
+  await page.evaluate(() => {
+    let starts = 0;
+    Object.assign(window, { __twinStarts: () => starts });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && url.search === "?scope=week" && new Headers(init?.headers).get("corten") === "action") starts += 1;
+      return fetch_.call(this, input, init);
+    };
+  });
   await trackForm();
   await press("Week");
   const twinSent = await twin.sent;
@@ -1238,7 +1257,7 @@ async function markedPatchVisits(browser, errors) {
     () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
   );
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
-  page.off("request", countTwin);
+  const twinStarts = await page.evaluate(() => /** @type {any} */ (window).__twinStarts());
   await twin.clear();
   const twinEnd = await state();
   check(
@@ -1484,24 +1503,104 @@ async function markedPatchVisits(browser, errors) {
       becameWrite.outputs.join() === "saved posted,week posted,day posted" && becameWrite.at === "",
     JSON.stringify({ savePosted, weekPosted, dayOnPost, dayPosted, becameWrite }),
   );
+
+  const becameRead = await postThenRead(page, false);
+  check(
+    "a marked POST waiting for a write is sent as a read when the write's answer draws its form with method get, and puts its address in the entry",
+    becameRead.saveSent && becameRead.drawn && becameRead.sent.join() === "POST scope=saved,?scope=week" && becameRead.at === "?scope=week" && becameRead.shown === "week",
+    JSON.stringify(becameRead),
+  );
+  const leftRead = await postThenRead(page, true);
+  check(
+    "a marked POST waiting for a write, sent again as a read, is not sent once the page has moved to an #id of it",
+    leftRead.saveSent && leftRead.moved === "#smoke-address" && leftRead.drawn && leftRead.sent.join() === "POST scope=saved" && leftRead.at === "#smoke-address" && leftRead.shown === "saved",
+    JSON.stringify(leftRead),
+  );
   await page.close();
 }
 
 /**
- * Moves the page to an `#id` of it, and presses Week from a listener of the page that hears the move:
- * `currententrychange`, or a `popstate` listener put on before the runtime's (as a script in the
- * page before it does). Says where the page is once Week's answer is drawn.
+ * Presses Save, then Week on the form drawn with `method="post"` while Save is on its way: a write
+ * then, which waits for Save's answer. That answer draws the form as the server writes it, with
+ * `method="get"`, so Week is sent again from it as a read, fenced as one. With `move`, the page
+ * moves to an `#id` of it before Save's answer: Week was pressed on the entry the page left. Says
+ * what the runtime sent and where the page is once Save's answer, and any read after it, is drawn.
+ * @param {import("@playwright/test").Page} page @param {boolean} move
+ */
+async function postThenRead(page, move) {
+  const home = `${base}/smoke/address`;
+  await page.goto(home);
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  await page.route(home, async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST" || request.headers()["corten"] !== "action") return route.continue();
+    await held;
+    await route.continue().catch(() => {});
+  });
+  const posted = page.waitForRequest((r) => r.url() === home && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => {
+    /** @type {string[]} */
+    const sent = [];
+    Object.assign(window, { __sent: sent });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && new Headers(init?.headers).get("corten") === "action")
+        sent.push((init?.method ?? "GET").toUpperCase() === "GET" ? url.search : `POST ${init?.body}`);
+      return fetch_.call(this, input, init);
+    };
+    /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form")).setAttribute("method", "post");
+  });
+  const click = (/** @type {string} */ name) => page.getByRole("button", { name, exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await click("Save");
+  const saveSent = await posted;
+  await click("Week");
+  const moved = move
+    ? await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            addEventListener("hashchange", () => resolve(location.hash), { once: true });
+            location.hash = "smoke-address";
+          }),
+      )
+    : null;
+  release();
+  const settled = () => page.waitForFunction(() => !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).then(() => true, () => false);
+  const drawn = move
+    ? await page.waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "saved", undefined, { timeout: 5000 }).then(() => true, () => false)
+    : await page.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week", undefined, { timeout: 5000 }).then(() => true, () => false);
+  // Long enough for a read sent after Save's answer (in a task of its own) to be on its way, then
+  // drawn.
+  await page.waitForTimeout(500);
+  await settled();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await page.unroute(home);
+  const end = await page.evaluate(() => ({
+    sent: /** @type {string[]} */ (/** @type {any} */ (window).__sent),
+    at: location.search + location.hash,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+  }));
+  return { saveSent, moved, drawn, ...end };
+}
+
+/**
+ * Moves the page to an `#id` of it, and presses Week from a listener of the page that hears the move,
+ * `currententrychange` or `popstate`, put on before the runtime's (by a script in the page before
+ * it), so the press comes before the runtime hears the move. Says where the page is once Week's
+ * answer is drawn.
  * @param {import("@playwright/test").Page} page @param {"currententrychange" | "popstate"} type
  */
 async function pressOnMove(page, type) {
-  if (type === "popstate")
-    await page.addInitScript(() =>
-      addEventListener("popstate", () => {
-        const press = /** @type {any} */ (window).__pressOnPop;
-        Object.assign(window, { __pressOnPop: undefined });
-        press?.();
-      }),
-    );
+  await page.addInitScript((type) => {
+    const name = `__pressOn${type}`;
+    (type === "popstate" ? window : /** @type {any} */ (window).navigation)?.addEventListener(type, () => {
+      const press = /** @type {any} */ (window)[name];
+      Object.assign(window, { [name]: undefined });
+      press?.();
+    });
+  }, type);
   await page.goto(`${base}/smoke/address`);
   const moved = await page.evaluate(
     (type) =>
@@ -1513,8 +1612,7 @@ async function pressOnMove(page, type) {
           /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click();
           resolve(moved);
         };
-        if (type === "popstate") Object.assign(window, { __pressOnPop: press });
-        else /** @type {any} */ (window).navigation.addEventListener(type, press, { once: true });
+        Object.assign(window, { [`__pressOn${type}`]: press });
         location.hash = "smoke-address";
       }),
     type,

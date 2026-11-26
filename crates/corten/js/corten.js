@@ -3274,22 +3274,22 @@ const presses = new Map();
 /**
  * Counts a press of `form` by its id, which the form a patch draws in its place keeps, as it is
  * made: before anything of the page runs for it (a `formdata` listener), so the presses are in the
- * order they were made. For a read, whether it is still to be drawn: until it draws, only while it
- * is the latest press of a form with that id (a newer one, of this form or the one drawn in its
- * place, drops it wherever it is: on its way, waiting for a write, about to be sent again), not once
- * it is drawing, which a press its draw makes (a `connectedCallback`) does not stop. A
- * `data-address` form's draws, and puts its address in, only on the entry and page it was pressed
- * on ({@link entry}) and while no visit of the runtime's is on its way, whose navigation the
+ * order they were made. Whatever it sends, a press is a read's fence only when it is sent as a read
+ * (a write is never dropped), and it keeps where it was made for when it is sent again as one (an
+ * answer drew its form with another method). As a read's, whether it is still to be drawn: until it
+ * draws, only while it is the latest press of a form with that id (a newer one, of this form or the
+ * one drawn in its place, drops it wherever it is: on its way, waiting for a write, about to be sent
+ * again), not once it is drawing, which a press its draw makes (a `connectedCallback`) does not
+ * stop. A `data-address` form's draws, and puts its address in, only on the entry and page it was
+ * pressed on ({@link entry}) and while no visit of the runtime's is on its way, whose navigation the
  * replace would cancel: never one pressed while a visit is on its way, for the page it leaves.
- * None for a write, which is never dropped.
- * @param {HTMLFormElement} form @param {ReturnType<typeof sendsAs>} sends
- * @returns {Press | undefined}
+ * @param {HTMLFormElement} form
+ * @returns {Press}
  */
-function pressed(form, sends) {
+function pressed(form) {
   const id = idOf(form);
   const n = (presses.get(id) ?? 0) + 1;
   presses.set(id, n);
-  if (sends.method !== "get") return;
   const at = hasAttr(form, "data-address") ? (reading.size ? null : entry()) : undefined;
   return (drawing, sending) => (drawing || !id || presses.get(id) === n) && (sending || at === undefined || (!reading.size && at === entry()));
 }
@@ -3356,12 +3356,14 @@ function asking(form, submitter) {
  *   for a write's answer, which read it at the press
  * @param {Press | null} [press] its press ({@link pressed}): taken now for a new one, kept by one that waited
  */
-async function send(form, submitter, sends, within = asking(form, submitter), press = pressed(form, sends)) {
+async function send(form, submitter, sends, within = asking(form, submitter), press = pressed(form)) {
   sentFrom.add(form);
   const turn = turns;
   const data = new FormData(form, submitter);
+  // The press fences only a read: a write is never dropped.
+  const read = sends.method === "get" ? press : null;
   // Dropped already: a `formdata` listener pressed the form again.
-  if (press && !press(false, true)) return;
+  if (read && !read(false, true)) return;
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
   const entries = sentEntries(data);
@@ -3385,7 +3387,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   }
   // The same read as one on its way is that one, which this press takes over: its answer is drawn
   // as this press's, on the entry this press is on.
-  if (previous?.key === key) return void (previous.here = press ?? undefined);
+  if (previous?.key === key) return void (previous.here = read ?? undefined);
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;
@@ -3399,7 +3401,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: press ?? undefined, mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), nextPress: /** @type {Press | null | undefined} */ (undefined), here: read ?? undefined, mine, busy, by: submitter };
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
   /** @type {Press} */ const here = (drawing) => !pending.here || pending.here(drawing);
@@ -3686,10 +3688,10 @@ function sendAgain(form, submitter, within, press) {
         );
   if (by === undefined) return;
   const sends = sendsAs(now, by);
-  // A read the form now sends as a write (an answer drew it with `method="post"`) is a write, which
-  // no newer press drops and whose answer is drawn and counted as a write's.
-  const read = sends.method === "get" ? press : null;
-  if (!read || read()) send(now, by, sends, within, read ?? null);
+  // Fenced as what the form sends now: a press the answer drew its form to send as a write (with
+  // `method="post"`) is one, which no newer press drops; one it drew to send as a read is a read,
+  // on the entry it was pressed on.
+  if (sends.method !== "get" || press?.()) send(now, by, sends, within, press ?? null);
 }
 
 /**
