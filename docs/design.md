@@ -8554,8 +8554,8 @@ rules something out.
     as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the
     guide names it as how an unstaged answer that changes says so, and covering it costs no other
     unstaged route anything. On any route whose answer cannot be `Public` the watch compiles away.
-    Every render that draws a key also marks the request's signal (a bit in a byte it already
-    had), which the stages read before they settle the answer, so a middleware of the
+    Every render that draws a key also marks the request's signal (a bit beside the notice's, in
+    the byte that held it), which the stages read before they settle the answer, so a middleware of the
     app's that makes a new response of the one it was given, with its body and headers and none
     of its extensions, does not take the mark away; a layer around the app (`App::layer`) still
     runs after the answer is settled. A middleware can also give `next` a request rebuilt
@@ -8563,14 +8563,20 @@ rules something out.
     signal the stages do not read (or none), so the stages mark their own signal as the route's
     answer comes back past the middleware. The route's side of the chain (`middleware::handle`,
     which no middleware can stand in for) looks at the answer as it comes back
-    (`middleware::Keyed`) and, when it has the mark, whoever put it on, sets a flag of the
-    thread's before any middleware sees the answer; each poll of the stages' chain (`page::run`,
-    through `middleware::passing`) clears that flag as it starts and puts back what was there as
-    it ends, as a render's mark is, and marks the stages' signal when it was set. A middleware is
-    given the rest of the chain as a `Next`, which promises no `'static`, so it cannot hand the
-    route's future to a task of its own; one that polls it on a scoped thread of its own is not
-    seen, as a key a handler draws on one is not. So a middleware that rebuilds both the request
-    and the response does not take the mark away either. The watch marks the answer alone: every
+    (`middleware::Keyed`) and, when it has the mark, whoever put it on, marks the stages' own
+    signal before any middleware sees the answer. The stages hold the route and their signal in
+    one place (`middleware::Ends`), and each link of the chain carries a reference to it, so the
+    route goes down the chain as one pointer where it was two, and the signal with it. A
+    middleware is given the rest of the chain as a `Next`, which promises no `'static`, so it
+    cannot hand the route's future to a task of its own, but it may call it or poll it on a
+    scoped thread of its own (a `Next` and its future are `Send`); the mark is the signal's, not
+    a thread's, so it reaches the stages from there too. So a middleware that rebuilds both the
+    request and the response does not take the mark away either, on whatever thread it polled
+    `next`. An earlier head (`cf2ea1a01`) set a flag of the thread's there instead, which each
+    poll of the stages' chain read and reset: a middleware that polled `next` on a scoped thread
+    and rebuilt both sides sent a keyed `Public` answer as `public, max-age=60`
+    (`tests::cache::an_answer_a_middleware_rebuilt_on_a_thread_of_its_own_keeps_its_submit_key_from_shared_caches`
+    fails there). The watch marks the answer alone: every
     staged route's answer comes back that way, so an earlier head's mark on the request's signal
     from the watch as well was a second of the same, which no test needed, and it held the
     request's signal in every watched route's future. An earlier head (`9c8cd07e7`) gave the

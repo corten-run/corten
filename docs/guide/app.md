@@ -1596,7 +1596,8 @@ one does, in every build, with or without the app's kept answers, and on a route
 headers around either (a `no-store` there does not take away a CDN's own caching header), or a
 tuple whose header part of the app's own refuses with one, since a refusal is the whole answer. The stages keep the mark past
 the app's middleware, so one that makes a new response of the one it was given does not take it
-away, nor one that also gives `next` a request rebuilt without the first one's extensions. The watch
+away, nor one that also gives `next` a request rebuilt without the first one's extensions, on
+whatever thread it calls or polls `next`. The watch
 sees what the handler draws itself, before it returns: a key drawn in a task it spawned, a
 render it handed to a blocking task or a thread of its own is not seen, nor is one drawn as a
 body is sent after the handler returned (`Media::stream`, a relay's body, a live stream's

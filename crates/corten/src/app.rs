@@ -2697,7 +2697,12 @@ impl<S: Steps> Layer<S> {
             credentials.personal(|| headers.contains_key(header::AUTHORIZATION))
         };
         let has = if !own && mount.is_none() { cache::request_tags(req.method(), headers, accepts_coding) } else { None };
-        let request_signal = self.signal(&credentials, body_limit);
+        let watch = Watch(self.signal(&credentials, body_limit));
+        let cors = cors.cloned();
+        if let Some(nonce) = &nonce {
+            req.extensions_mut().insert(nonce.clone());
+        }
+        req.extensions_mut().insert(watch.0.clone());
         // Every path under an API's prefix is its own: a parameter or a catch-all of a route
         // outside it (a page's `/{*rest}`, or the API around it's `/api/{id}` for `/api/items`)
         // does not answer it. The request meets everything a route of the API would, and the API's
@@ -2713,24 +2718,20 @@ impl<S: Steps> Layer<S> {
             // It is an unknown URL of the API's, for middleware that reads the route too.
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
-        // The route and the stages' signal, which the route's answer marks as it comes back past
-        // the middleware when it drew a form's new submit key, from whatever thread polled it.
-        let ends = crate::middleware::Ends { route, watch: Watch(request_signal) };
-        let cors = cors.cloned();
-        if let Some(nonce) = &nonce {
-            req.extensions_mut().insert(nonce.clone());
-        }
-        req.extensions_mut().insert(ends.watch.0.clone());
         let path = self.shared.dev.then(|| req.uri().path().to_string());
         // A write may change what a kept page shows: it is counted when it is answered, and
         // when it is dropped before that, for its path once the app counts writes by path. Only for a method that is not safe, in
         // an app that keeps answers.
-        let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &ends.watch.0));
+        let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
         // before someone has to measure every screen. It is timed until it is dropped, so a
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
+        // The route and the stages' hold on their signal, which the route's answer marks as it
+        // comes back past the middleware when it drew a form's new submit key, from whatever
+        // thread polled it.
+        let ends = crate::middleware::Ends { route, watch };
         // The middleware of the area or API the request is in, where one has some. Taken after
         // the signal, so it is dropped before it: `Next` holds both for one lifetime.
         let steps = self.steps.scope(scope);
