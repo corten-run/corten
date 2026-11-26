@@ -28,7 +28,13 @@ fn dev_gives_the_app_the_port_its_flag_names_over_port() {
     let removed = done.then(|| std::fs::remove_dir_all(&base));
     for ((args, inherited, expected), (port, said, stopped)) in cases.iter().zip(&seen) {
         let kept = base.display();
-        assert_eq!(port.as_deref(), Some(*expected), "corten dev {args:?} with PORT={inherited:?} said:\n{said}\n(kept {kept})");
+        // The stop's result is in this message too: a port missing because its exit could not be
+        // read names that error, not only the absent port.
+        assert_eq!(
+            port.as_deref(),
+            Some(*expected),
+            "corten dev {args:?} with PORT={inherited:?} (stopped: {stopped:?}) said:\n{said}\n(kept {kept})"
+        );
         assert!(stopped.is_ok(), "corten dev {args:?}: {stopped:?} (kept {kept})");
     }
     removed.expect("every run read its port and stopped").expect("removing the test's directory");
@@ -104,17 +110,42 @@ fn stand_in(name: &str) -> PathBuf {
         .unwrap();
     std::fs::create_dir(base.join("bin")).unwrap();
     let cargo = base.join("bin").join(format!("cargo{}", std::env::consts::EXE_SUFFIX));
-    let status = Command::new("rustc")
+    // Compiled with rustc rather than as a Cargo target of this crate, whose binaries are
+    // published and installed with the `corten` command.
+    let mut rustc = match Command::new("rustc")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dev-cargo.rs"))
         .arg("-o")
         .arg(&cargo)
-        .status();
-    // `status` waits for rustc, so whatever it said, nothing is running in the directory now.
-    if !status.as_ref().is_ok_and(|status| status.success()) {
-        let removed = std::fs::remove_dir_all(&base);
-        panic!("compiling the stand-in: {status:?} (removing {}: {removed:?})", base.display());
+        .spawn()
+    {
+        Ok(rustc) => rustc,
+        // Nothing was started, so nothing can be writing in the directory.
+        Err(error) => {
+            let removed = std::fs::remove_dir_all(&base);
+            panic!("starting rustc for the stand-in: {error} (removing {}: {removed:?})", base.display());
+        }
+    };
+    // Bounded, as the tests' own runs are. rustc waits for the linker it runs before it exits,
+    // so an exit it made by itself leaves nothing running in the directory. One stopped at the
+    // deadline, or whose exit could not be read, may leave its linker at work there even when it
+    // is seen to exit, so that directory is kept and named.
+    let start = Instant::now();
+    let compiled = loop {
+        match rustc.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if start.elapsed() <= Duration::from_secs(120) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => break Err(format!("still compiling 120 s after it started; then stopped: {:?}", stop(&mut rustc))),
+            Err(error) => break Err(format!("reading its exit: {error}; then stopped: {:?}", stop(&mut rustc))),
+        }
+    };
+    match compiled {
+        Ok(status) if status.success() => base,
+        Ok(status) => {
+            let removed = std::fs::remove_dir_all(&base);
+            panic!("compiling the stand-in: rustc exited with {status} (removing {}: {removed:?})", base.display());
+        }
+        Err(error) => panic!("compiling the stand-in: rustc {error} (kept {})", base.display()),
     }
-    base
 }
 
 /// An app directory under `base`: a `Cargo.toml` is all `corten dev` looks for.
