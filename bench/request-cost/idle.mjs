@@ -2,8 +2,9 @@
 // grows for each of many connections. Needs Linux with taskset and libjemalloc.so.2 (README.md).
 //
 // Usage: node idle.mjs <probe binary> [--connections 5000] [--case pipeline] [--requests 1 | --silent]
-//          [--addresses 1] [--cpu 0] [--port 8080]
+//          [--addresses 1] [--cpu 0] [--port 8080] [--json]
 //
+// `--json` prints the run as a line of JSON in place of the sentence, for compare.mjs to read.
 // Starts the probe (not under callgrind), opens the connections one after another, sends one
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
@@ -32,6 +33,7 @@ const { values, positionals } = parseArgs({
     addresses: { type: "string", default: "1" },
     cpu: { type: "string", default: "0" },
     port: { type: "string", default: "8080" },
+    json: { type: "boolean", default: false },
   },
 });
 const [binary] = positionals;
@@ -70,7 +72,8 @@ try {
     if (!values.silent) await send(connection, name, requests);
     all.push(connection);
   }
-  const took = `${((performance.now() - began) / 1000).toFixed(1)} s`;
+  const seconds = (performance.now() - began) / 1000;
+  const took = `${seconds.toFixed(1)} s`;
   await sleep(1000);
   const after = memory();
   const accepted = files() - open;
@@ -85,7 +88,9 @@ try {
     throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
   }
   const what = values.silent ? "sent nothing" : `answered ${requests} ${name}`;
-  console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
+  // In JSON a connection that was sent nothing answered 0 requests.
+  const measured = { kind: "idle", case: name, requests: values.silent ? 0 : requests, connections, addresses, bytes, before, after, seconds };
+  console.log(values.json ? JSON.stringify(measured) : `${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
 } finally {
   await probe.stop();
 }

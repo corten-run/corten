@@ -9,93 +9,124 @@
 //        node compare.mjs <base's directory> <head's directory> [--description <file>] [--base <name>] [--head <name>]
 //          the table and the verdict, in Markdown
 //
-// A build's directory holds what the kit printed, a file a run, named as `--readings` names it;
-// `answers/`, as `count.mjs --answers` wrote it; and beside a run the kit refused,
-// `<file>.refused`, what the kit said. A run that left no file gave no figure.
+// A build's directory holds what the kit printed with `--json`, a file a run, named as
+// `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; beside a run that was
+// refused or did not end, `<file>.refused`, a line each time saying why; and `unbuilt`, what the
+// build said, when the probe did not build. A figure is read only from a run's whole output, of
+// the case, depth, requests and connections asked for (`figure`): anything else is no figure.
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
-// the kit prints; no case's allocations a request rise; and no idle reading's median of three
-// runs on head is above base's by more than base's three span. A reading with no figure on
-// either build cannot be counted, which sends the change to the measured way as a rise does.
+// the kit gives; no case's allocations rise, by the calls themselves; and no idle reading's
+// median of three runs on head is above base's by more than base's three span. A reading with no
+// figure on either build, or a case either build gave no answer to, cannot be counted, which
+// sends the change to the measured way as a rise does.
 //
 // `--description` is the pull request's description, read for the way the change is decided: a
-// line of its own, `Request path: counted` or `Request path: measured`. Exit status 1 when the
-// rule does not hold and the description does not say `measured`: a change declared measured is
-// reported and never failed on its figures, and one that declares nothing fails only when the
-// rule does not hold. Exit status 2 for arguments that are not these.
+// line of its own, `Request path: counted` or `Request path: measured` (`declared`). Exit status
+// 1 when the rule does not hold and the description does not say `measured`, and when the probe
+// did not build against head: a change declared measured is reported and never failed on its
+// figures, and one that declares nothing fails only when the rule does not hold. Exit status 2
+// for arguments that are not these.
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { median } from "./figures.mjs";
-import { cases } from "./requests.mjs";
+import { COUNTED, median, sent } from "./figures.mjs";
+import { cases, unexpected } from "./requests.mjs";
 
-/** Idle readings taken on each build. */
+/** Idle readings taken on each build, and the counts of a case `count.mjs` takes in a run. */
 export const RUNS = 3;
 /** The cases also counted with their requests written 16 at a time (README.md, The cases). */
 const DEEP = ["pipeline", "get", "unstaged", "text"];
-/** The idle readings: each of `idle.mjs`'s lines under Running it. */
+/** The idle readings: each of `idle.mjs`'s lines under Running it, of its 5,000 connections. */
 const IDLE = [
-  { name: "request", what: "after one request", options: [] },
-  { name: "browser", what: "after three of a browser's requests", options: ["--case", "get-browser", "--requests", "3"] },
-  { name: "silent", what: "before any byte", options: ["--silent"] },
+  { name: "request", what: "after one request", options: [], of: { case: "pipeline", requests: 1 } },
+  { name: "browser", what: "after three of a browser's requests", options: ["--case", "get-browser", "--requests", "3"], of: { case: "get-browser", requests: 3 } },
+  { name: "silent", what: "before any byte", options: ["--silent"], of: { case: "pipeline", requests: 0 } },
 ];
+const SIDES = /** @type {const} */ (["base", "head"]);
 
 /**
  * The runs the rule reads, in the order to take them: every case's instructions, the four at a
  * depth of 16, every case's allocations, and each idle reading `RUNS` times, a reading's runs
  * apart from each other. Each is one run of a kit's script for one case, so a run the kit
- * refuses costs that case's figure alone.
- * @returns {{ file: string, script: "count.mjs" | "idle.mjs", options: string[] }[]}
+ * refuses costs that case's figure alone. `expect` is what the run's JSON must say it is of.
+ * @returns {{ file: string, script: "count.mjs" | "idle.mjs", options: string[], expect: Record<string, string | number> }[]}
  */
 export function readings() {
   const names = Object.keys(cases);
+  const count = (/** @type {string} */ kind, /** @type {string} */ name, /** @type {number} */ depth) => ({ kind, case: name, depth, requests: sent(COUNTED, depth) });
   /** @type {ReturnType<typeof readings>} */
   const all = [];
-  for (const name of names) all.push({ file: `count-${name}.txt`, script: "count.mjs", options: ["--cases", name] });
-  for (const name of DEEP) all.push({ file: `count-16-${name}.txt`, script: "count.mjs", options: ["--depth", "16", "--cases", name] });
-  for (const name of names) all.push({ file: `allocations-${name}.txt`, script: "count.mjs", options: ["--allocations", "--cases", name] });
-  for (let run = 1; run <= RUNS; run += 1) for (const { name, options } of IDLE) all.push({ file: `idle-${name}-${run}.txt`, script: "idle.mjs", options });
+  for (const name of names) all.push({ file: `count-${name}.json`, script: "count.mjs", options: ["--json", "--cases", name], expect: count("instructions", name, 1) });
+  for (const name of DEEP) all.push({ file: `count-16-${name}.json`, script: "count.mjs", options: ["--json", "--depth", "16", "--cases", name], expect: count("instructions", name, 16) });
+  for (const name of names) all.push({ file: `allocations-${name}.json`, script: "count.mjs", options: ["--json", "--allocations", "--cases", name], expect: count("allocations", name, 1) });
+  for (let run = 1; run <= RUNS; run += 1) for (const { name, options, of } of IDLE) all.push({ file: `idle-${name}-${run}.json`, script: "idle.mjs", options: ["--json", ...options], expect: { kind: "idle", ...of, connections: 5000 } });
   return all;
 }
 
 /**
- * A case's row of what `count.mjs` prints: its median, its counts and the seconds of its longest
- * window. Null when the text has no such row. @param {string} text @param {string} name
+ * What a run printed with `--json`, when it is the whole of the run asked for: one JSON object,
+ * every field of `expect` as given, whole numbers where the kit measures whole numbers, and for
+ * instructions `RUNS` counts that are their windows' own and whose median is the one stated.
+ * Null for anything else, so a figure is never read out of part of a run's output.
+ * @param {string} text @param {Record<string, string | number>} expect @returns {any}
  */
-export function counted(text, name) {
-  for (const line of text.split("\n")) {
-    const row = /^(\S+)\s+(\d+)\s+\d+\s+\d+\s+(\d+\.\d)\s+\d+ in \d+\s+(\d+(?: \d+)*)\s*$/.exec(line);
-    if (row && row[1] === name) return { median: Number(row[2]), counts: /** @type {string} */ (row[4]).split(" ").map(Number), seconds: /** @type {string} */ (row[3]) };
+export function figure(text, expect) {
+  let found;
+  try {
+    found = JSON.parse(text);
+  } catch {
+    return null;
   }
-  return null;
+  if (found === null || typeof found !== "object" || Object.entries(expect).some(([key, value]) => found[key] !== value)) return null;
+  const whole = (/** @type {unknown} */ n) => Number.isSafeInteger(n) && /** @type {number} */ (n) >= 0;
+  if (expect.kind === "allocations") return whole(found.allocations) && whole(found.frees) && found.allocations >= found.requests ? found : null;
+  if (expect.kind === "idle") return Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.bytes === Math.round((found.after - found.before) / found.connections) ? found : null;
+  const { counts, windows } = found;
+  if (!Array.isArray(counts) || !Array.isArray(windows) || counts.length !== RUNS || windows.length !== RUNS || found.median !== median(counts)) return null;
+  const sound = windows.every(
+    (window, at) => window && whole(window.instructions) && window.instructions >= found.requests && counts[at] === Math.round(window.instructions / found.requests) && Number.isFinite(window.seconds) && window.seconds >= 0 && whole(window.others) && whole(window.threads),
+  );
+  return sound ? found : null;
 }
 
 /**
- * A case's row of what `count.mjs --allocations` prints: allocations and frees a request. Null
- * when the text has no such row. @param {string} text @param {string} name
- */
-export function allocated(text, name) {
-  for (const line of text.split("\n")) {
-    const row = /^(\S+)\s+(\d+\.\d\d)\s+(\d+\.\d\d)(?:\s|$)/.exec(line);
-    if (row && row[1] === name) return { allocations: Number(row[2]), frees: Number(row[3]) };
-  }
-  return null;
-}
-
-/** The bytes a connection of what `idle.mjs` prints, or null when the text has no figure. @param {string} text */
-export function idled(text) {
-  const found = /^(-?\d+) bytes a connection \(/m.exec(text);
-  return found ? Number(found[1]) : null;
-}
-
-/**
- * The way a description says its change is decided: "counted" or "measured" when a line of its
- * own says one of them, "both" when lines say both, and null when none does.
+ * The way a description says its change is decided: "counted" or "measured" when a line says one
+ * of them, "both" when lines say both, and null when none does. The line is one a reader of the
+ * description sees standing alone: `Request path: counted` or `Request path: measured` from the
+ * line's first character, with nothing after it but spaces or tabs, outside a fenced code block
+ * and an HTML comment, and not a block quote's (a line right under a quoted one is the quote's).
  * @param {string} description @returns {"counted" | "measured" | "both" | null}
  */
 export function declared(description) {
-  const said = new Set([...description.matchAll(/^Request path: (counted|measured)[ \t]*\r?$/gm)].map((line) => line[1]));
+  const said = new Set();
+  /** The fence that opened the code block a line is in, the comment it is in, and the quote. */
+  let [fence, hidden, quoted] = ["", false, false];
+  for (const line of description.split(/\r?\n/)) {
+    const marks = hidden ? null : /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence !== "") {
+      if (marks?.startsWith(fence) && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = "";
+      continue;
+    }
+    if (marks) {
+      fence = marks;
+      continue;
+    }
+    // What of the line is outside a comment: one opened on an earlier line, or within this one.
+    let seen = line;
+    if (hidden) {
+      const end = seen.indexOf("-->");
+      if (end < 0) continue;
+      [seen, hidden] = [seen.slice(end + 3), false];
+    }
+    seen = seen.replace(/<!--.*?-->/g, "");
+    const open = seen.indexOf("<!--");
+    if (open >= 0) [seen, hidden] = [seen.slice(0, open), true];
+    quoted = seen.trim() !== "" && (quoted || /^ {0,3}>/.test(seen));
+    const way = /^Request path: (counted|measured)[ \t]*$/.exec(seen)?.[1];
+    if (way && !quoted) said.add(way);
+  }
   if (said.size > 1) return "both";
   return /** @type {"counted" | "measured" | null} */ ([...said][0] ?? null);
 }
@@ -109,29 +140,24 @@ export const over = (base, head) => (head - base) * 200 > base;
  */
 export const rose = (base, head) => median(head) - median(base) > Math.max(...base) - Math.min(...base);
 
-/** What the kit said of each run it refused, an error's message a run. @param {string} said */
-function reasons(said) {
-  const errors = [...said.matchAll(/^Error: (.*)$/gm)].map((line) => /** @type {string} */ (line[1]));
-  const last = said.trim().split("\n").at(-1) ?? "";
-  return (errors.length > 0 ? errors : [last]).map((reason) => reason.trim().slice(0, 300));
-}
+/** A file's lines that say something, each cut to what a table can hold. @param {string} at */
+const lines = (at) => (existsSync(at) ? readFileSync(at, "utf8").split("\n").map((line) => line.trim().replace(/^Error: /, "").slice(0, 300)).filter(Boolean) : []);
 
 /**
- * What a run left in a build's directory: its figure, or why there is none, and what the kit
- * said of each time it refused the run.
- * @template T @param {string} directory @param {string} file @param {(text: string) => T | null} read
- * @returns {{ figure: T | null, why: string, refused: string[] }}
+ * What a run left in a build's directory: its figure, or why there is none, and why each attempt
+ * that gave none did not.
+ * @param {string} directory @param {ReturnType<typeof readings>[number]} reading
  */
-function taken(directory, file, read) {
+function taken(directory, { file, expect }) {
   const at = join(directory, file);
-  const refused = existsSync(`${at}.refused`) ? reasons(readFileSync(`${at}.refused`, "utf8")) : [];
+  const refused = lines(`${at}.refused`);
   if (!existsSync(at)) return { figure: null, why: refused.at(-1) ?? "the run left no output", refused };
-  const figure = read(readFileSync(at, "utf8"));
-  return { figure, why: figure === null ? "the run's output is not what the kit prints" : "", refused };
+  const found = figure(readFileSync(at, "utf8"), expect);
+  return { figure: found, why: found === null ? "the run's output is not the whole of the run asked for" : "", refused };
 }
 
 const whole = (/** @type {number} */ n) => n.toLocaleString("en-US");
-const signed = (/** @type {number} */ n, digits = 0) => (n > 0 ? "+" : "") + n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const signed = (/** @type {number} */ n) => (n > 0 ? "+" : "") + whole(n);
 const percent = (/** @type {number} */ base, /** @type {number} */ head, digits = 2) => {
   if (base === 0) return "";
   const text = (((head - base) / base) * 100).toFixed(digits);
@@ -151,28 +177,35 @@ const table = (/** @type {string[]} */ head, /** @type {string[][]} */ rows) =>
  * @returns {{ markdown: string, status: 0 | 1, holds: boolean }}
  */
 export function compare(base, head, { description = "", names = { base: "base", head: "head" } } = {}) {
+  const at = { base, head };
+  const plan = Object.fromEntries(readings().map((reading) => [reading.file, reading]));
+  /** What a build that failed said last: such a build has no figure, which is said of it once. */
+  const unbuilt = { base: lines(join(base, "unbuilt")).at(-1), head: lines(join(head, "unbuilt")).at(-1) };
   /** What keeps the rule from holding, each a clause of the verdict. @type {string[]} */
-  const against = [];
+  const against = SIDES.filter((side) => unbuilt[side] !== undefined).map((side) => `the probe did not build against ${side} (${code(/** @type {string} */ (unbuilt[side]))})`);
   /** @type {string[]} */
   const refusals = [];
-  /**
-   * Both builds' figures of a reading, with what to say when either has none.
-   * @template T @param {string} file @param {string} what @param {(text: string) => T | null} read
-   */
-  const both = (file, what, read) => {
-    const sides = { base: taken(base, file, read), head: taken(head, file, read) };
-    for (const side of /** @type {const} */ (["base", "head"])) {
-      for (const reason of sides[side].refused) refusals.push(`- ${code(file)} on ${side}: ${code(reason)}${sides[side].figure === null ? "" : " (taken again, and counted)"}`);
-    }
-    const none = /** @type {const} */ (["base", "head"]).filter((side) => sides[side].figure === null);
-    if (none.length > 0) against.push(`${what} has no figure on ${none.join(" and ")} (${code(sides[/** @type {"base" | "head"} */ (none[0])].why)})`);
-    return sides;
+  /** Says what the builds that were built lack: `whys` is why, for each build that lacks it. @param {string} what @param {{ base?: string, head?: string }} whys */
+  const lacks = (what, whys) => {
+    const none = SIDES.filter((side) => whys[side] !== undefined && unbuilt[side] === undefined);
+    if (none.length > 0) against.push(`${what} on ${none.join(" and ")} (${code(/** @type {string} */ (whys[/** @type {"base" | "head"} */ (none[0])]))})`);
+  };
+  /** Both builds' figures of a reading. @param {string} file @param {string} what @returns {[any, any]} */
+  const both = (file, what) => {
+    const found = { base: taken(base, /** @type {ReturnType<typeof readings>[number]} */ (plan[file])), head: taken(head, /** @type {ReturnType<typeof readings>[number]} */ (plan[file])) };
+    for (const side of SIDES) for (const reason of found[side].refused) refusals.push(`- ${code(file)} on ${side}: ${code(reason)}${found[side].figure === null ? "" : " (taken again, and counted)"}`);
+    lacks(`${what} has no figure`, Object.fromEntries(SIDES.filter((side) => found[side].figure === null).map((side) => [side, found[side].why])));
+    return [found.base.figure, found.head.figure];
   };
 
-  const instructions = [...Object.keys(cases).map((name) => ({ name, file: `count-${name}.txt`, label: code(name) })), ...DEEP.map((name) => ({ name, file: `count-16-${name}.txt`, label: `${code(name)}, 16 at a time` }))].map(({ name, file, label }) => {
-    const sides = both(file, `${label}'s instructions`, (text) => counted(text, name));
-    const [b, h] = [sides.base.figure, sides.head.figure];
-    const runs = (/** @type {typeof b} */ side) => (side ? `${side.counts.join(" ")} (${side.seconds} s)` : "none");
+  const instructions = [...Object.keys(cases).map((name) => ({ file: `count-${name}.json`, label: code(name) })), ...DEEP.map((name) => ({ file: `count-16-${name}.json`, label: `${code(name)}, 16 at a time` }))].map(({ file, label }) => {
+    const [b, h] = both(file, `${label}'s instructions`);
+    // The counts, the longest window, and the most that threads other than the serving one ran in a window.
+    const runs = (/** @type {any} */ side) => {
+      if (!side) return "none";
+      const most = side.windows.reduce((/** @type {any} */ most, /** @type {any} */ window) => (window.others > most.others ? window : most));
+      return `${side.counts.join(" ")} (${Math.max(...side.windows.map((/** @type {any} */ window) => window.seconds)).toFixed(1)} s; others ${most.others} in ${most.threads})`;
+    };
     if (!b || !h) return [label, b ? whole(b.median) : "none", h ? whole(h.median) : "none", "", "", runs(b), runs(h), "no figure"];
     const high = over(b.median, h.median);
     // The budget in instructions is the most a case may rise by: 0.5% of base's, rounded down.
@@ -181,31 +214,55 @@ export function compare(base, head, { description = "", names = { base: "base", 
   });
 
   const allocations = Object.keys(cases).map((name) => {
-    const sides = both(`allocations-${name}.txt`, `${code(name)}'s allocations`, (text) => allocated(text, name));
-    const [b, h] = [sides.base.figure, sides.head.figure];
-    const frees = (/** @type {typeof b} */ side) => (side ? side.frees.toFixed(2) : "none");
-    if (!b || !h) return [code(name), b ? b.allocations.toFixed(2) : "none", h ? h.allocations.toFixed(2) : "none", "", "", frees(b), frees(h), "no figure"];
-    const more = h.allocations > b.allocations;
-    if (more) against.push(`${code(name)} allocates ${(h.allocations - b.allocations).toFixed(2)} more a request (${b.allocations.toFixed(2)} to ${h.allocations.toFixed(2)})`);
-    return [code(name), b.allocations.toFixed(2), h.allocations.toFixed(2), signed(h.allocations - b.allocations, 2), percent(b.allocations, h.allocations), frees(b), frees(h), more ? "rose" : ""];
+    const [b, h] = both(`allocations-${name}.json`, `${code(name)}'s allocations`);
+    const each = (/** @type {any} */ side) => (side ? (side.allocations / side.requests).toFixed(2) : "none");
+    const calls = (/** @type {any} */ side) => (side ? `${whole(side.allocations)} and ${whole(side.frees)} frees` : "none");
+    if (!b || !h) return [code(name), each(b), each(h), "", "", calls(b), calls(h), "no figure"];
+    // By the calls themselves, over the same requests: a rise the two places of a rate hide is a rise.
+    const more = h.allocations - b.allocations;
+    if (more > 0) against.push(`${code(name)} makes ${whole(more)} more allocations in ${whole(h.requests)} requests (${whole(b.allocations)} to ${whole(h.allocations)})`);
+    return [code(name), each(b), each(h), `${signed(more)} in ${whole(h.requests)}`, percent(b.allocations, h.allocations), calls(b), calls(h), more > 0 ? "rose" : ""];
   });
 
   const idle = IDLE.map(({ name, what }) => {
     const runs = [];
-    for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.txt`, `idle memory ${what}, run ${run},`, idled));
-    const b = runs.map((sides) => sides.base.figure);
-    const h = runs.map((sides) => sides.head.figure);
+    for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.json`, `idle memory ${what}, run ${run},`));
+    const [b, h] = [0, 1].map((side) => runs.map((found) => /** @type {number | null} */ (found[side]?.bytes ?? null)));
     /** A build's figures of the reading, when every run gave one: a median of fewer is not the rule's. */
-    const all = (/** @type {(number | null)[]} */ figures) => (figures.every((figure) => figure !== null) ? /** @type {number[]} */ (figures) : null);
-    const shown = (/** @type {(number | null)[]} */ figures) => figures.map((figure) => (figure === null ? "none" : whole(figure))).join(" ");
-    const [bases, heads] = [all(b), all(h)];
-    if (!bases || !heads) return [what, bases ? whole(median(bases)) : "none", heads ? whole(median(heads)) : "none", "", "", "", shown(b), shown(h), "no figure"];
+    const all = (/** @type {(number | null)[]} */ figures) => (figures.every((bytes) => bytes !== null) ? /** @type {number[]} */ (figures) : null);
+    const shown = (/** @type {(number | null)[]} */ figures) => figures.map((bytes) => (bytes === null ? "none" : whole(bytes))).join(" ");
+    const [bases, heads] = [all(/** @type {(number | null)[]} */ (b)), all(/** @type {(number | null)[]} */ (h))];
+    if (!bases || !heads) return [what, bases ? whole(median(bases)) : "none", heads ? whole(median(heads)) : "none", "", "", "", shown(/** @type {(number | null)[]} */ (b)), shown(/** @type {(number | null)[]} */ (h)), "no figure"];
     const span = Math.max(...bases) - Math.min(...bases);
     const [low, high] = [median(bases), median(heads)];
     const up = rose(bases, heads);
     if (up) against.push(`idle memory ${what} rises: head's median, ${whole(high)} bytes a connection, is above base's ${whole(low)} by more than base's span of ${whole(span)}`);
     return [what, whole(low), whole(high), signed(high - low), percent(low, high), whole(span), shown(bases), shown(heads), up ? "rose" : ""];
   });
+
+  // A build's answer to a case is its capture when that is the answer the case must get, whole.
+  const answers = Object.keys(cases).map((name) => {
+    const read = (/** @type {"base" | "head"} */ side) => {
+      const file = join(at[side], "answers", `${name}.http`);
+      const bytes = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
+      try {
+        return { bytes, why: bytes.length === 0 ? "no capture" : unexpected(name, bytes) };
+      } catch (error) {
+        return { bytes, why: /** @type {Error} */ (error).message };
+      }
+    };
+    const found = { base: read("base"), head: read("head") };
+    const none = SIDES.filter((side) => found[side].why !== null);
+    lacks(`${code(name)} has no answer`, Object.fromEntries(none.map((side) => [side, /** @type {string} */ (found[side].why).split("\n")[0]])));
+    return { name, state: none.length > 0 ? "none" : found.base.bytes.equals(found.head.bytes) ? "same" : "differ" };
+  });
+  const differ = answers.filter(({ state }) => state === "differ").map(({ name }) => code(name));
+  const unread = answers.filter(({ state }) => state === "none").map(({ name }) => code(name));
+  const answered = [
+    differ.length > 0 ? `The two builds answer differently in ${differ.join(", ")}: a count of two builds that answer differently compares two different jobs, which the review weighs.` : "",
+    unread.length > 0 ? `No answer to compare in ${unread.join(", ")}.` : "",
+    differ.length + unread.length === 0 ? `Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
+  ].filter(Boolean).join(" ");
 
   const said = declared(description);
   const holds = against.length === 0;
@@ -216,7 +273,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
   let status = 0;
   let verdict;
   if (said === "counted" && holds) {
-    verdict = "**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations a request rise, and idle memory does not rise.";
+    verdict = "**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case its answer.";
   } else if (said === "counted") {
     status = 1;
     verdict = `**Does not pass as counted:** ${why}. By ${rule} the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`;
@@ -231,18 +288,10 @@ export function compare(base, head, { description = "", names = { base: "base", 
       verdict = `**Does not pass as counted:** ${why}. ${none} By ${rule} such a change is measured: say \`Request path: measured\` on ${line}, and give what the measured way asks.`;
     }
   }
-
-  const answers = Object.keys(cases).map((name) => {
-    const [b, h] = [base, head].map((directory) => join(directory, "answers", `${name}.http`)).map((at) => (existsSync(at) ? readFileSync(at) : null));
-    return { name, state: !b || !h ? "none" : b.equals(h) ? "same" : "differ" };
-  });
-  const differ = answers.filter(({ state }) => state === "differ").map(({ name }) => code(name));
-  const unread = answers.filter(({ state }) => state === "none").map(({ name }) => code(name));
-  const answered = [
-    differ.length > 0 ? `The two builds answer differently in ${differ.join(", ")}: a count of two builds that answer differently compares two different jobs, which the review weighs.` : "",
-    unread.length > 0 ? `No answer to compare in ${unread.join(", ")}.` : "",
-    differ.length + unread.length === 0 ? `Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${answers.length} cases.` : "",
-  ].filter(Boolean).join(" ");
+  if (unbuilt.head !== undefined) {
+    status = 1;
+    verdict += " The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.";
+  }
 
   const markdown = [
     `## What a request costs: ${code(short(names.head))} against ${code(short(names.base))}`,
@@ -251,10 +300,10 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Instructions a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's counts", "Head's counts", "Rule"], instructions),
     "### Allocations a request",
-    table(["Case", "Base", "Head", "Difference", "Percent", "Base's frees", "Head's frees", "Rule"], allocations),
+    table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory an idle connection holds, in bytes",
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Base's span", "Base's runs", "Head's runs", "Rule"], idle),
-    ...(refusals.length > 0 ? ["### Runs the kit refused", refusals.join("\n")] : []),
+    ...(refusals.length > 0 ? ["### Runs that gave no figure", refusals.join("\n")] : []),
   ].join("\n\n");
   return { markdown: `${markdown}\n`, status, holds };
 }
