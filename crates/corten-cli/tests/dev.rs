@@ -15,11 +15,13 @@ fn dev_gives_the_app_the_port_its_flag_names_over_port() {
         // An app of its own for each run, so no run copies over a binary another started.
         seen.push(port_given(&base, &app(&base, at), args, &base.join(format!("port-{at}"))));
     }
-    // Every app has exited and been reaped, so nothing holds the directory.
-    std::fs::remove_dir_all(&base).unwrap();
+    // Every app has exited and been reaped, so nothing holds the directory. A failed removal is
+    // reported after the assertions, so it does not hide what the runs found.
+    let removed = std::fs::remove_dir_all(&base);
     for ((args, expected), (port, said)) in cases.iter().zip(&seen) {
         assert_eq!(port.as_deref(), Some(*expected), "corten dev {args:?} with PORT=4500 said:\n{said}");
     }
+    removed.expect("removing the test's directory");
 }
 
 /// An argument `corten dev` does not take is refused before Cargo runs, so a misspelled flag
@@ -53,21 +55,32 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
     };
     let cargo_ran = ran.exists();
     let stderr = std::fs::read_to_string(&said).unwrap();
-    std::fs::remove_dir_all(&base).unwrap();
+    let removed = std::fs::remove_dir_all(&base);
     assert!(status.is_some_and(|status| !status.success()), "{status:?}: {stderr}");
     assert!(stderr.contains(r#"corten dev takes --port <port> (or --port=<port>); not "--prot""#), "{stderr}");
     assert!(!cargo_ran, "Cargo ran for a refused argument");
+    removed.expect("removing the test's directory");
 }
 
 /// A directory holding `bin/cargo`, the stand-in for Cargo and the app (`fixtures/dev-cargo.rs`).
+/// Every process the stand-in runs as exits as soon as it has written, so stopping `corten dev`
+/// leaves nothing running in the directory.
 fn stand_in(name: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!("corten-dev-{name}-{}", std::process::id()));
-    // Left by an interrupted run of a process with the same id, its port files and marks would
-    // pass for this run's.
-    if base.exists() {
-        std::fs::remove_dir_all(&base).unwrap();
-    }
-    std::fs::create_dir_all(base.join("bin")).unwrap();
+    // Made new for this run, never reused: one left by another run (a process with the same id,
+    // in another PID namespace sharing the temp directory) is skipped, not removed, so its port
+    // files and marks cannot pass for this run's.
+    let base = (0..)
+        .map(|attempt| {
+            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+            std::env::temp_dir().join(format!("corten-dev-{name}-{}-{nanos}-{attempt}", std::process::id()))
+        })
+        .find(|base| match std::fs::create_dir(base) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(error) => panic!("creating {}: {error}", base.display()),
+        })
+        .unwrap();
+    std::fs::create_dir(base.join("bin")).unwrap();
     let cargo = base.join("bin").join(format!("cargo{}", std::env::consts::EXE_SUFFIX));
     let status = Command::new("rustc")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dev-cargo.rs"))
