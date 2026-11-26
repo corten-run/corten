@@ -270,9 +270,10 @@ fn handle<'a>(ends: &'a Ends<'a>, req: Request) -> impl Future<Output = Response
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match &ends.route {
         Some(route) => Either::Left(route.call(req)),
-        None => {
-            Either::Right(std::future::ready(crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND))))
-        }
+        // Made as it is polled, so the future holds no response while it waits: with one held,
+        // `Keyed` grew past what a move copies inline once it held the stages' signal too, and
+        // the stages' poll copied it three times more with a call (callgrind).
+        None => Either::Right(async { crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND)) }),
     };
     let answer =
         match here {
