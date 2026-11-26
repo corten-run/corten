@@ -2076,10 +2076,15 @@ invocation whose path appeared since is recorded as not valid and not run. An in
 only when its tag succeeded and named the side's image before and after it, the container
 `count.mjs` counted was started from the side's image by ID (`count.mjs` records it in
 `count-images.json` before the warmup), `count.mjs` exited 0,
-and its one row has 5,000 requests, none failed, each of its five counts a finite number with
-perf's running percentage at 100%, all of k6's checks passed, and the three files it is read
+and its one row has 5,000 requests, none failed, each of its five counts a whole number with
+perf's running percentage at 100% (user plus kernel cycles at most 2^53 - 1, so their sum is
+exact), all of k6's checks passed, and the three files it is read
 from are the bytes sealed when it ended: one replaced, removed or never written leaves it not
-valid. An invocation that was started is never started again: the command run again goes on from
+valid. The side's image is the ID `run.json` pins for the side of the invocation's slot in the
+schedule; a replay reads each record against that, not against the image the record names.
+`count.mjs` attaches `perf` to the counted container by the ID `docker run` gave and removes
+it by that ID; k6 reaches it by its name, `fsw-corten`, so `count.mjs` records the count failed
+unless that name is still that container's after each counted load. An invocation that was started is never started again: the command run again goes on from
 the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
 count runs or the host differ from `run.json`, or the host cannot be established; one
 interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
@@ -2089,7 +2094,12 @@ runners apart, whatever directory each starts from: the daemon makes that contai
 runner only, and the lock stands for its `cb-corten` tag and the `fsw-corten` container
 `count.mjs` starts. Each lock is made only where none is and removed only by the runner that made
 it (the container by the ID it was made with), so one left by a runner that was killed is removed
-by hand, as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it. The report gives each comparison's bounds and, as diagnostics, each
+by hand, as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it.
+Before each invocation, as each ends and before the report, the runner checks that
+`corten-count-pairs-lock` is still the container it made (a prune can remove it and another
+runner make its own) and that each file `run.json` binds still has its bytes. Where either does
+not, it stops, naming the lost lock or the file, with no further invocation and no report, and
+exits 2; an invocation that ran while it changed is recorded as not valid. The report gives each comparison's bounds and, as diagnostics, each
 side's median user cycles, kernel cycles, user and kernel instructions and user L1
 instruction-cache misses a request, with the median per-pair change in each; a pair not valid
 is named by its comparison, pair and side.

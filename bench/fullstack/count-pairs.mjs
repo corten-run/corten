@@ -37,7 +37,8 @@
 // `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
 // that only one runner can make (the lock on the daemon's `cb-corten` tag and the `fsw-corten`
 // container count.mjs starts, whatever directory a runner starts from) keep two runners apart.
-// It writes `report.json` and prints the report once every invocation has ended, unless it was
+// Before each invocation, as each ends and before the report, it stops with no report if that
+// container is not the one it made or a file run.json binds has other bytes. It writes `report.json` and prints the report once every invocation has ended, unless it was
 // asked to stop.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
@@ -133,14 +134,16 @@ const isCount = (/** @type {unknown} */ x) => typeof x === "number" && Number.is
 
 /**
  * Why one invocation's row is not valid, or [] when it is.
- * @param {{ row?: any, summary?: any, launched?: any, want: string, before?: string, after?: string, rc?: number | null,
- *   signal?: string | null, tagRc?: number | null, fresh?: boolean, interrupted?: boolean }} inv
+ * @param {{ row?: any, summary?: any, launched?: any, want?: string, before?: string, after?: string, rc?: number | null,
+ *   signal?: string | null, tagRc?: number | null, fresh?: boolean, interrupted?: boolean, lost?: string[] }} inv
  */
 export function invalid(inv) {
   if (inv.interrupted) return ["started and never ended; not run again"];
   if (inv.fresh === false) return ["its output path existed before it ran, so count.mjs was not run"];
   if (inv.tagRc !== 0) return [`docker tag exited ${inv.tagRc ?? "-"}, so count.mjs was not run`];
   const why = [];
+  if (typeof inv.want !== "string" || !inv.want) why.push("run.json pins no image for its slot");
+  if (Array.isArray(inv.lost) && inv.lost.length) why.push(`while it ran: ${inv.lost.join("; ")}`);
   if (inv.before !== inv.want || inv.after !== inv.want) why.push("the image counted was not the side's");
   if (inv.rc === 0 && (inv.launched?.image !== inv.want || !/^[0-9a-f]{64}$/.test(String(inv.launched?.container)))) why.push("the container counted was not started from the side's image");
   if (inv.rc !== 0) why.push(inv.signal ? `count.mjs was stopped by ${inv.signal}` : `count.mjs exited ${inv.rc ?? "-"}`);
@@ -160,7 +163,11 @@ export function invalid(inv) {
     if (typeof running !== "number") why.push(`perf's running percentage for ${event} is not recorded`);
     else if (running !== 100) why.push(`perf ran ${event} ${running}% of its enabled time, not 100%`);
   }
-  if (isCount(r.userCyclesPerRequest) && isCount(r.kernelCyclesPerRequest) && !(cycles(r) > 0)) why.push("no cycles");
+  if (isCount(r.userCyclesPerRequest) && isCount(r.kernelCyclesPerRequest)) {
+    if (!(cycles(r) > 0)) why.push("no cycles");
+    // A sum past 2^53 - 1 is rounded, so the bound would not be read from the counts exactly.
+    else if (Number.isSafeInteger(r.userCyclesPerRequest) && Number.isSafeInteger(r.kernelCyclesPerRequest) && !Number.isSafeInteger(cycles(r))) why.push("user plus kernel cycles a request is above 2^53 - 1, so not an exact count");
+  }
   const checks = inv.summary?.metrics?.checks;
   if (!checks) why.push("no k6 summary of the counted load");
   else {
@@ -278,19 +285,21 @@ const COMPARISON = { ab: "the change", aa: "its A/A" };
 
 /**
  * Reads a run's records: each invocation's row, summary and launched image from count.mjs's
- * results, as `load` gives them from the invocation's record (and why it could not).
+ * results, as `load` gives them from the invocation's record (and why it could not), each against
+ * the image ID run.json pins for its slot's side, not the one its own record names.
  * @param {ReturnType<typeof schedule>} plan
  * @param {Map<string, any>} records invocation records by name
  * @param {(name: string, target: string, record: any) => { row?: any, summary?: any, launched?: any, why?: string[] }} load
+ * @param {{ base?: string, head?: string }} [ids] the image IDs run.json pins
  */
-export function readRun(plan, records, load) {
+export function readRun(plan, records, load, ids = {}) {
   /** @type {Record<string, Record<string, any[]>>} */
   const pairs = {};
   for (const inv of plan) {
     const rec = records.get(inv.name);
     const ended = rec?.ended != null;
     const got = ended && rec.fresh !== false && rec.tagRc === 0 ? load(inv.name, inv.target, rec) : {};
-    const why = rec ? [...(got.why ?? []), ...invalid({ ...got, ...pick(rec), interrupted: !ended })] : ["not run"];
+    const why = rec ? [...(got.why ?? []), ...invalid({ ...got, ...pick(rec), want: ids[/** @type {"base" | "head"} */ (inv.image)], interrupted: !ended })] : ["not run"];
     const row = Array.isArray(got.row) && got.row.length === 1 ? got.row[0] : null;
     const value = why.length === 0 && row ? cycles(row) : null;
     const byTarget = (pairs[inv.target] ??= {});
@@ -314,8 +323,8 @@ export function readRun(plan, records, load) {
   return targets;
 }
 
-/** An invocation record's fields that decide its validity. */
-const pick = (/** @type {any} */ r) => ({ want: r.want, before: r.before, after: r.after, rc: r.rc, signal: r.signal, tagRc: r.tagRc, fresh: r.fresh });
+/** An invocation record's fields that decide its validity, but the image it wanted, which run.json gives. */
+const pick = (/** @type {any} */ r) => ({ before: r.before, after: r.after, rc: r.rc, signal: r.signal, tagRc: r.tagRc, fresh: r.fresh, lost: r.lost });
 
 /**
  * The cycle split and its diagnostics for one comparison: each count's median a request on each
@@ -485,8 +494,10 @@ export function environmentOf(exec, env, which) {
 /**
  * Takes the daemon's lock on its `cb-corten` tag and `fsw-corten` container: a container named
  * DAEMON_LOCK, made (never started) from `image`, which the daemon lets only one runner make
- * whatever directory each runs from. Throws, naming its holder, where one is there. Its release
- * removes the container by the ID it was made with, so never one another runner made after it.
+ * whatever directory each runs from. Throws, naming its holder, where one is there. `held` says
+ * whether the container of that name is still the one made (a prune or a hand can remove it and
+ * another runner make its own); `release` removes it by the ID it was made with, so never one
+ * another runner made after it.
  * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => { status: number | null, stdout?: string }} exec
  * @param {Record<string, string | undefined>} env
  * @param {string} image
@@ -496,7 +507,12 @@ export function daemonLock(exec, env, image, ledger) {
   const holder = `process ${process.pid} on ${hostname()}, since ${new Date().toISOString()}, for ${ledger}`;
   const made = exec("docker", ["create", "--name", DAEMON_LOCK, "--label", `${HOLDER}=${holder}`, "--label", `run.corten.count-pairs.token=${randomUUID()}`, image], { env });
   const id = (made.stdout ?? "").trim();
-  if (made.status === 0 && /^[0-9a-f]{64}$/.test(id)) return () => exec("docker", ["rm", id], { env }).status === 0;
+  if (made.status === 0 && /^[0-9a-f]{64}$/.test(id)) {
+    return {
+      held: () => { const r = exec("docker", ["inspect", "-f", "{{.Id}}", DAEMON_LOCK], { env }); return r.status === 0 && (r.stdout ?? "").trim() === id; },
+      release: () => exec("docker", ["rm", id], { env }).status === 0,
+    };
+  }
   if (made.status === 0) throw new Error(`docker create ${DAEMON_LOCK} gave no container ID; remove it with docker rm ${DAEMON_LOCK} and run again`);
   const seen = exec("docker", ["inspect", "-f", "{{json .Config.Labels}}", DAEMON_LOCK], { env });
   if (seen.status !== 0) throw new Error(`could not take the daemon's lock: docker create ${DAEMON_LOCK} exited ${made.status ?? "-"}`);
@@ -569,15 +585,15 @@ export async function runPairs(o) {
     const base = id(o.images.base), head = id(o.images.head);
     if (!base || !head) throw new Error("no image for a side");
     if (base === head && !existsSync(join(dir, "run.json"))) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
-    const release = daemonLock(o.exec, env, base, dir);
-    releases.push(() => { if (!release()) log(`the daemon's lock was not removed: remove it with docker rm ${DAEMON_LOCK} if no runner is going`); });
-    return await locked(o, { dir, now, log, env, id });
+    const daemon = daemonLock(o.exec, env, base, dir);
+    releases.push(() => { if (!daemon.release()) log(`the daemon's lock was not removed: remove it with docker rm ${DAEMON_LOCK} if no runner is going`); });
+    return await locked(o, { dir, now, log, env, id, held: daemon.held });
   } finally {
     for (const release of releases.reverse()) release();
   }
 }
 
-async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string }} */ { dir, now, log, env, id }) {
+async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string, held: () => boolean }} */ { dir, now, log, env, id, held }) {
   const file = join(dir, "invocations.jsonl"), runFile = join(dir, "run.json");
   const kitDir = o.kit ?? here;
   const plan = schedule(o.last, o.targets, o.prefix);
@@ -600,10 +616,22 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     if (taken.length) throw new Error(`${taken.length} of the run's output paths exist already (${join(o.results, taken[0].name)}): use a new prefix`);
     writeFileSync(runFile, JSON.stringify(settingsOf({ ...o, env }, ids, plan, kit, environment), null, 1) + "\n", { flag: "wx" });
   }
+  // What could make the next count, or the report, not the run's: the daemon's lock taken from it,
+  // or a file the count runs no longer the bytes run.json binds.
+  const lost = () => {
+    const out = held() ? [] : [`the daemon's lock was lost: ${DAEMON_LOCK} is not the container this runner made, so another runner may use the ${TAG} tag`];
+    try {
+      const current = kitOf(kitDir);
+      for (const f of new Set([...Object.keys(kit), ...Object.keys(current)])) if (JSON.stringify(kit[f]) !== JSON.stringify(current[f])) out.push(`${f} changed since the run started`);
+    } catch (e) { out.push(e instanceof Error ? e.message : String(e)); }
+    return out;
+  };
+  const stopIf = (/** @type {string[]} */ why, /** @type {string} */ where) => { if (why.length) throw new Error(`${why.join("; ")} (${where}); stopped with no report`); };
   const records = readRecords(file);
   for (const inv of plan) {
     if (records.has(inv.name)) continue;
     if (o.stop?.()) throw new Error(`stopped before ${inv.name}; run the command again to go on`);
+    stopIf(lost(), `before ${inv.name}`);
     const want = ids[/** @type {"base" | "head"} */ (inv.image)];
     const out = join(o.results, inv.name), logFile = join(dir, "inv", `${inv.name}.log`);
     const start = { name: inv.name, want, started: now() };
@@ -622,14 +650,19 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
         end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: r.signal ?? null, before, after, artifacts: seal(out, artifactsOf(inv.target)) };
       }
     }
+    // Seen as it ends, so an invocation that ran while the lock or the kit was lost is not valid.
+    const gone = lost();
+    if (gone.length) end = { ...end, lost: gone };
     appendFileSync(file, JSON.stringify(end) + "\n");
     records.set(inv.name, end);
+    stopIf(gone, `in ${inv.name}`);
     log(`${inv.name} rc ${end.rc ?? "-"} ${((Number(end.ended) - start.started) / 1000).toFixed(1)} s`);
     if (end.signal) throw new Error(`count.mjs was stopped by ${end.signal} in ${inv.name}; run the command again to go on`);
     // A signal sent to this process alone is handled between invocations.
     await new Promise((resolve) => setImmediate(resolve));
   }
   if (o.stop?.()) throw new Error("stopped before the report was written; run the command again to read it");
+  stopIf(lost(), "before the report");
   const load = (/** @type {string} */ name, /** @type {string} */ target, /** @type {any} */ record) => {
     /** @type {string[]} */
     const why = [];
@@ -644,7 +677,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     const [rows, summary, images] = artifactsOf(target).map(at);
     return { row: rows?.[`corten/${target}`], summary, launched: images?.[`corten/${target}`], why };
   };
-  const targets = readRun(plan, records, load);
+  const targets = readRun(plan, records, load, ids);
   const json = { prefix: o.prefix, images: o.images, ids, last: o.last, band: BAND, margin: MARGIN, targets };
   writeFileSync(join(dir, "report.json"), JSON.stringify(json, null, 1) + "\n");
   return { targets, md: markdown(targets, { prefix: o.prefix, base: `${o.images.base} ${ids.base}`, head: `${o.images.head} ${ids.head}` }) };

@@ -43,13 +43,16 @@ function k6(base, target, envs, summary) {
   if (r.status !== 0) throw new Error(r.stderr);
 }
 
-/** Counts events in the container's cgroup until `work` resolves. */
-async function counted(container, work, instructionsOnly) {
-  const id = docker("inspect", "-f", "{{.Id}}", container).stdout.trim();
+/**
+ * Counts events in the cgroup of the container `docker run` gave this ID until `work` resolves:
+ * by its ID, since the name can be another container's by then.
+ */
+async function counted(id, work, instructionsOnly) {
+  if (!/^[0-9a-f]{64}$/.test(id)) throw new Error(`docker run gave ${JSON.stringify(id)}, not a container ID`);
   const cgroup = `system.slice/docker-${id}.scope`;
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
   // `perf` attached to the cgroup with no load yet or the load had started.
-  console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-G", container);
+  console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-G", id);
   const perf = spawn("perf", perfCountArgs(countCpus, cgroup, instructionsOnly), { env: { ...process.env, LC_ALL: "C" } });
   let text = "";
   let said = "";
@@ -63,7 +66,7 @@ async function counted(container, work, instructionsOnly) {
   // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup.
   try {
     if (ready) {
-      console.log(new Date().toISOString(), "counting", container);
+      console.log(new Date().toISOString(), "counting", id);
       await work();
     }
   } finally {
@@ -127,7 +130,7 @@ for (const name of appsArg.split(",")) {
     if (!up) {
       console.log(name, target, "failed: never answered");
       results[`${name}/${target}${suffix}`] = { failed: `never answered ${path} within a minute` };
-      docker("rm", "-f", `fsw-${name}`);
+      docker("rm", "-f", container);
       continue;
     }
     const base = `http://fsw-${name}:8080`;
@@ -143,7 +146,10 @@ for (const name of appsArg.split(",")) {
             const summary = `${stem}${instructionsOnly ? "-instructions-only" : ""}.json`;
             const summaryFile = join(here, summary);
             rmSync(summaryFile, { force: true });
-            const perf = await counted(`fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly);
+            const perf = await counted(container, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly);
+            // k6 reaches the app by its name, so the load was the counted container's only if the
+            // name is still that container's once perf has stopped.
+            if (docker("inspect", "-f", "{{.Id}}", `fsw-${name}`).stdout?.trim() !== container) throw new Error(`fsw-${name} is not the counted container after the load, so the load may have reached another`);
             return { ...perf, summary: perf.ranLoad ? JSON.parse(readFileSync(summaryFile, "utf8")) : undefined };
           },
           (message) => console.warn(name, target + suffix, message),
@@ -158,7 +164,7 @@ for (const name of appsArg.split(",")) {
       console.log(name, target + suffix, "failed:", why);
       results[`${name}/${target}${suffix}`] = { failed: why };
     }
-    docker("rm", "-f", `fsw-${name}`);
+    docker("rm", "-f", container);
     // Written after each app, so a restart partway through the step keeps the apps already counted.
     writeFileSync(file, JSON.stringify(results, null, 1));
   }

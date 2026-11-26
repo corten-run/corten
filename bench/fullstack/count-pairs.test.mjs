@@ -52,7 +52,8 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     }
     if (cmd === "docker" && args[0] === "inspect") {
       const c = state.containers.get(args.at(-1));
-      return c ? { status: 0, stdout: JSON.stringify(c.labels) } : { status: 1, stdout: "" };
+      if (!c) return { status: 1, stdout: "" };
+      return { status: 0, stdout: args[2] === "{{.Id}}" ? c.id + "\n" : JSON.stringify(c.labels) };
     }
     if (cmd === "docker" && args[0] === "rm") {
       for (const [name, c] of state.containers) if (c.id === args[1]) { state.containers.delete(name); return { status: 0 }; }
@@ -378,15 +379,23 @@ test("two runners cannot share a ledger, or one daemon's cb-corten tag whatever 
     assert.equal(readFileSync(join(s.results, "t2", "run.lock"), "utf8"), "left by a runner that is gone\n");
     assert.equal(counts(h), before);
     assert.equal(h.state.containers.size, 0);
-    // A release does not remove a lock someone else has put in its place: it removes the ID it made.
+    // A lock pruned and taken by another runner while this one counts: this one stops at once, with
+    // no more invocations and no report, and its release does not remove the other's lock.
     let swapped = false;
     const h3 = host(other.results, { onCount: () => {
       if (swapped) return;
       swapped = true;
       h3.state.containers.set("corten-count-pairs-lock", { id: "f".repeat(64), labels: {}, image: "x" });
     } });
-    await runPairs(options(other, h3, { prefix: "t3" }));
+    await assert.rejects(runPairs(options(other, h3, { prefix: "t3" })), /the daemon's lock was lost: corten-count-pairs-lock is not the container this runner made.*\(in t3-json-ab-000-head\); stopped with no report/);
+    assert.equal(h3.state.counted.length, 1);
+    assert.ok(!existsSync(join(other.results, "t3", "report.json")));
     assert.equal(h3.state.containers.get("corten-count-pairs-lock")?.id, "f".repeat(64));
+    // Removed (pruned) with none in its place, the next run stops before its first invocation.
+    const h4 = host(other.results);
+    let pruned = false;
+    await assert.rejects(runPairs(options(other, h4, { prefix: "t4", stop: () => { if (!pruned) { pruned = true; h4.state.containers.clear(); } return false; } })), /the daemon's lock was lost.*\(before t4-json-ab-000-head\)/);
+    assert.equal(h4.state.counted.length + h4.state.tags.length, 0);
     // And the ledger's file lock likewise.
     const file = join(s.results, "file.lock");
     const release = lock(file, "mine");
@@ -607,4 +616,175 @@ test("the band's ends are read exactly from the cycle counts: a bound at an end 
   const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
   const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelCyclesPerRequest: 60000.5 })] }), ["kernelCyclesPerRequest is 60000.5, not a whole count"]);
+});
+
+test("a file the count runs that changes while the run goes on stops it, naming the file, with no report, and the invocation it changed under is not valid", async () => {
+  const s = scratch();
+  try {
+    const apps = join(s.kit, "apps.mjs");
+    const h = host(s.results, { onCount: (round) => { if (round === "t1-json-aa-001-base") writeFileSync(apps, "export const apps = { x: 1 };\n"); } });
+    await assert.rejects(runPairs(options(s, h)), /apps\.mjs changed since the run started \(in t1-json-aa-001-base\); stopped with no report/);
+    assert.equal(h.state.counted.length, 5);
+    assert.ok(!existsSync(join(s.results, "t1", "report.json")));
+    // Changed back, the run goes on, but what ran under the change is not known: that comparison has no bound.
+    writeFileSync(apps, "export const apps = {};\n");
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4);
+    assert.equal(targets.json.aa.bound, null);
+    assert.equal(targets.json.reading.verdict, aaFailed);
+    assert.ok(targets.json.pairs.aa.find((p) => p.pair === 1).why.includes("its A/A, pair 1, side base: while it ran: apps.mjs changed since the run started"));
+  } finally {
+    s.done();
+  }
+  // Changed after the last invocation, before the report: no report.
+  const s2 = scratch();
+  try {
+    const h2 = host(s2.results);
+    const stop = () => { if (h2.state.counted.length === 7 * 4) writeFileSync(join(s2.kit, "fixtures", "items.json"), "[1]\n"); return false; };
+    await assert.rejects(runPairs(options(s2, h2, { stop })), /fixtures\/items\.json changed since the run started \(before the report\); stopped with no report/);
+    assert.ok(!existsSync(join(s2.results, "t1", "report.json")));
+  } finally {
+    s2.done();
+  }
+});
+
+test("a replay reads each invocation against the image run.json pins for its slot, so head slots whose records carry the base's image are not valid, not a meet", async () => {
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    assert.equal((await runPairs(options(s, h))).targets.json.reading.verdict, "a miss");
+    // Each recorded head slot of the change rewritten as a count of the base's image that reads 10% below the base, record, receipt and seal agreeing.
+    const forged = (/** @type {string} */ name) => /^t1-json-ab-00[1-6]-head$/.test(name);
+    for (let pair = 1; pair <= 6; pair++) {
+      const dir = join(s.results, `t1-json-ab-00${pair}-head`);
+      writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "corten/json": [goodRow({ userCyclesPerRequest: 90000, kernelCyclesPerRequest: 0 })] }));
+      writeFileSync(join(dir, "count-images.json"), JSON.stringify({ "corten/json": { container: "d".repeat(64), image: "sha256:base" } }));
+    }
+    const ledger = join(s.results, "t1", "invocations.jsonl");
+    const records = readFileSync(ledger, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    writeFileSync(ledger, records.map((r) => JSON.stringify(!forged(r.name) ? r : { ...r, want: "sha256:base", ...(r.ended == null ? {} : { before: "sha256:base", after: "sha256:base", artifacts: countPairs.seal(join(s.results, r.name), countPairs.artifactsOf("json")) }) })).join("\n") + "\n");
+    const before = h.state.counted.length;
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, before);
+    assert.notEqual(targets.json.reading.verdict, "meets +1%");
+    assert.equal(targets.json.change.bound, null);
+    assert.equal(targets.json.reading.verdict, changeFailed);
+    const why = targets.json.pairs.ab.find((p) => p.pair === 2).why;
+    assert.ok(why.includes("the change, pair 2, side head: the image counted was not the side's"));
+    assert.ok(why.includes("the change, pair 2, side head: the container counted was not started from the side's image"));
+  } finally {
+    s.done();
+  }
+});
+
+test("user plus kernel cycles past 2^53 - 1 are not an exact count, so a sum that would round to the band's end is not valid rather than read inside it", async () => {
+  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
+  const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: 5216500000000000, kernelCyclesPerRequest: 5216500000000001 })] }), ["user plus kernel cycles a request is above 2^53 - 1, so not an exact count"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: Number.MAX_SAFE_INTEGER - 1, kernelCyclesPerRequest: 1 })] }), []);
+  // 10433000000000001 / 10000000000000000 - 1 is past the band's high end less +1%; added as doubles it is 10433000000000000, at that end.
+  const s = scratch();
+  try {
+    const big = (/** @type {string} */ round, /** @type {string} */ image) => (!round.includes("-ab-") ? {} : image === "sha256:head" ? { userCyclesPerRequest: 5216500000000000, kernelCyclesPerRequest: 5216500000000001 } : { userCyclesPerRequest: 5e15, kernelCyclesPerRequest: 5e15 });
+    const { targets } = await runPairs(options(s, host(s.results, { row: big })));
+    assert.equal(resolution(targets.json.aa), "resolved");
+    assert.notEqual(targets.json.reading.verdict, "inside the default band: not decided");
+    assert.equal(targets.json.reading.verdict, changeFailed);
+  } finally {
+    s.done();
+  }
+});
+
+// count.mjs itself, with stand-ins for docker and perf on its PATH and the app's port answered here:
+// what perf attaches to, what the load reached, and what is removed. POSIX only: the stand-ins are
+// scripts that a spawn without a shell runs by their #! line.
+const fakeDocker = `#!/usr/bin/env node
+const fs = require("node:fs"), path = require("node:path");
+const file = path.join(process.env.FAKE_DIR, "docker.json");
+const s = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { names: {}, calls: [], made: 0 };
+const a = process.argv.slice(2), hex = (n) => n.toString(16).padStart(64, "0");
+s.calls.push(a);
+let out = "", status = 0;
+const env = {};
+for (let i = 0; i < a.length; i++) if (a[i] === "-e") { const [k, ...v] = a[i + 1].split("="); env[k] = v.join("="); }
+if (a[0] === "image") out = JSON.stringify([{ Id: "sha256:" + "a".repeat(64), RepoDigests: [process.env.FAKE_K6], Os: "linux", Architecture: "amd64" }]);
+else if (a[0] === "run" && a.at(-1) === "version") out = "k6 v2.4.0 (stand-in)";
+else if (a[0] === "run" && a[1] === "-d") { const id = hex(++s.made); s.names[a[a.indexOf("--name") + 1]] = id; out = id; }
+else if (a[0] === "run") {
+  const summary = a[a.indexOf("--summary-export") + 1].replace("/bench", a[a.indexOf("-v") + 1].split(":/bench")[0]);
+  const n = Number(env.ITERATIONS ?? 100);
+  fs.writeFileSync(summary, JSON.stringify({ metrics: { http_reqs: { count: n }, http_req_failed: { passes: 0 }, checks: { passes: n, fails: 0 } } }));
+  // Another container takes the name, as a second runner or a hand would.
+  if (env.MODE === process.env.FAKE_REPLACE) s.names["fsw-corten"] = hex(++s.made);
+} else if (a[0] === "inspect") {
+  const key = a.at(-1), id = s.names[key] ?? (Object.values(s.names).includes(key) ? key : null);
+  if (a[2] === "{{.Image}}") out = "sha256:" + "b".repeat(64);
+  else if (id) out = id;
+  else status = 1;
+} else if (a[0] === "rm") for (const [n, id] of Object.entries(s.names)) if (n === a.at(-1) || id === a.at(-1)) delete s.names[n];
+fs.writeFileSync(file, JSON.stringify(s));
+if (out) process.stdout.write(out + "\\n");
+process.exit(status);
+`;
+const fakePerf = `#!/usr/bin/env node
+const fs = require("node:fs"), path = require("node:path");
+const a = process.argv.slice(2);
+if (a.includes("sleep")) { process.stderr.write("1000,,instructions:u,1000000,100.00,,\\n"); process.exit(0); }
+fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
+const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
+process.on("SIGINT", () => { process.stdout.write(events.map((e) => \`500000000,,\${e},\${cgroup},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); });
+setInterval(() => {}, 1000);
+`;
+
+test("count.mjs attaches perf to the container docker run gave by its ID, and an invocation whose fsw-corten is another container after its load is recorded failed", { skip: process.platform === "win32" && "the stand-in docker and perf are #! scripts, which a spawn without a shell runs only on POSIX" }, async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const root = mkdtempSync(join(tmpdir(), "count-mjs-"));
+  const server = createServer((_, res) => res.end("{}")).listen(18410);
+  try {
+    // The count's kit as count-pairs.mjs binds it, copied, so its results go under the copy.
+    const kit = join(root, "kit", "fullstack");
+    for (const name of Object.keys(countPairs.kitOf(here))) {
+      mkdirSync(dirname(join(kit, name)), { recursive: true });
+      copyFileSync(join(here, name), join(kit, name));
+    }
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "docker"), fakeDocker);
+    writeFileSync(join(bin, "perf"), fakePerf);
+    chmodSync(join(bin, "docker"), 0o755);
+    chmodSync(join(bin, "perf"), 0o755);
+    const { k6Image } = await import("../load-tool.mjs");
+    const count = async (/** @type {string} */ round, /** @type {string} */ replace) => {
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: replace, HOME: process.env.HOME ?? root };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: "ignore" });
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      const docker = JSON.parse(readFileSync(join(dir, "docker.json"), "utf8"));
+      const perf = readFileSync(join(dir, "perf.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      const row = JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"];
+      const receipt = JSON.parse(readFileSync(join(kit, "results", round, "count-images.json"), "utf8"))["corten/json"];
+      return { code, docker, perf, row, receipt };
+    };
+    const first = "0".repeat(63) + "1";
+    // Nothing replaced: perf counts that container's cgroup, the load is counted, and it is removed by its ID.
+    const kept = await count("kept", "none");
+    assert.equal(kept.code, 0);
+    assert.equal(kept.receipt.container, first);
+    assert.ok(kept.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)));
+    assert.ok(Array.isArray(kept.row) && kept.row[0].requests === 5000 && kept.row[0].userPerRequest === 100000, JSON.stringify(kept.row));
+    assert.deepEqual(kept.docker.calls.at(-1), ["rm", "-f", first]);
+    // Another container takes the name after the receipt: in the warmup, before perf attaches, or under the counted load.
+    for (const replace of ["closed", "iterations"]) {
+      const got = await count(`replaced-${replace}`, replace);
+      assert.equal(got.code, 0, replace);
+      assert.equal(got.receipt.container, first, replace);
+      assert.ok(got.perf.length > 0 && got.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)), replace);
+      assert.deepEqual(got.row, { failed: "fsw-corten is not the counted container after the load, so the load may have reached another" }, replace);
+      assert.deepEqual(got.docker.calls.at(-1), ["rm", "-f", first], replace);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
 });
