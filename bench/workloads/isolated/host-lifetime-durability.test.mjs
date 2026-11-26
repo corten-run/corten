@@ -234,11 +234,25 @@ test("queue bytes include the in-flight frame and admission is atomic", async (t
   assert.equal(f.writer.state().frames, 0); assert.equal(f.live.size, 0);
 });
 
-test("64 admitted frames includes the one in progress", { timeout: 5000 }, async (t) => {
+test("a paused host observation write retains 20 seconds of 100 ms samples", { timeout: 5000 }, async (t) => {
+  const f = await storageControl(t), pause = f.pause("write", isSamples);
+  const frames = Array.from({ length: 201 }, (_, sequence) => `${JSON.stringify({ sequence })}\n`);
+  try {
+    f.writer.enqueue([], frames[0]); await pause.entered;
+    for (const frame of frames.slice(1)) f.writer.enqueue([], frame);
+    assert.equal(f.writer.state().frames, frames.length);
+    assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), "");
+  } finally { pause.release(); }
+  assert.equal((await f.writer.finish()).samples, frames.length);
+  assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), frames.join(""));
+  assert.equal(f.live.size, 0);
+});
+
+test("the bounded frame queue includes the one in progress", { timeout: 5000 }, async (t) => {
   const f = await storageControl(t), pause = f.pause("write", isSamples);
   f.writer.enqueue([], "x"); await pause.entered;
   for (let i = 1; i < storageLimits.frames; i++) f.writer.enqueue([], "x");
-  assert.equal(f.writer.state().frames, 64);
+  assert.equal(f.writer.state().frames, 300);
   const fault = { operation: "storage-admission", code: "ERR_ASSERTION", limit: "queued-frames" };
   assert.throws(() => f.writer.enqueue([], "x"), fault); pause.release();
   await assert.rejects(f.writer.finish(), fault); await f.writer.settled;

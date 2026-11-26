@@ -225,8 +225,8 @@ There is no helper process, worker, custom message protocol or production I/O ho
 The sampler retains its actual capture timestamps, 100 ms interval and independent
 one-second replay limit. It can capture ahead of storage without retimestamping
 rows at completion. The combined 256 MiB record/sample limit includes admitted but
-unfinished bytes. Additional queue limits are 8 MiB, 64 frames and 4,096 initial
-records, including the one in-flight frame. Overflow fails rather than waiting on
+unfinished bytes. Additional queue limits are 8 MiB, 300 frames (30 seconds at
+100 ms) and 4,096 initial records, including the one in-flight frame. Overflow fails rather than waiting on
 the sampler, dropping a member or growing an unbounded queue. Storage uses at most
 two evidence FDs: the sample file and one record or directory. Queue payload and
 V8 heap limits are not claims about total process memory.
