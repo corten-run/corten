@@ -27,7 +27,7 @@ not remove that requirement.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux, and a WebSocket or tunnel counts until its route closes it; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux, and a WebSocket or tunnel counts until its route closes it; `.own_http1(true)`: requests without a body are read and answered by Corten's own connection code in the place of hyper's, with every limit here held the same ([below](#cortens-own-connection)); connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Deadline | a handler that has not started its answer in 30 seconds is answered 503 (`Failure::TimedOut`), or, under `serve`, the client's 408 when it was waiting for the body (`Failure::Failed`) | `.deadline(d)` (`None` for none); `Area::deadline`, `Api::deadline` for slower routes at a prefix |
 | Request bodies | `Json`, `Form`, `String` and `Bytes` read at most 2 MiB, and an `Upload` keeps as much unless its handler sets `upload.limit(bytes)`; over it, a 413 | `.body_limit(bytes)`; `Area::body_limit`, `Api::body_limit` (the innermost prefix that sets one decides); a proxy in front sizes its own body limit from it (nginx's `client_max_body_size`, [Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
@@ -203,6 +203,54 @@ caller its handler read (if any), the deploy and the layout that rendered it (wh
 document is written), and when a navigation or a form answer arrives with a different key
 (sign-in, sign-out, a new release, a page in another layout), the runtime loads the whole
 document, so the layout is never stale.
+
+## Corten's own connection
+
+`corten::serve` reads and writes HTTP/1.1 with hyper. `.own_http1(true)` has Corten's own
+connection code answer the requests that have no body, and leaves the rest to hyper
+([design Choice 76](../design.md#choice-own-http1)). It is off unless the app sets it.
+
+```rust,ignore
+let app = App::new(url::router()).own_http1(true);
+```
+
+A connection's requests are then read and answered by Corten up to the first one whose head has
+a `Content-Length`, a `Transfer-Encoding`, an `Expect` or an `Upgrade` header (whatever the
+header says), or that is a `CONNECT`, or an HTTP/1.0 request that asks to keep its connection.
+The answers before that request are sent, and it and every request after it on the connection
+are hyper's, as all are with the switch off. So a request's body is read by hyper either way, and
+a WebSocket's handshake and a tunnel are hyper's too: a route sees the same `Upgrade` and the same
+socket.
+
+The app sees the same requests and its clients the same answers, byte for byte but `Date`: a
+test sends both connections the same streams of bytes, well formed and not, and compares what
+comes back. Every limit above holds as it does with hyper: the header and send timeouts, the size
+of a head and its 100 headers, the cap on connections, the deadline, and shutdown's grace. The
+host check answers these requests as it answers any other ([below](#host-names)). Three things
+differ:
+
+1. The answers to requests that arrived together (a pipeline) leave in one write, where hyper
+   writes each as it is made. No answer waits for a request that has not come: what is written is
+   sent before the connection waits for anything.
+2. An answer's trailers are not sent, and a status's reason phrase is always its own. A head
+   that reaches `max_request_head` unfinished and is malformed further on is refused by both, but
+   may get 400 from one and 431 from the other, since the two read the socket in pieces of
+   different sizes.
+3. A client that pipelines requests and reads no answer holds a little more of the server's
+   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,185 to
+   2,371 MiB with the switch on and 2,092 to 2,153 MiB with it off (measured at `f02d8511f`,
+   nine runs each). Most of either is socket buffers, which `send_timeout` and
+   `max_connections` bound. This is why the switch is off unless set; behind a proxy that does
+   not pipeline to the app it does not arise. And a connection that has been handed to hyper
+   holds about 1.6 KiB more while it waits than one hyper served from the start (10,083 bytes
+   against 8,470), so an app whose connections mostly carry bodies gains nothing in memory.
+
+What it saves, counted in instructions a request over a socket (release build, jemalloc, one
+connection, at `f02d8511f`): an unstaged route's short answer goes from 10,564 to 8,984, a staged API route's
+`GET` from 18,376 to 16,789, and a 12 KB page from 43,144 to 41,726, each with three allocations
+fewer; a request with a body costs what it did. A connection waiting for a request holds 7,424
+bytes where hyper's holds 8,472. No time has been measured yet, so this is less work for a
+request and not yet a claim that it is faster.
 
 ## Access logs
 
