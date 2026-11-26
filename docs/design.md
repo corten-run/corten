@@ -11303,9 +11303,10 @@ rules something out.
       the new navigation is on its way, in all three engines (the smoke's chained case caught it),
       so a marked answer drew and aborted that navigation.
 
-    What it costs: the runtime every page loads is SIZE_RAW bytes larger raw (MAIN_RAW to NOW_RAW), SIZE_GZ
-    with gzip (MAIN_GZ to NOW_GZ) and SIZE_BR with brotli (MAIN_BR to NOW_BR), paid once a release by
-    every user. A `data-patch` submit reads one attribute and its form's id, and adds one to that
+    What it costs: the runtime every page loads is 1,015 bytes larger raw (46,502 to 47,517), 425
+    with gzip (16,718 to 17,143) and 369 with brotli (15,106 to 15,475), paid once a release by
+    every user (206, 54 and 53 bytes less than the build before this one, which repaired a refused
+    replace and counted navigations as they were heard). A `data-patch` submit reads one attribute and its form's id, and adds one to that
     id's count in a map that keeps a number for each id pressed; a read keeps the count it was
     pressed at and compares it where it could draw or be sent again. Only a marked GET builds the
     key and count of its entry as a string, compares it where it could draw, reads the size of the
@@ -11355,7 +11356,7 @@ rules something out.
     `#id` or a traversal between `#id` entries stops firing `popstate` before the script that made
     it goes on in one.
 
-    Last checked: 2026-11-25, the runtime's size with this change on main `MAIN_SHA` against
+    Last checked: 2026-11-25, the runtime's size with this change on main `8b4e863b1` against
     that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, `popstate` and
     the key on a move to an `#id`, and the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
