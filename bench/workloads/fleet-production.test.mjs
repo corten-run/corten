@@ -18,7 +18,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, tags, verifySshIngress } from "./cloud-contract.mjs";
-import { checkQuarantineCensus, readFleet, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { checkQuarantineCensus, externalFailedHostBinding, readFleet, readLaunchIntent, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { createErroredReceipt, createErroredRecord, offlineNeverStarted, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -26,6 +26,7 @@ import { continuationAdmission, continuationLock, inspectContinuation } from "./
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
+import { streamLimits } from "./isolated/control-stream.mjs";
 import { controller, publicError } from "./droplet.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
@@ -617,6 +618,70 @@ for (const [retry, change] of [
   if (change === "archive bytes") fs.writeFileSync(tar, bytes);
   assert.equal(treeHash(old), original);
 });
+
+for (const scenario of ["absent", "renamed old ID", "old tag on a different ID", "incomplete census", "late recovery"]) {
+  test(`external failed attempt before create: ${scenario}`, { timeout: 60000 }, async (t) => {
+    const group = "json-api", target = "hardening", round = "r20", next = "r21", id = "701";
+    const p = fixture(t, "ssh-late", target), root = p.h.base;
+    p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
+    fs.writeFileSync(path.join(root, "index.json"), "[]");
+    const args = (r, g) => [r, "--continuation-root", root, "--group", g];
+    const prepare = (r, g) => fleetMain([...args(r, g), "--prepare", "--commit", commit, "--ssh-key", "42",
+      "--account-id", accountId, "--context", context], p.deps);
+    const approve = async (r, g) => {
+      assert.equal(await fleetMain([...args(r, g), "--detach", "--print-approval"], p.deps), 3);
+      return [...args(r, g), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+    };
+    assert.equal(await prepare(round, group), 3);
+    assert.equal(await fleetMain(await approve(round, group), { ...p.deps, main: async () => 2 }), 2);
+    const old = path.join(root, group), stateRoot = path.join(old, group), local = path.join(stateRoot, `groups-${round}`);
+    fs.mkdirSync(local, { recursive: true });
+    const fleet = readFleet(old, round), manifest = fleet.manifest, token = manifest.jobs[0].token;
+    const at = "2026-11-23T00:00:00.000Z", monitorId = "a".repeat(32), monitorBinding = { round, commit, token, helperSha256: guardianSha256 };
+    const app = { ...registration, id: monitorId, binding: monitorBinding }, closedAtMs = Date.parse(at);
+    const state = { ...reservation({ round, commit, group, token, fleet: manifest }, at), status: "running", createIntentAt: at,
+      id, ip: "192.0.2.1", provider: manifest.provider, fullGroupQualified: false,
+      control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"],
+        monitor: { schema: "benchmark-supervised-control/v1", id: monitorId, phase: "invalid", registrationSha256: digest(JSON.stringify(app)) } } };
+    state.control.ledger.push({ request: controlRequest(state, "ssh", [`systemctl start ${state.unit}`], 60000, "bootstrap", []), localTerminal: true, code: 0 });
+    for (const [name, value] of Object.entries({ "state.json": state, "monitor-registration.json": app,
+      "monitor-invalid.json": { id: monitorId, binding: monitorBinding, publicationRevoked: true },
+      "monitor-local-closed.json": { id: monitorId, binding: monitorBinding, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs } }))
+      fs.writeFileSync(path.join(local, name), JSON.stringify(value));
+    const owner = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
+    assert.equal(owner.status, 0);
+    const pid = owner.pid;
+    fs.writeFileSync(path.join(old, ".fleet-operation.lock"), JSON.stringify({ pid, approvalSha256: readLaunchIntent(fleet).approvalSha256 }));
+    fs.writeFileSync(path.join(stateRoot, ".groups-launch.lock"), JSON.stringify({ pid, round }));
+    fs.writeFileSync(path.join(local, "operation.lock"), JSON.stringify({ pid, at }));
+    const binding = externalFailedHostBinding(fleet);
+    fs.writeFileSync(path.join(old, "receipts", "external-failed-host.json"), JSON.stringify({ schema: "benchmark-external-failed-host/v1",
+      binding, operatorProofSha256: "c".repeat(64) }));
+    const custody = treeHash(old);
+    assert.equal(await prepare(next, target), 3);
+    const approved = await approve(next, target), recovery = path.join(local, "stream-recovery.lock");
+    if (scenario === "renamed old ID") fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(id), name: "renamed", tags: [] }]));
+    if (scenario === "old tag on a different ID") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 702, name: "unrelated", tags: [state.tag] }]));
+    if (scenario === "incomplete census") fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: [], meta: { total: 1 } }));
+    if (scenario === "late recovery") {
+      p.deps.WorkerClass = class extends p.deps.WorkerClass {
+        constructor(entry, options) { fs.writeFileSync(recovery, "external recovery started"); super(entry, options); }
+      };
+    }
+    const exit = await fleetMain(approved, p.deps);
+    assert.equal(exit, scenario === "absent" ? 3 : 2, JSON.stringify(p.refusals()));
+    const calls = p.events().filter(({ boundary }) => boundary === "provider");
+    assert.ok(calls.some(({ method, path }) => method === "GET" && path === "/v2/droplets?page=1&per_page=200"));
+    assert.deepEqual(calls.filter(({ method }) => method !== "GET").map(({ method, group }) => [method, group]),
+      scenario === "absent" ? [["POST", target]] : []);
+    if (scenario !== "absent") {
+      const current = JSON.parse(fs.readFileSync(path.join(root, target, target, `groups-${next}`, "state.json")));
+      assert.equal(current.createIntentAt, undefined);
+    }
+    if (scenario === "late recovery") fs.unlinkSync(recovery);
+    assert.equal(treeHash(old), custody);
+  });
+}
 
 test("continuation child refuses a historical staged lock acquired after parent intent", { timeout: 60000 }, async (t) => {
   const p = fixture(t), retained = path.join(p.h.temp, "retained"), [first, group] = groupNames;

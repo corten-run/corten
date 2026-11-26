@@ -663,6 +663,21 @@ launch approval includes the stopped host's original ID: even a renamed or
 retagged host still present in the account prevents creation. An active cleanup
 blocks admission. This does not retire or retry the failed group, or publish a result.
 
+A monitored attempt that reached native setup but then failed can remain locked
+after audited external deletion. Do not clear its locks or mark it collected.
+After independent review of the original failed archive, the evidence that the
+local controller tree stopped, and an exact-ID 404 plus a complete same-account
+inventory, the operator may add `receipts/external-failed-host.json` to that
+attempt's own fleet slot. The record has `schema: "benchmark-external-failed-host/v1"`,
+`binding` from `externalFailedHostBinding(readFleet(slot, round, { priorSelection: true }))`,
+and `operatorProofSha256`, the SHA-256 of the reviewed operator record binding
+that evidence. Keep the operator record and raw archive outside Git. Do not
+record a failure when results might still be recoverable. The controller requires
+the original stopped locks and invalid, locally closed monitor. It rechecks the
+receipt and custody before a successor can allocate, using the complete account
+census to refuse the old ID, original name, or run tag. The receipt authorizes
+no SSH, delete, or publication; a retry needs a higher round and a new commit.
+
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
 retirement evidence and rechecks the unchanged locks; it never removes them or
