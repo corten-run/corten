@@ -44,10 +44,38 @@ function k6(base, target, envs, summary) {
 }
 
 /**
- * Counts events in the cgroup of the container `docker run` gave this ID until `work` resolves:
- * by its ID, since the name can be another container's by then.
+ * Why the load may not reach the container with this ID, or null. k6 reaches the app by the name
+ * `answer` on the load's network, and Docker's DNS answers that name for every running container
+ * there that has it as its name or an alias (a leftover one included), so this ID must be the only
+ * one. A container that joins and leaves between two checks is not seen (README, the count's host).
  */
-async function counted(id, work, instructionsOnly) {
+function answersError(id, answer) {
+  const net = docker("network", "inspect", "-f", "{{json .Containers}}", network);
+  let members = null;
+  try { members = Object.keys(JSON.parse(net.stdout ?? "") ?? {}); } catch {}
+  if (net.status !== 0 || !members) return `cannot list the containers on ${network}, so where the load goes is not known`;
+  const seen = members.length ? docker("inspect", "-f", "{{.Id}} {{json .Name}} {{json .NetworkSettings.Networks}}", ...members) : { status: 0, stdout: "" };
+  if (seen.status !== 0) return `cannot inspect the containers on ${network}, so where the load goes is not known`;
+  const answering = [];
+  for (const line of (seen.stdout ?? "").split("\n").filter(Boolean)) {
+    const m = /^([0-9a-f]{64}) ("[^"]*") (.*)$/.exec(line);
+    let names = null;
+    try {
+      const at = m && JSON.parse(m[3])?.[network];
+      names = m && [JSON.parse(m[2]).replace(/^\//, ""), ...(at?.Aliases ?? []), ...(at?.DNSNames ?? [])];
+    } catch {}
+    if (!m || !names) return `cannot read a container on ${network}, so where the load goes is not known`;
+    if (names.includes(answer)) answering.push(m[1]);
+  }
+  if (answering.length !== 1 || answering[0] !== id) return `${answer} on ${network} answers for ${answering.length} running containers where it must answer for the counted one alone, so the load may reach another`;
+  return null;
+}
+
+/**
+ * Counts events in the cgroup of the container `docker run` gave this ID until `work` resolves:
+ * by its ID, since the name can be another container's by then. `name` is what the log calls it.
+ */
+async function counted(id, name, work, instructionsOnly) {
   if (!/^[0-9a-f]{64}$/.test(id)) throw new Error(`docker run gave ${JSON.stringify(id)}, not a container ID`);
   const cgroup = `system.slice/docker-${id}.scope`;
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
@@ -66,7 +94,7 @@ async function counted(id, work, instructionsOnly) {
   // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup.
   try {
     if (ready) {
-      console.log(new Date().toISOString(), "counting", id);
+      console.log(new Date().toISOString(), "counting", name);
       await work();
     }
   } finally {
@@ -146,10 +174,13 @@ for (const name of appsArg.split(",")) {
             const summary = `${stem}${instructionsOnly ? "-instructions-only" : ""}.json`;
             const summaryFile = join(here, summary);
             rmSync(summaryFile, { force: true });
-            const perf = await counted(container, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly);
-            // k6 reaches the app by its name, so the load was the counted container's only if the
-            // name is still that container's once perf has stopped.
-            if (docker("inspect", "-f", "{{.Id}}", `fsw-${name}`).stdout?.trim() !== container) throw new Error(`fsw-${name} is not the counted container after the load, so the load may have reached another`);
+            // k6 reaches the app by its name, so the load is the counted container's only if that
+            // name answers for it alone on the network, before perf attaches and once it stops.
+            const before = answersError(container, `fsw-${name}`);
+            if (before) throw new Error(`before the load: ${before}`);
+            const perf = await counted(container, `fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly);
+            const after = answersError(container, `fsw-${name}`);
+            if (after) throw new Error(`after the load: ${after}`);
             return { ...perf, summary: perf.ranLoad ? JSON.parse(readFileSync(summaryFile, "utf8")) : undefined };
           },
           (message) => console.warn(name, target + suffix, message),

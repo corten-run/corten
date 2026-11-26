@@ -2083,26 +2083,37 @@ from are the bytes sealed when it ended: one replaced, removed or never written 
 valid. The side's image is the ID `run.json` pins for the side of the invocation's slot in the
 schedule; a replay reads each record against that, not against the image the record names.
 `count.mjs` attaches `perf` to the counted container by the ID `docker run` gave and removes
-it by that ID; k6 reaches it by its name, `fsw-corten`, so `count.mjs` records the count failed
-unless that name is still that container's after each counted load. An invocation that was started is never started again: the command run again goes on from
+it by that ID. k6 reaches it by its name, `fsw-corten`, which Docker's DNS answers for every
+running container on the load's network that has it as its name or an alias, so before `perf`
+attaches and again once it stops, `count.mjs` lists the network's containers and records the
+count failed unless exactly one answers to `fsw-corten` and it is that ID. A container that joins
+and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
 the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
 count runs or the host differ from `run.json`, or the host cannot be established; one
 interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
 honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a
-container named `corten-count-pairs-lock` (made from the base's image and never started) keep two
-runners apart, whatever directory each starts from: the daemon makes that container for one
+container named `corten-count-pairs-lock` (made from the base's image, with no network, and
+running `sleep` for seven days, past the longest schedule, so `docker container prune`, which
+removes stopped containers, leaves it while a run goes on) keep two runners apart, whatever directory each starts from: the daemon makes that container for one
 runner only, and the lock stands for its `cb-corten` tag and the `fsw-corten` container
 `count.mjs` starts. Each lock is made only where none is and removed only by the runner that made
 it (the container by the ID it was made with), so one left by a runner that was killed is removed
-by hand, as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it.
+by hand (`docker rm -f`), as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it.
 Before each invocation, as each ends and before the report, the runner checks that
-`corten-count-pairs-lock` is still the container it made (a prune can remove it and another
-runner make its own) and that each file `run.json` binds still has its bytes. Where either does
+`corten-count-pairs-lock` is still the container it made and still running (a hand can remove
+it and another runner make its own) and that each file `run.json` binds still has its bytes. Where either does
 not, it stops, naming the lost lock or the file, with no further invocation and no report, and
 exits 2; an invocation that ran while it changed is recorded as not valid. The report gives each comparison's bounds and, as diagnostics, each
 side's median user cycles, kernel cycles, user and kernel instructions and user L1
 instruction-cache misses a request, with the median per-pair change in each; a pair not valid
 is named by its comparison, pair and side.
+
+The supported procedure needs, for the run's whole length, a resumed run included, a Docker
+host and network the run has to itself and a private checkout no one changes. The checks above
+are made at their checkpoints and no more: the lock keeps out another `count-pairs.mjs`, not
+other tools; the network check sees a container answering to `fsw-corten` only while it is there
+at a check; and the kit's hashes detect a change to a file that is still present when the next
+check reads it, not one made and undone between two checks.
 
 Until a run's own A/A resolves, the count neither holds nor clears. The A/A resolves when both of
 its bounds, less +1%, are inside the default band (-2.98% to +3.33%, as

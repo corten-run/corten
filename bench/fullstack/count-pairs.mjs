@@ -35,8 +35,9 @@
 // summary and the launched image it is read from: a replay reads those bytes or none). No
 // invocation is run again: the command run again goes on from the first not started.
 // `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
-// that only one runner can make (the lock on the daemon's `cb-corten` tag and the `fsw-corten`
-// container count.mjs starts, whatever directory a runner starts from) keep two runners apart.
+// that only one runner can make and that runs while it is held, so a prune leaves it (the lock on
+// the daemon's `cb-corten` tag and the `fsw-corten` container count.mjs starts, whatever directory
+// a runner starts from) keep two runners apart.
 // Before each invocation, as each ends and before the report, it stops with no report if that
 // container is not the one it made or a file run.json binds has other bytes. It writes `report.json` and prints the report once every invocation has ended, unless it was
 // asked to stop.
@@ -81,6 +82,13 @@ export const MAX_PAIRS = 999;
 /** The container on the Docker daemon that stands for the lock on its `cb-corten` tag and `fsw-corten` container. */
 export const DAEMON_LOCK = "corten-count-pairs-lock";
 const HOLDER = "run.corten.count-pairs.holder";
+/**
+ * How long the daemon's lock runs, in seconds: seven days, past the longest schedule (999 pairs of
+ * both targets, 7,992 invocations, about 77 hours at #2066's 34.8 s each, estimated). It runs so that
+ * `docker container prune`, which removes stopped containers, cannot remove it while a run goes on,
+ * and exits by itself after this so one a killed runner left stops.
+ */
+export const LOCK_SECONDS = 7 * 24 * 3600;
 /** User plus kernel cycles a request, the measure the count is read in. */
 export const cycles = (/** @type {Record<string, number>} */ row) => row.userCyclesPerRequest + row.kernelCyclesPerRequest;
 
@@ -493,11 +501,12 @@ export function environmentOf(exec, env, which) {
 
 /**
  * Takes the daemon's lock on its `cb-corten` tag and `fsw-corten` container: a container named
- * DAEMON_LOCK, made (never started) from `image`, which the daemon lets only one runner make
- * whatever directory each runs from. Throws, naming its holder, where one is there. `held` says
- * whether the container of that name is still the one made (a prune or a hand can remove it and
- * another runner make its own); `release` removes it by the ID it was made with, so never one
- * another runner made after it.
+ * DAEMON_LOCK, made from `image` and started as `sleep LOCK_SECONDS` with no network, which the
+ * daemon lets only one runner make whatever directory each runs from, and which a prune does not
+ * remove while it runs. Throws, naming its holder, where one is there. `held` says whether the
+ * container of that name is still the one made and still running (a hand can remove it and another
+ * runner make its own); `release` removes it by the ID it was made with, so never one another
+ * runner made after it.
  * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => { status: number | null, stdout?: string }} exec
  * @param {Record<string, string | undefined>} env
  * @param {string} image
@@ -505,21 +514,27 @@ export function environmentOf(exec, env, which) {
  */
 export function daemonLock(exec, env, image, ledger) {
   const holder = `process ${process.pid} on ${hostname()}, since ${new Date().toISOString()}, for ${ledger}`;
-  const made = exec("docker", ["create", "--name", DAEMON_LOCK, "--label", `${HOLDER}=${holder}`, "--label", `run.corten.count-pairs.token=${randomUUID()}`, image], { env });
+  const made = exec("docker", ["create", "--name", DAEMON_LOCK, "--network", "none", "--label", `${HOLDER}=${holder}`, "--label", `run.corten.count-pairs.token=${randomUUID()}`, "--entrypoint", "sleep", image, String(LOCK_SECONDS)], { env });
   const id = (made.stdout ?? "").trim();
   if (made.status === 0 && /^[0-9a-f]{64}$/.test(id)) {
+    const release = () => exec("docker", ["rm", "-f", id], { env }).status === 0;
+    const started = exec("docker", ["start", id], { env });
+    if (started.status !== 0) {
+      const removed = release();
+      throw new Error(`could not start the daemon's lock: docker start exited ${started.status ?? "-"}${removed ? "" : `; remove it with docker rm -f ${DAEMON_LOCK}`}`);
+    }
     return {
-      held: () => { const r = exec("docker", ["inspect", "-f", "{{.Id}}", DAEMON_LOCK], { env }); return r.status === 0 && (r.stdout ?? "").trim() === id; },
-      release: () => exec("docker", ["rm", id], { env }).status === 0,
+      held: () => { const r = exec("docker", ["inspect", "-f", "{{.Id}} {{.State.Running}}", DAEMON_LOCK], { env }); return r.status === 0 && (r.stdout ?? "").trim() === `${id} true`; },
+      release,
     };
   }
-  if (made.status === 0) throw new Error(`docker create ${DAEMON_LOCK} gave no container ID; remove it with docker rm ${DAEMON_LOCK} and run again`);
+  if (made.status === 0) throw new Error(`docker create ${DAEMON_LOCK} gave no container ID; remove it with docker rm -f ${DAEMON_LOCK} and run again`);
   const seen = exec("docker", ["inspect", "-f", "{{json .Config.Labels}}", DAEMON_LOCK], { env });
   if (seen.status !== 0) throw new Error(`could not take the daemon's lock: docker create ${DAEMON_LOCK} exited ${made.status ?? "-"}`);
   /** @type {string | undefined} */
   let by;
   try { by = JSON.parse(seen.stdout ?? "")?.[HOLDER]; } catch {}
-  throw new Error(`the ${TAG} tag and the fsw-corten container on this Docker daemon are locked by ${by ?? "an unlabeled holder"} (container ${DAEMON_LOCK}). Another runner holds it; if none is running, the lock is stale: remove it with docker rm ${DAEMON_LOCK} and run again`);
+  throw new Error(`the ${TAG} tag and the fsw-corten container on this Docker daemon are locked by ${by ?? "an unlabeled holder"} (container ${DAEMON_LOCK}). Another runner holds it; if none is running, the lock is stale: remove it with docker rm -f ${DAEMON_LOCK} and run again`);
 }
 
 /** The outputs of one invocation that its reading is made from, sealed when it ends. */
@@ -586,7 +601,7 @@ export async function runPairs(o) {
     if (!base || !head) throw new Error("no image for a side");
     if (base === head && !existsSync(join(dir, "run.json"))) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
     const daemon = daemonLock(o.exec, env, base, dir);
-    releases.push(() => { if (!daemon.release()) log(`the daemon's lock was not removed: remove it with docker rm ${DAEMON_LOCK} if no runner is going`); });
+    releases.push(() => { if (!daemon.release()) log(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK} if no runner is going`); });
     return await locked(o, { dir, now, log, env, id, held: daemon.held });
   } finally {
     for (const release of releases.reverse()) release();
@@ -619,7 +634,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
   // What could make the next count, or the report, not the run's: the daemon's lock taken from it,
   // or a file the count runs no longer the bytes run.json binds.
   const lost = () => {
-    const out = held() ? [] : [`the daemon's lock was lost: ${DAEMON_LOCK} is not the container this runner made, so another runner may use the ${TAG} tag`];
+    const out = held() ? [] : [`the daemon's lock was lost: ${DAEMON_LOCK} is not the container this runner made, or it has stopped, so another runner may use the ${TAG} tag`];
     try {
       const current = kitOf(kitDir);
       for (const f of new Set([...Object.keys(kit), ...Object.keys(current)])) if (JSON.stringify(kit[f]) !== JSON.stringify(current[f])) out.push(`${f} changed since the run started`);

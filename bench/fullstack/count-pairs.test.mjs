@@ -31,7 +31,7 @@ const changeFailed = "failed: the change's pairs have no bound, so the count doe
  */
 function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCount = () => {}, launch = () => null } = {}) {
   const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
-  const state = { tagged: "", counted: [], tags: [], calls: 0, daemon: { id: "daemon-1", version: "29.1.0", kernel: "6.8.0-test", name: "bench" }, perf: "perf version 6.8.12", kernel: "6.8.0-test", containers: new Map(), made: 0 };
+  const state = { tagged: "", counted: [], tags: [], calls: 0, startRc: 0, daemon: { id: "daemon-1", version: "29.1.0", kernel: "6.8.0-test", name: "bench" }, perf: "perf version 6.8.12", kernel: "6.8.0-test", containers: new Map(), made: 0 };
   const paths = { docker: "/usr/bin/docker", perf: "/usr/bin/perf" };
   const hex = (n) => n.toString(16).padStart(64, "0");
   const exec = (cmd, args, options = {}) => {
@@ -50,16 +50,21 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
       const labels = {};
       for (let i = 0; i < args.length; i++) if (args[i] === "--label") { const [k, ...v] = args[i + 1].split("="); labels[k] = v.join("="); }
       const id = hex(++state.made);
-      state.containers.set(name, { id, labels, image: args.at(-1) });
+      state.containers.set(name, { id, labels, image: args[args.indexOf("--entrypoint") + 2], command: args.slice(args.indexOf("--entrypoint") + 1).filter((_, i) => i !== 1), running: false });
       return { status: 0, stdout: id + "\n" };
+    }
+    if (cmd === "docker" && args[0] === "start") {
+      for (const c of state.containers.values()) if (c.id === args[1] && state.startRc === 0) { c.running = true; return { status: 0 }; }
+      return { status: state.startRc || 1 };
     }
     if (cmd === "docker" && args[0] === "inspect") {
       const c = state.containers.get(args.at(-1));
       if (!c) return { status: 1, stdout: "" };
-      return { status: 0, stdout: args[2] === "{{.Id}}" ? c.id + "\n" : JSON.stringify(c.labels) };
+      return { status: 0, stdout: args[2] === "{{.Id}} {{.State.Running}}" ? `${c.id} ${c.running === true}\n` : JSON.stringify(c.labels) };
     }
     if (cmd === "docker" && args[0] === "rm") {
-      for (const [name, c] of state.containers) if (c.id === args[1]) { state.containers.delete(name); return { status: 0 }; }
+      // Without -f the daemon removes no running container.
+      for (const [name, c] of state.containers) if (c.id === args.at(-1)) { if (c.running && args[1] !== "-f") return { status: 1 }; state.containers.delete(name); return { status: 0 }; }
       return { status: 1 };
     }
     if (cmd === "docker" && args[0] === "tag") {
@@ -81,7 +86,9 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     writeFileSync(join(dir, "count-images.json"), JSON.stringify({ [`corten/${target}`]: { container: hex(1000 + n), image: launch(round) ?? image } }));
     return { status: rc(round) };
   };
-  return { ids, state, exec, paths, which: (name) => paths[name] ?? null };
+  /** What `docker container prune` does: removes every container not running. */
+  const prune = () => { for (const [name, c] of state.containers) if (!c.running) state.containers.delete(name); };
+  return { ids, state, exec, paths, prune, which: (name) => paths[name] ?? null };
 }
 
 /** A temporary results directory and count kit for one test. */
@@ -365,7 +372,7 @@ test("two runners cannot share a ledger, or one daemon's cb-corten tag whatever 
       assert.ok(round);
     } });
     await runPairs({ ...options(s, h), tagLock: join(s.results, "cb-corten.lock") });
-    await assert.rejects(second, /locked by process \d+ on .*, since .*, for .*t1.*remove it with docker rm corten-count-pairs-lock/);
+    await assert.rejects(second, /locked by process \d+ on .*, since .*, for .*t1.*remove it with docker rm -f corten-count-pairs-lock/);
     assert.equal(during, 0);
     assert.ok(!existsSync(join(other.results, "t1", "run.lock")));
     assert.equal(h.state.containers.size, 0);
@@ -405,6 +412,48 @@ test("two runners cannot share a ledger, or one daemon's cb-corten tag whatever 
     writeFileSync(file, JSON.stringify({ token: "theirs" }));
     release();
     assert.ok(existsSync(file));
+  } finally {
+    s.done();
+    other.done();
+  }
+});
+
+test("the daemon's lock runs a bounded sleep while a run goes on, so a prune during a count leaves it and a second runner is still refused; one that stops is lost", async () => {
+  const s = scratch(), other = scratch();
+  try {
+    let second, checked = false;
+    const h = host(s.results, { onCount: () => {
+      if (checked) return;
+      checked = true;
+      const lock = h.state.containers.get("corten-count-pairs-lock");
+      assert.equal(lock?.running, true);
+      assert.deepEqual(lock.command, ["sleep", String(countPairs.LOCK_SECONDS)]);
+      assert.equal(lock.image, "sha256:base");
+      h.prune();
+      assert.equal(h.state.containers.get("corten-count-pairs-lock"), lock);
+      second = runPairs(options(other, h));
+      second.catch(() => {});
+    } });
+    const before = h.state.counted.length;
+    await runPairs(options(s, h));
+    await assert.rejects(second, /locked by process \d+ on .*remove it with docker rm -f corten-count-pairs-lock/);
+    assert.equal(h.state.counted.length - before, schedule(6, ["json"], "t1").length);
+    assert.equal(h.state.containers.size, 0);
+    // The lock's sleep ended (its bound, or a hand stopping it): the run stops at the next check, with no report.
+    let stoppedOnce = false;
+    const h2 = host(other.results, { onCount: () => {
+      if (stoppedOnce) return;
+      stoppedOnce = true;
+      h2.state.containers.get("corten-count-pairs-lock").running = false;
+    } });
+    await assert.rejects(runPairs(options(other, h2, { prefix: "t5" })), /the daemon's lock was lost: corten-count-pairs-lock is not the container this runner made, or it has stopped.*\(in t5-json-ab-000-head\)/);
+    assert.equal(h2.state.counted.length, 1);
+    // A lock that cannot start is removed by its ID and no count is run.
+    const h3 = host(other.results);
+    h3.state.startRc = 125;
+    await assert.rejects(runPairs(options(other, h3, { prefix: "t6" })), /could not start the daemon's lock: docker start exited 125$/);
+    assert.equal(counts(h3), 0);
+    assert.equal(h3.state.containers.size, 0);
   } finally {
     s.done();
     other.done();
@@ -704,7 +753,10 @@ test("user plus kernel cycles past 2^53 - 1 are not an exact count, so a sum tha
 const fakeDocker = `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const file = path.join(process.env.FAKE_DIR, "docker.json");
-const s = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { names: {}, calls: [], made: 0 };
+const s = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { names: {}, aliases: {}, calls: [], made: 0 };
+const net = process.env.BENCH_NETWORK ?? "rustbench";
+// A container that is not fsw-corten but holds that name as its alias on the load's network, as a leftover would.
+const leftover = () => { const id = hex(++s.made); s.names["leftover"] = id; s.aliases[id] = ["fsw-corten"]; };
 const a = process.argv.slice(2), hex = (n) => n.toString(16).padStart(64, "0");
 s.calls.push(a);
 let out = "", status = 0;
@@ -712,13 +764,20 @@ const env = {};
 for (let i = 0; i < a.length; i++) if (a[i] === "-e") { const [k, ...v] = a[i + 1].split("="); env[k] = v.join("="); }
 if (a[0] === "image") out = JSON.stringify([{ Id: "sha256:" + "a".repeat(64), RepoDigests: [process.env.FAKE_K6], Os: "linux", Architecture: "amd64" }]);
 else if (a[0] === "run" && a.at(-1) === "version") out = "k6 v2.4.0 (stand-in)";
-else if (a[0] === "run" && a[1] === "-d") { const id = hex(++s.made); s.names[a[a.indexOf("--name") + 1]] = id; out = id; }
+else if (a[0] === "run" && a[1] === "-d") { const id = hex(++s.made); s.names[a[a.indexOf("--name") + 1]] = id; out = id; if (process.env.FAKE_ALIAS === "start") leftover(); }
+else if (a[0] === "network" && a[1] === "inspect") out = JSON.stringify(Object.fromEntries(Object.values(s.names).map((id) => [id, { Name: "x" }])));
 else if (a[0] === "run") {
   const summary = a[a.indexOf("--summary-export") + 1].replace("/bench", a[a.indexOf("-v") + 1].split(":/bench")[0]);
   const n = Number(env.ITERATIONS ?? 100);
   fs.writeFileSync(summary, JSON.stringify({ metrics: { http_reqs: { count: n }, http_req_failed: { passes: 0 }, checks: { passes: n, fails: 0 } } }));
   // Another container takes the name, as a second runner or a hand would.
   if (env.MODE === process.env.FAKE_REPLACE) s.names["fsw-corten"] = hex(++s.made);
+  if (env.MODE === process.env.FAKE_ALIAS) leftover();
+} else if (a[0] === "inspect" && a[2].startsWith("{{.Id}} {{json .Name}}")) {
+  const named = Object.fromEntries(Object.entries(s.names).map(([n, id]) => [id, n]));
+  const lines = a.slice(3).map((id) => named[id] && [id, JSON.stringify("/" + named[id]), JSON.stringify({ [net]: { Aliases: s.aliases[id] ?? null, DNSNames: [named[id], ...(s.aliases[id] ?? [])] } })].join(" "));
+  if (lines.some((l) => !l)) status = 1;
+  out = lines.filter(Boolean).join("\\n");
 } else if (a[0] === "inspect") {
   const key = a.at(-1), id = s.names[key] ?? (Object.values(s.names).includes(key) ? key : null);
   if (a[2] === "{{.Image}}") out = "sha256:" + "b".repeat(64);
@@ -739,7 +798,7 @@ process.on("SIGINT", () => { process.stdout.write(events.map((e) => \`500000000,
 setInterval(() => {}, 1000);
 `;
 
-test("count.mjs attaches perf to the container docker run gave by its ID, and an invocation whose fsw-corten is another container after its load is recorded failed", { skip: process.platform === "win32" && "the stand-in docker and perf are #! scripts, which a spawn without a shell runs only on POSIX" }, async () => {
+test("count.mjs attaches perf to the container docker run gave by its ID, and refuses a load fsw-corten may route to another container, by its name or an alias, before perf attaches or after it stops", { skip: process.platform === "win32" && "the stand-in docker and perf are #! scripts, which a spawn without a shell runs only on POSIX" }, async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const root = mkdtempSync(join(tmpdir(), "count-mjs-"));
   const server = createServer((_, res) => res.end("{}")).listen(18410);
@@ -764,17 +823,19 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and an
     chmodSync(join(bin, "docker"), 0o755);
     chmodSync(join(bin, "perf"), 0o755);
     const { k6Image } = await import("../load-tool.mjs");
-    const count = async (/** @type {string} */ round, /** @type {string} */ replace) => {
+    const count = async (/** @type {string} */ round, /** @type {string} */ replace, alias = "none") => {
       const dir = join(root, round);
       mkdirSync(dir);
-      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: replace, HOME: process.env.HOME ?? root };
-      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: "ignore" });
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: replace, FAKE_ALIAS: alias, HOME: process.env.HOME ?? root };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "pipe", "ignore"] });
+      let log = "";
+      child.stdout.on("data", (d) => (log += d));
       const code = await new Promise((resolve) => child.on("close", resolve));
       const docker = JSON.parse(readFileSync(join(dir, "docker.json"), "utf8"));
-      const perf = readFileSync(join(dir, "perf.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      const perf = existsSync(join(dir, "perf.jsonl")) ? readFileSync(join(dir, "perf.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
       const row = JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"];
       const receipt = JSON.parse(readFileSync(join(kit, "results", round, "count-images.json"), "utf8"))["corten/json"];
-      return { code, docker, perf, row, receipt };
+      return { code, docker, perf, row, receipt, log };
     };
     const first = "0".repeat(63) + "1";
     // Nothing replaced: perf counts that container's cgroup, the load is counted, and it is removed by its ID.
@@ -784,14 +845,36 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and an
     assert.ok(kept.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)));
     assert.ok(Array.isArray(kept.row) && kept.row[0].requests === 5000 && kept.row[0].userPerRequest === 100000, JSON.stringify(kept.row));
     assert.deepEqual(kept.docker.calls.at(-1), ["rm", "-f", first]);
-    // Another container takes the name after the receipt: in the warmup, before perf attaches, or under the counted load.
-    for (const replace of ["closed", "iterations"]) {
+    // The ID is logged before perf attaches; in the counted window the log names the container.
+    const lines = kept.log.split("\n");
+    const attach = lines.findIndex((l) => l.includes(" perf stat ") && l.endsWith(` -G ${first}`));
+    const counting = lines.findIndex((l) => l.includes(" counting "));
+    assert.ok(attach >= 0 && counting > attach, kept.log);
+    assert.match(lines[counting], / counting fsw-corten$/);
+    const refused = (/** @type {string} */ when, /** @type {number} */ n) => ({ failed: `${when} the load: fsw-corten on rustbench answers for ${n} running containers where it must answer for the counted one alone, so the load may reach another` });
+    // Another container takes the name after the receipt: in the warmup, so before perf attaches,
+    // which it then never does, or under the counted load, which is then not counted.
+    for (const [replace, when] of [["closed", "before"], ["iterations", "after"]]) {
       const got = await count(`replaced-${replace}`, replace);
       assert.equal(got.code, 0, replace);
       assert.equal(got.receipt.container, first, replace);
-      assert.ok(got.perf.length > 0 && got.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)), replace);
-      assert.deepEqual(got.row, { failed: "fsw-corten is not the counted container after the load, so the load may have reached another" }, replace);
+      if (when === "before") assert.deepEqual(got.perf, [], replace);
+      else assert.ok(got.perf.length > 0 && got.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)), replace);
+      assert.deepEqual(got.row, refused(when, 1), replace);
       assert.deepEqual(got.docker.calls.at(-1), ["rm", "-f", first], replace);
+    }
+    // A leftover container holding fsw-corten as an alias on the load's network while the name
+    // fsw-corten is still the counted container's: refused before perf attaches. One that takes the
+    // alias under the counted load fails the count after it.
+    for (const [alias, when] of [["start", "before"], ["iterations", "after"]]) {
+      const got = await count(`alias-${alias}`, "none", alias);
+      assert.equal(got.code, 0, alias);
+      assert.equal(got.receipt.container, first, alias);
+      assert.equal(got.docker.names["fsw-corten"], first, alias);
+      if (when === "before") assert.deepEqual(got.perf, [], alias);
+      else assert.ok(got.perf.length > 0, alias);
+      assert.deepEqual(got.row, refused(when, 2), alias);
+      assert.deepEqual(got.docker.calls.at(-1), ["rm", "-f", first], alias);
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
