@@ -2930,8 +2930,8 @@ impl Local {
     /// character or space a browser drops can turn it into one. Two more are refused because the
     /// browser would ask for another path than the one [`crate::Req::serves`] checks: a `.` or
     /// `..` segment, which it resolves away, and in the path a percent-escaped letter, digit or
-    /// `-._~` (`%61`, `%2e`), which Chromium sends as the plain character. Anything else, a full
-    /// URL included, is `None`: send the user to the fallback.
+    /// `-._~` (`%61`, `%2e`), which a browser may send as the plain character (WebKit does).
+    /// Anything else, a full URL included, is `None`: send the user to the fallback.
     pub fn parse(text: &str) -> Option<Local> {
         let bytes = text.as_bytes();
         let path = bytes.first() == Some(&b'/') && !matches!(bytes.get(1), Some(b'/' | b'\\'));
