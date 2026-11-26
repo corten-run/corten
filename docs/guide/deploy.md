@@ -974,7 +974,8 @@ or offline-handoff campaign can
 [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
 after official timing or untimed JSON preparation, once the last native command's sealed
 lifetime verifies termination and an empty accounting scope, and every new user-space identity
-is a proved udev worker. Timing requires worker birth strictly after the sealed terminal cutoff;
+is a proved udev worker, including where the daemon and workers share the distribution's
+`/usr/bin/udevadm` executable. Timing requires worker birth strictly after the sealed terminal cutoff;
 untimed JSON preparation uses its pre-phase census cutoff instead. The bounded wait, worker exit
 and ordinary whole-host boundary checks must all pass. Replay uses the measured checkout: this
 cannot qualify old evidence that lacks the proof or discount activity during measurement.
