@@ -18,7 +18,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, preloginUserData, reservation, savedLoadLayout, savedPlacement, tags, verifySshIngress } from "./cloud-contract.mjs";
-import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { checkQuarantineCensus, readFleet, recheckCreateQuarantine, recheckSetupAttempt, unacknowledgedCreateBinding, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { createErroredReceipt, createErroredRecord, offlineNeverStarted, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -84,7 +84,7 @@ function roleCheckFor(fixtureCommit, sourceCommit) {
   };
 }
 
-function fixture(t, mode = "success") {
+function fixture(t, mode = "success", fakeRoleGroup) {
   // A throwing after hook skips the hooks after it, so the trace is checked before the
   // harness removes it and a failure is raised only after that removal has run.
   let traceFailure = null;
@@ -140,7 +140,8 @@ import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRea
 import { bootstrapWorkspaceScript } from './cloud-contract.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
-const syntheticRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
+const nativeRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
+const syntheticRoleCheck = (subject) => subject.group === ${JSON.stringify(fakeRoleGroup)} ? [] : nativeRoleCheck(subject);
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
@@ -315,8 +316,8 @@ function unusedRetirement(root, fleet, group) {
   fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({ ...state, retirement: { kind: "unused", evidenceSha256: digest(proof) } }));
 }
 
-test("continuation schedules around pinned catalog and retired JSON without replaying either", { timeout: 60000 }, async (t) => {
-  const p = fixture(t), before = new Map(), catalog = "catalog-page", json = "json-api", next = "localized-marketplace";
+function retainCatalogFixture(p) {
+  const before = new Map(), catalog = "catalog-page", json = "json-api";
   const retained = path.join(p.h.temp, "retained"), index = path.join(p.h.base, "index.json");
   const history = fleetPlan({ round: "r20", commit: "b".repeat(40), token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
     tokens: Object.fromEntries(groupNames.map((group, i) => [group, String(i + 1).repeat(16)])) });
@@ -367,6 +368,12 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   p.deps.inspect = async ({ folder, round, commit }) => {
     const report = before.get(folder); assert.equal(report?.round, round); assert.equal(report?.commit, commit); return report;
   };
+  return { before, retained, index, history, oldFleet, saved, oldArchive, oldBytes, oldTree, collected, at };
+}
+
+test("continuation schedules around pinned catalog and retired JSON without replaying either", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), catalog = "catalog-page", json = "json-api", next = "localized-marketplace";
+  const { before, retained, index, history, oldFleet, saved, oldArchive, oldBytes, oldTree, collected, at } = retainCatalogFixture(p);
   const args = (group) => ["r21", "--continuation-root", p.h.base, "--group", group];
   const prepare = (group) => [...args(group), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   const preview = (group) => fleetMain([...args(group), "--detach", "--print-approval"], p.deps);
@@ -441,7 +448,7 @@ test("continuation schedules around pinned catalog and retired JSON without repl
     assert.deepEqual([result.round, result.commit, result.campaignCreatedAt, result.baseEffectiveOptions], [round, measuredCommit, date, { fixture: group }]);
   }
   assert.equal(report.groups[0].result.matchesCurrentContract, false);
-  assert.deepEqual(report.groups[0].result.selection, oldCatalog);
+  assert.deepEqual(report.groups[0].result.selection, saved.selection.groups[0]);
   assert.equal(report.groups[0].result.archiveSha256, saved.archiveSha256);
   assert.equal(report.groups[groupNames.indexOf(next)].result.matchesCurrentContract, true);
   assert.equal(report.groups[0].result.appOutcomes.find((app) => app.app === "express").comparisonEligible, false);
@@ -859,6 +866,186 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
+for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "malformed name sighting", "malformed tags sighting",
+  "oversized array sighting", "oversized tags sighting", "incomplete absence", "malformed absence",
+  "witnessed census", "absent census", "capacity", "historical ID"]) {
+test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
+  const mixed = scenario === "historical ID";
+  const group = mixed ? "recoverable-live" : "json-api", other = "hardening", round = "r19", next = "r21",
+    p = fixture(t, "success", other), slot = path.join(p.h.base, group);
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => { assert.fail("no collected evidence"); };
+  // This control exercises the admission and approval bytes, not Linux actor
+  // source replay; the failed child is a synthetic local controller below.
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, async roleCheck(subject) {
+    assert.ok([group, other, "json-api"].includes(subject.group));
+    return [];
+  } });
+  if (mixed) {
+    const earlier = await lateCreateAttempt(t, { p });
+    assert.equal(await earlier.child(), 1);
+    fs.unlinkSync(earlier.locks.outer);
+  }
+  if (scenario === "witnessed census") retainCatalogFixture(p);
+  const args = (which, name) => [which, "--continuation-root", p.h.base, "--group", name];
+  const prepare = (which, name) => fleetMain([...args(which, name), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  assert.equal(await prepare(round, group), 3);
+  assert.equal(await fleetMain([...args(round, group), "--detach", "--print-approval"], p.deps), 3);
+  const approval = p.output.at(-1).approvalSha256, saved = readFleet(slot, round), fleet = saved.manifest;
+  const stateRoot = path.join(slot, group), local = path.join(stateRoot, "groups-r19"), at = new Date().toISOString();
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  const pending = { ...reservation({ round, commit, token: fleet.jobs[0].token, group, fleet }), provider: fleet.provider,
+    fullGroupQualified: false, status: "creating", createIntentAt: at };
+  p.deps.main = async () => {
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(pending));
+    fs.writeFileSync(path.join(stateRoot, ".groups-launch.lock"), JSON.stringify({ pid: dead, round }));
+    fs.writeFileSync(path.join(local, "operation.lock"), JSON.stringify({ pid: dead, at }));
+    throw Object.assign(new Error("PRIVATE_MESSAGE"), { controlUncertain: true, controllerStage: "provider-settlement",
+      providerDiagnostic: { code: "create-request", detail: "request-error" } });
+  };
+  assert.equal(await fleetMain([...args(round, group), "--detach", "--approve-reviewed-merged-ready", approval], p.deps), 2);
+  delete p.deps.main;
+  const batch = path.join(slot, ".fleet-operation.lock"), outer = path.join(p.h.base, continuationLock);
+  fs.writeFileSync(batch, JSON.stringify({ ...JSON.parse(fs.readFileSync(batch)), pid: dead }));
+  await assert.rejects(prepare("r20", other), /EEXIST/);
+  fs.unlinkSync(outer); // synthetic operator's positive custody proof and archive, not a controller action
+  await assert.rejects(prepare("r20", other), (error) => error.code === "ESRCH" || error.message.includes("unresolved custody"));
+  const record = path.join(slot, "receipts", "create-quarantine.json");
+  const receipt = path.join(slot, "receipts", fs.readdirSync(path.join(slot, "receipts"))[0]);
+  const failure = fs.readFileSync(receipt);
+  fs.writeFileSync(receipt, JSON.stringify({ ...JSON.parse(failure), SAVEDKEYCANARY: "SAVEDVALUECANARY" }));
+  assert.throws(() => unacknowledgedCreateBinding(readFleet(slot, round)), (error) =>
+    error.message === "create quarantine detach outcome differs" && !String(error).includes("CANARY"));
+  fs.writeFileSync(receipt, failure);
+  const binding = unacknowledgedCreateBinding(readFleet(slot, round));
+  const proof = { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: "4".repeat(64) };
+  fs.writeFileSync(record, JSON.stringify(proof));
+  const sealed = treeHash(slot);
+  const { report } = await inspectContinuation(p.h.base, p.deps);
+  assert.ok(report.eligibleToRun.includes(other));
+  assert.ok(!report.eligibleToRun.includes(group));
+  assert.equal(report.groups.find((row) => row.group === group).outcome, "quarantined-create");
+  await assert.rejects(prepare("r20", group), /never allocate again/);
+  assert.equal(await prepare(next, other), 3);
+  const preview = await fleetMain([...args(next, other), "--detach", "--print-approval"], p.deps);
+  assert.equal(preview, 3);
+  const [old] = p.output.at(-1).subject.continuation.quarantinedCreates;
+  assert.equal(old.sha256, fileHash(record)); assert.equal(old.group, group);
+  const nextFleet = readFleet(path.join(p.h.base, other), next).manifest;
+  recheckCreateQuarantine(p.h.base, old, nextFleet);
+  if (scenario !== "admission") {
+    const providerMatch = { id: 123, name: pending.name, tags: [] };
+    if (scenario === "nonterminal sighting") fs.writeFileSync(p.hosts + ".census-next", JSON.stringify(providerMatch));
+    if (scenario === "count-mismatch sighting") fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({
+      droplets: [{ ...providerMatch, name: "renamed", tags: [pending.tag] }, { id: 124, tags: null }], meta: { total: 3 },
+    }));
+    if (scenario === "malformed name sighting" || scenario === "malformed tags sighting") {
+      const match = scenario === "malformed name sighting"
+        ? { ...providerMatch, name: null, tags: [pending.tag] } : { ...providerMatch, tags: null };
+      fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: [match], meta: { total: 1 } }));
+    }
+    if (scenario === "oversized array sighting" || scenario === "oversized tags sighting") {
+      const rows = scenario === "oversized array sighting"
+        ? [...Array.from({ length: 200 }, (_, i) => ({ id: i + 1000, name: "other", tags: [] })), providerMatch]
+        : [{ ...providerMatch, name: "renamed", tags: [...Array(256).fill("other"), pending.tag] }];
+      fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: rows, meta: { total: rows.length } }));
+    }
+    if (scenario === "incomplete absence" || scenario === "malformed absence")
+      fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({
+        droplets: [{ id: 123, name: "unrelated", tags: scenario === "malformed absence" ? null : [] }],
+        meta: { total: scenario === "malformed absence" ? 1 : 2 },
+      }));
+    if (mixed) {
+      assert.deepEqual(p.output.at(-1).subject.continuation.postedCreates.map(({ dropletId }) => dropletId), ["123"]);
+      fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({
+        droplets: [{ id: 123, name: "renamed", tags: [] }], meta: { total: 1 },
+      }));
+    }
+    if (scenario === "witnessed census") fs.writeFileSync(p.hosts, JSON.stringify([providerMatch]));
+    if (["absent census", "capacity"].includes(scenario)) {
+      fs.writeFileSync(p.hosts, JSON.stringify([{ id: 123, name: "unrelated", tags: [] }]));
+      if (scenario === "capacity") fs.writeFileSync(p.hosts + ".limit", "1");
+    }
+    const approved = p.output.at(-1).approvalSha256;
+    const code = await fleetMain([...args(next, other), "--detach", "--approve-reviewed-merged-ready", approved], p.deps);
+    const events = p.events();
+    const state = p.saved(path.join(other, other));
+    const firstPost = events.findIndex((row) => row.method === "POST");
+    const preCreate = firstPost === -1 ? events : events.slice(0, firstPost);
+    const census = preCreate.filter((row) => row.method === "GET" && row.path.startsWith("/v2/droplets?"));
+    assert.deepEqual(census.map((row) => row.path), ["/v2/droplets?page=1&per_page=200"], "no second inventory, later page or retake");
+    const provider = events.filter((row) => row.boundary === "provider"), at = provider.indexOf(census[0]);
+    assert.deepEqual([provider[at - 1]?.path, provider[at + 1]?.path], ["/v2/account", "/v2/account"], "the response is account-bracketed");
+    if (scenario === "absent census") {
+      assert.equal(code, 3);
+      assert.ok(state.createIntentAt);
+      assert.equal(events.filter((row) => row.method === "POST" && row.group === other).length, 1);
+      assert.equal(treeHash(slot), sealed);
+      return;
+    }
+    assert.equal(code, 2);
+    assert.ok(!events.some((row) => row.method === "POST" || row.method === "DELETE"));
+    assert.equal(state.createIntentAt, undefined, "no create intent");
+    const witness = path.join(slot, "receipts", "create-quarantine-witness.json");
+    if (!scenario.endsWith(" sighting") && scenario !== "witnessed census") {
+      assert.ok(!fs.existsSync(witness));
+      const refusal = mixed ? "historical host is listed" : scenario === "capacity" ? "account capacity unavailable" : "pre-create census incomplete";
+      assert.ok(p.refusals().flat().some((line) => line.includes(refusal)));
+    }
+    else {
+      assert.deepEqual(JSON.parse(fs.readFileSync(witness)), { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: old.sha256, dropletId: "123" });
+      if (scenario === "nonterminal sighting") fs.unlinkSync(p.hosts + ".census-next");
+      if (scenario.endsWith(" sighting") && scenario !== "nonterminal sighting") fs.unlinkSync(p.hosts + ".census-first");
+      fs.writeFileSync(p.hosts, JSON.stringify([{ ...providerMatch, name: "renamed", tags: [] }]));
+      await assert.rejects(prepare("r22", "recoverable-live"), /witnessed in provider inventory/);
+      assert.ok(!fs.existsSync(path.join(p.h.base, "recoverable-live")));
+      assert.deepEqual(p.events(), events, "the witness refuses admission before any new provider command");
+      const { report: after } = await inspectContinuation(p.h.base, p.deps);
+      assert.deepEqual(after.eligibleToRun, []);
+      const blocked = after.groups.find((row) => row.group === group);
+      assert.deepEqual([blocked.outcome, blocked.attempts.at(-1).outcome], ["blocked", "quarantined-create-witnessed"]);
+      assert.deepEqual(after.groups.find((row) => row.group === "catalog-page"), report.groups.find((row) => row.group === "catalog-page"));
+      if (scenario === "witnessed census") {
+        const bytes = fs.readFileSync(witness);
+        fs.writeFileSync(witness, JSON.stringify({ ...JSON.parse(bytes), dropletId: "WITNESSCANARY" }));
+        await assert.rejects(inspectContinuation(p.h.base, p.deps), (error) =>
+          error.message === "create quarantine witness differs" && !String(error).includes("CANARY"));
+        await assert.rejects(prepare("r22", "recoverable-live"), /witnessed in provider inventory/);
+        fs.writeFileSync(witness, bytes);
+      }
+      assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);
+      assert.ok(!p.events().some((row) => row.method === "POST" || row.method === "DELETE"));
+    }
+    return;
+  }
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, fleet), /only other groups/);
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, { ...nextFleet, provider: { accountId: "user:elsewhere" } }), /saved account/);
+  const census = (rows) => checkQuarantineCensus(p.h.base, [old], nextFleet, rows);
+  census([]);
+  census([{ id: 123, name: "unrelated", tags: ["production"] }]);
+  assert.ok(!JSON.stringify(old).includes(pending.tag), "the next approval need not carry the old provider tag");
+  census([{ id: 123, name: "unrelated" }]);
+  assert.throws(() => census([{ id: 123, name: "unrelated", tags: [null] }]), /invalid create quarantine census rows/);
+  assert.equal(treeHash(slot), sealed);
+  assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
+  fs.writeFileSync(record, JSON.stringify({ ...proof, binding: { ...binding, stateSha256: "a".repeat(64) } }));
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, nextFleet), /quarantine binding differs/);
+  await assert.rejects(prepare("r22", other), /quarantine binding differs/);
+  fs.writeFileSync(record, JSON.stringify(proof));
+  assert.throws(() => census([{ id: 123, name: "renamed", tags: [pending.tag] }]), /witnessed in provider inventory/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(slot, "receipts", "create-quarantine-witness.json"))), {
+    schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: old.sha256, dropletId: "123",
+  });
+  assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);
+  // Even if later inventory is empty or has a different name and tags, a new
+  // prepare and the locked gate cannot reinterpret the original as unwitnessed.
+  await assert.rejects(prepare("r22", other), /witnessed in provider inventory/);
+  assert.throws(() => recheckCreateQuarantine(p.h.base, old, nextFleet), /witnessed in provider inventory/);
+});
+}
+
 test("continuation retries past a create that errored after its launch deadline once the operator released its custody and the child recheck settled it", { timeout: 60000 }, async (t) => {
   const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
@@ -967,8 +1154,8 @@ test("continuation retries past a create that errored after its launch deadline 
 // --offline-handoff one, stopped at its create deadline with the POST's IDs. The child
 // state is the one the launch saves before its create; the launch's process tree has
 // since been accounted for by the operator's custody step for the child locks.
-async function lateCreateAttempt(t, { offline = false } = {}) {
-  const p = fixture(t), group = "json-api", slot = path.join(p.h.base, group);
+async function lateCreateAttempt(t, { offline = false, p = fixture(t) } = {}) {
+  const group = "json-api", slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
   const args = (round) => [round, "--continuation-root", p.h.base, "--group", group];

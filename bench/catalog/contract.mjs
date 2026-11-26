@@ -8,6 +8,8 @@ export const targets = ["page", "json"];
 export const phases = ["fixed", "sat64", "sat256"];
 export const leanProfile = "catalog-lean";
 export const leanApps = Object.freeze(groupDescriptor("catalog-page").apps);
+// The longest run.mjs gives one app's image build.
+export const imageBuildTimeoutMs = 60 * 60 * 1000;
 // The wider placement is for k6 only. Probes/checkers run on the original client cores.
 export function probeCpu(measurement) {
   return measurement.loadLayout === "c16-generator-v1"

@@ -1,0 +1,27 @@
+[package]
+name = "request-cost-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "The requests bench/request-cost counts: an API's short answers and an app's page and text."
+
+# Built from a copy, never in place: build.sh puts the counted commit's tree at ../work and its
+# Cargo.lock beside this file, so the probe is built against that commit's Corten with that
+# commit's locked crates, and this directory holds no lock of its own.
+[[bin]]
+name = "probe"
+path = "src/main.rs"
+
+# Not part of the Corten workspace.
+[workspace]
+
+# Features: the template's (the defaults and compress) and json.
+[dependencies]
+corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }
+tokio = { version = "1", features = ["macros", "net", "rt"] }
+
+# The repository's release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

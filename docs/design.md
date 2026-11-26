@@ -2496,7 +2496,27 @@ rules something out.
     headers, and an unstaged one still gets its sandbox. About 3,500 cycles a request (3% on
     this page) is no reason to take the document headers away. No flag has a measured case.
     Where the declaration shows an answer cannot use a group, leave out that work case by case,
-    each in its own change with its own measured cost. `unstaged` is no stage at all, which
+    each in its own change with its own measured cost. One case is taken where the answer shows
+    it, at the last stage: an answer that brings no header, or its `Content-Type` alone, is
+    given its scope's lines (the security headers and `Cache-Control`) in one pass
+    (`Applied::ready`), where the stages look each up and insert it. That is a second path to
+    the same lines, taken for what it saves a short answer (Stands on), and it is not a second
+    list of them: a scope's lines are what the stages themselves give an empty answer, made
+    once when the router is built, and the pass leaves to the stages every answer they would
+    treat differently (one with a header that is not its type, a request that took its nonce,
+    a page with a style block, a document or a worker's script where the policy has a line for
+    those). Two tests hold it equal to the stages:
+    `an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert` gives each kind of
+    answer it lists, under each policy it lists and in each scope (an API, pages, an area, an
+    API inside the area), to the pass and to the stages, compares the lines and their order,
+    and asserts which kinds the pass takes;
+    `an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_is_inserted_into`
+    compares every answer of an app with pages, an area and APIs outside and inside the area,
+    through the router, with the same app's answer when a middleware's one more line sends it
+    through the stages. Neither fails when the pass is never taken, since what is sent is the
+    same: the counts in [the app guide](guide/app.md#the-request-path) show that it is. An
+    answer the pass does not take pays the test that tells it apart (a page and a 404 page 6
+    to 27 instructions, Stands on). `unstaged` is no stage at all, which
     listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
     without, the same for every unstaged route ([Choice 25](#choice-axum-router), step 2).
     Nor the stages rewritten as combinators, measured
@@ -2557,6 +2577,95 @@ rules something out.
     moved the same Corten code by up to 8); either way it counts against the bound: 7,030 is 98 over 6,932 and
     7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
     this.
+
+    The next change was to the host check itself, which now also refuses what HTTP does not allow
+    (the `400` of [the app guide](guide/app.md#host-names)), at an unstaged route as at every other:
+    a `Host` line missing, repeated or not a host, which RFC 9112 (3.2) requires a server to refuse.
+    With them, by Corten's choice: an empty `Host`, which 3.3 lets a server read as its default
+    name; an address in brackets that is not IPv6, of a later version RFC 3986's grammar
+    has a place for and defines none of; and, in a target that names its own host
+    (`GET http://shop.example/ HTTP/1.1`, or a host alone), a host and port that are not what a
+    `Host` is held to: a user before it, which RFC 9110 (4.2.4) says a server should treat as an
+    error, a port that is no number (`http://shop.example:abc/`), and an address in brackets that
+    is not IPv6 or has a zone. It adds work to an unstaged route, so this was read again
+    as it was for the host check's 494. The same change stopped searching the headers for `Host`
+    where it is the first line, where RFC 9110 (7.2) asks a client to write it, and it reads a
+    `Host` no name holds with one of the two cheapest readers of those counted (below): in line
+    where the request is read, the port taken off the value's end and the name read four bytes at
+    a look, with what a refused request or a percent-encoded name runs held out of line. The
+    other, eight bytes at a look, counted within 11 of it either way: 91, 82 and 136 a call
+    against four's 93, 74 and 147, for `localhost:8080`, `shop.example` and a name of 33 bytes.
+    Four is kept as the one 8 ahead on one short name, 2 behind on the other, and 11 behind only
+    on the long one; that an app's names are nearer the short two was not surveyed. Counted over a
+    socket at `5c7b006dc` (below), each build in turn and main built a second time as the
+    control: an unstaged request with `Host` first costs 126 fewer than before in an app that names
+    its hosts; one with `Host` second 19 more, and 49 more with it the last of a browser's eight
+    lines, whose names are read in turn for the server's mark before the search; and one to an app
+    that answers to any host, which did not read `Host` before and now must to refuse a malformed
+    one, 111 more with `Host` first (0.9%) and 311 with it last of eight (1.7%). The control
+    counted within 2 of main in each of these but `Host` last of eight in an app that names its
+    hosts, where it counted 6 fewer, so that 49 is 55 by the control. In process, where
+    `tests/router_cost.rs` asks with no `Host`, an unstaged request costs 60 more (5,391 against
+    5,331, the control 5,331), which is 6 more than before the reader changed (5,385); where
+    those 6 are was not looked for.
+    What an app that answers to any host pays is near what reading `Host` costs at all. A build
+    that finds the line and reads none of its bytes, which refuses nothing and is no design,
+    counted 34 to 36 more than main with `Host` first: the 77 beyond that are the read of
+    `localhost:8080`, a look at each of its 14 bytes. With `Host` last of eight it counted 235
+    more: main never looked for `Host` in such an app, and a later line is found by the server's
+    read of the names in turn, for its mark, and then by the hashed search. So half a percent of
+    such a request (64 of an unstaged one's 12,709) is not reached by a reader that looks at
+    every byte, and one that looked at fewer would answer a `Host` that is none.
+    The refusals stay. The three of `Host` are what HTTP requires, which is correctness and comes
+    before the count (the README's Values), and a route that skipped them would answer a request
+    with two `Host` lines that every other route refuses. The three by choice cost nothing beside
+    them, being answers of the same read: an empty `Host` names none of the hosts an app answers to
+    and was a `421` before, in an app that names its hosts; an address in brackets is parsed as
+    IPv6 or is none; and a target's host and port are read where `Host` would be, by the function
+    that reads `Host` (below). The bound stays where it
+    was for a request whose first header line is `Host` in an app that names its hosts, the lane's
+    and step 4's 98 and 94 still counted against it. For a request with `Host` on a later line or
+    none it moves by what the refusals cost, the 19 to 60 counted, and in an app that answers to any
+    host by the 111 to 311 counted, which is the read of `Host` every other app paid already (about
+    400 of the host check's 494) come to it for the refusals; no further in either. The harness the
+    bound's counts came from is not in the repository and was not run for this change, so what an
+    unstaged route counts there now is not known; by the counts that were taken it is less than it
+    was if the harness's request names its host first and 19 to 60 more if it does not. The next
+    change that adds to an unstaged route reopens this as before. The designs tried before this one
+    are in the count below.
+    Not chosen: refusing a request with no `Host` by its version alone, with no mark from the
+    server, which would refuse every request a test builds without `Host` (an `http::Request` is
+    HTTP/1.1 unless it says otherwise), in this repository's tests and in apps'; what the mark gives
+    up is that such a request another library's server read and hands to the router is answered. Nor
+    refusing anything else in a request-target (its path, its query, its form), which an earlier
+    form of this change did for a target
+    with a byte outside ASCII and for `*` with a method other than `OPTIONS`. Of an invalid
+    request-line RFC 9112 (3.2) says a server should answer a `400` or a redirect, which is less
+    than it says of `Host`; the check refused one kind of byte no URI holds while a `|`, a `%`
+    before no hex digits and a fragment went through, so its reason (a line written to pass a filter
+    on its way) was applied to part of what it covers; it cost every request a scan as long as its
+    target, 41 instructions in one profile of a 19-byte one; and it turned a request typed by hand
+    for `/café`, which a client may send as typed where a browser percent-encodes it, from a page
+    into a `400`. Of `*`, 3.2.4 says only that the form is for `OPTIONS`, and names no answer to
+    another method, which the router answers `404` as it does any path with no route. Both are
+    answered as they were before this change, and `tests::security` holds them to that.
+    The host and port of a target that names its own are the one part of a target the check reads
+    and refuses, though an invalid one is the same "should answer a `400` or a redirect" as an
+    invalid path, and less than 3.2 says of `Host`. The reason is what the check is for: such a
+    target's host is the one the request asks for, whatever `Host` says (3.2.2), so the check
+    takes the target's authority where it would take `Host` (`security::read`, which reads
+    nothing else of the target) and gives it to the function that reads `Host`, to decide whose
+    name it is; bytes there that are no host and port get that function's one answer for them,
+    the `400`, as they do in `Host`. In
+    an app that answers to any host no name is decided, and the authority is read for the
+    refusal alone, as `Host` is there. Unlike the dropped scan, the rule is the whole of `Host`'s
+    and not one kind of byte, and a request whose target names no host, which is nearly every
+    one, pays nothing for it: one that does is read by a function held out of line
+    (`security::targeted`). Before this change the check took
+    the host as the URI parse split it, with any user and port left off, and answered any address
+    in brackets, so `http://localhost:abc/`, `http://[v1.x]/` and `http://[fe80::1%25eth0]/` were
+    routed in an app that answers to `localhost` (read in `c46092aeb`'s `security::named`, not
+    run there); each is a `400` now, held by `tests::security` over a connection.
 
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as
@@ -2639,7 +2748,79 @@ rules something out.
     7,076 in an API's module against 7,065, a `service_fn` with no framework 3,190 in both, a
     plain axum router 7,059 against 7,092; with glibc 7,834 against 7,823, 7,882 against 7,871,
     3,568 in both, and 8,073 against 8,106; the harness built before the control, two runs each:
-    7,022 against 7,012 and 7,073 against 7,063); measured (callgrind, release, three runs each, the stages written as combinators
+    7,022 against 7,012 and 7,073 against 7,063); measured (callgrind, release, jemalloc, a
+    request counted as callgrind's collection over 1,000 requests on one connection after 240 it
+    does not count, a bench app the repository does not hold, the host check with HTTP's refusals
+    at `5c7b006dc` against main `c46092aeb`, against main built a second time as the control and
+    against the head before its reader of a `Host` no name holds was changed, `68057e40d`, the
+    four builds counted one after another for each request and that three times, the build that
+    goes first moving on by one each time, median and range; with `Host: localhost:8080` the
+    first line in an app that names its hosts: an unstaged route 12,885 (12,883 to 12,886) against
+    13,011 (13,009 to 13,012), the control 13,011 and the earlier head 12,911; a `GET` through
+    the stages under an API 19,052 (19,049 to 19,057) against 19,176 (19,176 to 19,181), the
+    control 19,176 and the earlier head 19,084; the same with a browser's seven lines after
+    `Host` 24,593 (24,589 to 24,597) against 24,718 (24,714 to 24,724), the control 24,718 and
+    the earlier head 24,624; its `POST` 23,729 (23,727 to 23,758) against 23,851 (23,845 to
+    23,883), the control 23,850 and the earlier head 23,758; and a 12 KB page 43,438 (43,433 to
+    43,441) against 43,528 (43,526 to 43,532), the control 43,526 and the earlier head 43,468;
+    with `Host` after an `Accept` line, the unstaged route 13,616 (13,613 to 13,620) against
+    13,597 (13,595 to 13,600), the control 13,598 and the earlier head 13,634, and the `GET`
+    19,813 against 19,796, the control 19,797 and the earlier head 19,847; with `Host` the last
+    of a browser's eight lines 18,472 (18,469 to 18,476) against 18,423 (18,415 to 18,424) and
+    24,825 against 24,771, the control 18,417 and 24,772 and the earlier head 18,497 and 24,856;
+    in an app that answers to any host (`HOSTS=*`) with `Host` first 12,820 against 12,709 and
+    18,989 against 18,876, the control 12,707 and 18,874 and the earlier head 12,886 and 19,060,
+    and there with `Host` last of eight 18,407 against 18,096 and 24,759 against 24,447, the
+    control 18,095 and 24,447 and the earlier head 18,472 and 24,830; every one of these thirteen
+    answers the same bytes in the four builds, its `Date` and `ETag` masked; in process,
+    `tests/router_cost.rs`, whose requests have no `Host`, a request counted as the run of 1,200
+    less the run of 200 over 1,000, the same four builds in turn three times, every run within 2:
+    an unstaged route 5,391 against 5,331, a parameter route through the stages 12,254 against
+    12,203 and an unknown URL's 404 17,096 against 17,075, the control 5,331, 12,203 and 17,074
+    and the earlier head 5,385, 12,254 and 17,097. Over a socket the run of 1,240 requests less
+    the run of 240, which the counts before these were, differed between two counts of one build
+    by up to 207 on the machine these were taken on, which other work shared, so a request was
+    counted as said; a build counted that way three times over was within 2. A build of
+    `5c7b006dc` whose reader finds the line and reads none of its bytes, counted in turn with it
+    twice, for what the read itself costs: 34 and 36 more than main in an app that answers to any
+    host with `Host` first, and 235 with it last of eight. Readers of a `Host` no name holds,
+    each counted alone (the run of 2,000,000 calls less the run of 1,000,000, a call's
+    instructions for `localhost:8080`, for `shop.example` and for a name of 33 bytes; the
+    earlier head's and the one kept counted twice, the same each time, the others once): the
+    earlier head's, the colon searched for from the end and the name a byte at a look, 144, 175
+    and 427; the port taken off the end and the name four bytes at a look, which is kept, 93, 74
+    and 147; eight at a look 91, 82 and 136; every byte's look joined, with no branch for a byte,
+    104, 85 and 164; one pass from the start to the port's colon 131, 107 and 254; a look at each
+    byte from the end by its kind 126, 99 and 204; and eight bytes at a look as one word with no
+    table, for lower-case letters, digits, `-`, `.` and a port, the table's reader for any other
+    value, 134, 123 and 203. No control that shares no code with Corten was counted. Names
+    an app holds other ways were counted only at `c4c19eee5`, which still scanned the target, each
+    build's runs together and not in turn: a name under `localhost`, a listed name and a subdomain
+    of one cost 4 to 51 fewer than on main with `Host` first. The counts from here to the end of
+    this entry are by the earlier method, a request counted as the run of 1,240 less the run of
+    240: each is set against the main or the head counted beside it, given here where one was
+    recorded, and not against the counts above. Designs of the same change tried before this one,
+    three runs each and the median, the `GET` and the unstaged route, against main `3aee8a5db`: a
+    request the server read known by a thread-local set around the router's call 19,243 and 13,052
+    (uncommitted), and by a mark on the request's body 19,215 and 13,023 at `58d81af93`, which a
+    layer of the app's that replaces the body loses, main beside these two 19,152 (19,136 to
+    19,153) and 12,966 (12,965 to 12,966); by the mark it has now with the headers searched for
+    `Host` on every request 19,207 and 13,015 at `0b82b0dca`, with no count of main recorded
+    beside it; and with the scan of the request-target this change no longer has, 19,107 and
+    12,915 at `c4c19eee5`, main beside it 19,152 (19,151 to 19,152) and 12,953 (12,952 to 12,965),
+    its unstaged route counting 12,952 to 12,954 in some runs and 12,965 to 12,967 in others.
+    Tried at `31212aa1d` for an app that answers to any host, counted in turn with it and with
+    main `430e1ac1f` (`31212aa1d` then 12,843 and 19,034 against main's 12,666 and 18,850 in such
+    an app with `Host` first, and 12,870 and 19,061 against 12,966 and 19,152 in one that names
+    its hosts), and not kept: the value read once from its start for every app, with no search for
+    the colon, which took 28 to 41 from such an app's request with `Host` first (12,802 against
+    12,843 and 19,006 against 19,034) and added 23 to 25 to every request of an app that names its
+    hosts, which reads nothing of a name it holds as written (12,894 against 12,869, 19,083
+    against 19,060, `31212aa1d` in that count); the same read for such an app alone, 13 to 23
+    fewer in one count and none in the next; and the later lines read in turn for `Host` in place of
+    the hashed search, which took 70 to 80 from a request with `Host` second and 18 from one with it
+    last of eight and added 12 to every request with it first, or, held out of line, added about 80
+    to one with it last of eight); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -2690,7 +2871,29 @@ rules something out.
     `deflate, gzip, br` ([Choice 32](#choice-stream-coding)), which is not in the list and is
     parsed as before; Safari was not tried); bet (the line reaches the app as the browser sent
     it; behind a proxy that rewrites `Accept-Encoding` the list matches nothing and a request
-    pays its three comparisons before the parse, which was not checked behind one); value
+    pays its three comparisons before the parse, which was not checked behind one); bet (most
+    requests reach the app with `Host` their first header line, where RFC 9110 7.2 says a user
+    agent should write it: Playwright 1.65.1's Chromium 159 and Firefox 159 on Linux write it
+    first, a navigation and a `fetch` alike, and so does curl 8.5.0; its WebKit 27.2 there
+    writes it seventh of ten lines and tenth of thirteen, so its requests, and any behind a
+    proxy that writes its own lines first, pay the search they paid before and a look at each name
+    before `Host`, the 17 to 54 counted; Safari and a proxy that writes its own lines were not
+    tried, and nginx as the deploy guide sets it up writes `Host` first);
+    measured
+    (the one pass at the last stage, callgrind, release, jemalloc, `fad2caf29` against main
+    `c9666dc96`. Over one keep-alive connection to a benchmark app the repository does not
+    hold, 1,240 requests less 240 over 1,000, the median of three counts, two rounds of each
+    build, before and then after: a short text from a route under an API 19,171 and 19,170,
+    then 18,855 and 18,861; the same answering a `POST` 24,042 and 24,054, then 23,734 and
+    23,735; a short text from a page scope 18,071 and 18,078, then 17,631 in both; the first
+    and the third with a browser's request headers 24,716 and 24,709, then 24,395 and 24,390,
+    and 26,737 and 26,743, then 26,288 and 26,290; a 12 KB page, which does not take the pass,
+    43,500 and 43,501, then 43,506 and 43,512, and compressed for a browser 221,963 and
+    221,962, then 221,980 and 221,981; allocations a request the same in every case. In
+    process with `crates/corten/tests/router_cost.rs`, three runs each: text from a route with
+    a parameter 10,694 to 10,244, text under an API 8,207 to 7,895, text answering a `POST`
+    11,075 to 10,625, and the 404 page, which does not take it, 15,322 to 15,343; with glibc
+    12,207 to 11,716, 9,518 to 9,155, 12,682 to 12,235 and 17,078 to 17,105); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2705,7 +2908,10 @@ rules something out.
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
     than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
     with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
-    through its lane, 7,030 and 7,076 since step 4), when a control that shares no code with
+    through its lane, 7,030 and 7,076 since step 4), and over what its host check has cost
+    since it refuses what HTTP does not allow (`5c7b006dc`: 19 to 49 for a request whose first
+    header line is not `Host`, and in an app that answers to any host 111 with `Host` first and
+    311 with it last of eight), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -2739,8 +2945,34 @@ rules something out.
     browser Playwright runs sends another line (the list then takes it, and drops one no
     browser sends), or when requests are found to reach apps with the line rewritten more often
     than not.
+    Read the host check's look at the first header line again when requests are found to reach
+    apps with `Host` on a later line more often than not, or when Safari is found to write it
+    later, as Playwright's WebKit does on Linux: a request then pays the look and the search.
+    Take the one pass at the last stage out, so that every answer is given each line by the
+    stages again, when it saves the short answers that take it fewer than about 150
+    instructions (`router_cost.rs` with jemalloc: 450 on its text and 312 under an API at
+    `fad2caf29`); or when an answer is found that the pass and the stages send differently; or
+    when a stage comes to read something of an answer or its request that the pass's two tests
+    cannot vary, so that nothing would hold the two paths equal.
 
-    Last checked: 2026-11-23, the stages' reads of a request under an API, read in the code at
+    Last checked: 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
+    `c46092aeb`, against main built again and against `68057e40d`, callgrind over a socket on a
+    bench app the repository does not hold (the next check writes its own: one keep-alive
+    connection, a `GET` to a route that says `unstaged` and to routes through the stages, with `Host: localhost` and its port first,
+    after another line and last of a browser's lines, in an app that names its hosts and in one with
+    `HOSTS=*`, the builds counted in turn) and in process with `tests/router_cost.rs`, rustc
+    1.100.0, valgrind 3.24.0 (the harness with the no-framework control, which the bound's counts
+    came from, was not run, and no cycles under load were measured here), where Playwright 1.65.1's
+    browsers and curl 8.5.0 write `Host`, on Linux, read off a socket that prints each request's
+    lines, a navigation and a `fetch` from each browser, and what nginx 1.31.9 with the deploy
+    guide's configuration sends the app (`Host` the first line, the client's, or `Host: app`, its
+    upstream's name, for an HTTP/1.0 client that sent none, which the app answers `421` as it did on
+    main, and its own `400` to an HTTP/1.1 client with none);
+    2026-11-24, the one pass at the last stage: its counts over a socket and with
+    `router_cost.rs` at `fad2caf29` against `c9666dc96`, and its two tests against twelve ways
+    of breaking it, of which eleven fail one or both and the twelfth, the pass never taken,
+    fails neither and shows in the counts alone;
+    2026-11-23, the stages' reads of a request under an API, read in the code at
     `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
     were not taken again); 2026-11-23, each engine's `Accept-Encoding` over HTTP and HTTPS, by
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
@@ -6579,17 +6811,44 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above the
-    24,287.261 instructions accepted here on the same harness (that count is the baseline; the
-    2.1 above is not a regression still to fix); a compiler or code change lets the one loop poll
-    the plain task at the 24,285.154 it cost before, which removes the residual; an app needs a
+    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
+    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
+    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
+    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
+    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
+    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
+    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
+    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
+    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
+    count on one connection with glibc's allocator changed level by about 370 with no change to
+    what a request does; the 2.1 above is not a regression still to fix); a compiler or code
+    change lets the one loop poll the plain task at what it cost before the metadata path, which
+    removes the residual (the rerun of Last checked counts the two the same and cannot say whether
+    the later compiler or the rebuilt harness is why, so this may already hold); an app needs a
     connection value that cannot be cheaply cloned or shared; or the framework changes its
     connection service or request-extension ownership model.
 
     Last checked: 2026-11-17, before `6c5f17b11` (merged as `b08c48d23`), and the metadata
     path's Rust sources matching `caebfa19d` in the counts above, the connection-info
     integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
-    OpenAPI test of a documented route taking it.
+    OpenAPI test of a documented route taking it; 2026-11-25, the plain HTTP count alone, on the
+    harness built again from the description above, since the one those counts were made with is
+    not in the repository (a crate of its own with one typed `GET /` answering `served`, served by
+    `corten::serve` on a current-thread runtime, default features off, thin LTO and one codegen
+    unit, glibc's allocator, a client outside Callgrind that sends the request line and `host`
+    alone on one socket and checks every status and body, three rounds alternating, 200 requests
+    from 1,200 over 1,000, Callgrind 3.24.0 and rustc 1.100.0 with Tokio 1.54.1, so a count here is
+    not one of the counts above): `6c5f17b11` 23,073.241 instructions (range
+    23,073.221-23,077.401) and `caebfa19d` 23,073.192 (range 23,073.121-23,073.754), which is no
+    residual, and the rerun cannot say whether the later compiler or the rebuilt harness is why,
+    then `main` at `8d5160be2` 17,771.037 (range 17,770.049-17,771.622) and `9060dfb2a`, where a
+    connection's wait for shutdown is polled only when it was woken, 17,552.817 (range
+    17,552.342-17,552.875), then the last two again in a second session of three rounds,
+    17,771.565 (range 17,771.150-17,771.818) and 17,554.409 (range 17,553.815-17,556.855), where
+    the first session's binary of this change was built from `9060dfb2a` and the second's from
+    `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
+    that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
@@ -6600,7 +6859,7 @@ rules something out.
     closing the connection, is logged as that `500`, and a `101` as itself. A response future
     dropped before it is ready writes nothing; a ready response's line is not changed by a later
     disconnect. It sees the host check's
-    `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
+    `421` and `400`, cross-site refusals, error-page replacements, conditional `304`s, compression and
     app layers. It never polls a body to count it, so a live stream is logged when its answer
     is ready, not at a close it may never reach; a body HTTP gives no content (a `204`, a `304`,
     a `1xx`, a `2xx` to `CONNECT`) counts zero. The existing subscriber still owns formatting,
@@ -6670,7 +6929,9 @@ rules something out.
     subscriber read, at `f5f2132aa`; 2026-11-17, hyper 1.12's HTTP/1 server answering a final
     `100` and `103` with an empty `500` over a socket, at `67d888836`; 2026-11-17, a subscriber
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
-    above, at `65ac1dc47` against `38587c414`.
+    above, at `65ac1dc47` against `38587c414`; 2026-11-24, the line for the host check's `400`
+    and `421`, at a route through the stages and at one that says `unstaged`, by `log::tests` at
+    `b231f99d0` (the costs above were not taken again).
 
 62. <a id="choice-changelog-fragments"></a>**Unreleased changelog entries are per-change
     Markdown bullets.** Pull requests add separate files rather than edit the same list. The
@@ -7707,7 +7968,46 @@ rules something out.
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
     lookup. It is on unless the app says otherwise, holds at most 32 MiB
-    (`App::kept_answers`), and is off under `corten dev`.
+    (`App::kept_answers`), and is off under `corten dev`. There the store stands but keeps and
+    gives nothing, so the code that decides what a release build keeps still runs, and each
+    `Public` route says in the log whether that build would keep its answer while its store has
+    room, and if not the first reason that code found (a bound of 0 among them), once for each
+    route and verdict
+    ([#1801 Nothing tells an author whether a Public page is kept, or why not](https://github.com/corten-run/corten/issues/1801)):
+    a page that is not kept looks the same from outside save for a missing `Age`, so without it
+    an author first met the difference in production. It says no more than that the answer may be
+    kept: the store under `corten dev` is never full, and a full one keeps only a URL asked for
+    before, so that the answer is kept, or given again, is not promised. Of a body not held whole
+    it says so only as the body ends; the body is not read to say it, which would hold it from the
+    middleware, drop its trailers and what came before a failure and keep a slow one from the
+    client, but watched as whatever reads it next pulls each frame (one held whole, which a
+    release build takes without reading, at once), and one dropped before its end says nothing.
+    That watch is passive, so it says only what `corten dev` saw: a release build reads the body
+    before the answer leaves, within the route's deadline and before the request's signal ends,
+    and `corten dev` after, so a body that read whole is said to be kept if that build reads it
+    whole within its deadline (a slow one may not be), and one that failed is said to have failed
+    as `corten dev` read it, with no status that build answers (one that fails only once the
+    signal has ended reads whole there). Reading it the release way under `corten dev` would tell
+    more and change the answer the app's middleware and the client see. The reasons come from the code
+    that decides, not from a second list of its rules, which could drift from what the build does.
+    That code is compiled twice, the route's and its answer's checks alike (`Keeping` and
+    `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn
+    submit key at the same watch and the same return as a release build (so a key drawn as the
+    body is read is said by neither), counts the head of an answer whose locale was chosen late as
+    a release build names it, from a copy, so the answer the app's middleware sees is the one it
+    saw with no store, and leaves an answer it would keep for its body to be watched; a release
+    build's copy does none of this. In `router_cost` (callgrind, three rounds each, against
+    `c46092aeb`, rustc 1.100.0) a kept page given again costs what it did (14,559.9 to 14,560.1
+    instructions a request), a `Public` page that is not kept 3 more (21,238.0 to 21,240.7) and
+    one that is made and stored 32 more (28,589.6 to 28,621.6). With rustc 1.99.1 the three are 9,
+    3 and 12 more (14,874.5 to 14,883.7, 21,628.5 to 21,631.1, 28,904.8 to 28,916.3), the kept
+    page's 9 all in `memcmp`, whose count turns on where the bytes it compares lie. The release
+    copy does no more work; with a second copy in the program the compiler no longer inlines
+    putting the kept entry on the answer (about 29 of those 32 under rustc 1.100.0) and lays out
+    the rest slightly otherwise, and the ways tried to keep one copy as it was cost more than
+    these. `corten dev`'s copy watches the handler through a borrow, a type of its own, since
+    sharing the release copy's watch made the compiler stop inlining it there, 23 more on each
+    page not kept or stored.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
@@ -8949,7 +9249,10 @@ rules something out.
     keeps +1% with no floor, however flat its
     instructions, since a change to the data a request reads, its allocation, the kernel's work or
     its waiting can cost cycles on the same instructions; so does a workload not named before the
-    run, and the affected-route, memory and waiting measurements are required as before. This
+    run, and the affected-route, memory and waiting measurements are required as before. All of
+    this is said of a change Pull requests (item 2) has measured, the only kind the gate reads
+    since [design Choice 76](#choice-counted-or-measured): a counted change has no workload
+    held to +1% in cycles, and that Choice says what is given up by it. This
     answers
     [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923),
     whose pull requests missed by bounds of +1.13% to +1.67% on controls whose reported user
@@ -9186,6 +9489,14 @@ rules something out.
     one reading's bound look resolved while raising the other's. The benefit side may use the
     protocol when the plan declares it and its smallest worthwhile reduction before the run.
 
+    Which changes it reads. This Choice was written when every change around the handler was
+    asked for cycles a request. Pull requests (item 2) now asks them only of a change it has
+    measured: one of a kind a count cannot judge, one whose count is over its budget, or one
+    whose reason is a win in cycles, time or requests a second
+    ([design Choice 76](#choice-counted-or-measured)). A counted change has no cycles reading,
+    on one build or across placements, and nothing here is asked of it. What this Choice says
+    of a touched workload, it says of a measured change's, with no word of the reading changed.
+
     When it is required. A placement run costs hours where a single build costs minutes, so it is
     asked only where one build cannot decide. A placement of 8 recorded pairs took 62 s of turns
     on the third run's API host and 101 s in the fourth, whose workload waits 2 s at each start. At
@@ -9338,7 +9649,13 @@ rules something out.
     Revisit-when conditions). The maintainer decided both, the match and the reading made
     whatever one build read, on the first review of
     [#2109 Let a probe read across placements decide a change's cycles, and count the catalog's page and JSON once under such a plan](https://github.com/corten-run/corten/pull/2109),
-    whose description records the answers. Three sentences of item 2 beside them are that pull
+    whose description records the answers
+    ([a comment on it](https://github.com/corten-run/corten/pull/2109#issuecomment-7177590888)
+    of 2026-11-25 (UTC), recorded by that pull request's coordinator, who put each question to
+    the maintainer and decided none, gives both as the maintainer's choices in the words
+    chosen, and three further points as ones the maintainer stated no preference on, the
+    stricter reading standing).
+    Three sentences of item 2 beside them are that pull
     request's reading and not the maintainer's wording. A workload named for a target brings it
     under the case only if its A/A resolves and its bound is under +1%, because that reading is
     what stands in for the image; the pull request's second review finds the condition implied
@@ -10177,7 +10494,10 @@ rules something out.
     nothing, that build's reading still binding; and a count declared before the
     plan's first turn and before it is taken, and taken once for a pull request, is not chosen
     by its result, nor is a workload named for a target before the run and not replaced after
-    it is read);
+    it is read; and the gate reads the changes Pull requests has measured and no others, a
+    count deciding a change it can judge, which is
+    [design Choice 76](#choice-counted-or-measured)'s to stand on, with its bets, and takes no
+    reason from this Choice, whose reading is as it was for every change it still reads);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
@@ -10285,11 +10605,15 @@ rules something out.
     spread must match; a run's time across placements falls to a single-build
     run's, so the protocol could be the rule rather than an option; a tool reads the image
     `count.mjs` starts across placements (its binary linked again with a pad, started and
-    counted under the turn protocol), so the catalog's `page` and `json` can be read as a probe
+    counted under the turn protocol;
+    [#2120 Nothing reads the catalog's page or JSON across placements, so a cost only the catalog image shows inside the default band is seen by no reading](https://github.com/corten-run/corten/issues/2120)
+    asks for it), so the catalog's `page` and `json` can be read as a probe
     workload is and need no case of their own; a count taken under that case reads above the
     default band while every probe workload of its plan meets its margin across placements, or
     a later reading finds on either target a cost a change brought in under it, so a probe does
-    not stand in for the image; or the release binary's own
+    not stand in for the image; the kinds of change Pull requests has measured change, or
+    [design Choice 76](#choice-counted-or-measured) is reopened, so what this gate reads does;
+    or the release binary's own
     placement is asked to be checked.
 
     Last checked: 2026-11-22 for the source pads of each side of
@@ -10641,7 +10965,173 @@ rules something out.
     for `fetch` in 86 and wholly in 87), electron/electron issues 6859 and 7931 and MDN's
     `web_accessible_resources` page, read at `49b6e79eb`.
 
-76. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+76. <a id="choice-counted-or-measured"></a>**A change around the handler is decided by a count
+    where a count can judge it and by cycles where it cannot, and `main` is read against the last
+    release for what adds up.** Pull requests (item 2) asked every change around the handler for
+    cycles a request, held to +1%. One build's cycles say where its code landed as much as what
+    the change costs: the default band is -2.98% to +3.33%
+    ([design Choice 72](#choice-placement-runs)), so for the margin one build decides only a
+    bound under -1.98% or over +4.33% where no spread is recorded, and a smaller change was read
+    across placements, which that Choice estimates at about 4.1 to 8.4 hours of turns for one
+    workload on a setup with no eligible A/A. A count is the other way about.
+    [`bench/request-cost`](../bench/request-cost/README.md) counts the instructions the serving
+    thread runs for a request. On the 16-CPU host it was read on, where `get` counts 18,987, 30
+    counts of one binary spanned at most 1 instruction in each of its 13 rows, and 30 of four
+    cases with two busy loops on the probe's CPU spanned at most 1 and read at most 1 more; on a
+    slower, loaded machine one binary's counts were up to 4 apart. So a count of one binary
+    repeats to a few instructions, which one build's cycles do not, and it does not see what
+    cycles see: the kernel, another thread, a lock, a wait, a cache miss.
+
+    So [Pull requests](../CONTRIBUTING.md#pull-requests) (item 2) names three ways a change is
+    decided and which one a change takes, counted, measured and the trend. They are not said
+    again here; these are the reasons. The counted way decides what a count can judge. The
+    measured way is the reading in cycles that
+    [design Choice 71](#choice-layout-floor) and
+    [design Choice 72](#choice-placement-runs) give, unchanged in how it is made, and its list
+    is the kinds of change that can cost cycles on the same instructions, with a count over the
+    budget and any win claimed in cycles, time or requests a second. The trend, `main` across
+    placements against the last release, is the run
+    [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
+    asks for, which nothing makes yet. It gates no pull request, for the reason
+    [design Choice 72](#choice-placement-runs) gives against gating a release: it reads every
+    change since that release together and cannot attribute a cost to one.
+
+    The budget is +0.5% of base's instructions in a case, about 95 on `get`. It is a proposal,
+    not a measured threshold. It is well over what repeats of one binary differ by, 4 at most,
+    0.02% of `get`'s count. It is not well over what two builds can differ by. The kit's page
+    records builds of one commit 32 to 37 instructions apart on seven cases, from the name of
+    the build directory (`get` 19,019 against 18,987, 0.17%), which building both sides in one
+    directory keeps out, and says of two commits that a difference of a few tens of
+    instructions "may be where the code was placed and not the change". The budget is 64 on
+    `unstaged`, under twice that, so that a rise or a saving of that size is the change's is a
+    bet (below), which can send a change that costs nothing to the measured way or pass one
+    that costs a few tens. It is half the +1% the measured way holds a request's cycles to. And
+    0.5% of user instructions is the line the fourth placement run's plan drew, for another
+    purpose, under which a nearby commit compiles a path nearly as its base. Nothing in the
+    repository measures what a rise in a request's instructions costs it in cycles, so that a
+    rise inside the budget costs under +1% is a bet too. Idle memory has a statistic of its
+    own, since the kit prints one figure a run and its page records one binary at 2,641 to
+    2,645 bytes a connection between runs: three runs a build, and a rise only when head's
+    median is above base's by more than base's three span. No run is taken again for its
+    result, as no count or placement of the measured way is; a run the kit refuses gave no
+    figure, so taking it again is not that. The maintainer accepted both figures, this budget
+    and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
+    neither is measured: they are bets still, and the description of
+    [#2116 Name three ways a change around the handler is decided: counted, measured and the trend](https://github.com/corten-run/corten/pull/2116)
+    records the decision.
+
+    What is given up: a counted change has no cycles reading. The gate keeps +1% on a workload
+    the change touches however flat its instructions, "since a change to the data a request
+    reads, its allocation, the kernel's work or its waiting can cost cycles on the same
+    instructions" ([design Choice 71](#choice-layout-floor), which turned down an exception
+    for flat instructions for that reason), and still holds every workload it reads so. A
+    counted change is not read by it: a cost in cycles that leaves its count inside the budget
+    is seen by no reading of its pull request, the catalog's `page` and `json` included, which
+    only the measured way counts. Two things guard that. The list sends to the measured way
+    the changes that sentence names, and the author says why a change is of none of its kinds,
+    which the review accepts, as a negative control's declaration is accepted. The trend reads
+    what is left as it adds up (twenty costs at the budget are about 10% more instructions),
+    and does not exist yet; until it does, a release takes the kit's counts of its candidate
+    against the last release's tag ([RELEASING.md](../RELEASING.md#readiness-checkpoints)),
+    which anyone can take in minutes and which read instructions, not cycles. One kind on the
+    list cannot be told from a diff, a future's size. The test `staged_page_future_sizes`
+    prints the stage's and the handler's, the only futures any test in the repository sizes,
+    so a change that edits an `async` body gives those two for base and head, and that a
+    future it does not print kept its size is a bet. A saving is claimed in instructions and
+    not as a CPU-cost win for the same reason
+    turned about: in the first placement run
+    [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
+    ran 1.52% fewer user instructions on `kept` and read 0.07% fewer cycles across placements,
+    with a bound of +0.28%, one change in a reading that gated nothing.
+
+    The way is a line of the description, `Request path: counted` or `Request path: measured`,
+    the simplest thing a hosted job can read
+    ([#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
+    asks for the job); a label is not, since a fork's author cannot set one. A change goes from
+    counted to measured when a count sends it there. A pull request that declares a plan does
+    not go from measured to counted, by item 2's rule that a declaration is never added or
+    changed after a run to clear its result. A reading published under the rule as it stood
+    stays published, since a reading taken back is a result chosen after it was read. One that
+    was not decided, inside the spread or the band or with an A/A not resolved, said nothing of
+    the change, and no longer keeps its pull request from being counted. A decided miss keeps
+    its pull request measured: item 2 says a placement run declared after such a miss does not
+    clear it, and a count must not clear what that cannot. The maintainer may decide otherwise
+    on one pull request, in the maintainer's own words, as for any reading.
+
+    Not chosen: cycles asked of every change, the rule as it stood, at a pilot and a gated run
+    across placements for an effect one build cannot show; a count for every change, which passes
+    a lock, a wake, kernel work or a structure laid out to miss the cache more; no rise at all,
+    which sends each change that adds a check to a placement run, the cost this Choice removes;
+    a budget of +1%, which leaves a counted change nothing under the margin the measured way
+    holds; a budget of a fixed number of instructions, since `unstaged` counts 12,860 and
+    `page-browser` 221,809; a budget as narrow as the 0.05% band of instructions
+    [design Choice 71](#choice-layout-floor) turned down, about 20 instructions on its `plain`:
+    that band was a screen for waiving a miss in cycles already read, where this budget is a
+    cost stated and weighed with no miss behind it, and 0.05% of `unstaged` is 6 instructions,
+    under what two builds of one commit have differed by; a running total of counted costs
+    kept in the repository, a second record of what the trend reads in the unit that matters;
+    the way left to the author with no list, since a way taken after a look at a result is a
+    result chosen; every edit to an `async` body measured, since any can change a future's
+    size, which leaves the counted way nearly empty; a published reading deciding its pull
+    request by whatever rule is in force when it merges, which lets a count clear a decided
+    miss; and a reading that was not decided keeping its pull request measured, for a reading
+    the rule no longer asks of such a change.
+
+    Stands on: bet (a change of none of the listed kinds whose count stays inside the budget
+    costs a request under +1% of its cycles, which nothing has measured, the figure being a
+    proposal; a difference between two commits inside the budget is the change's and not the
+    build's, which the kit's page says is not known; the list names the ways a change costs
+    cycles on the same instructions, and an author can say from the diff why a change is of
+    none and a reviewer check it; a future the test does not print, the connection's among
+    them, keeps its size under an edit to an `async` body, or costs little when it does not,
+    which nothing sizes; a cost inside the budget on the kit's probe, whose handlers do nearly
+    nothing, is inside it in an app, though the kit's page says a count is of one program's
+    binary and never to be compared with another's; the kit's probe builds against the last
+    release's tag often enough for a release's count to be taken, which was not tried; and the
+    trend is made before counted costs add up past what a release can carry, no such run
+    having been made); measured (the kit's repeats as its page records them, 30 counts of one
+    binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
+    builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
+    and 22 counts of four cases on a slower, loaded machine, none taken again here; the
+    default band and the estimate of a reading across placements, which are
+    [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
+    not decide, so for a change this small the only cycles reading was across placements; a
+    count of one binary repeats within 4 in 18,987, so a rise of 0.5% is not the count's own
+    noise, which says nothing of two commits (the bet above); callgrind counts the serving
+    thread's user-space instructions, so the kernel, another thread, a lock, a wait and the
+    cache are not in a count, which is what the list is made from; one idle figure a run
+    cannot be told from another of the same binary, so a rise is read against base's own
+    runs; and a count attributes a cost to one pull request where a reading of `main` against
+    a release cannot, so the count gates and the trend reports); value (Fast, and proven
+    fast: a claim has the number that can see it behind it, instructions where a count sees
+    the change and cycles where only cycles do, README Values).
+
+    Revisit when: the kit's counts of a release's candidate against the last release's tag,
+    which [RELEASING.md](../RELEASING.md#readiness-checkpoints) has a release take, are over 2%
+    more in a case (four budgets, a proposal as the budget is) at a release after the first to
+    record them, whose count is the baseline, the changes before it not having been counted,
+    or cannot be taken because the
+    probe does not build against that tag, so nothing bounds what counted costs add up to;
+    a change that merged counted is later read, by the trend or by any reading
+    across placements, to cost a request more than +1% of its cycles, so the list misses a kind
+    or the budget is too wide; the trend moves past its threshold with every change since the
+    last release counted inside the budget; a release is made with no trend reading against the
+    one before it and no such count, so the guard this Choice leans on is not there; a future
+    no test sizes is found to have grown under a counted change; repeats of one binary differ
+    by more than a quarter of the budget in a case, so a count no longer resolves it; a placement
+    run is read on the kit's probe, which its page says none has been, and shows what a few tens
+    of instructions between two commits are worth; a hosted job counts every pull request
+    against its base, so the line of the description can be checked or dropped; or a reading
+    across placements comes to cost what a count does, so cycles can be asked of every change.
+
+    Last checked: 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
+    in five directories (taken on `c9666dc96`, not taken again), and
+    [design Choice 72](#choice-placement-runs) read at `9e209a32f` for the default band, the
+    hours a reading across placements takes, the fourth run's 0.5% and the first run's reading
+    of the kept answer's change; 2026-11-25, `crates` searched at `9e209a32f` for a test that
+    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found.
+
+77. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
     place of the history entry's as its patch is drawn.** A filter or scope that redraws one part
     of a screen with a GET `data-patch` form left the address as it was: a reload and a bookmark
     lost the filter, the page's other forms still carried the old one, and the same form without

@@ -249,6 +249,13 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
         None
     }
 
+    /// Of a typed route whose answer is `Public`: what it is kept as ([`Handler::keeps`]), or why
+    /// a release build never keeps it, known when the route is made. What `corten dev` says of
+    /// the route (`crate::kept::Verdict`); `None` for any other answer.
+    fn public(&self) -> Option<Result<crate::kept::Shape, crate::kept::Verdict>> {
+        None
+    }
+
     /// The answer to `req`.
     fn call(self, req: Request, state: S) -> impl Future<Output = Response> + Send + 'static;
 }
