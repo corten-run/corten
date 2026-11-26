@@ -316,7 +316,9 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
 }
 const startupRetryMs = 250, startupWindowMs = maximumSampleGapMs;
 const startupChurn = new WeakMap(), startupAttempts = new WeakMap(), startupRechecks = new WeakMap();
-const startupCensusOperations = new Set(["process-name-recheck", "executable-recheck-inode"]);
+// A changed name inside the census is already retried by the census itself
+// (`snapshot`, for every participant), so only an executable inode change reaches here.
+const startupCensusOperations = new Set(["executable-recheck-inode"]);
 function justStarted(startedAt) {
   // Docker's RFC 3339 UTC start time, truncated to milliseconds. Anything else is not corroboration.
   const match = typeof startedAt === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(startedAt);

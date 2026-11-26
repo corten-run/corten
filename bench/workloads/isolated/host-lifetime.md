@@ -75,15 +75,17 @@ A container's first process can rename itself or exec its entrypoint just after
 Docker reports it running (the Node image runs `docker-entrypoint.sh`, which execs
 `node`, whose main thread then renames itself). The collector rechecks only that
 churn: a changed process name between the opening and closing reads
-(`process-name-close`), or a changed name or executable inode in the container's
-census, on a container whose RFC 3339 Docker `StartedAt` is a real calendar time
+(`process-name-close`), or a changed executable inode in the container's census
+(`executable-recheck-inode`), on a container whose RFC 3339 Docker `StartedAt` is a real calendar time
 at most one second old. It takes the whole capture again, checking before each
 new attempt that 250 ms have not passed since the first began. A capture admitted
 after a recheck must have the same Docker start time, PID and kernel start time as
 the failed one, checked before its executables are pinned; a mismatch is a gap at
 `startup-recheck` and leaves no executable proof. Any other failure, an older,
 unreadable or impossible start time, or churn that outlasts the budget remains a gap and
-notifies `onFault` as before. A sealed terminal record counts admitted rechecks in
+notifies `onFault` as before. A changed name inside the census
+(`process-name-recheck`) is not part of this recheck: the census retries it itself,
+for every participant, within its own deadline. A sealed terminal record counts admitted rechecks in
 `dockerStartupRechecks` (count and the first stage, code and attempts).
 
 ## Fault Shutdown
