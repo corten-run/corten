@@ -2496,7 +2496,27 @@ rules something out.
     headers, and an unstaged one still gets its sandbox. About 3,500 cycles a request (3% on
     this page) is no reason to take the document headers away. No flag has a measured case.
     Where the declaration shows an answer cannot use a group, leave out that work case by case,
-    each in its own change with its own measured cost. `unstaged` is no stage at all, which
+    each in its own change with its own measured cost. One case is taken where the answer shows
+    it, at the last stage: an answer that brings no header, or its `Content-Type` alone, is
+    given its scope's lines (the security headers and `Cache-Control`) in one pass
+    (`Applied::ready`), where the stages look each up and insert it. That is a second path to
+    the same lines, taken for what it saves a short answer (Stands on), and it is not a second
+    list of them: a scope's lines are what the stages themselves give an empty answer, made
+    once when the router is built, and the pass leaves to the stages every answer they would
+    treat differently (one with a header that is not its type, a request that took its nonce,
+    a page with a style block, a document or a worker's script where the policy has a line for
+    those). Two tests hold it equal to the stages:
+    `an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert` gives each kind of
+    answer it lists, under each policy it lists and in each scope (an API, pages, an area, an
+    API inside the area), to the pass and to the stages, compares the lines and their order,
+    and asserts which kinds the pass takes;
+    `an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_is_inserted_into`
+    compares every answer of an app with pages, an area and APIs outside and inside the area,
+    through the router, with the same app's answer when a middleware's one more line sends it
+    through the stages. Neither fails when the pass is never taken, since what is sent is the
+    same: the counts in [the app guide](guide/app.md#the-request-path) show that it is. An
+    answer the pass does not take pays the test that tells it apart (a page and a 404 page 6
+    to 27 instructions, Stands on). `unstaged` is no stage at all, which
     listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
     without, the same for every unstaged route ([Choice 25](#choice-axum-router), step 2).
     Nor the stages rewritten as combinators, measured
@@ -2858,7 +2878,22 @@ rules something out.
     writes it seventh of ten lines and tenth of thirteen, so its requests, and any behind a
     proxy that writes its own lines first, pay the search they paid before and a look at each name
     before `Host`, the 17 to 54 counted; Safari and a proxy that writes its own lines were not
-    tried, and nginx as the deploy guide sets it up writes `Host` first); value
+    tried, and nginx as the deploy guide sets it up writes `Host` first);
+    measured
+    (the one pass at the last stage, callgrind, release, jemalloc, `fad2caf29` against main
+    `c9666dc96`. Over one keep-alive connection to a benchmark app the repository does not
+    hold, 1,240 requests less 240 over 1,000, the median of three counts, two rounds of each
+    build, before and then after: a short text from a route under an API 19,171 and 19,170,
+    then 18,855 and 18,861; the same answering a `POST` 24,042 and 24,054, then 23,734 and
+    23,735; a short text from a page scope 18,071 and 18,078, then 17,631 in both; the first
+    and the third with a browser's request headers 24,716 and 24,709, then 24,395 and 24,390,
+    and 26,737 and 26,743, then 26,288 and 26,290; a 12 KB page, which does not take the pass,
+    43,500 and 43,501, then 43,506 and 43,512, and compressed for a browser 221,963 and
+    221,962, then 221,980 and 221,981; allocations a request the same in every case. In
+    process with `crates/corten/tests/router_cost.rs`, three runs each: text from a route with
+    a parameter 10,694 to 10,244, text under an API 8,207 to 7,895, text answering a `POST`
+    11,075 to 10,625, and the 404 page, which does not take it, 15,322 to 15,343; with glibc
+    12,207 to 11,716, 9,518 to 9,155, 12,682 to 12,235 and 17,078 to 17,105); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2913,6 +2948,12 @@ rules something out.
     Read the host check's look at the first header line again when requests are found to reach
     apps with `Host` on a later line more often than not, or when Safari is found to write it
     later, as Playwright's WebKit does on Linux: a request then pays the look and the search.
+    Take the one pass at the last stage out, so that every answer is given each line by the
+    stages again, when it saves the short answers that take it fewer than about 150
+    instructions (`router_cost.rs` with jemalloc: 450 on its text and 312 under an API at
+    `fad2caf29`); or when an answer is found that the pass and the stages send differently; or
+    when a stage comes to read something of an answer or its request that the pass's two tests
+    cannot vary, so that nothing would hold the two paths equal.
 
     Last checked: 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
     `c46092aeb`, against main built again and against `68057e40d`, callgrind over a socket on a
@@ -2927,6 +2968,10 @@ rules something out.
     guide's configuration sends the app (`Host` the first line, the client's, or `Host: app`, its
     upstream's name, for an HTTP/1.0 client that sent none, which the app answers `421` as it did on
     main, and its own `400` to an HTTP/1.1 client with none);
+    2026-11-24, the one pass at the last stage: its counts over a socket and with
+    `router_cost.rs` at `fad2caf29` against `c9666dc96`, and its two tests against twelve ways
+    of breaking it, of which eleven fail one or both and the twelfth, the pass never taken,
+    fails neither and shows in the counts alone;
     2026-11-23, the stages' reads of a request under an API, read in the code at
     `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
     were not taken again); 2026-11-23, each engine's `Accept-Encoding` over HTTP and HTTPS, by
@@ -6766,17 +6811,44 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above the
-    24,287.261 instructions accepted here on the same harness (that count is the baseline; the
-    2.1 above is not a regression still to fix); a compiler or code change lets the one loop poll
-    the plain task at the 24,285.154 it cost before, which removes the residual; an app needs a
+    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
+    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
+    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
+    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
+    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
+    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
+    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
+    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
+    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
+    count on one connection with glibc's allocator changed level by about 370 with no change to
+    what a request does; the 2.1 above is not a regression still to fix); a compiler or code
+    change lets the one loop poll the plain task at what it cost before the metadata path, which
+    removes the residual (the rerun of Last checked counts the two the same and cannot say whether
+    the later compiler or the rebuilt harness is why, so this may already hold); an app needs a
     connection value that cannot be cheaply cloned or shared; or the framework changes its
     connection service or request-extension ownership model.
 
     Last checked: 2026-11-17, before `6c5f17b11` (merged as `b08c48d23`), and the metadata
     path's Rust sources matching `caebfa19d` in the counts above, the connection-info
     integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
-    OpenAPI test of a documented route taking it.
+    OpenAPI test of a documented route taking it; 2026-11-25, the plain HTTP count alone, on the
+    harness built again from the description above, since the one those counts were made with is
+    not in the repository (a crate of its own with one typed `GET /` answering `served`, served by
+    `corten::serve` on a current-thread runtime, default features off, thin LTO and one codegen
+    unit, glibc's allocator, a client outside Callgrind that sends the request line and `host`
+    alone on one socket and checks every status and body, three rounds alternating, 200 requests
+    from 1,200 over 1,000, Callgrind 3.24.0 and rustc 1.100.0 with Tokio 1.54.1, so a count here is
+    not one of the counts above): `6c5f17b11` 23,073.241 instructions (range
+    23,073.221-23,077.401) and `caebfa19d` 23,073.192 (range 23,073.121-23,073.754), which is no
+    residual, and the rerun cannot say whether the later compiler or the rebuilt harness is why,
+    then `main` at `8d5160be2` 17,771.037 (range 17,770.049-17,771.622) and `9060dfb2a`, where a
+    connection's wait for shutdown is polled only when it was woken, 17,552.817 (range
+    17,552.342-17,552.875), then the last two again in a second session of three rounds,
+    17,771.565 (range 17,771.150-17,771.818) and 17,554.409 (range 17,553.815-17,556.855), where
+    the first session's binary of this change was built from `9060dfb2a` and the second's from
+    `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
+    that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
@@ -9456,7 +9528,8 @@ rules something out.
     before `main` gave a band is read without one, so nobody is held to a rule `main` did not
     show them and no reading changes what it decided. The band is the same whatever reads the
     workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
-    choosing one. The test gives what it gives with a spread of the setup's own. A negative
+    choosing one (but for the catalog's two targets, below). The test gives what it gives with a
+    spread of the setup's own. A negative
     control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
     declared for a workload, its margin and a reduction, is tested on its own distance: one
     outside stays as one build read it, whatever a placement run then reads, and one inside is
@@ -9475,10 +9548,85 @@ rules something out.
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
     did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
     no run has been read from it; and no run has read the image `count.mjs` starts across
-    placements, which that kit does not read either, so the first catalog target the band leaves
-    not decided has that to build. The
+    placements, which that kit does not read either, so a catalog target the band leaves not
+    decided has that to build, unless its plan names a probe workload for it that is read
+    across placements (The catalog's `page` and `json`, below). The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
+
+    The catalog's `page` and `json`. Pull requests (item 2.1) has a change that the catalog's
+    item page or item JSON exercises counted with `bench/fullstack/count.mjs`, targets `page`
+    and `json`: one build of each side, in the image that script starts. Under the default band
+    a count whose bound's distance from its threshold is inside the band is not decided, does
+    not pass and is to be read across placements, and nothing reads that image across
+    placements: `bench/placement` reads a probe Cargo builds, and nothing else in the tree
+    gives a linker the ordering file a placement is made with. A change that touches every
+    request is exercised by both targets. As the rule stood it could meet the margin on them
+    only with a bound under -1.98% on one build of each side, which a change that leaves a
+    request as fast as it was does not reach by what it costs, and nothing else it could run
+    would decide them. The
+    maintainer decided the case on 2026-11-25 (UTC) for the four pull requests then open that
+    touch every request, none merged when this was written
+    ([#2029 Keep one deadline timer for a connection's requests](https://github.com/corten-run/corten/pull/2029),
+    [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037),
+    [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+    and
+    [#2067 Give an answer that brings none of its scope's header lines all of them in one pass](https://github.com/corten-run/corten/pull/2067);
+    the decision is
+    [a comment on the third](https://github.com/corten-run/corten/pull/2066#issuecomment-7173404420),
+    posted in the same words on the other three), and Pull requests states it as the rule for a
+    plan declared once it is on `main`. The probe decides: the workloads a plan reads across
+    placements on a probe are the reading this Choice takes for a change's cost on a touched
+    workload, each side at K placements with an A/A that says what the run resolves. A count on
+    one build of each side inside the band says where the image's
+    code landed, not what the change costs (The default band, above), and it had no reading
+    across placements to go to. Which plans the case covers, what is still counted and when it
+    is declared, what binds, what a count inside the band is reported as and where a failed
+    count goes are in
+    [Pull requests](../CONTRIBUTING.md#pull-requests) (item 2, with the default band) and are
+    not said again here; these are the reasons. The plan names, for each target the change
+    exercises, the probe workload that runs the changed code that target's request runs, with a
+    reason the review accepts, as a negative control's is. The decision's "on the path the
+    change touches" would by itself be met by a workload that reaches the changed code on
+    another branch than the target's request takes, or runs it once where the request runs it
+    many times, and such a workload says little of what the change costs the target. A workload
+    on that path may be read across placements for the case whatever a single build of it read.
+    The rule leaves a placement run only the thresholds one build read inside, so a change
+    whose probe workloads one build each read outside its spread or the band would have no
+    reading across placements, and its counts inside the band could not pass though nothing
+    about them differs. What that build read still binds, so the reading made for the case
+    decides nothing for the workload (read the other way, it is one of this Choice's
+    Revisit-when conditions). The maintainer decided both, the match and the reading made
+    whatever one build read, on the first review of
+    [#2109 Let a probe read across placements decide a change's cycles, and count the catalog's page and JSON once under such a plan](https://github.com/corten-run/corten/pull/2109),
+    whose description records the answers. Three sentences of item 2 beside them are that pull
+    request's reading and not the maintainer's wording. A workload named for a target brings it
+    under the case only if its A/A resolves and its bound is under +1%, because that reading is
+    what stands in for the image; the pull request's second review finds the condition implied
+    by item 2's rule for any reading across placements. A target with no named workload waits
+    for a plan of the pull request that names one. And a workload named for a target is not
+    replaced after it is read, since a pull request that named workloads until one met the
+    margin would gain by choosing what reads a workload, which the rule that a declaration is
+    never added or changed after a run to clear its result already bars. The count is kept for
+    what a probe is not: it
+    is the only reading of the change in the catalog's own image, and outside the band it binds
+    for the margin as it did, whatever the probe read. It is declared before the plan's first
+    turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
+    of the pull request took is a later plan's too, since a second count could not clear the
+    first and could leave the pull request two binding readings of one target that disagree.
+    A count is not taken again for its result, since one taken until it lands outside the band
+    would be chosen by its result, as a placement run again for its result would be.
+
+    The limit of that case: the catalog's image is never read across placements. A cost that
+    only that image shows, or that it shows more of than the workload named for the target
+    does, and that leaves the count's distance inside the band (for the margin, a bound up to
+    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). The
+    case is no wider than its words: the two targets alone; the default band, no spread being
+    recorded for that image; and a target for which the plan names a probe workload read across
+    placements. A change to code that only the catalog's image runs has no such workload until
+    a probe has a request that runs it, and the reading across placements its targets would go
+    to is still to build. A plan declared before the case was on `main` is read by the rule as it
+    then stood; the four pull requests' plans go by the decision as it was posted.
 
     How many placements. A plan declares each workload's K before the run, for at most a 5% chance
     that an A/A of a commit against itself fails one of its two readings, sized from an eligible
@@ -10207,6 +10355,19 @@ rules something out.
     which rests on a report of what a request runs that nothing a run keeps can verify: the
     load, the host and the tool that decide it are an author's to choose with results in hand,
     and the one answer that keeps a reading is a function reported as not run.
+    For the catalog's `page` and `json`: the rule left as it stood, under which a change that
+    touches every request meets the margin on them only where one build of each side reads
+    under the band, the draw this Choice does not gate on; one build of each side deciding the
+    two at any distance, which holds the catalog's image to less than a probe and lets a plan
+    gain by choosing what reads a workload; the two counts dropped under such a plan, which
+    leaves a cost on the catalog's image unread at any size, where a count outside the band
+    still binds; such a change held until a tool reads the image across placements, which
+    holds it for a tool and not for a cost, when a probe workload on its path is read across
+    placements under the rule as it is; the match left at the decision's "on the path the
+    change touches", which a workload that runs the changed code on another branch than the
+    target's request takes would meet; and the case kept from a change whose probe workloads
+    one build each read outside the band, which would hold back the changes whose probe
+    workloads read most clearly.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
@@ -10268,7 +10429,16 @@ rules something out.
     a line under the pads are its unpadded offset and each multiple of A from it, one behind
     64 and two behind 32 alone, which are the places its side's builds give it until the code
     between it and the aligned section before it changes, so what such a place costs or saves
-    a request belongs to the change that set it for as long as later builds keep it);
+    a request belongs to the change that set it for as long as later builds keep it; a count of
+    one build of each side of the catalog's image inside the default band is a reading
+    placement has been seen to account for, as any single build's is, so it says where the
+    image's code landed, while the change read across placements on the probe workload its
+    plan names for the target is the reading this Choice takes for a change's cost; a workload
+    read across placements for that case after one build read it outside the band clears
+    nothing, that build's reading still binding; and a count declared before the
+    plan's first turn and before it is taken, and taken once for a pull request, is not chosen
+    by its result, nor is a workload named for a target before the run and not replaced after
+    it is read);
     bet
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
@@ -10303,9 +10473,15 @@ rules something out.
     offsets stand in for real changes, though a real change also resizes the sections
     between the code and the data, which a pad does not; a spread recorded with one pad,
     and a K sized from an A/A read with one, hold for a run with two, and a spread recorded
-    with two for a run with one; and where a listed function lies in a line, which the pads
+    with two for a run with one; where a listed function lies in a line, which the pads
     leave at one place or at two 32 bytes apart, moves a request's cycles by little beside
-    +1%: no run has measured it);
+    +1%: no run has measured it; and a cost a change adds to the catalog's `page` or `json`
+    that leaves its count inside the default band is one the probe workload its plan names for
+    that target shows across placements too, the match resting on a reason a review read and
+    accepted and no run measured, so that what the catalog's image shows alone, or shows more
+    of than that workload, is small beside +1% or large enough to leave the band: nothing has
+    read a change on a probe and on that image side by side, and no tool reads the image across
+    placements);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
@@ -10368,7 +10544,13 @@ rules something out.
     run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
     spread must match; a run's time across placements falls to a single-build
-    run's, so the protocol could be the rule rather than an option; or the release binary's own
+    run's, so the protocol could be the rule rather than an option; a tool reads the image
+    `count.mjs` starts across placements (its binary linked again with a pad, started and
+    counted under the turn protocol), so the catalog's `page` and `json` can be read as a probe
+    workload is and need no case of their own; a count taken under that case reads above the
+    default band while every probe workload of its plan meets its margin across placements, or
+    a later reading finds on either target a cost a change brought in under it, so a probe does
+    not stand in for the image; or the release binary's own
     placement is asked to be checked.
 
     Last checked: 2026-11-22 for the source pads of each side of
@@ -10439,7 +10621,11 @@ rules something out.
     cases, and that gated part, which `plan.mjs` sized again at K = 93 from the 30-placement
     A/A, built and turned, 186 placements of `e2d0c464e` against itself, complete, with
     `report.mjs` printing its page again byte for byte, its plan and results at `647f918c1` (tag
-    `evidence/placement-kit-3`).
+    `evidence/placement-kit-3`); 2026-11-25 (UTC), the tree searched for a script that gives a
+    linker an ordering file (`symbol-ordering-file`), `bench/placement/relink.mjs` alone found,
+    which runs a probe's captured link again, and `bench/fullstack/count.mjs` read for what it
+    starts, each app's container from its image, at `1155bfdf8`, with the default band as the
+    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at

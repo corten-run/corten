@@ -1714,3 +1714,534 @@ async fn an_area_or_an_answer_makes_the_referrer_policy_stricter_only() {
     let path = referrer_url::Relayed { policy: "same-origin" }.href();
     assert_eq!(referrer(&strict, &path).await, "no-referrer", "the least of the app's and the answer's");
 }
+
+// ---- A scope's lines given to an answer in one pass, against each line inserted into it ----
+
+paths! {
+    LinesClosed = "/closed",
+    LinesOpen = "/open",
+    LinesArea = "/walled",
+    LinesWalled = "/walled/api",
+}
+
+/// The answer `kind` names ([`lines_answer`]) in an API.
+#[derive(crate::Route)]
+#[route("/closed/{kind}")]
+struct ClosedAnswer<'a> {
+    kind: &'a str,
+}
+
+/// The same in an API another origin may read.
+#[derive(crate::Route)]
+#[route("/open/{kind}")]
+struct OpenAnswer<'a> {
+    kind: &'a str,
+}
+
+/// The same in an area with a policy of its own.
+#[derive(crate::Route)]
+#[route("/walled/{kind}")]
+struct AreaAnswer<'a> {
+    kind: &'a str,
+}
+
+/// The same in an API inside that area, which sends the area's referrer policy and not the app's.
+#[derive(crate::Route)]
+#[route("/walled/api/{kind}")]
+struct WalledAnswer<'a> {
+    kind: &'a str,
+}
+
+/// Every answer [`lines_answer`] makes.
+const LINES_KINDS: [&str; 47] = [
+    "text",
+    "created",
+    "missing",
+    "failed",
+    "long",
+    "json",
+    "png",
+    "svg",
+    "html",
+    "nothing",
+    "no-content",
+    "teapot",
+    "two",
+    "no-store",
+    "shared",
+    "no-transform",
+    "typed",
+    "vary",
+    "vary-coding",
+    "vary-all",
+    "policy",
+    "report-only-policy",
+    "no-referrer",
+    "every-referrer",
+    "framed",
+    "opener",
+    "sniffed",
+    "transport",
+    "features",
+    "endpoints",
+    "cdn",
+    "cookie",
+    "encoded",
+    "ranged",
+    "tagged",
+    "relayed",
+    "relayed-bare",
+    "relayed-page",
+    "stream",
+    "events",
+    "style",
+    "keyed",
+    "keyed-cdn",
+    "worker",
+    "xml",
+    "alone",
+    "empty-text",
+];
+
+/// An answer by name: what a handler, a middleware or an upstream can leave on one that the
+/// stages read when they give it the scope's lines.
+fn lines_answer(kind: &str) -> Response {
+    let own = |name: &'static str, value: &'static str| ([(name, value)], "own").into_response();
+    let relayed = |lines: &[(&'static str, &'static str)]| {
+        let mut headers = http::HeaderMap::new();
+        for (name, value) in lines {
+            headers.append(*name, http::HeaderValue::from_static(value));
+        }
+        crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>")).into_response()
+    };
+    let chunks = || futures_util::stream::iter([Ok::<_, std::io::Error>(crate::http::Bytes::from_static(b"a,b\n1,2\n"))]);
+    match kind {
+        "text" => "ok".into_response(),
+        // A short text with another status, which a stage may come to read.
+        "created" => (StatusCode::CREATED, "made").into_response(),
+        "missing" => (StatusCode::NOT_FOUND, "none").into_response(),
+        "failed" => (StatusCode::INTERNAL_SERVER_ERROR, "down").into_response(),
+        "long" => "long ".repeat(400).into_response(),
+        // What a handler's `Json` is, where the build has it.
+        #[cfg(feature = "json")]
+        "json" => crate::Json(vec![7_u32; 800]).into_response(),
+        #[cfg(not(feature = "json"))]
+        "json" => ([("content-type", "application/json")], r#"{"a":1}"#.repeat(200)).into_response(),
+        "png" => crate::Media::new("image/png", "png").into_response(),
+        "svg" => crate::Media::new("image/svg+xml", "<svg/>".repeat(300)).into_response(),
+        "html" => ([("content-type", "text/html; charset=utf-8")], "<!doctype html><title>A</title>").into_response(),
+        "nothing" => ().into_response(),
+        "no-content" => StatusCode::NO_CONTENT.into_response(),
+        "teapot" => (StatusCode::IM_A_TEAPOT, "short and stout").into_response(),
+        "two" => own("x-own", "1"),
+        "no-store" => own("cache-control", "no-store"),
+        "shared" => own("cache-control", "public, max-age=60"),
+        "no-transform" => own("cache-control", "no-transform"),
+        "typed" => {
+            let mut res = "typed ".repeat(400).into_response();
+            Cache::public(Duration::from_secs(60)).apply(&mut res);
+            res
+        }
+        "vary" => own("vary", "origin"),
+        "vary-coding" => own("vary", "Accept-Encoding"),
+        "vary-all" => own("vary", "*"),
+        "policy" => own("content-security-policy", "sandbox"),
+        "report-only-policy" => own("content-security-policy-report-only", "default-src 'self'"),
+        "no-referrer" => own("referrer-policy", "no-referrer"),
+        "every-referrer" => own("referrer-policy", "unsafe-url"),
+        "framed" => own("x-frame-options", "SAMEORIGIN"),
+        "opener" => own("cross-origin-opener-policy", "unsafe-none"),
+        "sniffed" => own("x-content-type-options", "sniff"),
+        "transport" => own("strict-transport-security", "max-age=1"),
+        "features" => ([("content-type", "text/html"), ("permissions-policy", "fullscreen=()")], "<p>own</p>").into_response(),
+        "endpoints" => ([("content-type", "text/html"), ("reporting-endpoints", r#"app="https://r.example/a""#)], "<p>own</p>")
+            .into_response(),
+        "cdn" => own("cdn-cache-control", "max-age=60"),
+        "cookie" => own("set-cookie", "a=b"),
+        "encoded" => own("content-encoding", "gzip"),
+        "ranged" => (StatusCode::PARTIAL_CONTENT, [("content-range", "bytes 0-2/9")], "own").into_response(),
+        "tagged" => own("etag", "\"mine\""),
+        "relayed" => relayed(&[("content-type", "text/html"), ("content-security-policy", "script-src 'nonce-upstream'")]),
+        "relayed-bare" => relayed(&[("content-type", "text/plain; charset=utf-8")]),
+        "relayed-page" => relayed(&[("content-type", "text/html"), ("permissions-policy", "camera=(self)"), ("vary", "cookie")]),
+        "stream" => crate::Media::stream("text/csv", chunks()).into_response(),
+        "events" => ([("content-type", "text/event-stream")], Body::from_stream(chunks())).into_response(),
+        // What `Req::page` leaves on a page with a style block, and on one that drew a submit key.
+        "style" => {
+            let mut res =
+                ([("content-type", "text/html; charset=utf-8")], "<!doctype html><title>Styled</title>").into_response();
+            res.extensions_mut().insert(crate::security::StyleBlock("'sha256-c3R5bGU='".to_string()));
+            res
+        }
+        "keyed" | "keyed-cdn" => {
+            let mut res = "keyed".into_response();
+            if kind == "keyed-cdn" {
+                res.headers_mut().insert("surrogate-control", http::HeaderValue::from_static("max-age=60"));
+            }
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
+            res
+        }
+        // The service worker's script, as its route marks it, and a document that is not HTML.
+        "worker" => {
+            let mut res = ([("content-type", "text/javascript; charset=utf-8")], "self.skipWaiting()").into_response();
+            res.extensions_mut().insert(crate::pwa::WorkerScript);
+            res
+        }
+        "xml" => ([("content-type", "Application/Atom+XML ; charset=utf-8")], "<feed/>").into_response(),
+        // One line that is not its type, and a type on an answer with no body to compress.
+        "alone" => {
+            let mut res = ().into_response();
+            res.headers_mut().insert("cache-control", http::HeaderValue::from_static("no-store"));
+            res
+        }
+        "empty-text" => (StatusCode::NO_CONTENT, "").into_response(),
+        other => panic!("no answer named {other}"),
+    }
+}
+
+async fn lines_named(Num(kind): Num<String>) -> Response {
+    lines_answer(&kind)
+}
+
+async fn lines_shared_page(req: Req) -> Public<HtmlResult> {
+    Public::new(
+        Duration::from_secs(60),
+        req.page(Shell { req: &req, title: "Shared", head: "", children: html! { <p>"all"</p> } }),
+    )
+}
+
+async fn lines_keyed_page(req: Req) -> HtmlResult {
+    req.test_page("Keyed", html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+}
+
+async fn lines_moved(req: Req) -> HtmlResult {
+    req.redirect(&Done)
+}
+
+/// Gives the answer to a request that asks for it (`x-each`, which nothing else reads) a line no
+/// stage reads, as a request id is given: with it an answer has more than its type, so each of
+/// its scope's lines is inserted.
+struct OneMore;
+
+impl crate::Middleware for OneMore {
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
+        let asked = req.headers().contains_key("x-each");
+        let mut res = next.run(req).await;
+        if asked {
+            res.headers_mut().insert("x-one-more", http::HeaderValue::from_static("1"));
+        }
+        res
+    }
+}
+
+/// What the area of a [`lines_app`] adds to the app's policy: its referrer policy among it, the
+/// one line an API inside the area takes from it.
+fn lines_area_policy(sources: crate::security::Sources) -> crate::security::Sources {
+    let sources = sources.script_src("https://js.example").frame_ancestors("https://frames.example");
+    sources.referrer(crate::security::Referrer::NoReferrer)
+}
+
+/// Pages, an API, an API another origin may read, an area with its own policy and an API inside
+/// that area, each with every answer [`lines_answer`] makes.
+fn lines_app(policy: crate::security::Policy, dev: bool) -> App {
+    let pages = Table::new()
+        .route("/", get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }))
+        .route("/big", get(big_policy_page))
+        .route("/inline", get(inline_page))
+        .route("/keyed", get(lines_keyed_page))
+        .route("/shared", get(lines_shared_page))
+        .route("/moved", get(lines_moved))
+        .route("/fails", get(|| async { Err::<Response, _>(Error::new("down")) }))
+        // An answer with its type alone whose handler took the request's nonce.
+        .route(
+            "/nonced",
+            get(|nonce: crate::security::Nonce| async move {
+                ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], format!("nonce {}", nonce.0))
+            }),
+        )
+        .route("/a/{kind}", get(lines_named).post(lines_named));
+    App::new(Routes::from(pages))
+        .policy(policy)
+        .dev(dev)
+        .error_page(test_error_page, ())
+        .api::<LinesClosed>(|api| api.route::<ClosedAnswer>(crate::Methods::reads(get(lines_named))))
+        .api::<LinesOpen>(|api| {
+            api.route::<OpenAnswer>(crate::Methods::reads(get(lines_named))).allow_origin("https://partner.example")
+        })
+        .area::<LinesArea>(|area| area.route::<AreaAnswer>(crate::Methods::reads(get(lines_named))).policy(lines_area_policy))
+        .api::<LinesWalled>(|api| api.route::<WalledAnswer>(crate::Methods::reads(get(lines_named))))
+}
+
+/// Each policy the answers are compared under: what it is, the policy, and whether its app runs
+/// under `corten dev`.
+fn lines_policies() -> Vec<(&'static str, crate::security::Policy, bool)> {
+    use crate::security::{Feature, Policy, Referrer};
+    let every = [
+        Feature::Accelerometer,
+        Feature::Bluetooth,
+        Feature::Camera,
+        Feature::DisplayCapture,
+        Feature::Geolocation,
+        Feature::Gyroscope,
+        Feature::Hid,
+        Feature::IdleDetection,
+        Feature::LocalFonts,
+        Feature::Magnetometer,
+        Feature::Microphone,
+        Feature::Midi,
+        Feature::Payment,
+        Feature::Serial,
+        Feature::Usb,
+        Feature::WindowManagement,
+    ];
+    let reports = crate::http::Uri::from_static("https://reports.example/csp");
+    let allowed = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
+    vec![
+        ("the default policy", Policy::new(), false),
+        ("under corten dev", Policy::new(), true),
+        ("HSTS", Policy::new().hsts(), false),
+        ("report-only", Policy::new().report_only(), false),
+        ("framed by another origin", Policy::new().frame_ancestors("https://frames.example"), false),
+        (
+            "framed by another origin, report-only",
+            Policy::new().frame_ancestors("https://frames.example").report_only().hsts(),
+            false,
+        ),
+        ("framed by itself", Policy::new().frame_ancestors("'self'"), false),
+        ("every feature allowed", allowed(), false),
+        ("a report endpoint", Policy::new().report_to(&reports), false),
+        // No feature to deny, and still a line of a document's own.
+        ("every feature allowed, and a report endpoint", allowed().report_to(&reports), false),
+        ("a referrer policy and popups", Policy::new().referrer(Referrer::SameOrigin).allow_popups(), false),
+    ]
+}
+
+/// An answer's header lines in the order they are sent.
+fn lines_of(headers: &http::HeaderMap) -> Vec<(String, Vec<u8>)> {
+    headers.iter().map(|(name, value)| (name.as_str().to_string(), value.as_bytes().to_vec())).collect()
+}
+
+/// [`Applied::ready`](crate::security::Applied::ready) gives an answer exactly what the stages it
+/// stands in for would: under each policy, for an API's answers, a page scope's, an area's with a
+/// policy of its own and those of an API inside that area, every answer [`lines_answer`] makes is
+/// either left untouched, or has the same lines in the same order as the same answer given to
+/// `Applied::headers`, `Applied::document` and `cache::settle`, whatever the request was (its
+/// nonce taken or not, the runtime's or not, whoever asked).
+#[test]
+fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
+    use crate::cache::Seen;
+    use crate::security::{Applied, NonceSlot, Sources};
+    let anyone = || Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false };
+    let (mut given, mut left) = (0, 0);
+    for (name, policy, _) in lines_policies() {
+        let area = lines_area_policy(Sources::default());
+        let applied = Applied::new(policy, "", &[("/walled", &area)]);
+        let (walled, _) = applied.csp_for("/walled/text");
+        assert!(!Arc::ptr_eq(&walled, &applied.csp), "{name}: the area has a policy of its own");
+        let scopes = [
+            ("an API", &*applied.csp, false),
+            ("pages", &*applied.csp, true),
+            ("an area", &*walled, true),
+            ("an API in the area", &*walled, false),
+        ];
+        for (scope, csp, page) in scopes {
+            let lines = applied.lines(csp, page);
+            // One case of one answer: whether it was given the lines.
+            let mut ready = |kind: &str, taken: bool, swap: bool, seen: Seen| {
+                let slot = page.then(|| NonceSlot::new(7, false));
+                if let (Some(slot), true) = (&slot, taken) {
+                    slot.get();
+                }
+                let (mut one, mut each) = (lines_answer(kind), lines_answer(kind));
+                let said = format!("{name}, {scope}: {kind}, nonce taken {taken}, the runtime's {swap}");
+                if !applied.ready(&mut one, &lines, slot.as_ref(), csp) {
+                    assert_eq!(lines_of(one.headers()), lines_of(each.headers()), "{said}: left as it was");
+                    left += 1;
+                    return false;
+                }
+                let seen = Seen { nonce: taken, ..seen };
+                applied.headers(&mut each, slot.as_ref(), csp, false);
+                if page {
+                    applied.document(&mut each, csp, swap);
+                }
+                crate::cache::settle(&mut each, seen, "/a/path");
+                assert_eq!(lines_of(one.headers()), lines_of(each.headers()), "{said}");
+                assert_eq!(one.extensions().len(), each.extensions().len(), "{said}: what is left on it");
+                // Room is left for one more line (`Vary`, where the answer is compressed), as the
+                // stages leave it, so the map does not grow again for it.
+                assert!(one.headers().capacity() > one.headers().len(), "{said}: room for one more line");
+                given += 1;
+                true
+            };
+            for kind in LINES_KINDS {
+                for (taken, swap) in [(false, false), (false, true), (true, false), (true, true)] {
+                    let personal = Seen { credentials: true, caller: true, partial: true, nonce: false, dev: true };
+                    let was = ready(kind, taken, swap, anyone());
+                    assert_eq!(ready(kind, taken, swap, personal), was, "{name}, {scope}: {kind}, whoever asked");
+                }
+            }
+            // The answers the pass is for are given their lines, so it cannot quietly stop.
+            for kind in ["text", "created", "missing", "failed", "long", "json", "png", "nothing", "teapot", "keyed"] {
+                assert!(ready(kind, false, false, anyone()), "{name}, {scope}: {kind}");
+                // A page's request that took its nonce names it in the policy.
+                assert_eq!(ready(kind, true, false, anyone()), !page, "{name}, {scope}: {kind}, its nonce taken");
+            }
+            for kind in ["two", "no-store", "vary", "policy", "cookie", "alone", "relayed"] {
+                assert!(!ready(kind, false, false, anyone()), "{name}, {scope}: {kind}");
+            }
+            // A document gets lines of its own after the policy's, unless the policy has none for it.
+            let plain = name == "every feature allowed";
+            assert_eq!(ready("html", false, false, anyone()), !page || plain, "{name}, {scope}: a document");
+            assert_eq!(ready("style", false, false, anyone()), !page, "{name}, {scope}: a style block");
+        }
+    }
+    assert!(given > 1000 && left > 1000, "{given} given their lines, {left} left to the stages");
+}
+
+/// A document says where its CSP's reports go when its policy has no feature to deny, too. The
+/// line is the document stage's own (`Applied::document`), and the one pass leaves a document to
+/// that stage, so it is held here by what is sent, not by which answers the pass takes: a page, a
+/// handler's document with its type alone, and the same in an area have it; a text and an API's
+/// answer do not.
+#[tokio::test]
+async fn a_document_whose_policy_denies_no_feature_still_says_where_its_reports_go() {
+    let named = "every feature allowed, and a report endpoint";
+    let (_, policy, dev) = lines_policies().into_iter().find(|(name, ..)| *name == named).expect(named);
+    let router = lines_app(policy, dev).router();
+    let asked = [("/", true), ("/a/html", true), ("/walled/html", true), ("/a/text", false), ("/closed/html", false)];
+    for (path, document) in asked {
+        let (status, lines, _) = lines_sent(&router, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let of = |asked: &str| -> Vec<String> {
+            let found = lines.iter().filter(|(name, _)| name == asked);
+            found.map(|(_, value)| String::from_utf8_lossy(value).into_owned()).collect()
+        };
+        let ours = if document { vec![r#"csp="https://reports.example/csp""#] } else { Vec::new() };
+        assert_eq!(of("reporting-endpoints"), ours, "{path}");
+        assert!(of("permissions-policy").is_empty(), "{path}: the policy has no feature to deny");
+    }
+}
+
+/// An answer as it leaves the app: its status, its header lines in the order they are sent, and
+/// its body. The request's nonce, where one was taken, is blanked in both.
+type LinesSent = (StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>);
+
+async fn lines_sent(router: &Router, method: &str, path: &str, headers: &[(&str, &str)]) -> LinesSent {
+    let mut req = Request::builder().method(method).uri(path);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let (parts, body) = res.into_parts();
+    let mut body = body.collect().await.unwrap().to_bytes().to_vec();
+    let mut lines = lines_of(&parts.headers);
+    let nonce = lines.iter().find_map(|(_, value)| {
+        let at = value.windows(7).position(|window| window == b"'nonce-")? + 7;
+        Some(value.get(at..at + 32)?.to_vec())
+    });
+    if let Some(nonce) = nonce {
+        let blank = |bytes: &mut Vec<u8>| {
+            let mut from = 0;
+            while let Some(at) = bytes[from..].windows(32).position(|window| window == nonce) {
+                bytes[from + at..from + at + 32].fill(b'-');
+                from += at + 32;
+            }
+        };
+        blank(&mut body);
+        lines.iter_mut().for_each(|(_, value)| blank(value));
+    }
+    (parts.status, lines, body)
+}
+
+/// The requests each path of a [`lines_app`] is asked with: a method and header lines.
+const LINES_REQUESTS: [(&str, &[(&str, &str)]); 14] = [
+    ("GET", &[]),
+    (
+        "GET",
+        &[
+            ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+            ("accept-language", "fr-FR,fr;q=0.5"),
+            ("accept-encoding", "gzip, deflate, br, zstd"),
+            ("sec-fetch-site", "none"),
+        ],
+    ),
+    ("GET", &[("accept-encoding", "gzip")]),
+    ("GET", &[("if-none-match", "*")]),
+    ("HEAD", &[]),
+    ("GET", &[("corten", "nav"), ("accept-encoding", "br")]),
+    ("GET", &[("accept", "application/json")]),
+    ("GET", &[("cookie", "viewer=ann")]),
+    ("GET", &[("authorization", "Bearer t"), ("accept-encoding", "zstd")]),
+    ("GET", &[("origin", "https://partner.example"), ("accept-encoding", "br")]),
+    ("OPTIONS", &[("origin", "https://partner.example"), ("access-control-request-method", "GET")]),
+    ("POST", &[("origin", "https://evil.example"), ("sec-fetch-site", "cross-site"), ("accept", "text/html")]),
+    ("POST", &[("sec-fetch-site", "same-origin")]),
+    ("GET", &[("host", "rebound.attacker.example:3917")]),
+];
+
+/// The app sends an answer given its scope's lines in one pass as it sends the same answer with
+/// each line inserted. Every answer of a [`lines_app`], under each policy and in each scope, to
+/// each request, is compared with the same app's to the same request when its middleware gives
+/// the answer one more line ([`OneMore`]), which no stage reads and which leaves each of the
+/// scope's lines to be inserted: the status, the lines in the order they are sent but for that
+/// one, and the body are the same, and so is the answer to the same request asked again with
+/// its tag.
+#[tokio::test]
+async fn an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_is_inserted_into() {
+    let mut paths: Vec<String> = [
+        "/",
+        "/big",
+        "/inline",
+        "/keyed",
+        "/shared",
+        "/moved",
+        "/fails",
+        "/nonced",
+        "/unknown",
+        "/closed/unknown/url",
+        "/health/live",
+    ]
+    .map(String::from)
+    .to_vec();
+    for scope in ["/a", "/closed", "/open", "/walled", "/walled/api"] {
+        paths.extend(LINES_KINDS.iter().map(|kind| format!("{scope}/{kind}")));
+    }
+    let less = |mut sent: LinesSent| {
+        let had = sent.1.len();
+        sent.1.retain(|(name, _)| name != "x-one-more");
+        (had - sent.1.len(), sent)
+    };
+    let (mut compared, mut marked) = (0, 0);
+    for (policy, made, dev) in lines_policies() {
+        let app = lines_app(made, dev).middleware(OneMore).router();
+        for path in &paths {
+            for (method, headers) in LINES_REQUESTS {
+                let said = format!("{policy}: {method} {path} {headers:?}");
+                let mut asks = headers.to_vec();
+                asks.push(("x-each", "1"));
+                let (none, one_sent) = less(lines_sent(&app, method, path, headers).await);
+                let (more, each_sent) = less(lines_sent(&app, method, path, &asks).await);
+                assert_eq!(none, 0, "{said}");
+                marked += more;
+                // A submit key is drawn for each request: its page is as long either way.
+                let drawn = path == "/keyed";
+                let body = |sent: &LinesSent| if drawn { sent.2.len().to_string().into_bytes() } else { sent.2.clone() };
+                assert_eq!(body(&one_sent), body(&each_sent), "{said}");
+                assert_eq!((one_sent.0, &one_sent.1), (each_sent.0, &each_sent.1), "{said}");
+                compared += 1;
+                // The same request again, by the tag it was given.
+                let Some((_, tag)) = one_sent.1.iter().find(|(name, _)| name == "etag") else { continue };
+                let tag = std::str::from_utf8(tag).unwrap();
+                let mut again = headers.to_vec();
+                again.push(("if-none-match", tag));
+                let (_, one_again) = less(lines_sent(&app, method, path, &again).await);
+                again.push(("x-each", "1"));
+                let (_, each_again) = less(lines_sent(&app, method, path, &again).await);
+                assert_eq!(one_again, each_again, "{said}, asked again with its tag");
+                compared += 1;
+            }
+        }
+    }
+    // The middleware ran for most answers, so most were compared with each line inserted.
+    assert!(marked * 2 > compared && compared > 20_000, "{marked} of {compared} answers had the one more line");
+}

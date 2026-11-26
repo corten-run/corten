@@ -965,9 +965,11 @@ the same build moves by up to 2,000 instructions between runs:
 | unknown URL, JSON 404 | 26,930 | 19,892 | 19,892 (19,876-19,943) | 20,218 (19,899-20,714) | |
 | unknown URL, HTML 404 page | 37,130 | 29,325 | 29,325 (29,033-29,900) | 28,376 (27,182-29,333) | |
 
-Caching adds one header lookup and insert to every response (`Cache-Control`) and two to read
+Caching added one header lookup and insert to every response (`Cache-Control`) and two to read
 the request's credentials: a few hundred instructions on JSON. Pages got cheaper, because a
-page no longer makes a nonce (16 random bytes, base64, and the CSP string around it).
+page no longer makes a nonce (16 random bytes, base64, and the CSP string around it). An answer
+that brings no header but its `Content-Type` has since been given `Cache-Control` with its
+scope's other lines in one pass, without the lookup (the last table of this section).
 
 When the route's answer type, `Caller` and `Middleware` replaced the app's context and guards,
 the same requests were measured before and after (callgrind, release build, in-process
@@ -1060,6 +1062,29 @@ after commit, `89e1d0f16`):
 The last row is the cost: an unstaged text answer gets the same room and holds three headers
 (its `Content-Type`, `nosniff` and `sandbox`), as an unstaged JSON answer already did, and the
 larger block is one glibc's thread cache does not hold.
+
+The last stage used to give every answer each security header and its `Cache-Control` by a
+lookup and an insert. Each scope (the app, an area, an API) now keeps the lines those give an
+answer that brings none of them, made once when the router is built, and an answer with no
+header, or its `Content-Type` alone, is given them in one pass; any other answer (a page, an
+answer with a header of its own) has each inserted as before
+([design Choice 28](../design.md#choice-fixed-stages)). Counted with
+`crates/corten/tests/router_cost.rs` the same way (the median of three runs each, which
+differed by at most 9; before at `c9666dc96` with the test as it is at the after commit,
+`fad2caf29`):
+
+| Request | Before, glibc | After, glibc | Before, jemalloc | After, jemalloc |
+|---|---|---|---|---|
+| text from a route with a parameter | 12,207 | 11,716 | 10,694 | 10,244 |
+| text from a route under an API (`ROUTER_TARGET=api`) | 9,518 | 9,155 | 8,207 | 7,895 |
+| text answering a `POST` (`ROUTER_TARGET=write`) | 12,682 | 12,235 | 11,075 | 10,625 |
+| unknown URL, HTML 404 page (`ROUTER_TARGET=missing`) | 17,078 | 17,105 | 15,322 | 15,343 |
+| text from an [`unstaged`](#a-route-outside-the-stages) route (`ROUTER_TARGET=unstaged`) | 5,330 | 5,332 | 4,523 | 4,523 |
+
+The 404 page is the cost: an answer that is not given its lines this way pays the test that
+tells it apart, 21 to 27 instructions here. The first three rows are also what shows that the
+pass is taken. What is sent is the same either way, so no test of answers fails when it is not:
+a change to the last stage counts these rows again.
 
 ## Your own middleware
 

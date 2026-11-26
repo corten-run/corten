@@ -17,8 +17,8 @@ import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellati
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckCreateErroredAttempt, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
+import { checkQuarantineCensus, continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
   recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -299,12 +299,15 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
   const continuation = manifest?.single ? admission?.subject.continuation : undefined;
   const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
+  const quarantined = continuation?.quarantinedCreates ?? [];
+  assert.ok(quarantined.every((row) => row.group !== options.group && row.accountId === manifest.provider.accountId),
+    "create quarantine permits only other groups in the saved account");
   const exitOneRetirements = continuation?.exitOneRetirements ?? [];
   const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
-  let historicalHostsAbsent;
+  let historicalHostsAbsent = !historicalIds.size && !quarantined.length;
   const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
@@ -324,7 +327,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
     if (beforeCreate && manifest.single) {
-      if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
+      assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
       if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
@@ -340,6 +343,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         // Then every earlier posted create on this account, in any group (not only this
         // group's retry): a contradiction or custody change since admission refuses.
         for (const row of current.subject.continuation.postedCreates ?? []) recheckPostedCreate(row);
+        for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
       }
       if (beforeCreate !== "census") {
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
@@ -398,20 +402,20 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       await authorizeLocked();
       entered = true;
     }
-    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
-    // Use the controller's complete, account-bracketed pre-create list, not
-    // just the rows that still carry their original benchmark name or tags.
-    if (historicalIds.size && historicalHostsAbsent === undefined && binary === "doctl"
-        && argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "list") {
-      const rows = JSON.parse(result.stdout);
-      assert.ok(Array.isArray(rows));
-      historicalHostsAbsent = !rows.some(({ id }) => historicalIds.has(String(id)));
-    }
-    return result;
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
   };
+  const inspectPreCreateInventory = !historicalHostsAbsent ? (rows, complete) => {
+    const listed = rows.some(({ id }) => historicalIds.has(String(id)));
+    if (quarantined.length) {
+      checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
+      assert.ok(!listed, "an earlier historical host is listed; preserve reservation");
+    }
+    historicalHostsAbsent = complete && !listed;
+  } : undefined;
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
+    inspectPreCreateInventory, quarantineTargets: quarantined.map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {

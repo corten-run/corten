@@ -10,6 +10,8 @@ const labels = {
   phoenix: "Phoenix 1.8 (Elixir, controller + HEEx)",
   laravel: "Laravel 13 (PHP, Octane on FrankenPHP, Blade)",
 };
+// The longest run.mjs gives one app's image build.
+export const imageBuildTimeoutMs = 60 * 60 * 1000;
 export const inventory = Object.fromEntries(Object.entries(allApps).filter(([, app]) => app.pages !== false)
   .map(([name, app]) => [name, { ...app, label: labels[name] ?? app.label }]));
 export { phases, sources, targets } from "../catalog/contract.mjs";
