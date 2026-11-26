@@ -2040,7 +2040,9 @@ async fn a_head_that_comes_a_byte_a_read_is_copied_a_bounded_number_of_times() {
     use crate::h1::MOVED;
     let head = format!("GET / HTTP/1.1\r\n{HOST}x-long: {}\r\n\r\n", "v".repeat(250_000));
     let output = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let (input, dice) = (head.clone().into_bytes(), Dice(3));
+    // With the start of another request behind it: a request with nothing behind it but its
+    // client's end is not answered.
+    let (input, dice) = (format!("{head}GET ").into_bytes(), Dice(3));
     let io = Chopped { input, at: 0, output: output.clone(), dice, most: 1, vectored: true, fails_at: None };
     let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
     MOVED.set((0, 0));
@@ -2221,31 +2223,29 @@ async fn the_500_in_place_of_an_interim_answer_has_none_of_the_answer_s_headers(
 }
 
 /// A header name longer than `http` takes one (65,535 bytes), which a head can hold only under a
-/// limit an app raised past 64 KiB, is refused by both connections and reaches no handler, and
-/// they differ in how. Corten's connection answers 400, as it answers any head it cannot take.
-/// hyper 1.12.0 answers nothing and closes: it takes a name `http` refuses for a fault of its own
-/// (`Parse::Internal`, which it has no answer for, and in a build with debug assertions a panic
-/// of the connection's task). `docs/design.md#choice-own-http1` names the difference beside the
-/// target's. A name of the longest length is taken by both.
+/// limit an app raised past 64 KiB, is refused by both connections as hyper refuses it: with
+/// 431, as a head too long, though the head is shorter than the app's limit (hyper's
+/// `record_header_indices` refuses a name of 64 KiB before it makes a `HeaderName` of it). A
+/// name of the longest length is taken by both. (Corten's connection answered 400 before: it
+/// refused the name where `HeaderName` did.)
 #[tokio::test]
-async fn a_header_name_longer_than_http_takes_is_answered_400_where_hyper_answers_nothing() {
+async fn a_header_name_longer_than_http_takes_is_refused_as_hyper_refuses_it() {
     let app = || App::new(routes()).max_request_head(128 * 1024);
     let hyper = Served::start(app(), false).await;
     let own = Served::start(app(), true).await;
     let named = |length: usize| format!("GET / HTTP/1.1\r\n{HOST}{}: 1\r\n\r\n", "n".repeat(length));
-    let longer = named(65_536);
-    let (theirs, ours) = (hyper.closed(&longer).await, own.closed(&longer).await);
-    assert_eq!(statuses(&ours), [400], "{ours}");
-    assert!(ours.contains("connection: close\r\n"), "{ours}");
-    assert_eq!(theirs, "", "hyper answers nothing");
+    for before in [0, 2] {
+        let longer = GET.repeat(before) + &named(65_536);
+        let (theirs, ours) = (hyper.closed(&longer).await, own.closed(&longer).await);
+        let mut expected = vec![200; before];
+        expected.push(431);
+        assert_eq!(statuses(&theirs), expected, "hyper's, behind {before}: {theirs}");
+        assert_eq!(dateless(&ours), dateless(&theirs), "behind {before}");
+    }
     let longest = named(65_535) + &last();
     let (theirs, ours) = (hyper.closed(&longest).await, own.closed(&longest).await);
     assert_eq!(statuses(&ours), [200, 200], "{ours}");
     assert_eq!(dateless(&ours), dateless(&theirs));
-    // The server is as it was: hyper's too, whose connection's task ended oddly.
-    for served in [&hyper, &own] {
-        assert_eq!(statuses(&served.closed(last()).await), [200]);
-    }
     hyper.stop().await;
     own.stop().await;
 }
