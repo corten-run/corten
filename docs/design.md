@@ -7141,10 +7141,12 @@ rules something out.
     drawn from each change's own base and is not the fixed count it was until 2026-11-26, whose
     history is in Last checked and in
     [#2167 Choice 60's Revisit-when names a fixed count (17,557 instructions at one commit) that main has since fallen about 580 below, on a harness that is not in the repository](https://github.com/corten-run/corten/issues/2167);
-    the budget is 64 instructions on `unstaged` and about 95 on `get`, thirty to forty-five
-    times the 2.1 accepted above and more than the 10 and the 30 turned down there, so one
-    change can add what was refused then and not reopen this Choice, and the figure is
-    [design Choice 76](#choice-counted-or-measured)'s proposal and moves with it; what changes
+    the budget is 64 instructions on `unstaged` and about 95 on `get` by the counts of
+    [design Choice 76](#choice-counted-or-measured), and less on the cheaper rows, about 52 on
+    `pipeline` and about 41 on it at 16, so twenty to forty-five times the 2.1 accepted above
+    and on every row more than the 10 and the 30 turned down there: one change can add what was
+    refused then and not reopen this Choice, and the figure is that Choice's proposal and moves
+    with it; what changes
     that each stay under the budget add up to this line does not see, and nothing reopens this
     Choice for it: [design Choice 76](#choice-counted-or-measured) leans for that on
     the trend, [`bench/placement/trend`](../bench/placement/trend/README.md), which reads
@@ -7188,7 +7190,7 @@ rules something out.
     commits from there to `main` at `8d5160be2` lowered it by 5,302 more, and the connection's
     wait for shutdown, polled only when it was woken, by 218 more, which gave 17,552.8 at
     `9060dfb2a`, and the line was put at the top of what two sessions read there, about
-    17,557, which left 0 to 5 instructions over them, so that it reopened this Choice for a
+    17,557, which left 0 to 5 instructions over them, so it reopened this Choice for a
     rise of a few instructions when it was written and for none under about 580 once `main`
     was at `d15d3ac3a`): two sessions of three rounds, `9060dfb2a` 17,554.920 (range
     17,554.778-17,556.058) and 17,554.916 (range 17,553.216-17,555.770), inside what 2026-11-25
@@ -7196,7 +7198,7 @@ rules something out.
     (range 16,972.395-16,975.306), about 580 under that count, and with jemalloc preloaded
     16,000.617 and 16,001.631 against 15,412.503 and 15,414.189, where four of those twelve
     readings lay about 43 from their build's level and moved no median (about what
-    [the kit's page](../bench/request-cost/README.md#what-a-count-is-not) gives for a count read
+    [the kit's page](../bench/request-cost/README.md#how-a-number-is-read) gives for a count read
     from totals at exit, as this harness reads one, when the clock's thread ends before the
     process). Revisit when was
     restated that day as each change's own budget, by the maintainer's decision.
