@@ -6,7 +6,8 @@ mod trace;
 mod views;
 
 use corten::{
-    http::{HeaderMap, header},
+    extract::FromRequestParts,
+    http::{HeaderMap, header, request::Parts},
     i18n::Locale,
     prelude::*,
 };
@@ -33,15 +34,18 @@ impl PublicOrigin {
     fn new(origin: &str) -> Self {
         let uri: corten::http::Uri = origin.parse().expect("MARKETPLACE_PUBLIC_ORIGIN must be an HTTP(S) origin");
         let scheme = uri.scheme_str().filter(|scheme| matches!(*scheme, "http" | "https"));
-        let authority = uri.authority().map(|authority| authority.as_str());
+        let authority = uri.authority();
         let (Some(scheme), Some(authority)) = (scheme, authority) else {
             panic!("MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin");
         };
         assert!(
-            origin == format!("{scheme}://{authority}") && !authority.contains('@'),
+            origin == format!("{scheme}://{authority}")
+                && !authority.as_str().contains('@')
+                && authority.host().bytes().all(|byte| !byte.is_ascii_uppercase())
+                && authority.port_u16() != Some(if scheme == "https" { 443 } else { 80 }),
             "MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin"
         );
-        Self { origin: origin.into(), authority: authority.into() }
+        Self { origin: origin.into(), authority: authority.as_str().into() }
     }
 
     fn allows(&self, headers: &HeaderMap) -> bool {
@@ -55,6 +59,19 @@ impl PublicOrigin {
         }
         let mut origin = headers.get_all(header::ORIGIN).iter();
         origin.next().is_some_and(|value| value.as_bytes() == self.origin.as_bytes()) && origin.next().is_none()
+    }
+}
+
+struct PublicAlertOrigin;
+
+impl FromRequestParts<AppState> for PublicAlertOrigin {
+    type Rejection = corten::Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        if state.public_origin.as_ref().is_some_and(|origin| !origin.allows(&parts.headers)) {
+            return Err(Refused::forbidden().into());
+        }
+        Ok(Self)
     }
 }
 
@@ -129,14 +146,11 @@ async fn create_alert(
     req: Req,
     State(state): State<AppState>,
     Params(at): Params<routes::Marketplace<'_>>,
+    _: PublicAlertOrigin,
     session: alerts::Session,
     trace: TraceParent,
-    headers: HeaderMap,
     Form(form): Form<AlertForm>,
 ) -> HtmlResult {
-    if state.public_origin.as_ref().is_some_and(|origin| !origin.allows(&headers)) {
-        Err(Refused::forbidden())?;
-    }
     req.set_locale(at.locale);
     let record = state.source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?;
     let (message, accepted) = match text::alert(req.t(), &record, &form) {
@@ -202,6 +216,14 @@ mod tests {
     }
     fn at(tag: &str) -> routes::Marketplace<'static> {
         routes::Marketplace { locale: Locale::parse(tag).unwrap(), id: "item_1", query: Default::default() }
+    }
+    #[test]
+    fn public_origin_setting_must_match_browser_serialization() {
+        for origin in ["https://localhost:443", "http://localhost:80", "https://Localhost:8080", "https://localhost:8080/"] {
+            assert!(std::panic::catch_unwind(|| PublicOrigin::new(origin)).is_err(), "{origin}");
+        }
+        assert_eq!(PublicOrigin::new("https://localhost").authority.as_ref(), "localhost");
+        assert_eq!(PublicOrigin::new("https://localhost:8080").authority.as_ref(), "localhost:8080");
     }
     #[tokio::test]
     async fn public_origin_pin_preserves_direct_alerts_and_requires_https_on_the_public_host() {

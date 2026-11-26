@@ -31,9 +31,15 @@ struct Session {
 static SESSIONS: LazyLock<Mutex<HashMap<TokenHash, Session>>> = LazyLock::new(Mutex::default);
 
 fn secure_cookie(host: Option<&str>, origin: Option<&str>) -> bool {
-    origin
-        .and_then(|origin| origin.strip_prefix("https://"))
-        .is_some_and(|authority| host.is_some_and(|host| host.eq_ignore_ascii_case(authority)))
+    let (Some(host), Some(origin)) = (host, origin) else { return false };
+    let Ok(origin) = url::Url::parse(origin) else { return false };
+    if origin.scheme() != "https" {
+        return false;
+    }
+    let public = origin.origin().ascii_serialization();
+    let authority = public.strip_prefix("https://").expect("HTTPS origin serialization");
+    host.eq_ignore_ascii_case(authority)
+        || origin.port().is_none() && host.strip_suffix(":443").is_some_and(|host| host.eq_ignore_ascii_case(authority))
 }
 
 fn presented(cx: &Cx) -> Option<TokenHash> {
@@ -52,6 +58,10 @@ fn presented(cx: &Cx) -> Option<TokenHash> {
     found
 }
 pub fn append(cx: &Cx, row: Alert) -> Result<()> {
+    append_with_origin(cx, row, || std::env::var("MARKETPLACE_PUBLIC_ORIGIN").ok())
+}
+
+fn append_with_origin(cx: &Cx, row: Alert, configured_origin: impl FnOnce() -> Option<String>) -> Result<()> {
     let mut sessions = SESSIONS.lock().map_err(|_| service_unavailable(60))?;
     let now = Instant::now();
     sessions.retain(|_, session| now < session.expires);
@@ -64,7 +74,7 @@ pub fn append(cx: &Cx, row: Alert) -> Result<()> {
             let token = Token::random();
             let hash = token.hash();
             // The public TLS authority and the HTTP preflight share this app instance.
-            let public_origin = std::env::var("MARKETPLACE_PUBLIC_ORIGIN").ok();
+            let public_origin = configured_origin();
             let mut hosts = request::original_headers(cx).get_all(header::HOST).iter();
             let host = hosts.next().and_then(|value| value.to_str().ok()).filter(|_| hosts.next().is_none());
             let secure = secure_cookie(host, public_origin.as_deref());
@@ -107,11 +117,46 @@ mod tests {
         assert!(!secure_cookie(Some("localhost:8081"), public));
         assert!(!secure_cookie(None, public));
         assert!(!secure_cookie(Some("localhost:8080"), Some("http://localhost:8080")));
+        assert!(secure_cookie(Some("localhost"), Some("https://Localhost:443/")));
+        assert!(secure_cookie(Some("localhost:443"), Some("https://localhost")));
     }
 
     #[route(POST "/append")]
     async fn append_route(cx: &Cx) -> Result<()> {
         append(cx, Alert { item_id: "item_1".into(), email: "person@example.test".into(), target_minor: 1234 })
+    }
+
+    #[route(POST "/public-append")]
+    async fn public_append(cx: &Cx) -> Result<()> {
+        append_with_origin(
+            cx,
+            Alert { item_id: "item_1".into(), email: "person@example.test".into(), target_minor: 1234 },
+            || Some("https://Localhost:443/".into()),
+        )
+    }
+
+    #[tokio::test]
+    async fn public_and_direct_sessions_set_the_cookie_for_their_own_transport() {
+        let router = Router::builder().route(public_append).route(read).build();
+        for (host, secure) in [("localhost", true), ("127.0.0.1", false)] {
+            let response =
+                router.handle(Request::post("/public-append").header(header::HOST, host).body(Body::empty()).unwrap()).await;
+            assert_eq!(response.status(), 200);
+            let cookie = Cookie::parse(response.headers()[header::SET_COOKIE].to_str().unwrap()).unwrap();
+            assert_eq!(cookie.secure().unwrap_or(false), secure);
+            let readback = router
+                .handle(
+                    Request::get("/api/alerts")
+                        .header(header::HOST, host)
+                        .header(header::COOKIE, format!("{COOKIE}={}", cookie.value()))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await;
+            assert_eq!(readback.status(), 200);
+            let rows = to_bytes(readback.into_body(), 8192).await.unwrap();
+            assert_eq!(serde_json::from_slice::<Vec<Alert>>(&rows).unwrap().len(), 1);
+        }
     }
     #[tokio::test]
     async fn native_cookie_store_is_ordered_isolated_concurrent_and_expires() {
