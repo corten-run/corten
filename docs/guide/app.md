@@ -259,8 +259,8 @@ answers any other ([below](#host-names)). What differs:
    is answered twice or out of order, and a client that sends its next request again on a new
    connection, as HTTP has it do when a connection is closed on it, sees no difference.
 6. A client that pipelines requests and reads no answer holds a little more of the server's
-   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,106 to
-   2,272 MiB with the switch on and 2,094 to 2,142 MiB with it off (measured at `8dbd3db5f`,
+   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,162 to
+   2,322 MiB with the switch on and 2,108 to 2,136 MiB with it off (measured at `2764ce975`,
    nine runs each). Most of either is socket buffers: `max_connections` bounds how many
    connections hold one, and `send_timeout` how long a connection that takes nothing is kept.
    This is why the switch is off unless set; behind a proxy that does
@@ -269,13 +269,13 @@ answers any other ([below](#host-names)). What differs:
    against 8,469), so an app whose connections mostly carry bodies gains nothing in memory.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
-connection, at `8dbd3db5f`): the shortest request the counting kit sends, to a route that says
-`unstaged` and answers two bytes, goes from 10,563 to 9,310, a staged API route's `GET` from
-18,345 to 17,084, and a 12 KB page from 43,107 to 42,012, each with three allocations fewer. A
+connection, at `2764ce975`): the shortest request the counting kit sends, to a route that says
+`unstaged` and answers two bytes, goes from 10,572 to 9,318, a staged API route's `GET` from
+18,339 to 17,079, and a 12 KB page from 43,227 to 42,130, each with three allocations fewer. A
 request with the header lines a browser sends costs as many instructions as it did, to a
-quarter of a percent either way (the same `GET` 23,884 and 23,826, a compressed page 221,717
-and 221,858), with the three allocations fewer; a request with a body costs what it did. A
-connection waiting for a request holds 7,423 bytes where hyper's holds 8,472. No time has been
+quarter of a percent either way (the same `GET` 23,879 and 23,822, a compressed page 221,840
+and 221,982), with the three allocations fewer; a request with a body costs what it did. A
+connection waiting for a request holds 7,423 bytes where hyper's holds 8,471. No time has been
 measured yet, so this is less work for a short request and not yet a claim that it is faster.
 
 ## Access logs

@@ -11500,22 +11500,23 @@ rules something out.
     for the one kind of request that frames nothing, because something measured now does. Counted
     over a socket with [`bench/request-cost`](../bench/request-cost/README.md), the shortest
     request the kit sends (its `pipeline` case: a route that says `unstaged` and answers two
-    bytes) costs the serving thread 10,563 instructions and 11 allocations on hyper's connection
-    and 9,310 and 8 on Corten's own, 11.9% fewer instructions; sixteen written at a time cost
-    8,370 and 6,929 each, 17.2% fewer. A staged API route's `GET` goes from 18,345 to 17,084
-    (6.9%) and a 12 KB page from 43,107 to 42,012 (2.5%), each with three allocations fewer.
+    bytes) costs the serving thread 10,572 instructions and 11 allocations on hyper's connection
+    and 9,318 and 8 on Corten's own, 11.9% fewer instructions; sixteen written at a time cost
+    8,377 and 6,937 each, 17.2% fewer. A staged API route's `GET` goes from 18,339 to 17,079
+    (6.9%) and a 12 KB page from 43,227 to 42,130 (2.5%), each with three allocations fewer.
     With a browser's header lines nothing of that is left in instructions, though the three
-    allocations are: the same `GET` goes from 23,884 to 23,826 (0.2% fewer), a text answer from
-    25,861 to 25,924 (0.2% more) and the page, compressed, from 221,717 to 221,858 (0.06% more).
-    A request with a body costs the same on both (22,801 and 22,791, 19 allocations), since
+    allocations are: the same `GET` goes from 23,879 to 23,822 (0.2% fewer), a text answer from
+    25,826 to 25,889 (0.2% more) and the page, compressed, from 221,840 to 221,982 (0.06% more).
+    A request with a body costs the same on both (22,794 and 22,783, 19 allocations), since
     hyper answers it on both. A connection that waits for a request holds 7,423 bytes against
-    8,472 after one short request, 7,557 against 12,562 after three with a browser's header
-    lines, and 2,278 against 2,694 before its client has sent a byte (the median of three
-    readings of each). The counts with the switch on were lower when this Choice was first
-    written (8,984, 16,789 and 41,726, and 23,532 and 221,569 with a browser's lines): a request
-    sent alone now costs 286 to 326 more, 285 to 287 of it a look at the socket for the client's
-    end that hyper makes too and Corten's connection did not (below), the rest what two reviews
-    had fixed. These are
+    8,471 after one short request, 7,557 against 12,562 after three with a browser's header
+    lines, and 2,279 against 2,697 before its client has sent a byte (the median of three
+    readings of each). When this Choice was first written, against an earlier `main`, the
+    switch saved more: 15.0% on the shortest request (8,984 against 10,564), 8.6% on the `GET`,
+    3.3% on the page, 1.6% on the `GET` with a browser's lines. A request sent alone has since
+    gained 285 to 287 instructions for a look at the socket for its client's end, which hyper
+    makes too and Corten's connection did not (below), and up to 40 for what two reviews had
+    fixed. These are
     instructions, allocations and bytes, which measure work and memory and not speed. The change
     is one [Choice 76](#choice-counted-or-measured) has measured and not counted: with the switch
     on a connection writes to its socket at other times than hyper's does, no case of the kit asks
@@ -11632,10 +11633,10 @@ rules something out.
     workspace two servers to test and a dependency the power to turn it on. With it off a
     connection takes one more branch when it is accepted and nothing more a request: the same
     path through hyper, and byte-identical answers from the kit's nine requests. The compiled
-    program is not the same, though, and the kit counts 2 to 11 instructions a request more than
-    `main` with the switch off (10,560 and 10,563 on the shortest request, 43,097 and 43,107 on
+    program is not the same, though, and the kit counts 2 to 12 instructions a request more than
+    `main` with the switch off (10,567 and 10,572 on the shortest request, 43,215 and 43,227 on
     the page; allocations the same; of the bytes an idle connection holds, no median of three
-    readings more than a byte from `main`'s), 0.05% of a case's count at most, which is inside
+    readings more than 4 bytes from `main`'s), 0.05% of a case's count at most, which is inside
     the +0.5% [Choice 76](#choice-counted-or-measured) gives a counted change. Where they come
     from was read from the instructions that ran and is likely, not proven for each. At an
     earlier head (`f02d8511f`) the count was 3 to 48 more (0.26% at most), and `main` with that
@@ -11645,11 +11646,11 @@ rules something out.
     would make them. The ids themselves were not read, and which line of the manifest moved
     them was not found. With this head's manifest, which names `httpdate` too, `main` counts
     what it counts without it, to the 1 its repeats differ by: that fits a matter of where the
-    ids fall and not of code, and does not prove it. The 2 to 11 that are left are likely the
+    ids fall and not of code, and does not prove it. The 2 to 12 that are left are likely the
     compiler's: a function with one caller is inlined where one with two
     may not be, and the second connection gave functions on hyper's path a second caller. Sharing
     its types with hyper's path cost 64 to 156 a request in all (`f92fb906d` against `main` at
-    `ba6a7fe56`); the 2 to 11 are what is left with types
+    `ba6a7fe56`); the 2 to 12 are what is left with types
     of its own for Corten's connection and for hyper's once a connection is handed over
     (`crates/corten/src/h1/handoff.rs`), and with the router's future, its fix and the mark for a
     missing `Host` inlined always. What is left is the drop of the router's future, kept out of
@@ -11710,12 +11711,13 @@ rules something out.
     (an answer's are dropped, and no `Trailer` line is written) and no reason phrase but the
     status's own. And a client that pipelines requests and reads no answer holds more of the
     server's memory than on hyper's connection: under the public HttpArena harness's
-    pipelining flood, a 4 GiB container on two CPUs peaked at 2,106 to 2,272 MiB with the switch
-    on (median 2,219) and 2,094 to 2,142 MiB with it off (median 2,107), nine runs each at
-    `8dbd3db5f`. Two more sets of nine, at the heads either side of that one, read medians of
-    2,253 and 2,236 with it on against 2,117 and 2,120 with it off. Before the buffer of answers
+    pipelining flood, a 4 GiB container on two CPUs peaked at 2,162 to 2,322 MiB with the switch
+    on (median 2,195) and 2,108 to 2,136 MiB with it off (median 2,123), nine runs each at
+    `2764ce975`. Three more sets of nine, at the three heads before it that had the same fix,
+    read medians of 2,253, 2,219 and 2,236 with it on against 2,117, 2,107 and 2,120 with it
+    off. Before the buffer of answers
     dropped what had gone (above), the same runs read 2,185 to 2,371 (median 2,283) against
-    2,092 to 2,153 (median 2,120): the difference at the median went from 163 MiB to between 112
+    2,092 to 2,153 (median 2,120): the difference at the median went from 163 MiB to between 72
     and 136, and is not closed. What the rest of it is has not been found. Most of both peaks is
     the kernel's socket buffers. `App::max_connections` bounds how many connections there are and
     `App::send_timeout` how long one that takes nothing is kept; neither bounds what one
@@ -11775,26 +11777,29 @@ rules something out.
     Stands on: measured (instructions and allocations a request and bytes an idle connection
     holds, by `bench/request-cost` as it is on `main`, callgrind over a socket with jemalloc
     preloaded, three counts of each case that agree within 1 and three runs of each idle figure
-    over 5,000 connections, for `main` at `aa526350f`, for this change at `8dbd3db5f` with the
-    switch off and on (on by one call added to the kit's probe), and for `aa526350f` with this
-    change's two manifest files alone; between `8dbd3db5f` and the commit that wrote this, the
-    files under `crates/` differ in tests and in a comment; the figures are in the text above,
-    and the ones of earlier heads it names (`f02d8511f`, `7076a0c95`) were taken the same way;
+    over 5,000 connections, for `main` at `9afee60a8`, for this change at `2764ce975`, which
+    merges it, with the switch off and on (on by one call added to the kit's probe), and for
+    `9afee60a8` with this change's two manifest files alone; between `2764ce975` and the commit
+    that wrote this, the files under `crates/` differ in tests alone; the figures are in the
+    text above, and the ones of earlier heads it names (`f02d8511f`, `7076a0c95`, `8dbd3db5f`)
+    were taken the same way against the `main` of their time (`8270df196` for the first and
+    `aa526350f` for the others, with the same files under `crates/`);
     no cycles or times taken);
-    measured (the gate's long run, seed 20261124, at `a6cb2efe7`: 252,454 streams, 252,282
+    measured (the gate's long run, seed 20261124, at `36e5eb4db`: 252,454 streams, 252,282
     answered alike, the app answering in 177,817 of them, 172 in the one listed class, none
     failed; one run, which the same seed repeats; and at `7076a0c95` and `423722c21`, which
     looked for a client's end less often, 24 and 8 streams failed, as told above);
     measured (peak memory under the HttpArena harness's attacks, each in a fresh 4 GiB container
     on CPUs of its own, under an app for that harness that is not in this
     repository, with jemalloc as the starter image preloads it but a 64 KiB thread cache: the
-    pipelining flood nine runs at `8dbd3db5f`, at `7076a0c95` and at `423722c21`, with the
+    pipelining flood nine runs at `2764ce975`, and before it at `7076a0c95`, `8dbd3db5f` and
+    `423722c21`, with the
     switch on first in five and off first in four, and before those at `f02d8511f`, where
     huge-chunk, large-upload and header-bomb were run nine times each, chunk-extension-flood
     five and every other attack once, none of them again since; and what a connection holds
     after a request with a body, by `bench/request-cost`'s idle reading over 5,000 connections,
-    three runs each at `8dbd3db5f`: 10,082, 10,083 and 10,084 with the switch on, 8,469 twice
-    and 8,470 with it off, 8,468 twice and 8,470 on `main`);
+    three runs each at `2764ce975`: 10,082 and 10,083 twice with the switch on, 8,468, 8,469
+    and 8,470 with it off, 8,469 and 8,470 twice on `main`);
     platform (hyper 1.12.0 reads a request's head with httparse 1.10.1 under the settings and
     constructors `crates/corten/src/h1/head.rs` copies, writes an answer's head as that file
     writes it and its `Date` with httpdate 1.0.3, reads 8,192 bytes at first, keeps a
@@ -11835,9 +11840,9 @@ rules something out.
     where the gate met it, which lets the gate send bodies over pipes that hold little.
 
     Last checked: 2026-11-26, the counts and idle figures with `bench/request-cost`, on
-    `aa526350f` and on `8dbd3db5f` with the switch off and on; 2026-11-26, the
-    gate's long run and the suite on both connections at `a6cb2efe7`; 2026-11-26, the pipelining
-    flood with `MDA2AV/HttpArena@3388e45` on `8dbd3db5f`, and 2026-11-25, the rest of that
+    `9afee60a8` and on `2764ce975` with the switch off and on; 2026-11-26, the
+    gate's long run and the suite on both connections at `36e5eb4db`; 2026-11-26, the pipelining
+    flood with `MDA2AV/HttpArena@3388e45` on `2764ce975`, and 2026-11-25, the rest of that
     attack list on `f02d8511f`; 2026-11-26, hyper 1.12.0, httparse 1.10.1 and httpdate 1.0.3
     as `Cargo.lock` has them, hyper's server parse, encoder, read strategy, write queue and its
     look for a client's end read against `crates/corten/src/h1.rs` and
