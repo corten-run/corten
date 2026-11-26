@@ -7,6 +7,7 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import test from "node:test";
+import { verifyLiveRenderer } from "./renderer-witness.mjs";
 import { buildApps, root, solidBuildPlugin } from "./build.mjs";
 import { options, buildOptions } from "./contract.mjs";
 import { solidCompiler, matchesSolidRuntime, solidRuntimeFiles, solidRuntimePrefix } from "./compiler.mjs";
@@ -89,7 +90,21 @@ test("Remix's private test tool and the benchmark's root bundler both work", () 
   }
 });
 
-test("the locked JavaScript builds still pass the client-heavy browser oracle", { timeout: 120000 }, async () => {
+const smokeTimeoutMs = 120000, witnessTimeoutMs = 16000, cleanupReserveMs = 10000;
+function rendererWitnessBudget(deadline, now = performance.now()) {
+  const remainingMs = Math.floor(deadline - now - cleanupReserveMs);
+  assert.ok(remainingMs > 0, "no time remains for the renderer witness before cleanup");
+  return Math.min(witnessTimeoutMs, remainingMs);
+}
+
+test("renderer witness leaves time for smoke cleanup near the deadline", () => {
+  assert.equal(rendererWitnessBudget(120000, 80000), 16000);
+  assert.equal(rendererWitnessBudget(120000, 109750), 250);
+  assert.throws(() => rendererWitnessBudget(120000, 110000), /before cleanup/);
+});
+
+test("the locked JavaScript builds still pass the client-heavy browser oracle", { timeout: smokeTimeoutMs }, async (t) => {
+  const smokeDeadline = performance.now() + smokeTimeoutMs;
   const out = await mkdtemp(join(tmpdir(), "client-dependency-smoke-"));
   try {
     const { workload, settings, timeoutMs } = options(["dependency-smoke"]);
@@ -113,6 +128,9 @@ test("the locked JavaScript builds still pass the client-heavy browser oracle", 
         const close = pass.lifecycle.close;
         assert.ok(close?.returned && close.observed && close.failure === null, `${app}: ${JSON.stringify(close)}`);
         assert.equal(pass.actions, null, app);
+      }
+      if (process.platform === "linux") {
+        await verifyLiveRenderer(launched, (line) => t.diagnostic(line), rendererWitnessBudget(smokeDeadline));
       }
     } finally {
       try { await launched?.close(); } finally { await server.close(); }
