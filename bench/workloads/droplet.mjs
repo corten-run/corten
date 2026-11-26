@@ -10,7 +10,7 @@ import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleet
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
-import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
 import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
@@ -187,13 +187,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
   async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
+    const creating = binary === "doctl" && args[0] === "compute" && args[1] === "droplet" && args[2] === "create";
     const prepareDelete = typeof deleteProofExpiresAtMs === "object" ? deleteProofExpiresAtMs : undefined;
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
       assert.ok(prepareDelete || Number.isSafeInteger(deleteProofExpiresAtMs));
     }
+    const settleUnsentCreate = () => {
+      try {
+        boundary();
+        assert.ok(creating && state.status === "creating" && state.createIntentAt && !state.id && !state.createPending);
+        assert.ok(regular(statePath, 1024 * 1024).equals(Buffer.from(stateBytes(state))), "unsent create intent state changed");
+        state.status = "reserved"; delete state.createIntentAt;
+        writeState(state, renameSync, "create-unsent");
+      } catch (cause) { preserveOperationLock = true; throw cause; }
+    };
     const invoke = async (argv, permittedFailure = false, expiry) => {
-      check();
+      try { check(); }
+      catch (error) {
+        if (creating && argv[2] === "create") settleUnsentCreate();
+        throw error;
+      }
       const fresh = () => {
         const current = Date.now();
         assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
@@ -223,6 +237,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
+      if (r === unsentCreate) {
+        assert.equal(argv[2], "create");
+        settleUnsentCreate();
+        assert.fail("local custody or cancellation refused create before dispatch");
+      }
       if (registration?.stream && r.monitor) {
         monitor = r.monitor;
         assert.equal(monitor.registration.id, registration.expected.id);
@@ -258,7 +277,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
-    if (args[0] === "compute" && args[1] === "droplet" && args[2] === "create") {
+    if (creating) {
       // Check after the final account read, before recording or dispatching a create.
       launchPeers = checkFleetAdmission?.(true);
       recheckPriorRounds?.();

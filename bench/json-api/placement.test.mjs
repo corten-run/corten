@@ -29,6 +29,25 @@ test("the c-16 selector gives k6 CPUs 4-15 and leaves the app and upstream budge
 });
 
 const generator = { coldProbe: { quota: 4, cpuset: "4-7" }, loadSampler: { quota: 12, cpuset: "4-15" } };
+test("the c-32 selector requires the exact pins and a 32-CPU host, and records a quota of 20 for k6 alone", () => {
+  const marker = "json-c32-generator-v1";
+  const env = { ...pinned, [layoutKey]: marker, JSON_API_LOAD_CPUS: "4-23" };
+  const cpus = cpuSettings(pinned);
+  cpus.load = { ...cpus.load, quota: 20, cpuset: "4-23", args: ["--cpus", "20", "--cpuset-cpus", "4-23"] };
+  const generatorPlacement = { coldProbe: generator.coldProbe, loadSampler: { quota: 20, cpuset: "4-23" } };
+  const setting = runnerPlacement(env, 32);
+  assert.deepEqual(setting, { loadLayout: marker, cpus, generatorPlacement });
+  assert.deepEqual(coldProbeCpus(setting), cpuSettings(pinned).load);
+  assert.deepEqual(loadSamplerCpus(setting), generatorPlacement.loadSampler);
+  assert.deepEqual(recordedPlacement(setting), { placement: marker, cpus, generatorPlacement });
+  for (const count of [16, 24, 31]) assert.throws(() => runnerPlacement(env, count), /needs 32 logical CPUs/);
+  for (const vars of [{ JSON_API_LOAD_CPUS: "4-15" }, { JSON_API_APP_CPUS: "0" }, { JSON_API_API_CPUS: undefined }])
+    assert.throws(() => runnerPlacement({ ...env, ...vars }, 32), /requires JSON_API_/);
+  for (const wrong of [{ cpus }, { ...setting, loadLayout: c16Layout }, { loadLayout: marker, cpus },
+    { ...setting, generatorPlacement: generator }, { ...setting, cpus: runnerPlacement(c16Env, 16).cpus }])
+    assert.throws(() => recordedPlacement(wrong));
+});
+
 test("the fleet's saved c-16 placement is this layout's pins and host", () => {
   assert.deepEqual({ ...jsonFleetPlacement.cpuEnv, [layoutKey]: jsonFleetPlacement.loadLayout }, c16Env);
   assert.equal(jsonFleetPlacement.host.size, c16Host.size);

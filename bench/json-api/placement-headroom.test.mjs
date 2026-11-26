@@ -117,3 +117,20 @@ test("a c-16 result whose k6 reaches 960% is refused for load headroom on both s
     assert.equal(derived.incompleteReasons.includes(reason), !headroom, `${pct}%`);
   }
 });
+
+test("c-32 replays k6 above the r93 c-16 fence but still refuses exactly 1600%", async (t) => {
+  const c32 = runnerPlacement({ ...c16Env, JSON_API_LOAD_LAYOUT: "json-c32-generator-v1", JSON_API_LOAD_CPUS: "4-23" }, 32);
+  const f = await fixture(t, { placement: c32, loadCpu: () => 983.13 });
+  const report = inspectJson(f.summary, { load: f.load });
+  assert.equal(report.baseline, true, report.warnings.slice(0, 4).join("\n"));
+  const phase = savedPhase(f);
+  for (const [pct, headroom] of [[983.13, true], [1599.9, true], [1600, false]]) {
+    const raw = structuredClone(phase.raw);
+    for (const sample of raw.samples.load) sample.cpu = pct;
+    assert.equal(phase.legacy(raw).incompleteReasons.includes(reason), !headroom, `legacy ${pct}%`);
+    const scheduled = phase.scheduled(scheduledAt(phase.raw, pct));
+    assert.ok(Math.abs(scheduled.apparatus.load.cpuMaxPctUpper - pct) < 0.001);
+    assert.equal(scheduled.apparatus.load.loadHasHeadroom, headroom, `scheduled ${pct}%`);
+    assert.equal(scheduled.incompleteReasons.includes(reason), !headroom, `scheduled ${pct}%`);
+  }
+});

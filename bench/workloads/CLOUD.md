@@ -191,8 +191,26 @@ measured commit that predates it replays under its own closure list, which never
 names the file.
 
 This is apparatus placement for future runs, not a measured speedup and not a fix for
-the upstream constraint above. Do not compare JSON API timings across the two
+the upstream constraint above. Do not compare JSON API timings across
 placements, and do not rerun saved groups only to adopt it.
+
+### JSON API c-32 Placement (Opt-In)
+
+For a future JSON API calibration, use `--load-layout json-c32-generator-v1` at
+the same single-group `--prepare` step, not on detach. The saved fleet job
+selects only `c-32/sfo2`. Prepare, approval preview, detach and the locked
+pre-create check require that pair to be offered in both directions of the
+provider catalog; there is no fallback. The job requires `nproc` of at least 32.
+
+Only k6 widens: quota 20 on CPUs 4-23, with the load resource sampler accounting
+for all 20. CPU 0 stays for host work, the app and upstream remain on 1 and 2-3,
+the untimed cold probe and counter reader stay on 4-7, and CPUs 24-31 are not
+assigned to benchmark containers. The same load fence is below 1600%; upstream
+fences are unchanged. The binding and replay require the saved layout and its
+exact placement, not merely the host size. A default or c-16 reservation
+continues to regenerate its original bytes. See the
+[JSON API runner guide](../json-api/README.md#opt-in-c-32-load-placement) for the
+r93 calibration evidence and its limits.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
@@ -684,6 +702,20 @@ journal and no terminal or audit frame. It rechecks the
 receipt and custody before a successor can allocate, using the complete account
 census to refuse the old ID, original name, or run tag. The receipt authorizes
 no SSH, delete, or publication; a retry needs a higher round and a new commit.
+
+If the workstation died after a supervised JSON API or Mixed Production audit
+delivery, it may have left the monitor `live` without writing close markers.
+Use `benchmark-external-failed-host/v2` only after independent review confirms
+the original archive ended in failure without a recoverable result, the local
+controller tree stopped, and the externally retired host is absent by exact-ID
+404 and a complete same-account inventory. Keep the reviewed evidence outside
+Git. Use the same receipt fields with `archiveSha256` for the original failed
+archive and get `binding` with `externalFailedHostBinding(fleet, { orphaned: true })`.
+The original locks stay in place. The controller requires a complete local
+journal with an expired peer lease, the matching audit delivery and no terminal
+or close record, collection evidence or recovery lock. It rechecks those bytes
+and the same census before create. This records the failed attempt without
+trying to recover or qualify it.
 
 The same receipt can record external cleanup of a monitored attempt that stopped
 after an accepted create but before binding the droplet. The original reservation
@@ -1398,6 +1430,14 @@ still needs a later sample with no remaining session member to prove drainage.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
+Fleet verification and retry admission replay the saved failed-setup receipt
+against its archive and extracted evidence. For a controlled receipt they also
+verify the final setup query and the original control files in the extraction.
+Verified setup retirement permits a retry; it does not qualify a result.
+The retry approval binds the prior retirement, and the child rechecks it and
+its custody before recording the create intent and again before provider dispatch.
+A local refusal before contacting the provider keeps the new reservation unused;
+a missing provider reply does not count as a local refusal.
 
 ### Failed Native Custody And Retirement
 

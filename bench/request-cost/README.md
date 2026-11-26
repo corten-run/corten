@@ -55,7 +55,7 @@ requests at a time, as a client that pipelines does; the rows read that way have
 ## Running it
 
 On Linux, with the Rust toolchain, Node (the repository's `.node-version`; 22.15 at least, for
-zstd), `git`, `taskset`, valgrind, jemalloc (`libjemalloc.so.2`), `pkg-config` and libzstd's
+zstd), `git`, `taskset`, `getconf`, valgrind, jemalloc (`libjemalloc.so.2`), `pkg-config` and libzstd's
 headers. On Debian 13, or in the `rust:1-trixie` container with Node added:
 
 ```sh
@@ -86,9 +86,10 @@ The probe's source is this checkout's, the same for every commit: only Corten an
 crates differ. Use one checkout of the kit and one directory for every commit of a comparison
 (the first point under [What a count is not](#what-a-count-is-not)).
 
-No check builds the probe: Corten is at `../work/crates/corten` only after `build.sh` has put a
-commit there. `corten fmt --check`, which CI runs over `bench`, reads its markup; a change to
-Corten that stops it compiling shows the next time the kit is run.
+None of CI's own checks builds the probe: Corten is at `../work/crates/corten` only after
+`build.sh` has put a commit there. `corten fmt --check`, which CI runs over `bench`, reads its
+markup; a change to Corten that stops it compiling shows the next time the kit is run, which
+for a pull request [the hosted job](#the-hosted-job) counts is in that job.
 
 Then, with `<probe>` for one of those binaries and `<cpu>` for a CPU the server is held to:
 
@@ -113,12 +114,21 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    many they were (`243 in 1`). [How a number is read](#how-a-number-is-read) says what each
    is for.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
-4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`). One client
+4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), and the growth
+   in bytes and the page size it is read from (Idle memory, below). One client
    address has ports for about 28,000: for more, `--addresses` spreads them over that many
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
 `--cases` takes a list of cases, and `--port` (8080 by default) the port the probe listens on,
-for two runs side by side on CPUs of their own. `--depth` takes at most 240.
+for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--json`, on a
+count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
+with what was measured, unrounded: each window's instructions, seconds and other threads, the
+allocator's calls and the requests they are over, an idle run's bytes a connection, its
+connections, its before and after, its growth and its page size. It is what
+[`compare.mjs`](compare.mjs) reads; the text is for people. A count of several cases prints
+each case's line as it is counted, so one that fails at a later case has printed the earlier
+ones: the hosted job counts one case an invocation. `idle.mjs` prints its line once the probe
+has stopped.
 
 ## How a number is read
 
@@ -202,7 +212,15 @@ allocates for each request, so it is not a profile of them.
 client then opens the connections one after another, sends what the case says on each and reads
 the answers, and waits a second. The growth of the process's `VmRSS` over those connections,
 divided by their number, is the figure. The kernel's socket buffers are not the process's and
-are not in it.
+are not in it. Resident memory moves a page at a time (`getconf PAGESIZE`, 4,096 bytes on
+x86-64 Linux), so two readings differ by whole pages, and one page, under a byte a connection
+over 5,000 with 4,096-byte pages (13 with 65,536-byte ones), is the least they can differ by: the step of the reading, not a measured bound on
+its accuracy. The run prints the growth in bytes and the page
+size beside the figure, and CONTRIBUTING's gate compares the growths, not the figures, which are
+rounded: two pages more can round to one byte a connection more. [`idleRise`](figures.mjs) is
+that comparison, and it refuses readings over fewer connections than a page has bytes, where one
+page is more than a byte a connection: over 40, one 4,096-byte page is 102 bytes a connection, a
+step the gate would let pass unseen.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
@@ -272,6 +290,165 @@ made with it, so the spread such a run records has not been recorded for this pr
 is, a difference between two commits of a few tens of instructions, as the 32 to 37 above, may
 be where the code was placed and not the change.
 
+## The hosted job
+
+A pull request that changes what a request is built from is counted against its base by the
+`Request Cost` workflow
+([`.github/workflows/request-cost.yml`](../../.github/workflows/request-cost.yml)), so its
+author prepares no host. Its one job counts when the pull request changes `crates/corten`,
+`crates/corten-macros`, `crates/corten-feed`, `crates/corten-protocol`, the root `Cargo.toml`
+or `Cargo.lock`, this kit, the workflow, the script that scopes it, `.node-version` or a
+`.gitattributes` in any directory (which says what the archive `build.sh` builds from holds),
+and otherwise says in its summary that it counted nothing, and passes
+(`scripts/benchmark-scope.mjs`, by the diff of the pull request's merge against the base). A
+scope step that says neither fails the job. The probe is built from the first two crates
+alone; the feed's are there because a request for a feed runs them, though no case here does,
+so a change to them alone reads the same on both builds. The probe is a workspace of its own
+with its own release profile, so a profile or a `[patch]` changed in the root's `Cargo.toml`
+selects the job and is not what either probe is built with: such a change is measured, by the
+fourth kind of item 2.1's list. The root's `.cargo` configuration is in neither build and
+selects nothing.
+
+On one runner it does what [Running it](#running-it) says, the first three by
+[`job.sh`](job.sh):
+
+1. Builds the probe against the merge base and then against the head, in one directory, with
+   the kit of the pull request's merge, so the probe's source is the same for both. The head
+   is counted against the commit where it left the base's branch, not as merged: what the
+   base gained since is in neither build. A build that fails or does not end in 7 minutes
+   leaves what it said; that build is then not run at all, whatever it left, and the table is
+   written without its figures.
+2. Writes both builds' answers (`count.mjs --answers`).
+3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
+   `--json`, on base and then on head, a case a run: the nine cases' instructions, three counts
+   each, the four at a depth of 16, the nine cases' allocations, and the three idle readings
+   three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
+   minutes have gone since the job's first step, which leaves six of the job's 30 for the
+   table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
+   seconds more to end. The checkout, the toolchain and the two builds are not held to those 24: a job
+   they take past its 30 minutes ends there with no table. A run the kit refuses, or that
+   does not end, gave no figure and is taken again, once, with why kept for each attempt (the
+   kit's error, else the last thing the run said, else its exit status); no run is taken
+   again for its figure.
+4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
+   writes what it prints to the job's summary: for each case base, head, the difference and
+   the percent, every count of every run with its longest window and the most that other
+   threads ran in one, the allocator's calls, every idle run's growth in bytes with its rounded
+   figure a connection and what base's runs allow, each idle run's line with its before, after,
+   growth and page size (which stands in for the line `idle.mjs` printed), each attempt that gave
+   no figure, and one
+   line of verdict. Its exit status is the job's.
+
+`compare.mjs` holds the figures to the rule of
+[CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests) (Pull requests, item 2.1, Counted): no
+case's instructions a request more than +0.5% over base's by the kit's medians, no case's
+allocations up (by the allocator's calls over the same requests, so 16,004 against 16,000 in
+1,000 requests is a rise, though both print as 16.00), and no idle reading that rises by
+[`idleRise`](figures.mjs): the median of head's three growths of resident memory, each run's
+after less its before in bytes, above base's by more than the larger of base's three span and
+one page. The figures a connection are rounded and do not decide it: one page more over base's
+three equal 62,812,160 bytes passes, though the figures read 12,562 and 12,563, and two pages
+more fail, though their figures can also be one byte a connection apart. A figure is read only from the whole JSON of the run asked
+for: its case, depth, requests and 5,000 connections from one address, three counts whose
+median is the one stated, and for an idle run its growth equal to its after less its before
+and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
+growth is not guessed from its figure. The job's connections stay 5,000: on a runner whose page
+has more bytes than that (65,536-byte pages), a page is more than a byte a connection, and
+`idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
+asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one
+whole answer, by its `Content-Length`, with nothing after it, and the case's. Anything else
+is no figure or no answer, and a reading with no figure on either build, a case either build
+gave no answer to, an idle reading not decided, and a base that did not build are each a case
+that cannot be counted. The
+job fails when the head does not build, whatever is declared.
+The description's line says what a miss does:
+
+| The description says | The rule holds | It does not |
+| --- | --- | --- |
+| `Request path: counted` | Passes | Fails, naming each case, and says the change is then measured |
+| `Request path: measured` | Passes: the counts are reported and decide nothing | The same |
+| No such line, or more than one | Passes, and names the line to add | Fails, and names the line to add |
+
+A declaration line is a line of the description's text, as it is written, that is
+`Request path: counted` or `Request path: measured` from its first character with nothing
+after it but spaces, whether the line ends in a line feed or in a carriage return and a line
+feed. The description declares a way when it holds exactly one. The job reads no Markdown,
+so such a line counts wherever it stands, in an example's block, a quote or a comment as in
+the text, and a description that says the line and also quotes it whole in an example holds
+two: more than one is read as none, whether or not they agree. So write the line once, on a
+line of its own, and where the description speaks of the line, write it inside a sentence.
+The verdict says what was read: the way and its line's number, that there is no declaration
+line, or how many there are and at which lines. Builds that answer differently are named
+above the table and fail nothing: a change may be meant to change an answer, and the review
+weighs a count of two different jobs.
+
+The description is the one the event carried when the run started. A line added afterwards is
+read by the next run a push starts, not by a rerun, and an edit starts no run, since it would
+count the same commits again and so draw them again. So a red check on a pull request that
+has since declared `measured` stands, with its reason in its summary, until the next push: a
+maintainer reads the summary and the description as it now is, and the check's color only for
+the commit and description it ran with.
+
+A green check is evidence for a reviewer to read, not an attestation: the counts are of the
+pull request's own tree, by its own workflow, scope, kit and comparison. A pull request that
+changes any of those has that change reviewed for what it does to the verdict.
+
+The same comparison of two builds counted on a host of one's own, each run's `--json` output in
+a file named as `--readings` names it:
+
+```sh
+node bench/request-cost/compare.mjs --readings
+node bench/request-cost/compare.mjs <base's directory> <head's directory> --description <file>
+```
+
+What hosted runners gave, in the job's first four runs, for the pull request that added it
+([#2124 Count what a request costs for a pull request against its base in a hosted job](https://github.com/corten-run/corten/pull/2124)):
+`651d61f71`, `28d9af174` and `20960f56d`, each against `1bef46229`, and `1df3829c6` against
+`aa526350f`, each base's crates the same as its head's, so that a run's two probes were one
+binary, byte for byte (the second, third and fourth runs printed their checksums). Each runner
+had 4 CPUs, of an Intel Xeon Platinum 8573C, an AMD EPYC 9V45 and, twice, an AMD EPYC 7763,
+with valgrind 3.26.0 and rustc 1.100.0:
+
+1. The job took 5 minutes 19 seconds, 4 minutes 7, 5 minutes 42 and 5 minutes 46. In the
+   first, third and fourth, the probe built against base, with nothing built before, in 52, 64
+   and 63 seconds, and against head, with base's crates built, in 40, 39 and 41; the 62 runs of
+   the kit took 193, 212 and 212. The second restored the first's compiled crates from a cache
+   (66 MB), as the workflows' other Rust jobs do: 32 and 26 seconds to build, and 154 for the
+   runs, on another runner. Installing valgrind, jemalloc and libzstd's headers took 8 to 13
+   seconds. That is one run with a cache beside three without, on runners that differ, so
+   what a cache saves was not measured; the job ends in about five minutes and keeps none.
+2. No run was refused, of 248. The runners allow 65,536 open files, each idle run's 5,000
+   connections opened in 0.2 to 2.2 seconds, and 13,215 to 13,979 sockets were in
+   `TIME_WAIT` when a job's last run ended.
+3. In the first three runs each row's eighteen counts, six a job, spanned at most 1
+   instruction in all 13 rows, on the three CPU models alike (`get` 18,504 and 18,505,
+   `page-browser` 219,794 and 219,795), which is as close as the 16-CPU host under
+   [How a number is read](#how-a-number-is-read) read one binary. In the fourth, twelve rows'
+   six counts did, and `get`'s spanned 3, base's being 18,387, 18,388 and 18,390, where the
+   budget is 91. In no run did a median differ from the other build's by more than 1, and
+   every allocation count was the same.
+4. An idle reading's six runs spanned 0 to 4 bytes a connection in a job (over the four:
+   8,430 to 8,433 after one request, 12,521 to 12,525 after three of a browser's, 2,655 to
+   2,661 before any byte). In a fifth run, of `bd7506d60`, the six before any byte spanned 5,
+   2,657 to 2,662.
+
+The idle rule can read a rise between two builds that are the same, since it compares two
+medians of three by a span of three, or one page when that is more: base's growths a page
+apart and a head two pages above base's median would be one. A model says how often, not the
+runners. When the rule compared the figures a connection by base's span alone, with every run
+drawn independently from one distribution, it did so in 8.7% of comparisons and 23.8% of jobs,
+a job being three readings, when the draws are normal, and in 5.5% and 15.7% when they are
+normal with a standard deviation of 1.5 bytes a connection and rounded to whole bytes. On the
+growths, with that standard deviation over 5,000 connections (7,500 bytes, 1.8 pages of 4,096),
+each draw rounded to whole pages and the mean placed anywhere in a page, the same draws read
+one by base's span alone in 5.9% of comparisons and 16.7% of jobs, and with the one page
+allowed in 5.4% and 15.3% (each simulated, 1,000,000 jobs): most of the fall from 8.7% is the
+rounding, and the one page allowed takes away about half a point more at that spread. None of
+the five runs read one, whose
+figures were compared, not their growths, which those runs did not print. A job that fails on idle memory alone, by a byte or
+two, is to be read with that in mind; by the rule its runs are still not taken again for
+their result.
+
 ## Tests
 
 `node --test bench/request-cost/*.test.mjs`, which `npm run check` runs file by file. No test
@@ -286,8 +463,11 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one page over base's agreeing three passing, two pages failing, more than base's span failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
+| `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
-`run.test.mjs` (but its refusals of an option) and `build.test.mjs` need Linux with `sh` and
-`git`, and are skipped elsewhere: on Windows 30 of the 46 tests run. The hosted check runs on
-Linux. What no test covers is checked by running the kit: the probe itself, callgrind's own
-dumps, and a real build.
+`run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
+with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 47 of the 69 tests run.
+The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
+itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
+around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).

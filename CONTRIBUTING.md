@@ -560,15 +560,32 @@ establish a general ranking.
          cannot count (Counted, below).
       7. A change whose reason is a win in cycles, time or requests a second.
 
-      **Counted.** Build base and head with
+      **Counted.** The hosted `Request Cost` job takes these counts for a pull request that
+      changes what a request is built from, base and head on one runner, and writes every
+      figure and its verdict to its summary, to copy into the description, so the author
+      prepares no host ([The hosted job](bench/request-cost/README.md#the-hosted-job)). Its
+      green check is evidence for a reviewer to read, not an attestation: the counts are of
+      the pull request's own tree, by its own workflow, scope, kit and comparison, so a pull
+      request that changes any of those has that change reviewed for what it does to the
+      verdict. On a host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no
       case's instructions a request rise by more than +0.5% of base's (the budget, by the
       medians the kit prints), no case's allocations a request rise, and idle memory does not
-      rise: each idle reading is taken three times on each build, and head's median is not
-      above base's by more than base's three span. The description gives every figure of every
-      run for both builds, and says why the change is none of the kinds above, which the review
+      rise: each idle reading is taken three times on each build, all six with the same
+      connections, case, requests and page size (each run prints them) and the same `--addresses`
+      (which it does not print, so the description names it), over at least as many connections as
+      the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
+      pages, over `--addresses 3`), so one page is at most a byte a connection, since a reading over
+      fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
+      resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
+      than the larger of base's three span and one page (the size it prints, the step resident
+      memory is reported in); the figures a connection are rounded and do not decide it. The
+      hosted job decides each idle reading so, from each run's growth and page size, and at its
+      fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
+      not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
+      `idle.mjs` printed it (its growth and settings, which decide; the hosted job's summary gives each run's before, after, growth and page size, which stands in for it), and says why the change is none of the kinds above, which the review
       accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
       it may be taken again, and the description gives the refusal and the kit's reason for
       it; a case that still cannot be counted sends the change to measured. A cost inside the
