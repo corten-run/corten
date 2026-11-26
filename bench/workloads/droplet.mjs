@@ -47,7 +47,7 @@ function acquireHandoffLock(path, bytes) {
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
     return current?.isFile() && ["dev", "ino", "birthtimeNs", "ctimeNs", "nlink"].every(key => current[key] === owned[key]);
   };
-  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "operation lock changed; preserve custody");
+  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "handoff operation lock changed; preserve custody");
 }
 
 const sameStateFile = (a, b) => ["dev", "ino", "birthtimeNs"].every(key => a[key] === b[key]);
