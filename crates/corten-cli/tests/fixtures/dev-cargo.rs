@@ -9,7 +9,15 @@ fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("metadata") => println!("{{\"packages\":[],\"workspace_members\":[]}}"),
         Some("build") => {
-            let exe = std::env::current_exe().unwrap().display().to_string().replace('\\', "/");
+            // The path as a JSON string, as Cargo writes it.
+            let mut exe = String::new();
+            for c in std::env::current_exe().unwrap().to_str().unwrap().chars() {
+                match c {
+                    '"' | '\\' => exe.extend(['\\', c]),
+                    c if c < ' ' => exe.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => exe.push(c),
+                }
+            }
             println!("{{\"reason\":\"compiler-artifact\",\"target\":{{\"kind\":[\"bin\"]}},\"executable\":\"{exe}\"}}");
         }
         _ => {
