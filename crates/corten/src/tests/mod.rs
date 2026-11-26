@@ -608,7 +608,8 @@ struct Logging {
     _beside: tracing::Dispatch,
 }
 
-/// Logs what this thread logs to `lines` until the [`Logging`] is dropped. A second subscriber,
+/// Logs what this thread logs to `lines`, without the time, until the [`Logging`] is dropped: a
+/// test matches what a line says, and a time's digits would match by chance. A second subscriber,
 /// which logs nothing, stays registered beside it for as long: while one subscriber alone is
 /// registered, `tracing` decides once for the whole process whether a log line is wanted, by the
 /// subscriber of the first thread to reach it, so a test running beside this one with none would
@@ -618,7 +619,7 @@ struct Logging {
 fn log_to(lines: &Lines) -> Logging {
     let _beside = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let writer = lines.clone();
-    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).without_time().with_writer(move || writer.clone()).finish();
     Logging { _logging: tracing::subscriber::set_default(subscriber), _beside }
 }
 
