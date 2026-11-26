@@ -1,6 +1,11 @@
 //! Stands in for Cargo and for the app under `corten dev`: `build` names this program as the
 //! package's binary, and run as that binary it writes the `PORT` it was given to `DEV_PORT_OUT`.
+//! Run at all, it makes the file `DEV_CARGO_RAN` names.
 fn main() {
+    // Noted for a test that requires Cargo never ran.
+    if let Some(ran) = std::env::var_os("DEV_CARGO_RAN") {
+        std::fs::write(ran, "").unwrap();
+    }
     match std::env::args().nth(1).as_deref() {
         Some("metadata") => println!("{{\"packages\":[],\"workspace_members\":[]}}"),
         Some("build") => {
