@@ -2747,7 +2747,7 @@ impl<S: Steps> Layer<S> {
         }
         // An answer that brings none of its scope's lines is given them all in one pass; any
         // other has each inserted.
-        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp);
+        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp, caller);
         if !ready {
             // First: the security headers reserve room for `Cache-Control` and `Vary` too.
             self.policy.headers(&mut res, nonce.as_ref(), csp, vary);

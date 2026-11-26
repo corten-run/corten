@@ -1758,7 +1758,7 @@ struct WalledAnswer<'a> {
 }
 
 /// Every answer [`lines_answer`] makes.
-const LINES_KINDS: [&str; 47] = [
+const LINES_KINDS: [&str; 49] = [
     "text",
     "created",
     "missing",
@@ -1806,6 +1806,8 @@ const LINES_KINDS: [&str; 47] = [
     "xml",
     "alone",
     "empty-text",
+    "bare-no-store",
+    "bare-public",
 ];
 
 /// An answer by name: what a handler, a middleware or an upstream can leave on one that the
@@ -1900,6 +1902,14 @@ fn lines_answer(kind: &str) -> Response {
             res
         }
         "empty-text" => (StatusCode::NO_CONTENT, "").into_response(),
+        // A `Cache` answer whose header a middleware took out: settled by its mark.
+        "bare-no-store" | "bare-public" => {
+            let mut res = "bare".into_response();
+            let cache = if kind == "bare-no-store" { Cache::no_store() } else { Cache::public(Duration::from_secs(60)) };
+            cache.apply(&mut res);
+            res.headers_mut().remove("cache-control");
+            res
+        }
         other => panic!("no answer named {other}"),
     }
 }
@@ -2059,12 +2069,13 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 }
                 let (mut one, mut each) = (lines_answer(kind), lines_answer(kind));
                 let said = format!("{name}, {scope}: {kind}, nonce taken {taken}, the runtime's {swap}");
-                if !applied.ready(&mut one, &lines, slot.as_ref(), csp) {
+                if !applied.ready(&mut one, &lines, slot.as_ref(), csp, seen.caller) {
                     assert_eq!(lines_of(one.headers()), lines_of(each.headers()), "{said}: left as it was");
                     left += 1;
                     return false;
                 }
-                let seen = Seen { nonce: taken, ..seen };
+                // As the app reads it: a nonce taken from the request's slot (an API's has none).
+                let seen = Seen { nonce: slot.as_ref().is_some_and(|slot| slot.taken().is_some()), ..seen };
                 applied.headers(&mut each, slot.as_ref(), csp, false);
                 if page {
                     applied.document(&mut each, csp, swap);
@@ -2091,7 +2102,7 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 // A page's request that took its nonce names it in the policy.
                 assert_eq!(ready(kind, true, false, anyone()), !page, "{name}, {scope}: {kind}, its nonce taken");
             }
-            for kind in ["two", "no-store", "vary", "policy", "cookie", "alone", "relayed"] {
+            for kind in ["two", "no-store", "vary", "policy", "cookie", "alone", "relayed", "bare-no-store", "bare-public"] {
                 assert!(!ready(kind, false, false, anyone()), "{name}, {scope}: {kind}");
             }
             // A document gets lines of its own after the policy's, unless the policy has none for it.

@@ -1477,22 +1477,37 @@ impl Applied {
     /// [`Applied::headers`], [`Applied::document`] and [`crate::cache::settle`], when those would
     /// leave the same lines in the same order: an answer with no header, or its `Content-Type`
     /// alone, that is not a document or a worker's script those give lines of its own, on a
-    /// request that took no nonce and drew no style block. `nonce` and `csp` are what
-    /// [`Applied::headers`] is given. Returns whether it did; `res` is untouched when not.
+    /// request that took no nonce and drew no style block, and without a [`crate::cache::Cache`]
+    /// mark (one whose header a middleware took out is settled by its mark). `nonce` and `csp`
+    /// are what [`Applied::headers`] is given, and `caller` whether something read a [`crate::Caller`]: such
+    /// an answer is marked [`crate::cache::Personal`], as `settle` marks it, the one thing `settle`
+    /// does differently for who asked to an answer this takes. Returns whether it did; `res` is
+    /// untouched when not.
     #[inline]
-    pub(crate) fn ready(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp) -> bool {
+    pub(crate) fn ready(
+        &self,
+        res: &mut Response,
+        lines: &HeaderMap,
+        nonce: Option<&NonceSlot>,
+        csp: &Csp,
+        caller: bool,
+    ) -> bool {
         // A page brings more than its type: it is told apart here, without a call.
-        res.headers().len() <= 1 && self.give(res, lines, nonce, csp)
+        res.headers().len() <= 1 && self.give(res, lines, nonce, csp, caller)
     }
 
     /// [`Applied::ready`], for an answer with one header at most.
     #[inline(never)]
-    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp) -> bool {
+    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp, caller: bool) -> bool {
         let kind = match res.headers().iter().next() {
             None => None,
             Some((name, kind)) if name == header::CONTENT_TYPE => Some(kind),
             Some(_) => return false,
         };
+        // A `Cache` answer whose header a middleware took out is settled by its mark.
+        if crate::cache::Typed::marked(res) {
+            return false;
+        }
         if let Some(slot) = nonce {
             if slot.taken().is_some() || res.extensions().get::<StyleBlock>().is_some() {
                 return false;
@@ -1510,6 +1525,10 @@ impl Applied {
         headers.reserve(lines.len() + 1);
         for (name, value) in lines {
             headers.append(name, value.clone());
+        }
+        // One visitor's, for an app that relays it inline ([`crate::cache::Personal`]).
+        if caller {
+            res.extensions_mut().insert(crate::cache::Personal);
         }
         true
     }

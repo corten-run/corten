@@ -242,6 +242,14 @@ impl Typed {
         res.extensions().get::<Typed>().is_some_and(|typed| typed.no_store)
     }
 
+    /// Whether `res` carries a [`Cache`] mark, its own or a kept answer's: [`settle`] holds it to
+    /// the mark (a `NoStore` one goes out `private, no-store`, a `Public` one to a request with
+    /// credentials is one visitor's) even when a middleware took its header out, so the one pass
+    /// ([`crate::security::Applied::ready`]) leaves it to the stages.
+    pub(crate) fn marked(res: &Response) -> bool {
+        res.extensions().get::<Typed>().is_some() || crate::kept::Kept::typed(res.extensions()).is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         Typed { named: false, no_store: false, lifetime: 60 }
