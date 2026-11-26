@@ -30,8 +30,8 @@ item 2 asks for cycles under load as well, which this kit does not give.
 
 Each case is one request, sent to one of the probe's two configurations: `api`, an app with an
 API and no pages, and `pages`, an app without an API. Both keep every `App` default, and answer
-to the names an app answers to by default (`localhost` and IP addresses) but in the four cases
-that end `-any` or `-any-last`, where the probe is started with `HOSTS=*` and answers to any
+to the names an app answers to by default (`localhost` and IP addresses) but in the six cases
+with `-any` in their name, where the probe is started with `HOSTS=*` and answers to any
 host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 
 | Case | Configuration | Request | Answer |
@@ -45,6 +45,8 @@ host. A `HOSTS` in the environment the kit is run in never reaches the probe.
 | `get-browser`, `text-browser`, `page-browser` | as above | The same with the seven header lines a browser sends with a navigation | The same; the page compressed with zstd |
 | `get-any`, `unstaged-any` | `api`, `HOSTS=*` | As `get` and `unstaged` | `3` |
 | `get-any-last`, `unstaged-any-last` | `api`, `HOSTS=*` | As `get` and `unstaged` with the browser's seven lines before `Host`, which is the last of eight | `3` |
+| `unstaged-any-name` | `api`, `HOSTS=*` | As `unstaged` to `Host: shop-2.example-cdn.region-9.example.test` and the port, a name of 40 bytes | `3` |
+| `unstaged-any-long` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,095 `a` and a `_` and the port | `3` |
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
@@ -52,7 +54,9 @@ refuses it), so that one reads none.
 
 Every request has a `Host` line and nothing else it does not need. An app that answers to any host
 reads its `Host` by itself and not against names, and finds it on a later line by other searches
-than on the first: the four cases of `HOSTS=*` count those reads, with `Host` first and last. Every answer is checked
+than on the first: the cases of `HOSTS=*` count those reads, with `Host` first and last, and with
+names longer than `localhost`: one of the letters, digits, `-` and `.` most names are made of, and
+one whose last byte is none of those, which is read to its end before that byte is found. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16

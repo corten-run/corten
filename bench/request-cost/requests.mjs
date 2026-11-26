@@ -16,8 +16,14 @@ const BROWSER = [
 const get = (path, more = []) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, `Host: localhost:${port}`, ...more, "", ""].join("\r\n"), "latin1");
 /** A GET with `Host` after the browser's lines: the last of eight. */
 const last = (path) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, ...BROWSER, `Host: localhost:${port}`, "", ""].join("\r\n"), "latin1");
+/** A GET whose `Host` is `name` and the port. */
+const hosted = (path, name) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, `Host: ${name}:${port}`, "", ""].join("\r\n"), "latin1");
 const post = (path, type, body) => (port) =>
   Buffer.from([`POST ${path} HTTP/1.1`, `Host: localhost:${port}`, `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
+
+/** A name of 40 bytes, as a site's host on a CDN is, and one of 4,096 that ends in `_`. */
+const NAME = "shop-2.example-cdn.region-9.example.test";
+const LONG = `${"a".repeat(4095)}_`;
 
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
@@ -50,6 +56,10 @@ export const cases = {
   "unstaged-any": { configuration: "api", hosts: "*", request: get("/unstaged11?a=1&b=2"), body: "3" },
   "get-any-last": { configuration: "api", hosts: "*", request: last("/baseline11?a=1&b=2"), body: "3" },
   "unstaged-any-last": { configuration: "api", hosts: "*", request: last("/unstaged11?a=1&b=2"), body: "3" },
+  // `unstaged-any` with a longer name than `localhost`: one of 40 bytes of letters, digits, `-`
+  // and `.`, and one of 4,095 `a` and a `_`, which a name holds but is none of those, last.
+  "unstaged-any-name": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", NAME), body: "3" },
+  "unstaged-any-long": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", LONG), body: "3" },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */
