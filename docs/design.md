@@ -11397,10 +11397,10 @@ rules something out.
 
     Last checked: 2026-11-26, the runtime's size with this change against main `8b4e863b1`, whose
     runtime main `d38271235` has unchanged, and the page's and the patch's bodies on `6ca02c26e`;
-    2026-11-25, `popstate` and the key on a move to an `#id`; 2026-11-26, `currententrychange`
-    before `popstate`, the order of `window`'s `popstate` listeners, and the signal of a
+    2026-11-25 and 2026-11-26, `popstate` and the key on a move to an `#id`, `currententrychange`
+    before `popstate`, the order of `window`'s `popstate` listeners and the signal of a
     cancelled replace, and the watchlist smoke on the same
-    server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
+    server, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.
 
 ## Rules
