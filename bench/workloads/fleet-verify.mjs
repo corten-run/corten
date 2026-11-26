@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full, providerDiagnostic } from "./cloud-options.mjs";
-import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { livePeerLease, requireUnfinishedJournal, settledMonitor, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { streamLimits } from "./isolated/control-stream.mjs";
 import { digest, durable, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
@@ -452,6 +453,69 @@ export function recheckSetupAttempt(root, row, successor) {
   if (present(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), [], "setup attempt entered the campaign"); }
   idleAttempt(); // Hashing the archive/tree may overlap the start of collection.
   return idleAttempt;
+}
+
+// An operator-reviewed external cleanup never changes the old launch's state
+// or grants result or deletion authority. The next create must prove absence.
+export function externalFailedHostBinding(fleet) {
+  const { root, manifest, manifestSha256 } = fleet, { round, provider, single } = manifest;
+  assert.ok(single && !single.offlineHandoff, "external failure requires a monitored independent attempt");
+  const { group, local, state, stateSha256, outcome } = readGroup(fleet, single.group);
+  assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === "invalid"
+    && !state.archiveSha256 && !state.evidence && !state.validation && !state.collectedAt && !state.deletionIntentAt && !state.destroyedAt,
+    "external failure requires an uncollected invalid attempt");
+  const hasConflict = () => ["results.tgz", "monitor-terminal.json", "audit-delivery.lock", "state.json.tmp"].some((name) => present(join(local, name)))
+    || readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz\.|monitor-audit-)/i.test(name))
+    || [createQuarantineFile, quarantineWitnessFile].some((name) => present(join(root, "receipts", name)));
+  assert.ok(!hasConflict(), "external failure cannot supersede other evidence or custody");
+  const capture = (name, max) => digest(regular(join(local, name), max));
+  const journal = join(local, "monitor-journal.jsonl");
+  const monitor = () => [capture("monitor-invalid.json", 8192), capture("monitor-local-closed.json", 8192),
+    capture("monitor-registration.json", 131072), fileHash(journal, streamLimits.journalBytes)];
+  const monitorFiles = monitor();
+  settledMonitor(local, state);
+  requireUnfinishedJournal(journal, state.control.monitor.id);
+  const intent = readLaunchIntent(fleet), batch = reportBatch(fleet, () => undefined);
+  assert.ok(batch && batch !== "busy", "external failure requires the original stopped batch owner");
+  const { pid, approvalSha256 } = batchLock(batch.bytes);
+  const locks = [];
+  const owner = readRetainedInvalidLocks(local, state, (path) => {
+    const lock = lockEvidence(path);
+    locks.push({ ...lock, path });
+    return lock.bytes;
+  });
+  assert.ok(owner.pid === pid && approvalSha256 === intent.approvalSha256 && Date.parse(owner.at) <= Date.parse(state.createIntentAt),
+    "external failure requires original launch custody");
+  assert.ok(!retainedInvalidOwner(local, state) && sameChildLocks(local, locks) && sameReportBatch(batch, reportBatch(fleet, () => undefined))
+    && isDeepStrictEqual(monitorFiles, monitor()) && stateSha256 === readGroup(fleet, group).stateSha256 && !hasConflict(),
+    "external failure custody changed or recovery is active");
+  return { round, group, accountId: provider.accountId, id: state.id, manifestSha256, stateSha256, launch: intent.sha256,
+    batchLockSha256: batch.sha256, operationLockSha256: locks[0].sha256, launchLockSha256: locks[1].sha256, monitorFiles,
+    nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+}
+
+export function readExternalFailedHost(fleet) {
+  const dir = join(fleet.root, "receipts"), path = join(dir, "external-failed-host.json");
+  if (!present(path)) return;
+  physical(dir);
+  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = externalFailedHostBinding(fleet);
+  const operatorProofSha256 = record?.operatorProofSha256;
+  assert.ok(typeof operatorProofSha256 === "string" && /^[a-f0-9]{64}$/.test(operatorProofSha256), "external failure operator proof required");
+  assert.ok(isDeepStrictEqual(record, { schema: "benchmark-external-failed-host/v1", binding, operatorProofSha256 }),
+    "external failure binding differs");
+  const { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256 } = binding;
+  return { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256,
+    root: fleet.root, externalFailureSha256: digest(bytes) };
+}
+
+export function recheckExternalFailedHost(root, row, successor) {
+  assert.equal(dirname(row.root), root, "external failure belongs to another continuation");
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.ok(isDeepStrictEqual(readExternalFailedHost(fleet), row), "external failure custody changed");
+  if (successor?.single?.group === row.group) {
+    assert.ok(Number(successor.round.slice(1)) > Number(row.round.slice(1)), "external failure requires a higher round");
+    assert.notEqual(successor.commit, fleet.manifest.commit, "retry after external failure requires a different measured commit");
+  }
 }
 
 // Read-only per-group replay, shared by final inspection and staged admission.
