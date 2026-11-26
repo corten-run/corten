@@ -148,29 +148,35 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false, b
   return { ...h, repo, inspect, input: { folder: root, round: "r21", commit: approvedCommit }, started: join(root, "started") };
 }
 
-test("JSON API c-16 replay evaluates the committed placement module in the sealed worker; dropping it stays blocked", { timeout: 60000 }, async (t) => {
+test("JSON API c-16 and c-32 replay evaluate the committed placement module in the sealed worker; dropping it stays blocked", { timeout: 60000 }, async (t) => {
   const path = "bench/json-api/placement.mjs";
   assert.equal(validationPaths.filter((p) => p === path).length, 1);
   const h = await fakeNative(t, `import {readFileSync} from "node:fs"; import {createHash} from "node:crypto";
     import {inspectJson, renderJson} from "../../json-api/report.mjs";
     export function validateCampaign({folder}) {
-      const {summary, artifacts} = JSON.parse(readFileSync(folder + "/c16-result.json", "utf8"));
-      const load = (ref) => { const bytes = artifacts[ref?.path];
-        if (bytes === undefined || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw new Error("raw artifact"); return JSON.parse(bytes); };
-      const report = inspectJson(summary, {load});
-      return { baseline: report.baseline, layout: summary.measurement.loadLayout, line: renderJson(report).includes("not a measured speedup") };
+      return JSON.parse(readFileSync(folder + "/json-layouts.json", "utf8")).map(({summary, artifacts}) => {
+        const load = (ref) => { const bytes = artifacts[ref?.path];
+          if (bytes === undefined || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw new Error("raw artifact"); return JSON.parse(bytes); };
+        const report = inspectJson(summary, {load});
+        return { baseline: report.baseline, layout: summary.measurement.loadLayout, line: renderJson(report).split("\\n").find((line) => line.startsWith("Load layout ")) };
+      });
     }`, { realGraph: true });
-  // The real opt-in result, saved as run.mjs saves it under JSON_API_LOAD_LAYOUT on a 16-CPU host.
+  // Both results use the placement and measurement shape run.mjs writes.
   const { result } = await import("../json-api/test-fixtures.mjs"), { c16Env, runnerPlacement } = await import("../json-api/placement.mjs");
-  const artifacts = new Map(), f = result([], { artifacts, placement: runnerPlacement(c16Env, 16) });
-  assert.ok(artifacts.size > 0);
-  writeFileSync(join(h.input.folder, "c16-result.json"), JSON.stringify({ summary: f.summary, artifacts: Object.fromEntries(artifacts) }));
+  const cases = [[16, c16Env], [32, { ...c16Env, JSON_API_LOAD_LAYOUT: "json-c32-generator-v1", JSON_API_LOAD_CPUS: "4-23" }]];
+  const saved = cases.map(([size, env]) => {
+    const artifacts = new Map(), f = result([], { artifacts, placement: runnerPlacement(env, size) });
+    assert.ok(artifacts.size > 0);
+    return { summary: f.summary, artifacts: Object.fromEntries(artifacts) };
+  });
+  writeFileSync(join(h.input.folder, "json-layouts.json"), JSON.stringify(saved));
   const snapshot = captureFixture(h.input.commit, { root: h.repo }), row = snapshot.sources.find((r) => r.path === path);
   assert.equal(row.source, readFileSync(join(checkout, path), "utf8").replaceAll("\r\n", "\n"));
   // Replacing the checkout file after commit cannot run: replay uses the committed bytes.
   const marker = join(h.input.folder, "unapproved-placement");
   writeFileSync(join(h.repo, path), `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "unapproved");`);
-  assert.deepEqual(await h.inspect(h.input), { baseline: true, layout: "json-c16-generator-v1", line: true });
+  assert.deepEqual(await h.inspect(h.input), cases.map(([size, env], i) => ({ baseline: true, layout: env.JSON_API_LOAD_LAYOUT,
+    line: `Load layout ${env.JSON_API_LOAD_LAYOUT}: the untimed cold probe ran on CPUs 4-7 at quota 4; load resource samples are bounded against k6's quota ${i ? 20 : 12} on CPUs ${env.JSON_API_LOAD_CPUS}. This is apparatus placement for a ${size}-CPU host, not a measured speedup.` })));
   assert.equal(existsSync(marker), false);
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
@@ -513,6 +519,21 @@ test("native replay timeout has a fixed stage and retains custody if the worker 
   await rejected;
   assert.equal(retains, 1);
   assert.equal(unreferences, 1);
+});
+
+test("replay after confirmed host absence is still bounded, but permits 25 minutes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let stops = 0;
+  const pending = inspectCampaign({}, { confirmedAbsent: true, start: () => ({
+    result: new Promise(() => {}), stop: () => stops++,
+  }) });
+  const rejected = assert.rejects(pending, { controllerStage: "collect-native-replay-deadline" });
+  t.mock.timers.tick(validationLimit + 1);
+  assert.equal(stops, 0);
+  t.mock.timers.tick(25 * 60_000 - validationLimit);
+  assert.equal(stops, 1);
+  t.mock.timers.tick(validationStopLimit);
+  await rejected;
 });
 
 test("native replay startup, interruption and worker refusal have closed stages", async () => {

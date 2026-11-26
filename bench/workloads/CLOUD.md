@@ -55,6 +55,12 @@ A reservation without the marker regenerates its original job, which pulls
 `node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1`.
 A new reservation's measured commit must therefore include that move; merged main does.
 
+New dedicated Catalog, Marketplace, Mixed Production and Hardening reservations use
+their runners' Playwright containers. JSON API does not launch a browser. These
+reservations save `skipHostChromium: true` and omit only the host Chromium install.
+Fullstack Browser, Client Heavy, Live Delivery and Recoverable Live still install
+host Chromium. Unmarked reservations keep their original job, packer and unit bytes.
+
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
 `umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`
@@ -185,8 +191,26 @@ measured commit that predates it replays under its own closure list, which never
 names the file.
 
 This is apparatus placement for future runs, not a measured speedup and not a fix for
-the upstream constraint above. Do not compare JSON API timings across the two
+the upstream constraint above. Do not compare JSON API timings across
 placements, and do not rerun saved groups only to adopt it.
+
+### JSON API c-32 Placement (Opt-In)
+
+For a future JSON API calibration, use `--load-layout json-c32-generator-v1` at
+the same single-group `--prepare` step, not on detach. The saved fleet job
+selects only `c-32/sfo2`. Prepare, approval preview, detach and the locked
+pre-create check require that pair to be offered in both directions of the
+provider catalog; there is no fallback. The job requires `nproc` of at least 32.
+
+Only k6 widens: quota 20 on CPUs 4-23, with the load resource sampler accounting
+for all 20. CPU 0 stays for host work, the app and upstream remain on 1 and 2-3,
+the untimed cold probe and counter reader stay on 4-7, and CPUs 24-31 are not
+assigned to benchmark containers. The same load fence is below 1600%; upstream
+fences are unchanged. The binding and replay require the saved layout and its
+exact placement, not merely the host size. A default or c-16 reservation
+continues to regenerate its original bytes. See the
+[JSON API runner guide](../json-api/README.md#opt-in-c-32-load-placement) for the
+r93 calibration evidence and its limits.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
@@ -679,10 +703,44 @@ receipt and custody before a successor can allocate, using the complete account
 census to refuse the old ID, original name, or run tag. The receipt authorizes
 no SSH, delete, or publication; a retry needs a higher round and a new commit.
 
+If the workstation died after a supervised JSON API or Mixed Production audit
+delivery, it may have left the monitor `live` without writing close markers.
+Use `benchmark-external-failed-host/v2` only after independent review confirms
+the original archive ended in failure without a recoverable result, the local
+controller tree stopped, and the externally retired host is absent by exact-ID
+404 and a complete same-account inventory. Keep the reviewed evidence outside
+Git. Use the same receipt fields with `archiveSha256` for the original failed
+archive and get `binding` with `externalFailedHostBinding(fleet, { orphaned: true })`.
+The original locks stay in place. The controller requires a complete local
+journal with an expired peer lease, the matching audit delivery and no terminal
+or close record, collection evidence or recovery lock. It rechecks those bytes
+and the same census before create. This records the failed attempt without
+trying to recover or qualify it.
+
+The same receipt can record external cleanup of a monitored attempt that stopped
+after an accepted create but before binding the droplet. The original reservation
+must have the posted droplet and action IDs, the exact uncertain create-action
+request refusal, and no setup files, guest control, or collection evidence. For
+this case review the saved launch and stopped process tree, the exact completed
+create action and prior ownership of that ID, and the subsequent exact-ID 404 and
+complete same-account inventory. Bind that review in `operatorProofSha256`.
+Do not alter the saved reservation, its child locks or the fleet lock. If the
+outer continuation lock is still held, stop dispatch to that root and separately
+verify and archive that lock and its original owner's closed process tree before
+releasing only the outer lock. Keep dispatch stopped until the receipt is in place.
+The next launch still checks the old ID, name and tag in its pre-create census.
+
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
 retirement evidence and rechecks the unchanged locks; it never removes them or
 authorizes collection or deletion on the old host.
+
+For an existing monitored external failure receipt for a bound droplet, replay
+can also recognize a Windows process whose start time is strictly later than the
+saved receipt and all three original locks. Ambiguous identity still refuses.
+The checks for issuing a new receipt or replaying an unbound posted create are
+unchanged. Replay neither changes old custody records nor replaces the
+same-account absence check before a new allocation.
 
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
@@ -1379,6 +1437,14 @@ still needs a later sample with no remaining session member to prove drainage.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
+Fleet verification and retry admission replay the saved failed-setup receipt
+against its archive and extracted evidence. For a controlled receipt they also
+verify the final setup query and the original control files in the extraction.
+Verified setup retirement permits a retry; it does not qualify a result.
+The retry approval binds the prior retirement, and the child rechecks it and
+its custody before recording the create intent and again before provider dispatch.
+A local refusal before contacting the provider keeps the new reservation unused;
+a missing provider reply does not count as a local refusal.
 
 ### Failed Native Custody And Retirement
 
@@ -1915,7 +1981,24 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each local inspection has a fixed 15-minute deadline including snapshot setup.
+Local inspection has a 15-minute deadline including snapshot setup. With a saved
+DELETE intent, no recorded destruction and a previously verified, monitored
+result, a fresh collect may use up to 25 minutes for replay only after a
+same-account exact 404. It checks absence again and rechecks the archive,
+extracted evidence and terminal campaign and seal before recording cleanup.
+It never sends another DELETE. Other replay deadlines are unchanged.
+If ordinary collection at the measured commit cannot finish that replay, a
+reviewed merged successor can reconcile an already verified, successfully
+collected child with closed monitoring and a saved DELETE intent. Run the child
+`cloud-production.mjs --collect --absent-measured-checkout PATH` preview from
+the successor, with `PATH` the clean original measured checkout. Its approval must
+name `collect-verified-absent-host-only` and the original measured commit. The
+ancestor must supply the successor's complete replay source list. Replay reads
+the measured commit's blobs and verifies the same evidence again. Only the exact
+account and host may be read; a present host, changed reservation, or different
+replay result refuses. This route records only `destroyedAt`; it cannot connect
+to the guest or send another DELETE. Other collection paths keep their source
+requirements.
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider

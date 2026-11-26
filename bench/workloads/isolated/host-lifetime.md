@@ -92,6 +92,29 @@ for every participant, within its own deadline. A sealed terminal record counts 
 is of captures, including those in a sample the collector later rejects for another
 reason, so it can exceed the retained Docker participant captures.
 
+Separately, if the opening `/proc/PID/stat` read returns `ENOENT` after a
+running inspect, an exact-ID re-observation can record the container as stopped.
+It must show the same image, start and restart generation, PID zero and an
+`exited` or `removing` state with a valid finish time in that capture. The
+stopped row has no kernel evidence. Only an unchanged, coherent running response
+allows one pause and one final exact-ID inspect. The pause targets 70 ms from
+the start of capture; the final inspect must start before 75 ms on the monotonic
+clock. Failed confirmation retains the original gap; later proc reads and
+startup retries do not use this path.
+
+Replay counts only verified kernel records as live coverage. An `exited` or
+`removing` row must have a finish between the end of the last verified running
+capture and the end of its own capture. Stopped rows for the same container
+generation must agree on finish, exit code and OOM status, even if the terminal
+receipt still showed it running. Stopped rows do not extend live coverage.
+An exited terminal receipt must also have a valid finish no earlier than the
+last verified running capture, even without a stopped row. Fullstack Browser
+bounds it by its post-inspect timestamp (`window.endedAt`). Live Delivery records
+its window end before the inspect, so that boundary does not constrain the
+receipt's finish. Docker timestamps retain nanoseconds,
+but comparisons to observation or receipt clocks truncate to milliseconds.
+A finish in the last millisecond of a bound is admitted.
+
 ## Fault Shutdown
 
 The first irrecoverable interval observation or storage failure requests command-local
@@ -225,8 +248,8 @@ There is no helper process, worker, custom message protocol or production I/O ho
 The sampler retains its actual capture timestamps, 100 ms interval and independent
 one-second replay limit. It can capture ahead of storage without retimestamping
 rows at completion. The combined 256 MiB record/sample limit includes admitted but
-unfinished bytes. Additional queue limits are 8 MiB, 64 frames and 4,096 initial
-records, including the one in-flight frame. Overflow fails rather than waiting on
+unfinished bytes. Additional queue limits are 8 MiB, 300 frames (30 seconds at
+100 ms) and 4,096 initial records, including the one in-flight frame. Overflow fails rather than waiting on
 the sampler, dropping a member or growing an unbounded queue. Storage uses at most
 two evidence FDs: the sample file and one record or directory. Queue payload and
 V8 heap limits are not claims about total process memory.

@@ -420,7 +420,20 @@ test("expired systemd history collects the sealed exit archive once, even after 
   const before = h.calls.length;
   await assert.rejects(task().collect(), /acknowledgement lost/);
   assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
-  assert.equal(await task().collect(), 0); assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
+  h.hosts();
+  let replayed = false;
+  await assert.rejects(h.task({ inspect: async () => { replayed = true; return report; } }).collect(), /deletion not confirmed/);
+  assert.equal(replayed, false); assert.equal(h.deletes, 1);
+  assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  h.hosts([]);
+  const beforeRecovery = h.calls.length;
+  const exactRead = ([bin, command, resource, action]) => bin === "doctl" && command === "compute" && resource === "droplet" && action === "get";
+  const recovery = h.task({ inspect: async () => {
+    assert.equal(h.calls.slice(beforeRecovery).filter(exactRead).length, 1, "exact absence before extended replay");
+    return report;
+  } });
+  assert.equal(await recovery.collect(), 0); assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.calls.slice(beforeRecovery).filter(exactRead).length, 2, "absence checked again after replay");
   assert.equal(h.saved().evidenceOutcome, "validated"); assert.equal(h.saved().fullGroupQualified, false);
   assert.deepEqual(target, { app: "fastapi", outcome: "failed", comparisonEligible: false });
   assert.ok(!h.calls.slice(before).some(([bin, ...args]) => bin === "ssh" && args.at(-1).includes("pack.sh")));

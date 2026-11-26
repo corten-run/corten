@@ -131,11 +131,16 @@ sfo2. A non-catalog group can use c-8 in sfo2 (`dedicated-sfo2`), lon1
 placement. Native replay reports the alternate mode so the collector can check
 it against the child's reservation. These c-8 placements use the same workload
 and resource budgets.
-The fleet binds only catalog-page to c-16 in sfo2 with
+The fleet binds Catalog to c-16 in sfo2 with
 [`c16-generator-v1`](CAMPAIGN.md#parent-interface), which widens the load generator
-without changing the app, upstream or probes. Allocation and isolation remain
-unobserved by an offline binding. Other timed HTTP roles retain native 1/2/4 CPU quotas and explicitly
-record intended app/upstream/load pinning `1`/`2-3`/`4-7` using each native environment prefix.
+without changing the app, upstream or probes. An independent JSON API fleet can
+opt into [`json-c16-generator-v1`](../CLOUD.md#json-api-c-16-placement-opt-in) or
+[`json-c32-generator-v1`](../CLOUD.md#json-api-c-32-placement-opt-in), also in sfo2.
+The wider layout then changes only the generator quota and pinning; the cold
+probe and counter sidecar stay on `4-7`. Allocation and isolation remain
+unobserved by an offline binding. The default timed HTTP roles retain native
+1/2/4 CPU quotas and explicitly record intended app/upstream/load pinning
+`1`/`2-3`/`4-7` using each native environment prefix.
 Those settings are expectations, not observed environment or native defaults. Mixed
 functional capture has separate 1/2/2 CPU app/upstream/capture budgets; only its explicit
 measurement recipe requests the measured CPU placement. Its qualification worker has 1 GiB;

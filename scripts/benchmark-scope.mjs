@@ -21,6 +21,14 @@ const kernelInputs = [...tooling, ".github/workflows/benchmark-evidence.yml", "b
 // Includes the core suite's committed source-custody roots, checked against captureSources.
 const evidenceInputs = [...kernelInputs, ...rustInputs,
   "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "examples/card-market"];
+// What the Request Cost job counts, and what it counts with: the crates the request path is built
+// from and their locked versions, the kit, and the job itself. The kit's probe builds from
+// crates/corten and crates/corten-macros alone; the feed's two crates are here because a request
+// for a feed runs them, though no case of the kit does. A .gitattributes in any directory says
+// what `git archive` puts in the tree build.sh builds from (selectRequestCost).
+const requestCostInputs = [".node-version", ".github/workflows/request-cost.yml", "scripts/benchmark-scope.mjs",
+  "Cargo.toml", "Cargo.lock", "crates/corten", "crates/corten-macros", "crates/corten-feed", "crates/corten-protocol",
+  "bench/request-cost"];
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
 
 export function selectScope(allApps, paths) {
@@ -60,6 +68,10 @@ export function selectEvidence(paths) {
 
 export function selectKernel(paths) {
   return paths === undefined || paths.some(path => matches(path, kernelInputs));
+}
+
+export function selectRequestCost(paths) {
+  return paths === undefined || paths.some(path => matches(path, requestCostInputs) || /(^|\/)\.gitattributes$/.test(path));
 }
 
 function changedPaths(base, head, cwd, env) {
@@ -102,7 +114,9 @@ if (import.meta.main) {
   } else if (workflow === "evidence") {
     const paths = eventPaths(process.env);
     appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
+  } else if (workflow === "request-cost") {
+    appendFileSync(GITHUB_OUTPUT, `run=${selectRequestCost(eventPaths(process.env))}\n`);
   } else {
-    throw new Error("Expected catalog or evidence scope");
+    throw new Error("Expected catalog, evidence or request-cost scope");
   }
 }

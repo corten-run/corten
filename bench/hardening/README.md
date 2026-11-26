@@ -37,7 +37,9 @@ Use the [grouped benchmark procedure](../workloads/CLOUD.md) for an official rou
 Before the first cell, the runner prepares its Node upstream, Playwright checker,
 nginx edge and OpenSSL certificate images. It reuses successful local lookups
 and otherwise makes one bounded pull of the same reference. The Playwright
-reference follows the pinned browser-driver version. The runner records and
+reference follows the pinned browser-driver version. That container supplies
+Chromium and its libraries; new dedicated Hardening cloud runs do not install
+a second Chromium on the host. The runner records and
 uses the inspected image IDs; failure here is an apparatus failure, not a
 framework result. This setup does not warm any measured endpoint or alter the
 request schedule.

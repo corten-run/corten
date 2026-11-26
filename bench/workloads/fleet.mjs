@@ -6,7 +6,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetCatalogCommand, fleetPlan, fleetRegion, jsonFleetPlacement, requireStagedFleet, roundName } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetPlan, fleetRegion, jsonFleetPlacementFor, requireStagedFleet, roundName } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
@@ -54,9 +54,9 @@ export function parseFleetArgs(args) {
   } else assert.equal(o.group, undefined, "group requires a continuation root");
   fleetRoot(o.root);
   if (o["offline-handoff"]) assert.ok(o.prepare && o.continuationRoot, "offline handoff must be selected at single-group preparation");
-  // The opted-in JSON API c-16 placement is saved in the fleet at preparation; nothing later selects it.
-  if (o.loadLayout !== undefined) assert.ok(o.prepare && o.continuationRoot && o.group === "json-api"
-    && o.loadLayout === jsonFleetPlacement.loadLayout, "fleet-load-layout");
+  // The opted-in layout is saved in the fleet at preparation; nothing later selects it.
+  if (o.loadLayout !== undefined) assert.ok(o.prepare && o.continuationRoot
+    && jsonFleetPlacementFor(o.group, o.loadLayout), "fleet-load-layout");
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -470,6 +470,16 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   let preIntentStage = continuation ? "initial-plan" : undefined;
   try {
     const preview = await fleetOperationPlan(options, deps);
+    if (options.detach && options["print-approval"]) {
+      const { manifest } = preview.fleet;
+      const layout = jsonFleetPlacementFor(manifest.single?.group, manifest.single?.loadLayout);
+      if (layout?.host.size === "c-32") {
+        await readPlacement(manifest.provider, placement, manifest.host.region,
+          { staged: true, group: manifest.single.group, loadLayout: layout.loadLayout });
+        assert.equal(readFleet(root, options.round).manifestSha256, preview.fleet.manifestSha256, "fleet-manifest-changed");
+        assert.deepEqual(rootRecords(preview.fleet), preview.subject.records, "fleet-records-changed");
+      }
+    }
     continuation?.recheck();
     if (options["print-approval"]) {
       preIntentStage = undefined;

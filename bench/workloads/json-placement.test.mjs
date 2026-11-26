@@ -12,6 +12,11 @@ import { fleetMain, fleetWorkerPaths, parseFleetArgs } from "./fleet.mjs";
 import { groupNames } from "./registry.mjs";
 
 const at = "2026-11-25T00:00:00.000Z", layout = "json-c16-generator-v1", c16 = { ...contract.host, size: "c-16", region: "sfo2" };
+const c32Layout = "json-c32-generator-v1", c32 = { ...c16, size: "c-32" };
+const c32Catalog = (listing = syntheticPlacement(), available = true) => ({
+  sizes: [...listing.sizes, { slug: "c-32", available, regions: ["sfo2"] }],
+  regions: listing.regions.map((row) => ({ ...row, sizes: row.slug === "sfo2" ? [...row.sizes, "c-32"] : row.sizes })),
+});
 const tokens = Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")]));
 const input = (group) => ({ round: "r90", commit: "a".repeat(40), token: "f".repeat(16), tokens: { [group]: tokens[group] },
   provider: { accountId: "team:synthetic-fleet", context: "synthetic" }, sshKey: "42" });
@@ -114,11 +119,11 @@ test("the fleet command selects the layout only at single-group json-api prepara
 });
 
 // A single opted-in json-api offline handoff against the fake provider. No real provider is contacted.
-function fakeLaunch(t, placement) {
+function fakeLaunch(t, placement, loadLayout = layout) {
   const h = harness(t, { active: true, ...(placement ? { placement } : {}) });
   const values = { ...input("json-api"), round: "r21", commit, provider: { accountId, context } };
   const fleet = contract.fleetPlan(values, at, "sfo3", { stagedPlacement: true,
-    single: { group: "json-api", indexSha256: "1".repeat(64), checkout: h.repo, offlineHandoff: true, loadLayout: layout } });
+    single: { group: "json-api", indexSha256: "1".repeat(64), checkout: h.repo, offlineHandoff: true, loadLayout } });
   const path = join(h.temp, "json-c16-fleet.json");
   writeFileSync(path, JSON.stringify(fleet));
   const run = (bin, args, timeout, allowed, expiry, registration) => {
@@ -142,8 +147,10 @@ test("an opted-in json-api launch posts one c-16/sfo2 create with the layout's p
   assert.ok(f.catalogs().length >= 1 && h.calls.indexOf(f.catalogs()[0]) < h.calls.indexOf(create));
   const saved = h.saved();
   assert.deepEqual(saved.host, c16); assert.equal(contract.savedLoadLayout(saved), layout); assert.deepEqual(saved.fleet, f.fleet);
+  assert.equal(saved.skipHostChromium, true);
   const job = readFileSync(join(h.local, "job.sh"), "utf8");
   assert.equal(job, remoteFiles(saved)["job.sh"]);
+  assert.ok(!job.includes("bootstrap_stage=browser-install\n"));
   assert.ok(job.includes(`--group 'json-api' --load-layout '${layout}'\n`)); assert.match(job, /test "\$\(nproc\)" -ge 16\n/);
 });
 
@@ -166,9 +173,9 @@ test("an opted-in json-api launch refuses before any create intent or POST when 
 // placement recheck before the launch intent, against a fake provider catalog. The child is stubbed, so
 // nothing can be created; the catalog the fleet reads at detach is the only thing a case changes.
 const fleetSources = new Map(fleetWorkerPaths.map((file) => [file, readFileSync(resolve(file), "utf8").replaceAll("\r\n", "\n")]));
-function fleetDetach(t, { loadLayout } = {}) {
+function fleetDetach(t, { loadLayout, placement = syntheticPlacement() } = {}) {
   const h = harness(t), output = [], children = [], catalogReads = [];
-  let offered = syntheticPlacement();
+  let offered = placement;
   writeFileSync(join(h.base, "index.json"), "[]");
   const deps = { repo: h.repo, write: (value) => output.push(JSON.parse(value)),
     spawn: (binary, argv) => {
@@ -180,11 +187,17 @@ function fleetDetach(t, { loadLayout } = {}) {
     catalogProvider: syntheticCatalogProvider(() => offered, catalogReads),
     main: async (args) => { children.push(args); return 2; } };
   const args = ["r21", "--continuation-root", h.base, "--group", "json-api"], root = join(h.base, "json-api");
+  const prepare = () => fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId,
+    "--context", context, ...(loadLayout ? ["--load-layout", loadLayout] : [])], deps);
+  const preview = (listing = offered) => {
+    offered = listing;
+    return fleetMain([...args, "--detach", "--print-approval"], deps);
+  };
   return { h, root, output, children, catalogReads, intent: () => existsSync(join(root, "launch-intent.json")),
+    prepareOnly: prepare, preview,
     async prepare() {
-      assert.equal(await fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId,
-        "--context", context, ...(loadLayout ? ["--load-layout", loadLayout] : [])], deps), 3);
-      assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3, JSON.stringify(output.at(-1)));
+      assert.equal(await prepare(), 3);
+      assert.equal(await preview(), 3, JSON.stringify(output.at(-1)));
       return output.at(-1).approvalSha256;
     },
     detach(approval, catalog) {
@@ -194,6 +207,60 @@ function fleetDetach(t, { loadLayout } = {}) {
 }
 const c8Nowhere = () => syntheticPlacement([]);
 const c16Withdrawn = () => { const catalog = syntheticPlacement(); catalog.sizes[1].available = false; return catalog; };
+
+test("c-32 prepare, preview and detach use only the exact c-32/sfo2 offer for JSON API", async (t) => {
+  const opts = { loadLayout: c32Layout, placement: c32Catalog(c8Nowhere()) };
+  const noOffer = c32Catalog(syntheticPlacement(), false);
+  const deniedPrepare = fleetDetach(t, { ...opts, placement: noOffer });
+  await assert.rejects(deniedPrepare.prepareOnly(), /not advertised: c-32\/sfo2/);
+  const deniedPreview = fleetDetach(t, opts);
+  assert.equal(await deniedPreview.prepareOnly(), 3);
+  await assert.rejects(deniedPreview.preview(noOffer), /not advertised: c-32\/sfo2/);
+  assert.ok(!deniedPreview.output.some((row) => row.approvalSha256));
+  assert.equal(deniedPreview.intent(), false);
+  assert.deepEqual(deniedPreview.catalogReads.map(([verb, noun]) => [verb, noun]),
+    Array.from({ length: 2 }, () => [["account", "get"], ["compute", "placement"], ["account", "get"]]).flat());
+  const wide = fleetDetach(t, opts), approval = await wide.prepare();
+  assert.equal(await wide.detach(approval, opts.placement), 2, JSON.stringify(wide.output.at(-1)));
+  assert.equal(wide.children.length, 1);
+  const saved = JSON.parse(readFileSync(join(wide.root, "launch-intent.json"), "utf8"));
+  const { fleet } = saved.subject;
+  assert.equal(fleet.single.loadLayout, c32Layout);
+  assert.deepEqual(fleet.jobs[0].host, c32);
+  assert.throws(() => contract.validateFleet(resign(fleet, (b) => { b.jobs[0].loadLayout = layout; })), /fleet differs/);
+  assert.throws(() => contract.validateFleet(resign(fleet, (b) => { delete b.single.loadLayout; })), /fleet differs/);
+  assert.throws(() => single("catalog-page", { loadLayout: c32Layout }), /unknown independent group load layout/);
+  const withdrawn = fleetDetach(t, opts), again = await withdrawn.prepare();
+  await assert.rejects(withdrawn.detach(again, noOffer), /not advertised: c-32\/sfo2/);
+  assert.equal(withdrawn.intent(), false); assert.deepEqual(withdrawn.children, []); assert.equal(withdrawn.h.creates, 0);
+});
+
+test("the c-32 child rechecks both catalog directions before its one fake c-32/sfo2 create", async (t) => {
+  const f = fakeLaunch(t, c32Catalog(), c32Layout);
+  await f.launch();
+  const [create] = f.creates(), flag = (name) => create[create.indexOf(name) + 1];
+  assert.equal(f.h.creates, 1); assert.equal(flag("--size"), "c-32"); assert.equal(flag("--region"), "sfo2");
+  assert.ok(f.h.calls.indexOf(f.catalogs().at(-1)) < f.h.calls.indexOf(create));
+  const saved = f.h.saved(), job = readFileSync(join(f.h.local, "job.sh"), "utf8");
+  assert.deepEqual(saved.host, c32);
+  assert.equal(contract.savedLoadLayout(saved), c32Layout); assert.equal(contract.savedPlacement(saved), undefined);
+  assert.equal(job, remoteFiles(saved)["job.sh"]);
+  assert.match(job, /test "\$\(nproc\)" -ge 32\n/);
+  assert.ok(job.includes(`--group 'json-api' --load-layout '${c32Layout}'\n`));
+  const host = { id: 123, name: saved.name, tags: [...contract.tags, saved.tag], size_slug: "c-32", region: { slug: "sfo2" },
+    networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
+  assert.equal(contract.assertFleetCensus([host], saved.fleet), true);
+  assert.throws(() => contract.assertFleetCensus([{ ...host, size_slug: "c-16" }], saved.fleet));
+  const disagree = c32Catalog(); disagree.regions.find((r) => r.slug === "sfo2").sizes.pop();
+  for (const [listing, message] of [[syntheticPlacement(), /missing or invalid fleet catalog entry: c-32/],
+    [disagree, /fleet catalog listings disagree: c-32\/sfo2/], [c32Catalog(syntheticPlacement(), false), /not advertised: c-32\/sfo2/]]) {
+    const blocked = fakeLaunch(t, listing, c32Layout);
+    await assert.rejects(blocked.launch(), message);
+    assert.deepEqual(blocked.creates(), []);
+    assert.equal(blocked.h.saved().status, "reserved");
+    assert.equal(blocked.h.saved().createIntentAt, undefined);
+  }
+});
 
 test("the fleet's last placement check before an opted-in json-api launch intent reads c-16/sfo2, not the default c-8", async (t) => {
   // c-8 is offered nowhere at detach; the opted-in job needs only c-16/sfo2, so it proceeds.
