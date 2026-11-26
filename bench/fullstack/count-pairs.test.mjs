@@ -870,7 +870,9 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       const got = await count(`alias-${alias}`, "none", alias);
       assert.equal(got.code, 0, alias);
       assert.equal(got.receipt.container, first, alias);
-      assert.equal(got.docker.names["fsw-corten"], first, alias);
+      // fsw-corten itself was never another container's: the leftover holds it only as an alias.
+      assert.notEqual(got.docker.names.leftover, first, alias);
+      assert.deepEqual(got.docker.aliases[got.docker.names.leftover], ["fsw-corten"], alias);
       if (when === "before") assert.deepEqual(got.perf, [], alias);
       else assert.ok(got.perf.length > 0, alias);
       assert.deepEqual(got.row, refused(when, 2), alias);
