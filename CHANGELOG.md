@@ -1958,6 +1958,12 @@ builds against.
 
 - Benchmark cleanup can let proved udev workers settle on hosts where systemd-udevd uses `/usr/bin/udevadm`, without changing the cleanup checks. [#2127 JSON API r85 preparation rejects 32 udev workers without executable evidence](https://github.com/corten-run/corten/issues/2127).
 
+- A benchmark observer that sees a Docker participant rename itself or exec its
+  entrypoint just after it starts retakes that participant's snapshot, starting no new
+  attempt after 250 ms, and admits it only for the same container start, PID and process start
+  time. Any other missing snapshot still cancels the run
+  ([#2052 Fullstack Browser r70 is cancelled after builds and before any browser case runs](https://github.com/corten-run/corten/issues/2052)).
+
 #### Added
 
 - `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
