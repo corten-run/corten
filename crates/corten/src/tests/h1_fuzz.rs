@@ -10,8 +10,11 @@
 //! stream is then changed at random three times in
 //! ten (a byte flipped, dropped or added, a line doubled, dropped or moved, the stream cut), cut
 //! into several writes one time in three, and its client's side closed behind it one time in
-//! twelve. The streams before those are fixed: each of a few requests cut in two writes at every
-//! byte, and ended at every byte. The same number makes the same stream on every run.
+//! twelve. Three streams in ten go over a pipe that holds little (64 bytes to 20 KB each way), so
+//! the server's writes are taken in parts and wait for the client, and one route's handler waits
+//! before it answers, so requests arrive while one is being answered. The streams before those
+//! are fixed: each of a few requests cut in two writes at every byte, and ended at every byte.
+//! The same number makes the same stream on every run.
 //!
 //! After a stream, if the server has not closed, one more request is sent that every server
 //! answers: where a server took the stream's last message to end shows in whether, and how, that
@@ -20,12 +23,15 @@
 //! **What fails the gate**, for any stream:
 //! 1. Corten's own connection is laxer than hyper's: it answers more requests than hyper does, or
 //!    the app answers a request there that hyper refuses or does not answer.
-//! 2. The two differ in any other way that is not on the list below: a byte of an answer other
-//!    than its `Date`, an answer more or fewer, a connection closed by one and kept by the other.
+//! 2. The two differ in any other way that is not on the list below: a byte of what they send
+//!    other than the value of an answer's `Date` (the bytes are compared as they were sent, and
+//!    nothing else in them is passed over), an answer more or fewer, a connection closed by one
+//!    and kept by the other.
 //! 3. A connection's task panics.
-//!
-//! A server that never stops working on a stream never lets the test end (time here is tokio's
-//! own, which passes only when every task waits), so a hang fails it too.
+//! 4. A server hangs: no stream of the run finishes in two minutes of real time ([`STALLED`]).
+//!    Time on a run's thread is tokio's own, which passes only when every task waits, so a server
+//!    that never stops working on a stream is not seen from that thread: the test's thread
+//!    watches, by the clock.
 //!
 //! **The differences on the list**, which is the whole of it ([`Verdict::Listed`]):
 //! 1. A head that reaches the app's limit unfinished and is malformed further on is refused by
@@ -33,15 +39,23 @@
 //!    answers depends on where its reads ended: 400 if the malformed bytes had arrived with the
 //!    ones before the limit, 431 if they had not. Corten's own connection reads a head no further
 //!    than the limit, and other bytes in reads of other sizes, so the same stream can be cut
-//!    differently for it.
+//!    differently for it. The class is of that head and not of the stream: the bytes sent from
+//!    where the first request neither server answered begins are as many as the limit
+//!    ([`unanswered_from`]), whatever was sent and answered before them.
 //!
-//! The servers run in the test's own thread, over pipes in memory, with tokio's time paused: a
-//! client that waits for the server to go quiet waits until every task is idle, not for a guess
-//! at how long a loaded machine needs, so the same stream has the same outcome on every run.
+//! The servers of a run are on one thread, the run's own, over pipes in memory, with tokio's time
+//! paused: a client that waits for the server to go quiet waits until every task is idle, not for
+//! a guess at how long a loaded machine needs, so the same stream has the same outcome on every
+//! run.
+//!
+//! **What the gate does not send** is in `docs/design.md#choice-own-http1`, under what would make
+//! the connection the default.
 
-use super::h1::{dateless, Dice};
+use super::h1::{find, undated, Dice};
 use super::*;
 use bytes::Bytes;
+use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 /// The seed of the run the pull request reports, and of the smaller one in the suite.
@@ -50,9 +64,14 @@ const SEED: u64 = 20_261_124;
 /// How many streams made at random the suite's run sends, after the fixed ones.
 const IN_SUITE: usize = 3_000;
 
-/// How long a client waits with nothing arriving before it takes the server to be waiting, in
-/// tokio's paused time: well under the header timeout, which would close the connection.
+/// How long a client waits before it takes the server to be waiting, in tokio's paused time,
+/// which passes only when every task waits: well under the header timeout, which would close the
+/// connection.
 const QUIET: Duration = Duration::from_secs(2);
+
+/// How long a run may go without finishing a stream, in real time, before it is taken to hang.
+/// A stream takes milliseconds.
+const STALLED: Duration = Duration::from_secs(120);
 
 /// Listens on a channel: a connection is one end of a pipe the test made.
 struct Piped(tokio::sync::mpsc::UnboundedReceiver<DuplexStream>);
@@ -111,6 +130,12 @@ fn app() -> App {
         let pieces: [&'static [u8]; 4] = [b"first", b"second", &X, b"last"];
         Body::from_stream(futures_util::stream::iter(pieces.map(|piece| Ok::<_, std::io::Error>(Bytes::from_static(piece)))))
     };
+    // Longer than a client leaves between two writes, so what it sends next arrives while this
+    // request is being answered.
+    let wait = || async {
+        tokio::time::sleep(Duration::from_millis(3)).await;
+        "waited"
+    };
     let table = Table::new()
         .route("/", get(|| async { "hi" }))
         .route("/json", get(|| async { ([(header::CONTENT_TYPE, "application/json")], r#"{"ok":true}"#) }))
@@ -118,6 +143,7 @@ fn app() -> App {
         .route("/stream", get(stream))
         .route("/none", get(|| async { StatusCode::NO_CONTENT }))
         .route("/close", get(|| async { ([(header::CONNECTION, "close")], "bye") }))
+        .route("/wait", get(wait))
         .route("/unread", crate::router::any(|| async { "unread" }))
         .route("/read", crate::router::any(|body: Bytes| async move { format!("read {}", body.len()) }))
         .route("/seen", crate::router::any(seen));
@@ -133,27 +159,49 @@ fn serve(own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSender<DuplexStr
     connect
 }
 
+/// Bytes a server sent, as it sent them but for the value of each answer's `Date` ([`undated`]).
+/// Shown as text; compared as bytes.
+#[derive(PartialEq, Eq, Clone, Default)]
+struct Sent(Vec<u8>);
+
+impl std::fmt::Debug for Sent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl From<&str> for Sent {
+    fn from(text: &str) -> Sent {
+        Sent(text.as_bytes().to_vec())
+    }
+}
+
 /// What a server did with a stream.
 #[derive(Debug, PartialEq, Eq)]
 struct Outcome {
-    /// What it sent before the last request, without each `Date`.
-    before: String,
+    /// What it sent before the last request.
+    before: Sent,
     /// It closed the connection before the last request was sent.
     closed: bool,
     /// What it sent to the last request.
-    after: String,
+    after: Sent,
     closed_after: bool,
 }
 
-/// Everything `client` receives until the server closes or goes quiet, and whether it closed.
-async fn receive(client: &mut DuplexStream) -> (String, bool) {
-    let (mut got, mut buf) = (Vec::new(), vec![0u8; 64 * 1024]);
-    loop {
-        match tokio::time::timeout(QUIET, client.read(&mut buf)).await {
-            Ok(Ok(0) | Err(_)) => return (dateless(&String::from_utf8_lossy(&got)), true),
-            Ok(Ok(read)) => got.extend_from_slice(&buf[..read]),
-            Err(_) => return (dateless(&String::from_utf8_lossy(&got)), false),
-        }
+/// What a client has received, and whether the server has closed the connection: filled by a
+/// task that reads all the time, so a server is never kept waiting for its client to read.
+#[derive(Default)]
+struct Received {
+    bytes: Vec<u8>,
+    closed: bool,
+}
+
+impl Received {
+    /// What the server has sent from `from` on once it has gone quiet, and whether it has closed.
+    async fn quiet(received: &Mutex<Received>, from: usize) -> (Sent, bool) {
+        tokio::time::sleep(QUIET).await;
+        let received = received.lock().unwrap();
+        (Sent(undated(&received.bytes[from..])), received.closed)
     }
 }
 
@@ -165,8 +213,24 @@ fn last_request(index: usize) -> String {
 /// Sends a stream to a server, each write once the server has done all it will with the one
 /// before, then the last request if the connection is still open and the client's side of it is.
 async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, stream: &Stream) -> Outcome {
-    let (mut client, server) = tokio::io::duplex(1 << 20);
+    let (client, server) = tokio::io::duplex(stream.pipe);
     connect.send(server).expect("the server is listening");
+    let (mut reading, mut client) = tokio::io::split(client);
+    let received = Arc::new(Mutex::new(Received::default()));
+    let reader = {
+        let received = received.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let read = reading.read(&mut buf).await;
+                let mut received = received.lock().unwrap();
+                match read {
+                    Ok(0) | Err(_) => break received.closed = true,
+                    Ok(read) => received.bytes.extend_from_slice(&buf[..read]),
+                }
+            }
+        })
+    };
     for write in &stream.writes {
         if client.write_all(write).await.is_err() {
             break;
@@ -176,11 +240,12 @@ async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, st
     if stream.closes {
         let _ = client.shutdown().await;
     }
-    let (before, closed) = receive(&mut client).await;
-    let (mut after, mut closed_after) = (String::new(), closed);
+    let (before, closed) = Received::quiet(&received, 0).await;
+    let (mut after, mut closed_after) = (Sent::default(), closed);
     if !closed && !stream.closes && client.write_all(last_request(stream.index).as_bytes()).await.is_ok() {
-        (after, closed_after) = receive(&mut client).await;
+        (after, closed_after) = Received::quiet(&received, before.0.len()).await;
     }
+    reader.abort();
     Outcome { before, closed, after, closed_after }
 }
 
@@ -193,7 +258,8 @@ struct Answer {
 }
 
 /// The answers in `sent`. No body of [`app`]'s has a status line in it.
-fn answers(sent: &str) -> Vec<Answer> {
+fn answers(sent: &[u8]) -> Vec<Answer> {
+    let sent = &*String::from_utf8_lossy(sent);
     let starts: Vec<usize> = sent.match_indices("HTTP/1.").map(|(at, _)| at).collect();
     let mut found = Vec::new();
     for (which, start) in starts.iter().enumerate() {
@@ -228,20 +294,83 @@ const LIMIT_OR_GRAMMAR: &str = "a head that reaches the limit and is malformed f
 /// where that answer is the server's own refusal of a head as malformed (400) or as too long
 /// (431). `None` where its last answer is not one of those.
 fn refusal_alike(outcome: &Outcome) -> Option<Outcome> {
-    let alike = |sent: &str| {
-        let at = sent.rfind("HTTP/1.")?;
-        let end = at + sent[at..].find("\r\n")?;
+    let alike = |sent: &Sent| {
+        let sent = &sent.0[..];
+        let at = sent.windows(7).rposition(|window| window == b"HTTP/1.")?;
+        let end = at + find(&sent[at..], b"\r\n")?;
         let (version, status) = (sent.get(at..at + 8)?, sent.get(at + 8..end)?);
-        let refusal = matches!(status, " 400 Bad Request" | " 431 Request Header Fields Too Large");
+        let refusal = status == b" 400 Bad Request" || status == b" 431 Request Header Fields Too Large";
         let servers = answers(&sent[at..]).last().is_some_and(|answer| !answer.apps);
-        (refusal && servers).then(|| format!("{}{version} 4xx{}", &sent[..at], &sent[end..]))
+        (refusal && servers).then(|| Sent([&sent[..at], version, b" 4xx", &sent[end..]].concat()))
     };
     let (before, after) = (outcome.before.clone(), outcome.after.clone());
-    let (before, after) = if answers(&after).is_empty() { (alike(&before)?, after) } else { (before, alike(&after)?) };
+    let (before, after) = if answers(&after.0).is_empty() { (alike(&before)?, after) } else { (before, alike(&after)?) };
     Some(Outcome { before, closed: outcome.closed, after, closed_after: outcome.closed_after })
 }
 
-/// `reaches_limit`: the client sent as many bytes as the app's limit on a head, or more.
+/// How long a chunked body at the start of `body` is, with its last chunk and its trailers:
+/// `None` if it is not all there, or is not one.
+fn chunked(body: &[u8]) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        let line = at + find(&body[at..], b"\n")? + 1;
+        let digits = body[at..line].iter().take_while(|byte| byte.is_ascii_hexdigit()).count();
+        let size = usize::from_str_radix(std::str::from_utf8(&body[at..at + digits]).ok()?, 16).ok()?;
+        at = line;
+        if size == 0 {
+            // Its trailers, to the empty line.
+            loop {
+                let end = at + find(&body[at..], b"\n")? + 1;
+                let empty = matches!(&body[at..end], b"\r\n" | b"\n");
+                at = end;
+                if empty {
+                    return Some(at);
+                }
+            }
+        }
+        at = at.checked_add(size)?;
+        at += body.get(at..)?.starts_with(b"\r\n").then_some(2)?;
+    }
+}
+
+/// Where the first request the servers did not answer begins in `sent`, when they answered
+/// `answered` requests before it: behind that many requests, each a head as the parser both
+/// servers use reads it and the body its head frames (chunks, else a length, else none). `None`
+/// when `sent` does not hold that many whole requests so read, and then no difference is taken
+/// for a listed one.
+fn unanswered_from(sent: &[u8], answered: usize) -> Option<usize> {
+    let mut at = 0;
+    for _ in 0..answered {
+        let mut headers = [httparse::EMPTY_HEADER; 100];
+        let mut request = httparse::Request::new(&mut headers);
+        let httparse::Status::Complete(head) = request.parse(sent.get(at..)?).ok()? else { return None };
+        let named = |name: &str| request.headers.iter().find(|header| header.name.eq_ignore_ascii_case(name));
+        let body = &sent[at + head..];
+        let body = if named("transfer-encoding").is_some() {
+            chunked(body)?
+        } else if let Some(length) = named("content-length") {
+            let first = length.value.split(|byte| *byte == b',').next()?.trim_ascii();
+            let length: usize = std::str::from_utf8(first).ok()?.parse().ok()?;
+            (length <= body.len()).then_some(length)?
+        } else {
+            0
+        };
+        at += head + body;
+    }
+    Some(at)
+}
+
+/// Whether the head the servers refused reaches `limit`: the bytes sent from where the first
+/// request they did not answer begins are that many. `sent`: the stream, with the last request
+/// if it was sent.
+fn refused_head_reaches(sent: &[u8], hyper: &Outcome, limit: usize) -> bool {
+    // The refusal is the last of the answers, and the ones before it are of whole requests.
+    let answered = (answers(&hyper.before.0).len() + answers(&hyper.after.0).len()).saturating_sub(1);
+    unanswered_from(sent, answered).is_some_and(|from| sent.len() - from >= limit)
+}
+
+/// `reaches_limit`: the head the servers refused is as long as the app's limit on a head, or
+/// longer ([`refused_head_reaches`]).
 fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
     if hyper == own {
         return Verdict::Same;
@@ -250,8 +379,8 @@ fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
         return Verdict::Listed(LIMIT_OR_GRAMMAR);
     }
     let all = |outcome: &Outcome| {
-        let mut all = answers(&outcome.before);
-        all.extend(answers(&outcome.after));
+        let mut all = answers(&outcome.before.0);
+        all.extend(answers(&outcome.after.0));
         all
     };
     let (theirs, ours) = (all(hyper), all(own));
@@ -283,7 +412,13 @@ struct Stream {
     writes: Vec<Vec<u8>>,
     /// The client closes its side behind the last write.
     closes: bool,
+    /// How many bytes the pipe holds each way: what the server writes beyond that waits for the
+    /// client to read, and is taken in parts.
+    pipe: usize,
 }
+
+/// A pipe that holds everything a stream sends and everything it is answered.
+const WIDE: usize = 1 << 20;
 
 impl Stream {
     fn bytes(&self) -> Vec<u8> {
@@ -330,7 +465,7 @@ const METHODS: &[&str] = &[
 ];
 const TARGETS: &[&str] = &[
     "/",
-    "/",
+    "/wait",
     "/json",
     "/empty",
     "/stream",
@@ -670,7 +805,7 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
         if fixed < 2 * base.len() {
             let (at, closes) = (fixed % base.len(), fixed >= base.len());
             let writes = if closes { vec![base[..at].to_vec()] } else { vec![base[..at].to_vec(), base[at..].to_vec()] };
-            return Stream { index, writes, closes };
+            return Stream { index, writes, closes, pipe: WIDE };
         }
         fixed -= 2 * base.len();
     }
@@ -700,7 +835,9 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     } else {
         writes.push(bytes);
     }
-    Stream { index, writes, closes: chance(&mut dice, 8) }
+    let closes = chance(&mut dice, 8);
+    let pipe = if chance(&mut dice, 30) { [64, 512, 4096, 20_000][dice.below(4)] } else { WIDE };
+    Stream { index, writes, closes, pipe }
 }
 
 /// How many streams of a run are fixed.
@@ -742,7 +879,7 @@ struct Found {
 
 /// Sends the streams `which` gives to both connections, under each of two limits on a head (the
 /// app's own unless set, and one a long line of the grammar passes), and judges each.
-async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
+async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) -> Found {
     count_panics();
     let bases = bases();
     // Hyper's connection and Corten's own, for each limit.
@@ -755,22 +892,26 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
         let (hyper, own) = &servers[index % 2];
         let (theirs, ours) = (exchange(hyper, &stream).await, exchange(own, &stream).await);
         found.streams += 1;
-        found.asked += usize::from(!ours.after.is_empty());
-        let asked = if theirs.after.is_empty() && ours.after.is_empty() { 0 } else { last_request(index).len() };
-        let verdict = judge(&theirs, &ours, stream.bytes().len() + asked >= limits[index % 2]);
+        found.asked += usize::from(!ours.after.0.is_empty());
+        let mut sent = stream.bytes();
+        if !(theirs.after.0.is_empty() && ours.after.0.is_empty()) {
+            sent.extend_from_slice(last_request(index).as_bytes());
+        }
+        let verdict = judge(&theirs, &ours, refused_head_reaches(&sent, &theirs, limits[index % 2]));
         let describe = |what: &str| {
             let sent = String::from_utf8_lossy(&stream.bytes()).into_owned();
             let writes: Vec<usize> = stream.writes.iter().map(Vec::len).collect();
             format!(
-                "stream {index} (seed {seed}, head limit {}): {what}\n  sent {sent:?}\n  in writes of {writes:?}, closed behind: {}\n  hyper: {theirs:?}\n  own:   {ours:?}",
+                "stream {index} (seed {seed}, head limit {}): {what}\n  sent {sent:?}\n  in writes of {writes:?}, closed behind: {}, over a pipe of {} bytes\n  hyper: {theirs:?}\n  own:   {ours:?}",
                 limits[index % 2],
-                stream.closes
+                stream.closes,
+                stream.pipe
             )
         };
         match verdict {
             Verdict::Same => {
                 found.same += 1;
-                found.answered += usize::from(answers(&ours.before).iter().any(|answer| answer.apps));
+                found.answered += usize::from(answers(&ours.before.0).iter().any(|answer| answer.apps));
             }
             Verdict::Listed(class) => {
                 found.listed += 1;
@@ -783,8 +924,52 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>) -> Found {
             found.failures.push(describe("a task panicked"));
             break;
         }
+        done.fetch_add(1, SeqCst);
     }
     found
+}
+
+/// [`run`] for each of `parts`, each on a thread of its own with a runtime whose time is paused,
+/// and what they found together. The caller's thread watches them by the clock: a run that
+/// finishes no stream for `stalled` fails here, since a server that never stops working on a
+/// stream keeps its own thread from ever seeing time pass.
+fn watched<W>(seed: u64, parts: Vec<W>, stalled: Duration) -> Found
+where
+    W: Iterator<Item = usize> + Send + 'static,
+{
+    let done = Arc::new(AtomicUsize::new(0));
+    let (finding, finds) = std::sync::mpsc::channel();
+    let threads = parts.len();
+    for part in parts {
+        let (done, finding) = (done.clone(), finding.clone());
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap();
+            let _ = finding.send(runtime.block_on(run(seed, part, &done)));
+        });
+    }
+    drop(finding);
+    let (mut all, mut seen) = (Found::default(), 0);
+    for _ in 0..threads {
+        let found = loop {
+            match finds.recv_timeout(stalled) {
+                Ok(found) => break found,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let now = done.load(SeqCst);
+                    assert!(now != seen, "no stream of the run finished in {stalled:?}, after {now} had: a server hangs");
+                    seen = now;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("a thread of the run panicked"),
+            }
+        };
+        all.streams += found.streams;
+        all.same += found.same;
+        all.answered += found.answered;
+        all.asked += found.asked;
+        all.listed += found.listed;
+        all.first_listed = all.first_listed.or(found.first_listed);
+        all.failures.extend(found.failures);
+    }
+    all
 }
 
 fn report(seed: u64, found: &Found) {
@@ -803,9 +988,9 @@ fn report(seed: u64, found: &Found) {
 
 /// The gate, at the size the suite runs every time: the fixed streams and [`IN_SUITE`] made at
 /// random.
-#[tokio::test(start_paused = true)]
-async fn own_and_hyper_answer_every_stream_alike() {
-    let found = run(SEED, 0..fixed(&bases()) + IN_SUITE).await;
+#[test]
+fn own_and_hyper_answer_every_stream_alike() {
+    let found = watched(SEED, std::iter::once(0..fixed(&bases()) + IN_SUITE).collect(), STALLED);
     report(SEED, &found);
     assert!(
         found.failures.is_empty(),
@@ -835,33 +1020,14 @@ fn own_and_hyper_answer_every_stream_of_a_long_run_alike() {
     if let Ok(only) = std::env::var("H1_FUZZ_ONLY") {
         let only: Vec<usize> =
             only.split(',').map(|index| index.trim().parse().expect("H1_FUZZ_ONLY is stream numbers")).collect();
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap();
-        let found = runtime.block_on(run(seed, only.into_iter()));
+        let found = watched(seed, vec![only.into_iter()], STALLED);
         report(seed, &found);
         assert!(found.failures.is_empty(), "{} of {} streams fail the gate", found.failures.len(), found.streams);
         return;
     }
     let streams = fixed(&bases()) + number("H1_FUZZ_STREAMS").unwrap_or(250_000) as usize;
     let threads = std::thread::available_parallelism().map_or(4, usize::from);
-    let handles: Vec<_> = (0..threads)
-        .map(|thread| {
-            std::thread::spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap();
-                runtime.block_on(run(seed, (thread..streams).step_by(threads)))
-            })
-        })
-        .collect();
-    let mut all = Found::default();
-    for handle in handles {
-        let found = handle.join().expect("a thread of the run");
-        all.streams += found.streams;
-        all.same += found.same;
-        all.answered += found.answered;
-        all.asked += found.asked;
-        all.listed += found.listed;
-        all.first_listed = all.first_listed.or(found.first_listed);
-        all.failures.extend(found.failures);
-    }
+    let all = watched(seed, (0..threads).map(|thread| (thread..streams).step_by(threads)).collect(), STALLED);
     report(seed, &all);
     assert_eq!(all.streams, streams, "every stream was sent");
     assert!(all.failures.is_empty(), "{} of {} streams fail the gate", all.failures.len(), all.streams);
@@ -876,9 +1042,9 @@ fn the_judge_names_each_kind_of_difference() {
         |status: u16, body: &str| format!("HTTP/1.1 {status} X\r\nx-content-type-options: nosniff\r\ndate: -\r\n\r\n{body}");
     let refusal = "HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\ndate: -\r\n\r\n".to_owned();
     let outcome = |before: &str, closed: bool, after: &str| Outcome {
-        before: before.to_owned(),
+        before: before.into(),
         closed,
-        after: after.to_owned(),
+        after: after.into(),
         closed_after: true,
     };
     let (one, two) = (app(200, "hi"), app(200, "hi") + &app(200, "hi"));
@@ -924,4 +1090,70 @@ fn the_judge_names_each_kind_of_difference() {
     // Not an answer of the app's with either status.
     let (bad, large) = (app(400, ""), app(431, ""));
     assert!(matches!(judge(&outcome(&bad, true, ""), &outcome(&large, true, "")), Verdict::Unlisted(_)));
+    // Not bytes that only read alike as text: what was sent is compared as it was sent.
+    let odd = |byte: &[u8]| Outcome {
+        before: Sent([one.as_bytes(), byte].concat()),
+        closed: true,
+        after: Sent::default(),
+        closed_after: true,
+    };
+    assert_eq!(format!("{:?}", odd(b"\xff")), format!("{:?}", odd(b"\xfe")));
+    assert!(matches!(judge(&odd(b"\xff"), &odd(b"\xfe")), Verdict::Unlisted(_)));
+}
+
+/// The listed class is of the head that was refused, not of the stream: a refusal counts as one
+/// of a head that reaches the limit only when the bytes from where the first unanswered request
+/// begins are as many as the limit, however long the requests answered before it were.
+#[test]
+fn the_listed_class_is_of_the_head_that_was_refused() {
+    let get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    let post = "POST /read HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\nhello";
+    let chunks =
+        "POST /read HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5;ext=1\r\nhello\r\nA\r\n0123456789\r\n0\r\nx-t: 1\r\n\r\n";
+    let long = format!("GET / HTTP/1.1\r\nhost: localhost\r\nx-long: {}\r\n", "v".repeat(700));
+    let before = [get, post, chunks, "\r\n\r\nGET /none HTTP/1.1\nhost: localhost\n\n"].concat();
+    // Where each request begins, by what is before it.
+    for (answered, from) in [(0, 0), (1, get.len()), (2, get.len() + post.len()), (3, get.len() + post.len() + chunks.len())] {
+        assert_eq!(unanswered_from(before.as_bytes(), answered), Some(from), "behind {answered} requests");
+    }
+    assert_eq!(unanswered_from(before.as_bytes(), 4), Some(before.len()));
+    // Not behind more requests than were sent whole, and not past a body that is not all there.
+    assert_eq!(unanswered_from(before.as_bytes(), 5), None);
+    assert_eq!(unanswered_from(&post.as_bytes()[..post.len() - 1], 1), None);
+    assert_eq!(unanswered_from(&chunks.as_bytes()[..chunks.len() - 2], 1), None);
+    assert_eq!(unanswered_from(b"GET / HTTP/1.1\r\ncontent-length: five\r\n\r\n", 1), None);
+
+    let app = "HTTP/1.1 200 OK\r\nx-content-type-options: nosniff\r\ndate: -\r\n\r\nhi";
+    let refusal = "HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\ndate: -\r\n\r\n";
+    let outcome = |answered: usize| Outcome {
+        before: Sent::from(&*(app.repeat(answered) + refusal)),
+        closed: true,
+        after: Sent::default(),
+        closed_after: true,
+    };
+    // A head of the limit's length, alone and behind answered requests: of the class.
+    assert!(refused_head_reaches(long.as_bytes(), &outcome(0), 700));
+    assert!(refused_head_reaches(format!("{}{long}", get.repeat(3)).as_bytes(), &outcome(3), 700));
+    // A short head refused behind requests that are long together: not of it, though the stream
+    // is longer than the limit. (The gate took this for a head that reaches the limit, before.)
+    let short = format!("{}GET / HTTP/1.1\r\nhost : localhost\r\n\r\n", get.repeat(30));
+    assert!(short.len() > 700);
+    assert!(!refused_head_reaches(short.as_bytes(), &outcome(30), 700));
+    // Nor a head a byte short of the limit, nor one where the requests before it cannot be told.
+    assert!(!refused_head_reaches(&long.as_bytes()[..699], &outcome(0), 700));
+    assert!(!refused_head_reaches(long.as_bytes(), &outcome(1), 700));
+}
+
+/// A run that stops finishing streams fails by the clock, though its own thread never sees time
+/// pass: here a run whose next stream never comes.
+#[test]
+fn a_run_that_hangs_fails_by_the_clock() {
+    let hangs = std::iter::repeat_with(|| -> usize {
+        loop {
+            std::thread::park();
+        }
+    });
+    let watching = std::panic::catch_unwind(|| watched(SEED, vec![hangs], Duration::from_millis(300)));
+    let message = watching.err().and_then(|panic| panic.downcast::<String>().ok()).expect("the run fails");
+    assert!(message.contains("a server hangs"), "{message}");
 }
