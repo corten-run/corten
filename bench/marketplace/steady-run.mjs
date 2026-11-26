@@ -57,7 +57,7 @@ import { containerReceipt, imageReceipt, nodeImage } from "./raw-contract.mjs";
 import { retainLoadEvidence, validateLoadExecution } from "./load-evidence.mjs";
 import { k6Image, k6Provenance } from "../load-tool.mjs";
 import { validateMarketplace } from "./records.mjs";
-import { records } from "./fixtures.mjs";
+import { records, writeFixture } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
 import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, containerChecks, convergenceSchema, cpuModelDigest, eventFormat, eventRow, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell, loadVus,
@@ -728,8 +728,11 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       let bytes = null;
       try { bytes = readFileSync(fixtureFile); } catch (e) { if (e.code !== "ENOENT") throw e; }
       if (bytes !== null) {
+        // A fresh directory (mkdirSync refuses one that exists), published as the other runners
+        // publish theirs (writeFixture): under a umask such as 077 a plain copy would be 0700/0600,
+        // which the read-only mount keeps, so an adapter running as another user could not read it.
         mkdirSync(fixtureCopy);
-        writeFileSync(join(fixtureCopy, "marketplace.json"), bytes, { flag: "wx" });
+        writeFixture(join(fixtureCopy, "marketplace.json"), bytes);
         bytes = readFileSync(join(fixtureCopy, "marketplace.json"));
         fixtureCopySha256 = sha256(bytes);
       }

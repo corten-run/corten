@@ -990,6 +990,30 @@ test("every container mounts a private copy of the verified fixture, so editing 
   assert.ok(!missingDocker.calls.some((c) => c.args[0] === "create"), "no container was created");
 });
 
+// An adapter may run as another user (Gin runs as nobody) and a read-only bind keeps the copy's
+// modes, so the copy is readable by anyone however private the workstation's umask is. Windows has
+// no such modes, so this runs on Linux only, as the other umask cases do.
+test("the mounted fixture copy is readable by another user under umask 077", { skip: process.platform === "win32" }, async (t) => {
+  const folder = folderOf(t);
+  const options = parseSteadyArgs(["convergence", "t24", "--apps", "corten", "--sources", "fixture", "--targets", "page", "--minutes", "2"], apps, groupApps);
+  const suffix = ":/fixtures:ro";
+  const modes = [];
+  const fake = fakeDocker({ exportFor: () => k6Export(flat(8)), override: (args) => {
+    const spec = args[0] === "create" ? args.find((a) => a.endsWith(suffix)) : undefined;
+    if (spec) {
+      const source = spec.slice(0, -suffix.length);
+      modes.push([statSync(source).mode & 0o777, statSync(join(source, "marketplace.json")).mode & 0o777]);
+    }
+    return undefined;
+  } });
+  const previous = process.umask(0o077);
+  let s;
+  try { s = await run(fake, options, folder("private")); } finally { process.umask(previous); }
+  assert.equal(s.complete, true, JSON.stringify([s.failures, s.cells]));
+  assert.ok(modes.length > 0, "a container mounted the copy");
+  for (const [directory, file] of modes) assert.deepEqual([directory.toString(8), file.toString(8)], ["711", "644"]);
+});
+
 test("a container log through the CLI's runner goes straight to its file with stderr as well as stdout and is never read back; every other command reaches Catalog's runner unchanged", async (t) => {
   const { command } = commandRunner({ cwd: process.cwd() });
   const script = ["-e", "process.stdout.write('out-line\\n'); process.stderr.write('err-line\\n')"];

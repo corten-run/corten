@@ -629,7 +629,9 @@ test("the report states the convergence pass given to it, or that none was provi
     return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
   }))), { commit: s.commit, host: { cpuModelSha256: cpuModelDigest(s.host.cpu), kernel: s.host.release, onlineCpus: s.host.onlineCpus }, images: { corten: s.apps.corten.imageId, aspnet: s.apps.aspnet.imageId },
     measurement: { cpus: s.measurement.cpus, appMemoryBytes: s.measurement.appMemoryBytes, upstreamMemoryBytes: s.measurement.upstreamMemoryBytes, encoding: s.measurement.encoding },
-    fixtureSha256: s.fixtureSha256, tools: { upstream: { imageId: s.tools.upstream.imageId }, k6: { imageId: s.tools.k6.imageId, version: "2.4.0" } } });
+    fixtureSha256: s.fixtureSha256, tools: { upstream: { imageId: s.tools.upstream.imageId }, k6: { imageId: s.tools.k6.imageId, version: "2.4.0" } },
+    // The production group's adapters a timed round admitted, as steady.mjs --group --admitted-from runs them.
+    admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected: groupApps("production"), admitted: ["corten", "aspnet"] } });
   const given = (p) => (round, apps) => convergenceLines(round, apps, p);
   const text = report(s, { convergence: given(pass) });
   assert.doesNotMatch(text, /none provided to this report/);
@@ -729,7 +731,7 @@ test("report.mjs --convergence prints no text it read from a saved pass or round
   const pass = savedPass(options, options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) => {
     const w = windows(Array(12).fill(1000)), requests = w.reduce((sum, x) => sum + x.requests, 0);
     return { app, source, target, windows: w, tail: 0, unrecorded: 0, requests, iterations: requests, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(w) };
-  }))), { commit: s.commit });
+  }))), { commit: s.commit, admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected: groupApps("production"), admitted: ["corten", "aspnet"] } });
   const given = (p) => (round, list) => convergenceLines(round, list, p);
   const refusedWithout = (mutate) => {
     const p = structuredClone(pass); mutate(p);
@@ -825,7 +827,7 @@ test("report.mjs --convergence prints this checkout's adapter labels and limits,
   const windows = Array.from({ length: 12 }, (_, index) => ({ index, startSeconds: index * 15, seconds: 15, requests: 15000, failed: 0, rps: 1000, p95: 5, p99: 9 }));
   const options = { ...parseSteadyArgs(["convergence", "w7", "--group", "production", "--minutes", "3"], apps, groupApps), apps: ["corten", "aspnet"] };
   const pass = savedPass(options, options.sources.flatMap((source) => options.apps.flatMap((app) => options.targets.map((target) =>
-    ({ app, source, target, windows, tail: 0, unrecorded: 0, requests: 180000, iterations: 180000, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(windows) })))), { commit: s.commit });
+    ({ app, source, target, windows, tail: 0, unrecorded: 0, requests: 180000, iterations: 180000, latencyMaxMs: 10, failedRequests: 0, verdict: flattenPoint(windows) })))), { commit: s.commit, admission: { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected: groupApps("production"), admitted: ["corten", "aspnet"] } });
   const given = (round, list) => convergenceLines(round, list, pass);
   // The default report is unchanged: it prints the saved text.
   const plain = report(s);

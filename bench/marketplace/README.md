@@ -176,7 +176,8 @@ item or the first locale's page, until its first 200), and then one long k6 pass
 the timed requests and checks, with each answer counted in the window it completed in).
 `--admitted-from <round>/summary.json`
 measures only the adapters that saved timed round admitted; without it every selected adapter
-runs and the report says admission was not checked. A round that cannot be read or does not
+runs and the report says admission was not checked. A saved pass with `--group` reads back only
+with that group's adapters, or the subset of them its admission admitted. A round that cannot be read or does not
 validate fails the pass with a fixed refusal on the console and in `run.log`; why, which can quote
 the file, is kept only in `errors.log`. `--minutes`, `--window` (convergence),
 `--interval` (soak), `--vus`, `--rate`, `--targets` and `--sources` change the defaults;
@@ -185,7 +186,8 @@ beside its ownership label. Like a timed round, a pass refuses to start without 
 generated fixture (`node bench/marketplace/fixtures.mjs`). It reads that fixture once into a copy
 in the pass's own folder (`mounted-fixture`), checks and hashes the copy, and mounts only the copy,
 read-only, for the upstream and every app, so an edit to the original during a pass cannot change
-what a later cell serves; the copy is hashed again before the pass can be complete. Teardown removes
+what a later cell serves. The copy is published as the timed runners publish theirs (directory
+0711, file 0644, whatever the umask), so an adapter running as another user can read it; it is hashed again before the pass can be complete. Teardown removes
 the copy only once every container of the pass is confirmed removed, and keeps it otherwise, since a
 container may still mount it; a copy that could not be removed makes the pass incomplete. A
 container's log (`cold.log`, `app.log`) is written straight to its file with its stderr as well as
@@ -403,8 +405,9 @@ role, the upstream's events and the app's, and which of the app's container ID, 
 RestartCount differed from the launch check at the end) are what they read.
 
 For each cell with a reading, a soak reports memory at the start and the end (the median sample in
-the first and last memory interval), p99 per latency interval, failed requests (in its intervals and
-in k6's aggregate), whether it observed evidence that the app restarted, and, separately, the app's
+the first and last memory interval), p99 per latency interval, failed requests (the Markdown prints
+k6's aggregate count; each interval's count is only in summary.json, as the cell's
+`windows[].failed`), whether it observed evidence that the app restarted, and, separately, the app's
 observed exit, signal and OOM events that qualify for the cell (below). Memory and p99 are reported figures: no criterion
 says whether they held. Only the fixed rate (below) is reported as held or not. Restart events
 come from the cell's live `docker events` stream, filtered to the app, the load, an API cell's

@@ -381,7 +381,8 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
   assert.match(soakMemoryClock, /intervals of their own/);
   assert.doesNotMatch(text, /was not met/);
   assert.match(text, /^No group: /m);
-  const grouped = structuredClone(s); grouped.options.group = "production";
+  // A grouped pass selected all of its group's adapters and ran those the round admitted.
+  const grouped = structuredClone(s); grouped.options.group = "production"; grouped.admission.selected = groupApps("production");
   assert.match(soakReport(grouped), /^Group production: its images and container settings\.$/m);
   assert.equal(steadyReport(s), text);
   const replaced = structuredClone(s); replaced.cells = [soakCell({ after: { ...held, startedAt: "2026-11-20T00:30:00Z" } })];
@@ -1263,6 +1264,40 @@ test("a saved pass names only adapters and groups this checkout has, and never p
   admitted.admission = { round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected: ["corten", "aspnet"], admitted: ["corten", "aspnet"] };
   validateConvergence(admitted);
   assert.match(steadyReport(admitted), /^Adapters: those timed round w2 .* admitted, of corten, aspnet\.$/m);
+});
+
+test("a saved pass with a group ran that group's adapters, or the subset of them its admission admitted, as steady.mjs runs it", () => {
+  const performant = groupApps("production-performant");
+  assert.deepEqual([performant.includes("aspnet"), performant.includes("rails"), apps.includes("rails")], [true, false, true]);
+  const admission = (selected, admitted) => ({ round: "w2", commit: "e".repeat(40), summarySha256: "f".repeat(64), path: null, selected, admitted });
+  // An adapter this checkout has, but not the group's: steady.mjs --group never runs it.
+  const rails = (v) => {
+    v.options.apps = v.options.apps.map((a) => (a === "aspnet" ? "rails" : a));
+    v.images = Object.fromEntries(Object.entries(v.images).map(([a, id]) => [a === "aspnet" ? "rails" : a, id]));
+    for (const c of v.cells) if (c.app === "aspnet") c.app = "rails";
+  };
+  const s = convergencePass();
+  s.options.group = "production-performant";
+  for (const [what, mutate] of [
+    ["an adapter outside the group", (v) => { rails(v); v.admission = null; }],
+    ["an adapter outside the group, selected for admission", (v) => { rails(v); v.admission = admission(["corten", "rails"], ["corten", "rails"]); }],
+    ["a subset of the group with no admission", (v) => { v.admission = null; }],
+    ["an admission that did not select the whole group", (v) => { v.admission = admission(["corten", "aspnet"], ["corten", "aspnet"]); }],
+    ["fewer adapters than the admission admitted", (v) => { v.admission = admission(performant, ["corten", "aspnet", "topcoat"]); }],
+  ]) {
+    const v = structuredClone(s); mutate(v);
+    for (const read of [validateConvergence, steadyReport, (x) => convergenceLines(likeRound(), ["corten", "aspnet"], x)]) {
+      assert.throws(() => read(v), (error) => {
+        assert.equal(error.message, "the pass's adapters are not its group's, or the subset of them its admission admitted", what);
+        assert.ok(!error.message.includes("rails"), what);
+        return true;
+      }, what);
+    }
+  }
+  // The subset of the group that a round admitted, selected as the whole group, reads, as that group.
+  const subset = structuredClone(s); subset.admission = admission(performant, ["corten", "aspnet"]);
+  validateConvergence(subset);
+  assert.match(steadyReport(subset), /^Group production-performant: its images and container settings\.$/m);
 });
 
 test("saved memory medians and growth must be numbers before the report does any arithmetic", () => {

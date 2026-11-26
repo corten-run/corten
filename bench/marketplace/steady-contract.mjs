@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { cpuSettings, inventory, resultSchema, timedProfilesFor } from "./run-contract.mjs";
-import { groupNames } from "./groups.mjs";
+import { groupApps, groupNames } from "./groups.mjs";
 
 // v4: summary.json is an allowlist. Every saved field is defined by the checkout (a fixed code or
 // text), a validated number, or a value that matches a strict pattern (savedText); the readers
@@ -768,6 +768,15 @@ function passEvidence(s, schema) {
     fields(a, ["round", "commit", "summarySha256", "path", "selected", "admitted"], "the pass's admission");
     assert.ok(matches("round", a.round) && matches("commit", a.commit) && matches("sha256", a.summarySha256) && (a.path === null || matches("path", a.path))
       && [a.selected, a.admitted].every((list) => Array.isArray(list) && list.every((x) => matches("name", x))) && a.selected.every(adapter) && o.apps.every((x) => a.selected.includes(x) && a.admitted.includes(x)), "the pass's admission");
+  }
+  // A named group's adapters are the ones parseSteadyArgs gives it (groups.mjs), in its order; with an
+  // admission, the pass selected exactly those and ran the subset the round admitted. Its group is
+  // what the reports print, so a pass that ran another adapter under that name is refused.
+  if (o.group !== null) {
+    const members = groupApps(o.group);
+    const same = (list, expected) => list.length === expected.length && list.every((x, i) => x === expected[i]);
+    assert.ok(s.admission === null ? same(o.apps, members) : same(s.admission.selected, members) && same(o.apps, members.filter((x) => s.admission.admitted.includes(x))),
+      "the pass's adapters are not its group's, or the subset of them its admission admitted");
   }
   fields(s, ["schema", "name", "runId", "options", ...(kind === "convergence" ? ["rule"] : []), "startedAt", "finishedAt", "complete", "failures", "cleanup", "cells", "admission", "startup",
     "host", "scope", "measurement", "commit", "finishedCommit", "dirty", "fixtureSha256", "images", "tools"], "the pass");
