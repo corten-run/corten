@@ -31,6 +31,8 @@ node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 # The reviewed fleet reservation passes its named layout to the same entry:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
+# An independent json-api fleet saved with the opt-in JSON API c-16 layout passes it the same way:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --load-layout json-c16-generator-v1
 # For a non-catalog group only at the placement authorized by the fleet:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --placement dedicated-sfo2
 ```
@@ -42,9 +44,12 @@ The catalog job keeps its separate `c16-generator-v1` layout.
 The argument order and root are fixed. No selection, recipe, command, validator, image,
 environment, output-path, retry or resume argument is accepted. The parent provisions a
 private, same-UID `/bench/campaign` outside a clean checkout, a Linux host with Node 24+,
-at least eight available CPUs (16 for the named catalog layout), Docker and the
-actual native build/browser dependencies. Only the catalog group accepts the named
-layout. Without it the existing CPU binding is unchanged. The parent separately
+at least eight available CPUs (16 for either named layout), Docker and the
+actual native build/browser dependencies. Only the catalog group accepts
+`c16-generator-v1`, and only json-api accepts `json-c16-generator-v1`, whose binding
+requests `JSON_API_LOAD_LAYOUT=json-c16-generator-v1` with CPUs 1, 2-3 and 4-15
+([JSON API c-16 placement](../CLOUD.md#json-api-c-16-placement-opt-in)). Without a layout
+the existing CPU binding is unchanged. The parent separately
 establishes the reserved host identity, authorized operator launch, unit/cgroup
 ownership and exclusive fresh-host use. This code does not authenticate a cloud size or
 prove host exclusivity from a receipt. The trusted parent launching this fixed CLI is the
@@ -120,8 +125,11 @@ finalization. Historical result paths, standalone commands and the archive layou
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
-groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
-native README specifies. The older mixed-measure remains the default-profile recipe,
+groups and mixed-production-measure in the legacy full campaign. Dedicated Mixed
+campaigns use `mixed-production-django-asgi`: the same `--measure --profile matched`,
+plus the fixed `--django-deployment django-granian-asgi` selection. The build and
+audit bind that deployment for both sources, without changing the measured workload
+or its gates. The older mixed-measure remains the default-profile recipe,
 unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
 client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
 legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
@@ -414,7 +422,10 @@ uses the pre-phase census cutoff instead.
 Both uptime and the monotonic apparatus samples must support the wait. Cancellation
 keeps the first-after inventory and skips the second census. Exact cgroup, parent
 PID/start identity and matching executable path, device and inode are required, not
-just the worker name. Saved replay uses the measured checkout and requires cleanup
+just the worker name. On hosts where
+[systemd-udevd links to udevadm](https://github.com/systemd/systemd-stable/blob/v255.4/src/udev/meson.build),
+procfs may report `/usr/bin/udevadm` for the daemon and its workers. That path
+alone establishes neither role nor cleanup. Saved replay uses the measured checkout and requires cleanup
 proof before accepting JSON audit readiness. A surviving or replacement worker,
 uncertain timing or ownership, a new login or benchmark process, or a changed Docker
 baseline still stops sequencing. This does not alter a measured window, prove the

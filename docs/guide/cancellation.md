@@ -45,7 +45,7 @@ so a page rendered from memory registers none.
 A connection `serve` accepted keeps one timer for its requests' deadlines once two requests of
 its have waited, rather than making one a request: the first two requests to wait make their own,
 the connection makes its timer at the second, and each after them sets the connection's again
-and leaves it set ([design.md, Choice 74](../design.md#choice-deadline-timer)). A connection
+and leaves it set ([design.md, Choice 77](../design.md#choice-deadline-timer)). A connection
 whose only request waits, as a proxy that opens one for each request sends them, keeps none. A
 deadline fires when it did. What an app can see of the kept timer:
 

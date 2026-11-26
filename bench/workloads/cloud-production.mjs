@@ -5,19 +5,21 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, controllerFailure, controllerState, full, parseDropletArgs, providerFailure, routeStages, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, handoffCapture, handoffLocks, handoffRetirementPolicy,
-  interruptedFirstUpload, launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+  failedExitOneCandidate, failedExitOnePolicy, failedExitOneScope, verifyFailedExitOneCustody, verifyFailedExitOneRetirement, interruptedFirstUpload,
+  launchHostKey, offlineNeverStarted, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckCreateErroredAttempt, recheckIndexedLaunchCustody, recheckPostedCreate, recheckSetupAttempt } from "./fleet-verify.mjs";
+import { checkQuarantineCensus, continuationIndexSha256, outside, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+  recheckContinuationPeers, recheckCreateErroredAttempt, recheckCreateQuarantine, recheckExitOneRetirement, recheckIndexedLaunchCustody, recheckPostedCreate,
+  recheckExternalFailedHost, recheckSetupAttempt } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -69,7 +71,8 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   if (options.detach) for (const path of benchPackagePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
-  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
+  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout
+    && options.absentMeasuredCheckout === undefined) && !compiler()) missing.push(localCompilerMissing);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery, launchHostKeySha256;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
@@ -144,15 +147,30 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         const { stagedChildIntent } = await import("./fleet.mjs");
         if (saved.control?.monitor?.phase === "closed") {
           handoffLocks(local, holdingOperationLock);
-          const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
-          recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
-            captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
-            hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
-            evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
-            custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
-            launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
-            registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
-            campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          if (failedExitOneCandidate(local, saved)) {
+            const absentOnly = saved.status === "retired";
+            const { grouped, launchIntentSha256, fleetManifestSha256, record } = absentOnly
+              ? verifyFailedExitOneRetirement(local, saved) : verifyFailedExitOneCustody(local, saved);
+            if (absentOnly) assert.equal(record.controllerCommit, head, "original exit-one retirement controller required");
+            const intent = stagedChildIntent(physicalRequest, saved);
+            assert.deepEqual(intent, { launch: launchIntentSha256 }, "original exit-one launch intent changed");
+            recovery = { policy: failedExitOnePolicy, operation: absentOnly ? "reconcile-absence-only" : "observe-terminal-and-retire",
+              measuredCommit: saved.commit, provider: saved.provider, hostId: saved.id,
+              ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent, fleetManifestSha256 };
+          } else {
+            const { grouped, capture, captureSha256 } = handoffCapture(local, saved);
+            recovery = { policy: handoffRetirementPolicy, measuredCommit: saved.commit, captureControllerCommit: capture.controllerCommit,
+              captureSha256, preservedReservationSha256: capture.reservationSha256, provider: saved.provider,
+              hostId: saved.id, ip: saved.ip, group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256,
+              evidenceSha256: saved.evidenceSha256, custodyArchiveSha256: capture.observation.archiveSha256,
+              custodyEvidenceSha256: capture.evidenceSha256, snapshotSha256: capture.observation.snapshotSha256,
+              launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+              registrationSha256: saved.control.monitor.registrationSha256, sealSha256: grouped.terminal.sealSha256,
+              campaign: grouped.terminal.campaign, intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+          }
         } else {
           const grouped = groupedPreplanFailure(local, saved);
           // A refused custody probe can append a settled collection ledger row
@@ -174,7 +192,19 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
           policy: failedNativePolicy(saved) };
       }
     } else {
-      assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+      if (options.absentMeasuredCheckout !== undefined) {
+        assert.ok(saved.commit !== head && absentCollectionCandidate(options, saved), "absence-only collection requires a verified older reservation with deletion intent");
+        const measuredRoot = realpathSync(options.absentMeasuredCheckout);
+        assert.ok(outside(measuredRoot, physicalRequest) && outside(physicalRequest, measuredRoot), "measured checkout and reservation must be disjoint");
+        const measuredGit = async (...args) => (await run("git", ["-C", measuredRoot, ...args])).stdout;
+        assert.equal(realpathSync((await measuredGit("rev-parse", "--show-toplevel")).trim()), measuredRoot);
+        assert.equal((await measuredGit("rev-parse", "--verify", "HEAD^{commit}")).trim(), saved.commit, "use the original measured checkout");
+        assert.equal(await measuredGit("status", "--porcelain", "--untracked-files=all"), "", "clean measured checkout required");
+        await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+        if (!compiler(measuredRoot)) missing.push(localCompilerMissing);
+        recovery = { policy: absentCollectionPolicy, measuredCommit: saved.commit, measuredRoot, hostId: saved.id,
+          archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256 };
+      } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
       if (options.collect && saved.launchHostKeySha256 !== undefined) {
         launchHostKey(join(physicalRequest, `groups-${options.round}`), saved);
         launchHostKeySha256 = saved.launchHostKeySha256;
@@ -193,6 +223,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
       : options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
       : options.r21MeasuredCheckout ? "operator-approved-after-merged-independent-review-for-one-sealed-child-collection"
+      : recovery?.policy === absentCollectionPolicy ? "operator-approved-for-read-only-absence-and-measured-replay-only"
       : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
@@ -225,6 +256,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     return error;
   };
   try {
+  let checkHistoricalDispatch;
   const run = async (...args) => {
     const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
     try { await controlCheckpoint(interrupted); } catch (error) {
@@ -236,8 +268,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       assert.ok(args[0] === "doctl" && args[1][2] === "delete" && args[4] !== undefined);
       // The controller's local custody must still match after this last await,
       // before the private worker receives the mutation.
-      guardDispatch();
+      if (guardDispatch() === false) return unsentDelete; // The local proof expired before worker dispatch.
     }
+    if (args[0] === "doctl" && args[1][2] === "create") checkHistoricalDispatch?.();
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
     // Hand custody back before cancellation: take the stream handle, record
@@ -276,15 +309,20 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
   const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
+  const externalFailures = unconfirmed.filter((row) => row.externalFailureSha256 !== undefined);
   // Every posted droplet of an earlier provider-errored attempt, in any group, is fenced
   // too, by ID alone: a renamed or untagged droplet with that ID still refuses the create.
   const continuation = manifest?.single ? admission?.subject.continuation : undefined;
   const posted = [...continuation?.createFailures ?? [], ...continuation?.postedCreates ?? []];
-  const historicalIds = new Set([...unconfirmed, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
+  const quarantined = continuation?.quarantinedCreates ?? [];
+  assert.ok(quarantined.every((row) => row.group !== options.group && row.accountId === manifest.provider.accountId),
+    "create quarantine permits only other groups in the saved account");
+  const exitOneRetirements = continuation?.exitOneRetirements ?? [];
+  const historicalIds = new Set([...unconfirmed, ...exitOneRetirements, ...posted.map(({ accountId, dropletId }) => ({ accountId, id: dropletId }))].map(({ accountId, id }) => {
     assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
     return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
   }));
-  let historicalHostsAbsent;
+  let historicalHostsAbsent = !historicalIds.size && !quarantined.length;
   const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
@@ -304,13 +342,14 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
     if (beforeCreate && manifest.single) {
-      if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
+      assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
       if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
       if (beforeCreate === true) {
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
-        const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
+        const checks = unconfirmed.filter((row) => row.root !== undefined && row.externalFailureSha256 === undefined)
+          .map((row) => recheckSetupAttempt(root, row, manifest));
         for (const stillIdle of checks) stillIdle(); // Another attempt's archive may have taken time to hash.
         // Last, immediately before the create is recorded and dispatched under this child's
         // own locks: an earlier provider-errored attempt of this group must still hold no
@@ -320,10 +359,25 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
         // Then every earlier posted create on this account, in any group (not only this
         // group's retry): a contradiction or custody change since admission refuses.
         for (const row of current.subject.continuation.postedCreates ?? []) recheckPostedCreate(row);
+        for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
+      }
+      if (beforeCreate !== "census") {
+        for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
+        for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
+        // A continuation approval predating this binding cannot create beside
+        // an unbound r78 slot. Do not try to replay its archive from the child.
+        for (const slot of ["client-heavy", "client-heavy--r78"]) {
+          const prior = join(root, slot);
+          if (prior === current.fleetRoot || exitOneRetirements.some((row) => row.root === prior)
+              || !lstatSync(join(prior, "fleet-r78.json"), { throwIfNoEntry: false })) continue;
+          const { state } = readGroup(readFleet(prior, "r78", { priorSelection: true }), "client-heavy");
+          assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
+        }
       }
       return currentPeers;
     }
   });
+  if (exitOneRetirements.length || externalFailures.length) checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
@@ -348,6 +402,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       requireStagedFleet(JSON.parse(bytes)), admission?.placement?.region) });
   }
   let entered = false;
+  const absenceOnly = plan.subject.recovery?.policy === absentCollectionPolicy ? plan.subject.recovery : undefined;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
     const locked = await productionPlan(options, { ...deps, holdingOperationLock: true });
@@ -355,37 +410,47 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
     assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     checkFleetAdmission?.();
-    if (locked.subject.recovery?.policy === handoffRetirementPolicy) entered = true;
+    if ([handoffRetirementPolicy, failedExitOnePolicy].includes(locked.subject.recovery?.policy)) entered = true;
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch) => {
+    if (absenceOnly && binary !== "git") assert.ok(binary === "doctl" && !registration && deleteProofExpiresAtMs === undefined && guardDispatch === undefined
+      && (argv[0] === "account" && argv[1] === "get"
+        || argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "get" && argv[3] === absenceOnly.hostId), "absence reconciliation is read-only");
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
       await authorizeLocked();
       entered = true;
     }
-    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
-    // Use the controller's complete, account-bracketed pre-create list, not
-    // just the rows that still carry their original benchmark name or tags.
-    if (historicalIds.size && historicalHostsAbsent === undefined && binary === "doctl"
-        && argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "list") {
-      const rows = JSON.parse(result.stdout);
-      assert.ok(Array.isArray(rows));
-      historicalHostsAbsent = !rows.some(({ id }) => historicalIds.has(String(id)));
-    }
-    return result;
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration, guardDispatch);
   };
+  const inspectPreCreateInventory = !historicalHostsAbsent ? (rows, complete) => {
+    const listed = rows.some(({ id }) => historicalIds.has(String(id)));
+    const externalListed = rows.some(({ name, tags }) => externalFailures.some((row) =>
+      typeof name === "string" && digest(name) === row.nameSha256
+      || tags?.some((tag) => typeof tag === "string" && digest(tag) === row.tagSha256)));
+    if (quarantined.length) {
+      checkQuarantineCensus(dirname(admission.fleetRoot), quarantined, manifest, rows);
+    }
+    assert.ok(!externalListed && (!(quarantined.length || externalFailures.length) || !listed),
+      "an earlier historical host is listed; preserve reservation");
+    historicalHostsAbsent = complete && !listed;
+  } : undefined;
+  // The worker returns at most one compact witness. Keep quarantine targets
+  // ahead of external failures, which are all checked against the complete census.
+  const censusTargets = quarantined.length ? quarantined : externalFailures.slice(0, 1);
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
+    inspectPreCreateInventory, preCreateCensusTargets: censusTargets.map(({ nameSha256, tagSha256 }) => `${nameSha256}:${tagSha256}`),
     ...(admission ? { checkFleetAdmission, ...(stagedSibling
       ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
-    } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
+    } }), ...(absenceOnly || options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy].includes(plan.subject.recovery?.policy)
+        ...(absenceOnly || options.r21MeasuredCheckout || ["grouped-preplan-failure-custody-only", handoffRetirementPolicy, failedExitOnePolicy].includes(plan.subject.recovery?.policy)
           ? plan.subject.recovery : {}) },
     } : {}) });
   let result;

@@ -66,7 +66,31 @@ If a Docker participant snapshot fails, a sealed terminal record also includes
 including when a later sample is complete. The diagnostic keeps no error text,
 daemon output, commands, environment or values read from procfs. The existing
 sample still records the gap and notifies as before. A stage identifies a failed
-check, not the cause of the underlying failure, and adds no retry.
+check, not the cause of the underlying failure. A `kernel-census` failure in one
+of the fixed census checks also names it (`operation`); an ancestor read or the
+root-PID check can fail there without one. A failure after startup rechecks
+records their `attempts`.
+
+A container's first process can rename itself or exec its entrypoint just after
+Docker reports it running (the Node image runs `docker-entrypoint.sh`, which execs
+`node`, whose main thread then renames itself). The collector rechecks only that
+churn: a changed process name between the opening and closing reads
+(`process-name-close`), or a changed executable inode in the container's census
+(`executable-recheck-inode`), on a container whose RFC 3339 Docker `StartedAt` is a real calendar time
+at most one second old. It takes the whole capture again, checking before each
+new attempt that 250 ms have not passed since the first began; the budget bounds
+when an attempt may start, and one started inside it runs to its end. A capture admitted
+after a recheck must have the same Docker start time, PID and kernel start time as
+the failed one, checked before its executables are pinned; a mismatch is a gap at
+`startup-recheck` and leaves no executable proof. Any other failure, an older,
+unreadable or impossible start time, or churn still there when the budget leaves no
+new attempt remains a gap and
+notifies `onFault` as before. A changed name inside the census
+(`process-name-recheck`) is not part of this recheck: the census retries it itself,
+for every participant, within its own deadline. A sealed terminal record counts admitted rechecks in
+`dockerStartupRechecks` (count and the first stage, code and attempts). The count
+is of captures, including those in a sample the collector later rejects for another
+reason, so it can exceed the retained Docker participant captures.
 
 ## Fault Shutdown
 
@@ -201,8 +225,8 @@ There is no helper process, worker, custom message protocol or production I/O ho
 The sampler retains its actual capture timestamps, 100 ms interval and independent
 one-second replay limit. It can capture ahead of storage without retimestamping
 rows at completion. The combined 256 MiB record/sample limit includes admitted but
-unfinished bytes. Additional queue limits are 8 MiB, 64 frames and 4,096 initial
-records, including the one in-flight frame. Overflow fails rather than waiting on
+unfinished bytes. Additional queue limits are 8 MiB, 300 frames (30 seconds at
+100 ms) and 4,096 initial records, including the one in-flight frame. Overflow fails rather than waiting on
 the sampler, dropping a member or growing an unbounded queue. Storage uses at most
 two evidence FDs: the sample file and one record or directory. Queue payload and
 V8 heap limits are not claims about total process memory.
@@ -229,6 +253,21 @@ A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retain
 ownership until the operation returns and cleanup is attempted; partial files and
 an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
 an empty cgroup nor an eventual successful fsync clears a prior storage failure.
+`halted` events retain `hostStorageFailure` for known FIFO faults, including
+during startup: the first writer operation, its allowlisted code (or
+`unknown`), and, only for a quota refusal, the first exceeded limit
+(`total-bytes`, `queued-bytes`, `queued-frames` or `queued-records`).
+A timed-out wait identifies the active writer stage if one is known. Record,
+directory and final sample closes are distinct from sync. Startup retains the
+writer's first fault even if cleanup later fails. When the supervisor reports
+its setup deadline as the first interruption of a pending writer, the halt can
+name the stage without waiting for I/O. When attachment is still draining, the
+campaign journals the supervisor outcome without finishing the disposed observer.
+An earlier leader exit or ordinary cancellation is not a writer deadline.
+These labels do not contain exception text, paths or process details. A frame
+limit reports a full queue, not why the writer fell behind. No terminal seal
+is published on this path.
+
 Fully observed and flushed cancelled/forced evidence retains the old contract:
 it can be collected as explicitly nonqualifying evidence, never a clean success.
 A new abort during finish cannot seal an earlier contradictorily clean result.

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -7,8 +8,24 @@ import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationR
 import { readApparatus, verifyApparatus } from "./control-stream.mjs";
 
 const udevCgroup = "0::/system.slice/systemd-udevd.service/udev\n";
-const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd"]);
+// Systemd 255 installs systemd-udevd as a symlink to the udevadm executable.
+const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd", "/usr/bin/udevadm"]);
 export const udevSettleMs = 5000;
+export const hostObservationBytes = 256 * 2 ** 20;
+
+export function processIdentity(stat) {
+  const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
+  assert.ok(match); const rest = match[4].split(" ");
+  assert.match(rest[18] ?? "", /^\d+$/);
+  return { pid: Number(match[1]), startTicks: rest[18], comm: match[2] };
+}
+
+export function processRecordKey(p) {
+  const identity = { ...processIdentity(p.stat), cgroup: p.cgroup,
+    ...(p.executableRef ? { executableRef: p.executableRef, executableIdentity: p.executableIdentity }
+      : { executableSha256: p.executableSha256 }), type: p.type };
+  return createHash("sha256").update(`${JSON.stringify(identity)}\n`).digest("hex");
+}
 
 export function processStat(stat) {
   if (typeof stat !== "string") return null;

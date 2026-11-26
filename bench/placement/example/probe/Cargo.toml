@@ -1,0 +1,25 @@
+[package]
+name = "placement-example"
+version = "0.0.0"
+edition = "2021"
+
+# The example plan's probe (src/main.rs), built once per side from one place: build.sh puts the
+# side's tree at ../work and its Cargo.lock here, so every binary is built from the same paths and
+# differs only in what the tree holds. The binary is named probe: the kit captures the final link
+# of a file with that name.
+[[bin]]
+name = "probe"
+path = "src/main.rs"
+
+# Features: the template's (the defaults, log, and compress) and json.
+[dependencies]
+corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+# The repository's release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

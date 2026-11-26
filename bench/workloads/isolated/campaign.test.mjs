@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,7 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { isolatedLiveCapture, isolatedLiveLifetime } from "./test-fixtures/live-campaign.mjs";
 import { registration as controlRegistration } from "../test-fixtures/control-stream-fixture.mjs";
 import { streamHash } from "./control-stream.mjs";
-import { supervise } from "./process.mjs";
+import { limits, supervise } from "./process.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
@@ -192,7 +192,7 @@ mock.module("./host-lifetime.mjs", { exports: {
     if (liveRoundTrip) return isolatedLiveLifetime(liveRoundTrip.capture, args, liveRoundTrip.clock);
     if (lifetimeRun) {
       const run = lifetimeRun;
-      return actualLifetime.beginLifetime(args).then((observer) => {
+      return run.setup = actualLifetime.beginLifetime(args).then((observer) => {
         run.observer = observer;
         return run.beforeAttach ? Object.freeze({ ...observer, attach(pid) { run.beforeAttach(); return observer.attach(pid); } }) : observer;
       });
@@ -200,7 +200,7 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
+    const observer = { attach() { if (startup) { startup.attached++; startup.onAttach?.(); } }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
@@ -216,7 +216,10 @@ mock.module("./host-lifetime.mjs", { exports: {
     if (!startup) return observer;
     assert.ok(startupSignal instanceof AbortSignal);
     startup.signal = startupSignal; startup.directory = directory; startup.enter();
-    return startup.gate.then(() => { if (startup.failure) throw new Error("PRIVATE_SETUP_FAILURE"); return observer; });
+    return startup.gate.then(() => {
+      if (startup.failure) throw Object.assign(new Error("PRIVATE_SETUP_FAILURE"), { operation: "sample-open", code: "EIO" });
+      return observer;
+    });
   },
   inspectLifetime(binding, invocation, directory, expected) {
     if (lifetimeRun || liveRoundTrip) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
@@ -329,10 +332,15 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
   }
   if (lifetimeStartup) {
-    lifetimeStartup.child = child;
+    const startup = lifetimeStartup;
+    startup.child = child;
     const send = child.send.bind(child);
     child.send = (message, callback) => {
-      if (message.type === "cancel") { callback?.(null); queueMicrotask(() => child.close(0)); return; }
+      if (message.type === "cancel") {
+        callback?.(null);
+        if (startup.onCancel) startup.onCancel(); else queueMicrotask(() => child.close(0));
+        return;
+      }
       return send(message, callback);
     };
   }
@@ -860,11 +868,16 @@ for (const [fault, shutdown = "drained"] of [
     assert.equal(state.outcomes[0].outcome, "preserved-uncertain");
     assert.equal(existsSync(join(root, ".host-attempt.json")), true);
     const directory = join(h.directory, "00-client-heavy-timing/command-0-host");
+    const halted = readdirSync(h.directory).find((name) => /^\d+-halted\.json$/.test(name));
+    const savedHalt = readFileSync(join(h.directory, halted), "utf8");
     if (fault === "write") {
       assert.match(outcome.error.message, /storage incomplete/);
       assert.equal(outcome.error.code, "EIO");
       assert.equal(existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+      assert.deepEqual(JSON.parse(savedHalt).hostStorageFailure, { operation: "sample-write", code: "EIO" });
+      assert.ok(!savedHalt.includes("PRIVATE_STORAGE_DETAIL"));
     } else {
+      assert.equal(JSON.parse(savedHalt).hostStorageFailure, undefined);
       const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
       if (fault === "continuity") {
         assert.equal(terminal.observerError, null); assert.equal(terminal.observerFailures.count, 0);
@@ -891,6 +904,139 @@ for (const [fault, shutdown = "drained"] of [
     if (!settled) run.child?.close(0);
     await advancing; lifetimeRun = null;
   }
+});
+
+for (const kind of ["fault", "fault then cleanup failure", "cancel", "cancel then fault", "deadline", "cancel through deadline",
+  "deadline then cancel", "deadline then fault", "exit through deadline", "attachment deadline"])
+test(`actual campaign startup storage: ${kind} preserves only a real writer diagnostic`, { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  const h = await begin(s), parent = new AbortController();
+  t.mock.method(globalThis, "setInterval", () => null);
+  const f = await samplingControl(t);
+  f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  const run = lifetimeRun = { started: false, cancels: 0 };
+  const cancelled = new Promise((resolve) => { run.cancel = resolve; });
+  run.start = () => run.child.close(0);
+  let openFaults = 0, cleanupFaults = 0, settled = false;
+  const directory = join(h.directory, "00-client-heavy-timing"), host = join(directory, "command-0-host");
+  const sample = join(host, "samples.jsonl");
+  const held = !kind.startsWith("fault");
+  const attaching = kind === "attachment deadline", earlyExit = kind === "exit through deadline";
+  const pause = attaching ? f.pause("sync", (path) => path.startsWith(join(host, "processes")) && path.endsWith(".json"))
+    : held ? f.pause("open", (path) => path === sample) : null;
+  const before = f.before;
+  const deadline = kind.includes("deadline"), earlyCancel = kind.startsWith("cancel"), lateCancel = kind === "deadline then cancel";
+  const lateFault = kind === "deadline then fault";
+  if (deadline) t.mock.timers.enable({ apis: ["setTimeout"] });
+  if (kind === "fault then cleanup failure") {
+    const rmdir = fs.rmdirSync;
+    t.mock.method(fs, "rmdirSync", (path, ...args) => {
+      if (String(path).replaceAll("\\", "/").startsWith("/sys/fs/cgroup/")) {
+        cleanupFaults++;
+        throw Object.assign(new Error("PRIVATE_CLEANUP_DETAIL"), { code: "EBUSY" });
+      }
+      return rmdir(path, ...args);
+    });
+    syncBuiltinESMExports();
+  }
+  f.before = async (step, path) => {
+    await before(step, path);
+    if (step === "open" && path === sample && (!held || kind === "cancel then fault" || lateFault)) { openFaults++; throw ioError(); }
+  };
+  const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
+    () => { settled = true; }, (error) => { settled = true; return error; });
+  try {
+    if (pause) await pause.entered;
+    if (earlyCancel) parent.abort();
+    if (earlyExit) run.child.emit("exit", 0, null);
+    if (deadline) t.mock.timers.tick(30000);
+    if (lateCancel) parent.abort();
+    await Promise.race([cancelled, advancing.then(() => { throw new Error("startup did not request owned cancellation"); })]);
+    assert.equal(run.started, false); assert.equal(run.cancels, 1);
+    assert.equal(parent.signal.aborted, earlyCancel || lateCancel); assert.equal(settled, false);
+    assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
+    if (!deadline || lateFault) pause?.release();
+    if (lateFault) await new Promise((resolve) => setImmediate(resolve));
+    run.child.close(0);
+    const error = await advancing;
+    const files = readdirSync(h.directory);
+    const exitFile = files.find((name) => name.endsWith("-command-exited.json"));
+    assert.ok(exitFile, "supervisor outcome must be journaled before halt, while attachment I/O is still held");
+    const exited = JSON.parse(readFileSync(join(h.directory, exitFile)));
+    assert.match(error?.message, /lifetime or cleanup unproven/);
+    if (!held) assert.equal(exited.error, "native host observation setup failed");
+    if (deadline) assert.equal(exited.error, "native host observation setup incomplete");
+    assert.equal(exited.cancelled, true); assert.equal(exited.success, false);
+    assert.equal(exited.hostManifestSha256, undefined);
+    const halted = readFileSync(join(h.directory, files.find((name) => name.endsWith("-halted.json"))), "utf8");
+    const halt = JSON.parse(halted);
+    assert.ok(exited.sequence < halt.sequence, "the observed command exit precedes the halt");
+    const code = deadline && !earlyCancel && !earlyExit ? "ETIMEDOUT" : kind.includes("fault") ? "EIO" : undefined;
+    assert.deepEqual(halt.hostStorageFailure,
+      code ? { operation: attaching ? "process-record-sync" : "sample-open", code } : undefined);
+    if (attaching) {
+      assert.ok(f.live.size > 0, "the writer still owns the held fsync");
+      assert.equal(f.removed, false);
+    }
+    assert.equal(openFaults, code === "EIO" || lateFault ? 1 : 0);
+    assert.equal(cleanupFaults, kind === "fault then cleanup failure" ? 1 : 0);
+    if (cleanupFaults) assert.equal(f.removed, false);
+    assert.ok(!/PRIVATE_(?:STORAGE|CLEANUP)_DETAIL/.test(halted));
+    assert.equal(existsSync(join(host, "terminal.json")), false);
+    assert.equal(existsSync(join(root, ".host-attempt.json")), true);
+    assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
+  } finally {
+    pause?.release();
+    if (!settled) run.child?.close(0);
+    await advancing; await run.setup?.catch(() => {});
+    lifetimeRun = null;
+  }
+});
+
+test("actual campaign compiler cleanup preserves its wrapped writer fault", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  t.mock.method(globalThis, "setInterval", () => null);
+  const windows = process.platform === "win32";
+  const f = await samplingControl(t);
+  f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  const target = `${join(repo, s.plan.bindings[0].validation.artifactRoot)}.compiler`;
+  if (windows) {
+    const exec = childProcess.execFileSync;
+    t.mock.method(childProcess, "execFileSync", (file, args, ...rest) => {
+      if (file !== "/bin/mv") return exec(file, args, ...rest);
+      assert.equal(args[0], "-n"); assert.equal(args[2], fs.realpathSync(dirname(target)));
+      renameSync(args[1], target);
+    });
+  }
+  let cleanupFaults = 0;
+  const rmdir = fs.rmdirSync;
+  t.mock.method(fs, "rmdirSync", (path, ...args) => {
+    if (String(path).startsWith(join(fs.realpathSync(dirname(target)), ".compiler-owner-"))) {
+      cleanupFaults++; throw new Error("PRIVATE_COMPILER_CLEANUP");
+    }
+    return rmdir(path, ...args);
+  });
+  syncBuiltinESMExports();
+  const host = join(h.directory, "00-client-heavy-timing/command-0-host");
+  f.before = (step, path) => { if (step === "sync" && path === join(host, "samples.jsonl")) throw ioError(); };
+  const run = lifetimeRun = { started: false, cancels: 0, start() { f.members = []; run.child.close(0); } };
+  try {
+    await assert.rejects(s.campaign.advance(h), (error) => /compiler target cleanup failed/.test(error.message) && error.cause?.code === "EIO");
+    const halted = readdirSync(h.directory).find((name) => name.endsWith("-halted.json"));
+    const saved = readFileSync(join(h.directory, halted), "utf8");
+    assert.deepEqual(JSON.parse(saved).hostStorageFailure, { operation: "sample-sync", code: "EIO" });
+    assert.ok(!/PRIVATE_(?:COMPILER|STORAGE)/.test(saved));
+    assert.equal(run.started, true); assert.equal(cleanupFaults, 1);
+    assert.equal(existsSync(target), true); assert.equal(existsSync(join(host, "terminal.json")), false);
+    assert.equal(s.campaign.status(h).state, "preserved-uncertain");
+  } finally { lifetimeRun = null; }
 });
 
 test("actual campaign attachment gap cancels before native start or interval creation", { timeout: 15000 }, async (t) => {
@@ -947,11 +1093,121 @@ for (const stop of ["cancel", "close"]) for (const failure of [false, true]) tes
     release(); await rejected;
     assert.equal(owner.attached, 0); assert.equal(owner.disposed, failure ? 0 : 1);
     assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+    const halted = readdirSync(h.directory).find((name) => name.endsWith("-halted.json"));
+    const saved = readFileSync(join(h.directory, halted), "utf8");
+    assert.equal(JSON.parse(saved).hostStorageFailure, undefined);
+    assert.ok(!saved.includes("PRIVATE_SETUP_FAILURE"));
     const status = s.campaign.status(h);
     assert.equal(status.state, "preserved-uncertain"); assert.equal(status.uncollectedNativeRoots.length, 1);
     assert.equal(calls.length, 1);
     await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
   } finally { release(); await rejected; }
+});
+
+for (const crossed of [false, true]) test(`command-started journal ${crossed ? "crosses" : "stays within"} the observation startup cutoff`, async (t) => {
+  const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  let now = 100, journalFd, journalSyncs = 0, setups = 0;
+  const open = fs.openSync, sync = fs.fsyncSync;
+  t.mock.method(performance, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(fs, "openSync", (path, ...args) => {
+    const fd = open(path, ...args);
+    if (args[0] === "wx" && typeof path === "string" && path.endsWith("-command-started.json")) journalFd = fd;
+    return fd;
+  });
+  t.mock.method(fs, "fsyncSync", (fd) => {
+    sync(fd);
+    if (fd === journalFd) {
+      journalFd = undefined; journalSyncs++;
+      now += limits.readyMs + (crossed ? 1 : -1);
+    }
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const owner = lifetimeStartup = { enter() { setups++; }, gate: Promise.resolve(), attached: 0, disposed: 0 };
+  if (crossed) await assert.rejects(s.campaign.advance(h), /lifetime or cleanup unproven/);
+  else assert.equal((await s.campaign.advance(h)).state, "finished");
+
+  const files = readdirSync(h.directory);
+  const receipt = (kind) => JSON.parse(readFileSync(join(h.directory, files.find((name) => name.endsWith(`-${kind}.json`))), "utf8"));
+  const started = receipt("command-started"), exited = receipt("command-exited");
+  assert.equal(journalSyncs, 1);
+  assert.equal(started.kind, "command-started");
+  assert.ok(started.sequence < exited.sequence);
+  assert.equal(exited.success, !crossed);
+  assert.equal(exited.cancelled, crossed);
+  assert.equal(exited.error, crossed ? "native host observation setup incomplete" : null);
+  assert.equal(setups, crossed ? 0 : 1);
+  assert.equal(owner.attached, crossed ? 0 : 1);
+  const host = join(h.directory, "00-catalog-page-timing", "command-0-host");
+  assert.equal(existsSync(host), !crossed);
+  assert.equal(existsSync(join(host, "terminal.json")), !crossed);
+});
+
+for (const boundary of ["before attach", "after attach", "after attachment check"]) {
+  test(`campaign startup cutoff without dispatching timers: ${boundary}`, { timeout: 10000 }, async (t) => {
+    const s = setupGroup("client-heavy"), h = await begin(s);
+    let elapsed = 100, readsUntilCutoff = Infinity, enter, release, onCancel;
+    t.mock.method(performance, "now", () => elapsed + (readsUntilCutoff-- <= 0 ? 30000 : 0));
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const entered = new Promise((resolve) => { enter = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const cancelled = new Promise((resolve) => { onCancel = resolve; });
+    const expire = () => { elapsed += 30000; };
+    const owner = lifetimeStartup = { enter, gate, onCancel, attached: 0, disposed: 0, onAttach() {
+      if (boundary === "after attach") expire();
+      if (boundary === "after attachment check") readsUntilCutoff = 1;
+    } };
+    let returned = false;
+    const advancing = s.campaign.advance(h).then(() => null, (error) => error).finally(() => { returned = true; });
+    let closed = false;
+    function close() { if (!closed && owner.child) { closed = true; owner.child.close(0); } }
+    try {
+      await entered;
+      if (boundary === "before attach") expire();
+      release();
+      await cancelled;
+      assert.equal(returned, false, "the child has not drained");
+      assert.equal(owner.disposed, 1, "rejection disposes before child shutdown");
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      close();
+      assert.match((await advancing)?.message ?? "", /lifetime or cleanup unproven/);
+      assert.equal(owner.attached, boundary === "before attach" ? 0 : 1);
+      assert.equal(owner.disposed, 1);
+      assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+      const exit = readdirSync(h.directory).find((name) => name.endsWith("-command-exited.json"));
+      const result = JSON.parse(readFileSync(join(h.directory, exit), "utf8"));
+      assert.equal(result.error, "native host observation setup incomplete");
+      assert.equal(result.success, false);
+      assert.equal(result.hostManifestSha256, undefined);
+      const state = s.campaign.status(h);
+      assert.equal(state.state, "preserved-uncertain");
+      assert.equal(state.uncollectedNativeRoots.length, 1);
+      assert.equal(calls.length, 1);
+    } finally { release(); close(); await advancing; }
+  });
+}
+
+for (const cancelled of [false, true]) test(`campaign admitted startup seals ${cancelled ? "drained cancellation" : "healthy exit"}`, async () => {
+  const s = setupGroup("catalog-page"); s.plan.bindings[0].preparation.fixtures = [];
+  const h = await begin(s);
+  abort = new AbortController();
+  if (cancelled) mode = "abort-native";
+  const owner = lifetimeStartup = { enter() {}, gate: Promise.resolve(), attached: 0, disposed: 0, onCancel() {} };
+  const status = await s.campaign.advance(h, { signal: abort.signal });
+  assert.equal(owner.attached, 1);
+  assert.equal(owner.disposed, 0, "an accepted attachment is not disposed during runtime cancellation or exit");
+  const seal = JSON.parse(readFileSync(join(owner.directory, "terminal.json"), "utf8"));
+  assert.equal(seal.unforced, !cancelled);
+  const exit = readdirSync(h.directory).find((name) => name.endsWith("-command-exited.json"));
+  const result = JSON.parse(readFileSync(join(h.directory, exit), "utf8"));
+  assert.equal(result.success, !cancelled);
+  assert.equal(result.cancelled, cancelled);
+  assert.match(result.hostManifestSha256, /^[0-9a-f]{64}$/);
+  assert.equal(status.state, cancelled ? "preserved-uncertain" : "finished");
+  assert.equal(status.uncollectedNativeRoots.length, 0);
+  assert.equal(calls.length, 1);
 });
 
 for (const group of groupNames) test(`${group}: one complete group runs and replays without inventing other groups`, async () => {

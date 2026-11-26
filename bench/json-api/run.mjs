@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { hostname, platform, release } from "node:os";
+import { availableParallelism, hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { commands } from "./process.mjs";
@@ -25,14 +25,17 @@ export async function run(args) {
   // These legacy selectors cannot pre-filter the registry or its ESM dependencies.
   const saved = Object.fromEntries(["BENCH_APPS", "BENCH_TIER"].map((k) => [k, process.env[k]]));
   for (const k of Object.keys(saved)) delete process.env[k];
-  let c, artifacts, evidence, matrix, stats, reporting, production, phaseCapture, outcomes, readUpstreamSnapshot;
+  let c, artifacts, evidence, matrix, stats, reporting, production, phaseCapture, outcomes, readUpstreamSnapshot, placement;
   try {
     c = await import("./contract.mjs"); artifacts = await import("./artifacts.mjs"); evidence = await import("./evidence.mjs");
     matrix = await import("./matrix.mjs"); stats = await import("../catalog/stats.mjs"); reporting = await import("./report.mjs");
     production = await import("./production.mjs"); phaseCapture = await import("./phase.mjs"); outcomes = await import("./timed-outcomes.mjs");
-    ({ readUpstreamSnapshot } = await import("./check.mjs"));
+    ({ readUpstreamSnapshot } = await import("./check.mjs")); placement = await import("./placement.mjs");
   } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
-  const options = c.parseArgs(args), group = c.descriptor(), cpus = c.cpuSettings(process.env);
+  const options = c.parseArgs(args), group = c.descriptor();
+  // Without JSON_API_LOAD_LAYOUT this is exactly c.cpuSettings(process.env). The opt-in c-16
+  // layout refuses here, before any result folder or container, on a host below 16 CPUs.
+  const layout = placement.runnerPlacement(process.env, availableParallelism()), cpus = layout.cpus;
   const folder = join(here, "results", options.round);
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder); // Never overwrite old evidence.
   const runId = `json-api-${options.round}-${randomBytes(5).toString("hex")}`, network = `${runId}-net`, label = "run.corten.json-api";
@@ -40,10 +43,12 @@ export async function run(args) {
   const docker = (args, opts) => command("docker", args, opts);
   const summary = { schema: c.timedSchema, producer: production.producerProvenance(c.scheduledProducerSchema), group, options, timingPlan: c.timingPlan(options), round: options.round, runId, startedAt: new Date().toISOString(), complete: false, attemptComplete: false, checksPassed: false,
     failures: [], cleanupFailures: [], fixtures: {}, tools: {}, host: { hostname: hostname(), platform: platform(), release: release(), node: process.version, checkout: repo.replaceAll("\\", "/") },
-    measurement: { cpus, encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
+    measurement: { cpus, ...(layout.loadLayout === undefined ? {} : { loadLayout: layout.loadLayout, generatorPlacement: layout.generatorPlacement }), encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...c.phases] },
     apps: Object.fromEntries(options.apps.map((app) => [app, { images: {}, checks: {}, runs: Object.fromEntries(group.cases.map((p) => [p.key, []])),
       aggregates: Object.fromEntries(group.cases.map((p) => [p.key, {}])), projections: Object.fromEntries(group.cases.map((p) => [p.key, outcomes.timedCaseProjection([], options.passes)])) }])) };
+  // The untimed cold probe and CPU counter reader keep the original generator CPUs (4-7 under c-16).
+  const probeCpus = placement.coldProbeCpus(summary.measurement);
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (line) => { const text = `${new Date().toISOString()} ${line}`; console.log(text); appendFileSync(join(folder, "run.log"), `${text}\n`); };
   const recordFailure = (app, key, stage, error) => summary.failures.push({ app, key, stage, error: error.stack ?? String(error) });
@@ -106,7 +111,7 @@ export async function run(args) {
     const upstreamBefore = await apiReads(profile.payload);
     await own(["create", ...argsFor(name, profile, image)], name);
     try {
-      await own(["run", "-d", "--network", network, ...cpus.load.args, "--memory", "256m", ...mount, summary.tools.node.imageId,
+      await own(["run", "-d", "--network", network, ...probeCpus.args, "--memory", "256m", ...mount, summary.tools.node.imageId,
         "node", "/bench/json-api/cold.mjs", `http://${name}:8080`, c.route(profile), String(options.startupTimeout)], probe);
       const deadline = Date.now() + 10000;
       while (!(await docker(["logs", probe])).includes("json-probe-ready")) {
@@ -251,7 +256,7 @@ export async function run(args) {
         summary.checksPassed = qualified; save();
         if (!qualified) log("Full JSON matrix unqualified: no timing runs will start; all selected rows retained.");
         else if (!options.checkOnly) {
-          await own(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host",
+          await own(["run", "-d", "--network", "none", "--cpus", "1", ...(probeCpus.cpuset ? ["--cpuset-cpus", probeCpus.cpuset] : []), "--memory", "128m", "--cgroupns=host",
             "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount, summary.tools.node.imageId, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
         }
       },

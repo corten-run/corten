@@ -124,23 +124,30 @@ export function durableCopy(source, destination, expected) {
 
 // Compact sorted directory inventory: <=32 MiB name bytes + 4.2 MiB offsets.
 // opendir checks admission before retaining a name, unlike read-entire-directory.
-function walkTree(root, limits, selected, hashFiles, trackIdentity = false) {
+function walkTree(root, limits, selected, hashFiles, trackIdentity = false, subtrees) {
   physical(root);
   const arena = Buffer.alloc(limits.nameBytes), offsets = new Uint32Array(limits.nodes), hash = createHash("sha256");
   const metadata = trackIdentity ? createHash("sha256") : null;
   let used = 0, count = 1, size = 0, memberBytes = 0, tarBytes = 0;
   const nameAt = (i) => { const at = offsets[i]; return arena.subarray(at + 1, at + 1 + arena[at]); };
-  function visit(path, key, depth) {
+  function visit(path, key, depth, scopes) {
     assert.ok(depth <= depthLimit && key.length <= pathLimit && Buffer.byteLength(path) <= pathLimit, "evidence path limit");
     const member = key.replace(/^\//, "");
     const info = trackIdentity ? lstatSync(path, { bigint: true }) : null;
     const stat = info ?? lstatSync(path), bytes = Number(stat.size);
+    const subtree = subtrees?.get(key);
+    if (subtree) {
+      assert.ok(stat.isDirectory(), "evidence subtree must be a directory");
+      subtree.seen = true;
+      scopes = [...(scopes ?? []), subtree];
+    }
     memberBytes += member.length + (key && stat.isDirectory() ? 1 : 0); assert.ok(memberBytes <= limits.memberBytes, "archive index member budget");
     assert.ok(!stat.isSymbolicLink(), "evidence link");
     if (metadata) metadata.update(`${key}\0${identity(info)}\0`);
     if (key) tarBytes += 512 + (member.length + (stat.isDirectory() ? 1 : 0) > 100 ? 512 + Math.ceil((member.length + (stat.isDirectory() ? 1 : 0) + 1) / 512) * 512 : 0);
     if (stat.isDirectory()) {
       physical(path); hash.update(`d\0${key}\0`);
+      if (scopes) for (const scope of scopes) scope.hash.update(`d\0${key.slice(scope.key.length)}\0`);
       const start = count - 1; let end = start;
       const add = (name) => {
         assert.ok(portableEvidenceSegment(name) && name.length <= 255, "unsafe evidence component");
@@ -155,7 +162,7 @@ function walkTree(root, limits, selected, hashFiles, trackIdentity = false) {
       }
       offsets.subarray(start, end).sort((a, b) => Buffer.compare(arena.subarray(a + 1, a + 1 + arena[a]), arena.subarray(b + 1, b + 1 + arena[b])));
       for (let i = start; i < end; i++) {
-        const name = nameAt(i).toString("ascii"); visit(join(path, name), `${key}/${name}`, depth + 1);
+        const name = nameAt(i).toString("ascii"); visit(join(path, name), `${key}/${name}`, depth + 1, scopes);
       }
     } else {
       assert.ok(stat.isFile() && Number(stat.nlink) === 1, "evidence special file/hardlink");
@@ -163,11 +170,15 @@ function walkTree(root, limits, selected, hashFiles, trackIdentity = false) {
       tarBytes += Math.ceil(bytes / 512) * 512;
       if (!trackIdentity || hashFiles) {
         hash.update(`f\0${key}\0${bytes}\0`);
+        if (scopes) for (const scope of scopes) scope.hash.update(`f\0${key.slice(scope.key.length)}\0${bytes}\0`);
         const file = opened(path, limits.content);
         try {
           assert.equal(file.size, bytes, "evidence file changed");
           if (info) assert.equal(identity(fstatSync(file.fd, { bigint: true })), identity(info), "evidence file changed");
-          if (hashFiles) chunks(file, (bytes) => hash.update(bytes)); else file.unchanged();
+          if (hashFiles) chunks(file, (bytes) => {
+            hash.update(bytes);
+            if (scopes) for (const scope of scopes) scope.hash.update(bytes);
+          }); else file.unchanged();
         } finally { closeSync(file.fd); }
       }
     }
@@ -177,13 +188,27 @@ function walkTree(root, limits, selected, hashFiles, trackIdentity = false) {
     tarBytes: Math.ceil((tarBytes + 1024) / 10240) * 10240, ...(metadata ? { metadataSha256: metadata.digest("hex") } : {}) };
 }
 export function treeHash(root, lowered = {}) { return walkTree(root, bounds(lowered), null, true).sha256; }
-// Capture a bounded metadata fingerprint in the same walk that verifies the
-// bytes. Late checks never reopen or hash payload files.
-export function pinEvidenceTree(root, expected, message) {
-  const limits = bounds(), verified = walkTree(root, limits, null, true, true);
+// Verify the whole root while deriving the same framed hashes as separate
+// treeHash calls on these directories. Metadata rechecks do not read payloads.
+export function verifiedEvidenceTree(root, expected, message, paths = []) {
+  const subtrees = new Map(paths.map((path) => {
+    assert.ok(path.split("/").every(portableEvidenceSegment), "unsafe evidence subtree");
+    const key = "/" + path;
+    return [key, { key, hash: createHash("sha256"), seen: false }];
+  }));
+  assert.equal(subtrees.size, paths.length, "duplicate evidence subtree");
+  const limits = bounds(), verified = walkTree(root, limits, null, true, true, subtrees.size ? subtrees : undefined);
   assert.equal(verified.sha256, expected, message);
-  return () => assert.ok(walkTree(root, limits, null, false, true).metadataSha256 === verified.metadataSha256,
-    "local handoff custody changed: extraction");
+  const hashes = Object.fromEntries([...subtrees.values()].map(({ key, hash, seen }) => {
+    assert.ok(seen, "required evidence subtree missing");
+    return [key.slice(1), hash.digest("hex")];
+  }));
+  return { hashes, unchanged: () => assert.ok(walkTree(root, limits, null, false, true).metadataSha256 === verified.metadataSha256,
+    "local handoff custody changed: extraction") };
+}
+
+export function pinEvidenceTree(root, expected, message) {
+  return verifiedEvidenceTree(root, expected, message).unchanged;
 }
 export function checkPackage(root) {
   physical(root);

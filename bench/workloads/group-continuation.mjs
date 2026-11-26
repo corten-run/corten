@@ -3,15 +3,16 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { isBuiltin, registerHooks } from "node:module";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
 import { createContradiction, createErroredCustody, createErroredReceipt, createRecheckLock, setupEvidence, terminalSetupScript, verifyCreateErrored,
-  verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
-import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
-  postedContradiction, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
+  exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement,
+  verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readCreateQuarantine, readFleet, readGroup,
+  postedContradiction, readExternalFailedHost, readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckExternalFailedHost, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
@@ -58,13 +59,16 @@ async function measuredReplay(repo, checkout, commit) {
 }
 
 const setupCensusOutcome = "setup-failed-needs-census";
-const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", "create-errored", setupCensusOutcome].includes(row.outcome)
+const externalFailureOutcome = "external-failed-needs-census";
+const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", "create-errored", setupCensusOutcome, externalFailureOutcome].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
 export function requireSetupRetryCommit(attempts, commit) {
   assert.ok(!attempts.some((row) => row.outcome === setupCensusOutcome && row.commit === commit),
     "retry after failed setup requires a different measured commit");
+  assert.ok(!attempts.some((row) => row.outcome === externalFailureOutcome && row.commit === commit),
+    "retry after external failure requires a different measured commit");
 }
-const acceptable = (row) => ["missing", "prepared", "verified", "running"].includes(row.outcome) || retryable(row);
+const acceptable = (row) => ["missing", "prepared", "verified", "running", "quarantined-create"].includes(row.outcome) || retryable(row);
 const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-result" && !acceptable(row) && !row.cleanupUnconfirmed;
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
@@ -84,11 +88,17 @@ const known = ({ state }) => state?.id && state.status === "collected" && state.
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
-function verifyRetryRetirement(saved, processStart, retainedLocks) {
+function verifyRetryRetirement(saved, processStart, retainedLocks, exitOne) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
   assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
   if (kind === "native-failed") {
-    if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
+    if (exitOne) {
+      assert.equal(saved.outcome, "available", "exit-one retirement still holds custody");
+      exitOneReadLocks(local);
+      const { record, assertCustody } = verifyFailedExitOneRetirement(local, state, evidenceSha256, true);
+      retainedLocks.push(() => { exitOneReadLocks(local); assertCustody(); });
+      return { receiptSha256: evidenceSha256, reservationSha256: record.reservationSha256 };
+    } else if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
     else {
       const sameLocks = historicalChildLocks(saved, processStart);
       assert.ok(sameLocks, "unresolved custody for the selected group");
@@ -160,7 +170,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   // postedCreates is the census fence and the final-gate snapshot: every earlier
   // provider-errored attempt's posted droplet in any group, settled or contradicted
   // (also after its retirement), refuses a create on its account while it is listed.
-  const createFailures = [], postedCreates = [];
+  const createFailures = [], postedCreates = [], exitOneRetirements = [], quarantinedCreates = [];
   const retainedLocks = [];
   const setupCensus = (fleet, saved, lock, launch) => {
     const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
@@ -214,6 +224,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     for (const saved of children) {
       const { group, state, stateSha256 } = saved, selected = group === admittedGroup;
       const pinned = archives && Object.hasOwn(archives, group);
+      const exitOne = failedExitOneCandidate(saved.local, state);
+      if (failedExitOneScope(state) && state.archiveSha256 && !terminal(saved))
+        assert.fail("unresolved custody: the bound Client Heavy attempt requires confirmed absence");
+      if (exitOne) assert.ok(!pinned, "failed exit one is not a retained result");
       // Only bound historical allocations past create/bootstrap (or with a
       // recorded terminal setup) can have cleanup settled by an account census.
       const setup = setupCensus(fleet, saved, lock, launch);
@@ -248,8 +262,16 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
         outcome = "create-errored";
       } else if (terminal(saved)) {
         if (state.status === "retired") {
-          if (selected) {
-            try { verifyRetryRetirement(saved, processStart, retainedLocks); }
+          if (selected || failedExitOneScope(state)) {
+            try {
+              const retirement = verifyRetryRetirement(saved, processStart, retainedLocks, exitOne);
+              if (retirement) {
+                assert.equal(dirname(fleet.root), root, "exit-one retirement must stay in its original continuation slot");
+                assert.ok(launch, "no original exit-one launch intent");
+                exitOneRetirements.push({ root: fleet.root, round, group, manifestSha256, stateSha256, launch,
+                  accountId: manifest.provider.accountId, id: state.id, ...retirement });
+              }
+            }
             catch (cause) { refuseAdmission("custody-replay", new Error("unresolved custody: selected group retirement is not verified", { cause })); }
             receipt = retirementFile(state.retirement.kind);
           }
@@ -286,6 +308,29 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
     }
   };
   const read = async (fleet, checkout, archives) => {
+    const external = readExternalFailedHost(fleet);
+    if (external) {
+      const { group, round, id, accountId, manifestSha256, stateSha256, launch } = external;
+      assert.ok(!archives && attempts.has(group), "external failure is not a retained result");
+      claim(id);
+      needsCensus.add(accountId); unconfirmed.push(external);
+      retainedLocks.push(() => recheckExternalFailedHost(root, external));
+      attempts.get(group).push({ group, round, commit: fleet.manifest.commit, id, manifestSha256, stateSha256, launch,
+        outcome: externalFailureOutcome, attemptRoot: fleet.root, cleanupUnconfirmed: true });
+      return;
+    }
+    const quarantineOptions = { report: !admittedGroup };
+    const quarantine = readCreateQuarantine(fleet, quarantineOptions);
+    if (quarantine) {
+      const { group, round, accountId } = quarantine, { manifest, manifestSha256 } = fleet;
+      assert.ok(!archives && attempts.has(group), "create quarantine is not a retained result");
+      needsCensus.add(accountId); quarantinedCreates.push(quarantine);
+      retainedLocks.push(() => assert.deepEqual(readCreateQuarantine(readFleet(fleet.root, round, { priorSelection: true }),
+        quarantineOptions), quarantine, "create quarantine changed"));
+      attempts.get(group).push({ group, round, commit: manifest.commit, manifestSha256,
+        outcome: quarantine.witnessSha256 ? "quarantined-create-witnessed" : "quarantined-create", attemptRoot: fleet.root });
+      return;
+    }
     if (admittedGroup) return readAdmission(fleet, checkout, archives);
     const { manifest, manifestSha256 } = fleet, { round, commit } = manifest;
     const lock = reportBatch(fleet, processStart);
@@ -302,6 +347,10 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const { group } = row;
       const saved = readGroup(fleet, group);
       assert.equal(saved.stateSha256, row.stateSha256, "continuation state changed");
+      if (failedExitOneScope(saved.state) && saved.state.archiveSha256 && !terminal(saved))
+        assert.fail("unresolved custody: the bound Client Heavy attempt requires confirmed absence");
+      if (failedExitOneCandidate(saved.local, saved.state))
+        assert.equal(row.outcome, "native-failed-retired", "unresolved custody: failed exit one needs confirmed retirement");
       const setup = row.outcome === "uncollected" && setupCensus(fleet, saved, lock, launch);
       const noCreate = notCreated(fleet, saved, lock), outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : row.outcome;
       if (manifest.single && (retryable({ ...row, outcome }) || outcome === "verified"))
@@ -434,6 +483,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       ...(unconfirmed.length ? { unconfirmed } : {}),
       ...(createFailures.length ? { createFailures } : {}),
       ...(postedCreates.length ? { postedCreates } : {}),
+      ...(quarantinedCreates.length ? { quarantinedCreates } : {}),
+      ...(exitOneRetirements.length ? { exitOneRetirements } : {}),
       ...(peers.length ? { peers: peers.map(({ proof }) => proof) } : {}) } };
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
     manifestSha256: fleet.manifestSha256, ...snapshot })),

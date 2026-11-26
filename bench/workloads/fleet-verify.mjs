@@ -4,14 +4,17 @@ import { spawnSync } from "node:child_process";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
-import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
-import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
-import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
+import { campaignOutcome, controllerState, full, providerDiagnostic } from "./cloud-options.mjs";
+import { livePeerLease, requireUnfinishedJournal, settledMonitor, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { streamLimits } from "./isolated/control-stream.mjs";
+import { digest, durable, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createContradiction, createErroredCustody, readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyCreateErrored, verifyFailedNativeRetirement,
-  verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+  exitOneEvidenceFingerprint, exitOneReadLocks, failedExitOneCandidate, failedExitOneScope, verifyFailedExitOneRetirement, verifyHistoricalFailedNativeRetirement,
+  verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -242,6 +245,128 @@ export function readGroup(fleet, group) {
     : ["creating", "preparing", "starting", "running", "collected", "retired"].includes(state.status) ? "available" : "ambiguous" };
 }
 
+const createQuarantineFile = "create-quarantine.json";
+const quarantineWitnessFile = "create-quarantine-witness.json";
+const externalFailedHostFile = "external-failed-host.json";
+const quarantineWitnessed = "quarantined create witnessed in provider inventory; reconcile before allocating";
+const quarantineJson = (bytes) => {
+  try { return JSON.parse(bytes); } catch { throw new Error("invalid create quarantine evidence"); }
+};
+
+// Read-only candidate for an operator who has accounted for the entire local
+// controller tree. Dead lock owners alone do not prove that tree has settled.
+export function unacknowledgedCreateBinding(fleet) {
+  return unboundCreateBinding(fleet);
+}
+
+function unboundCreateBinding(fleet, { report = false, removed = false } = {}) {
+  const { root, manifest, manifestSha256 } = fleet, { round, single } = manifest;
+  assert.ok(single, "create quarantine requires an independent attempt");
+  const { group } = single, { state, stateRoot, local, stateSha256 } = readGroup(fleet, group);
+  assert.ok(state?.status === "creating" && !state.id && !state.createErrored && !state.createContradicted
+    && (removed ? state.createPending : !state.createPending),
+  removed ? "external failure requires an unbound posted create" : "create quarantine requires an unbound create without a posted ID");
+  if (removed) {
+    assert.ok(Object.keys(state).every((k) => [
+      "schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "group", "fleet", "createdAt",
+      "status", "provider", "fullGroupQualified", "benchPackage", "gitSource", "trixieUpstream", "skipHostChromium", "quietBootstrap",
+      "control", "createIntentAt", "createPending",
+    ].includes(k)), "external posted create cannot claim setup or collection");
+  }
+  assert.ok(!state.control || state.control.ledger.length === 0 && state.control.sealed.length === 0
+    && (!state.control.monitor || state.control.monitor.phase === "pending" && !state.control.monitor.registrationSha256),
+    "create quarantine cannot hide guest control");
+  assert.ok(isDeepStrictEqual(readdirSync(stateRoot).sort(), [".groups-launch.lock", `groups-${round}`])
+    && isDeepStrictEqual(readdirSync(local).sort(), ["operation.lock", "state.json"]), "create quarantine child files differ");
+  const intent = readLaunchIntent(fleet), batch = reportBatch(fleet);
+  assert.ok(batch && batch !== "busy", "create quarantine requires the original dead batch owner");
+  const { pid, approvalSha256 } = batchLock(batch.bytes);
+  assert.equal(approvalSha256, intent.approvalSha256, "create quarantine requires the original batch approval");
+  const launchPath = join(stateRoot, ".groups-launch.lock"), operationPath = join(local, "operation.lock");
+  const launch = lockEvidence(launchPath), operation = lockEvidence(operationPath);
+  assert.ok(isDeepStrictEqual(quarantineJson(launch.bytes), { pid, round }), "create quarantine launch lock differs");
+  const owner = quarantineJson(operation.bytes);
+  assert.ok(isDeepStrictEqual(owner, { pid, at: owner?.at }), "create quarantine operation lock differs");
+  assert.ok(Number.isFinite(Date.parse(owner.at)) && new Date(owner.at).toISOString() === owner.at
+    && Date.parse(owner.at) <= Date.parse(state.createIntentAt), "create quarantine requires original operation custody");
+  const dir = join(root, "receipts"); physical(dir);
+  if (!report) assert.ok(!present(join(dir, quarantineWitnessFile)), quarantineWitnessed);
+  const entries = readdirSync(dir).filter((file) => removed ? file !== externalFailedHostFile
+    : file !== createQuarantineFile && !(report && file === quarantineWitnessFile));
+  assert.equal(entries.length, 1, "create quarantine requires exactly one original detach outcome");
+  assert.ok(new RegExp(`^detach-[a-f0-9]{16}-${group}\\.json$`).test(entries[0]), "create quarantine detach outcome name differs");
+  const failureBytes = regular(join(dir, entries[0]), 4096), failure = quarantineJson(failureBytes);
+  const diagnostic = providerDiagnostic(failure?.providerDiagnostic);
+  assert.equal(diagnostic?.code, removed ? "create-action-request" : "create-request",
+    removed ? "external failure requires a lost create-action read" : "create quarantine requires an unacknowledged POST diagnostic");
+  assert.ok(isDeepStrictEqual(failure, { group, outcome: "error", error: "group-operation-failed", uncertain: true,
+    providerDiagnostic: diagnostic, controllerStage: "provider-settlement" }), "create quarantine detach outcome differs");
+  assert.ok(sameReportBatch(batch, reportBatch(fleet)) && sameChildLocks(local,
+    [{ ...launch, path: launchPath }, { ...operation, path: operationPath }]),
+    "create quarantine custody changed");
+  assert.equal(readGroup(fleet, group).stateSha256, stateSha256, "create quarantine state changed");
+  return { round, group, accountId: manifest.provider.accountId, manifestSha256, stateSha256, launchSha256: intent.sha256,
+    failureSha256: digest(failureBytes), batchLockSha256: batch.sha256, launchLockSha256: launch.sha256, operationLockSha256: operation.sha256 };
+}
+
+export function readCreateQuarantine(fleet, { report = false } = {}) {
+  const dir = join(fleet.root, "receipts");
+  if (!fleet.manifest.single || !present(dir)) return;
+  physical(dir);
+  const path = join(dir, createQuarantineFile), witness = join(dir, quarantineWitnessFile);
+  if (!present(path)) {
+    assert.ok(!present(witness), "create quarantine witness has no quarantine record");
+    return;
+  }
+  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = unboundCreateBinding(fleet, { report });
+  assert.ok(typeof record?.localCustodyProofSha256 === "string" && /^[a-f0-9]{64}$/.test(record.localCustodyProofSha256),
+    "operator tree-custody proof digest required");
+  assert.ok(isDeepStrictEqual(record, { schema: "benchmark-create-quarantine/v1", binding, localCustodyProofSha256: record.localCustodyProofSha256 }),
+    "create quarantine binding differs");
+  const { state } = readGroup(fleet, binding.group);
+  assert.equal(digest(regular(join(fleet.root, binding.group, `groups-${binding.round}`, "state.json"), 1024 * 1024)), binding.stateSha256,
+    "create quarantine state changed");
+  const sha256 = digest(bytes);
+  let witnessSha256;
+  if (present(witness)) {
+    assert.ok(report, quarantineWitnessed);
+    const bytes = regular(witness, 4096), row = quarantineJson(bytes), id = row?.dropletId;
+    assert.ok(typeof id === "string" && /^[1-9]\d{0,15}$/.test(id) && Number.isSafeInteger(Number(id))
+      && isDeepStrictEqual(row, { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: sha256, dropletId: id }),
+    "create quarantine witness differs");
+    witnessSha256 = digest(bytes);
+  }
+  return { round: binding.round, group: binding.group, root: fleet.root, accountId: binding.accountId,
+    sha256, nameSha256: digest(state.name), tagSha256: digest(state.tag), ...(witnessSha256 ? { witnessSha256 } : {}) };
+}
+
+export function recheckCreateQuarantine(root, row, selection) {
+  assert.ok(dirname(row.root) === root && row.group !== selection.single.group
+    && row.accountId === selection.provider.accountId, "create quarantine permits only other groups in the saved account");
+  assert.ok(isDeepStrictEqual(readCreateQuarantine(readFleet(row.root, row.round, { priorSelection: true })), row), "create quarantine changed");
+}
+
+// The worker projects trusted sightings even from a response that cannot prove absence.
+export function checkQuarantineCensus(root, quarantined, selection, rows) {
+  const text = (value) => typeof value === "string" && value.length > 0;
+  assert.ok(rows.every((d) => Number.isSafeInteger(d?.id) && d.id > 0 && (d.name === undefined || text(d.name))
+    && (d.tags === undefined || Array.isArray(d.tags) && d.tags.every(text))), "invalid create quarantine census rows");
+  for (const { id, name, tags } of rows) {
+    const nameSha256 = name === undefined ? undefined : digest(name), tagSha256s = new Set(tags?.map(digest));
+    const match = quarantined.find((row) => row.nameSha256 === nameSha256 || tagSha256s.has(row.tagSha256));
+    if (!match) continue;
+    try {
+      recheckCreateQuarantine(root, match, selection);
+      durable(join(match.root, "receipts", quarantineWitnessFile), `${JSON.stringify({
+        schema: "benchmark-create-quarantine-witness/v1", quarantineSha256: match.sha256, dropletId: String(id),
+      })}\n`);
+    } catch (cause) {
+      throw Object.assign(new Error("quarantined create witness not published; retain operation custody", { cause }), { controlUncertain: true });
+    }
+    throw new Error(quarantineWitnessed);
+  }
+}
+
 // A running status without sealed bootstrap and monitor custody proves nothing.
 export function supervisedHost(saved, phase, { pid = process.pid, peer = false } = {}) {
   const s = saved?.state, monitor = s?.control?.monitor;
@@ -341,6 +466,78 @@ export function recheckSetupAttempt(root, row, successor) {
   return idleAttempt;
 }
 
+// An operator-reviewed external cleanup never changes the old launch's state
+// or grants result or deletion authority. The next create must prove absence.
+export function externalFailedHostBinding(fleet) {
+  const { root, manifest, manifestSha256 } = fleet, { round, provider, single } = manifest;
+  assert.ok(single && !single.offlineHandoff, "external failure requires a monitored independent attempt");
+  const { group, local, state, stateSha256, outcome } = readGroup(fleet, single.group);
+  if (state?.status === "creating" && state.createPending) {
+    const monitor = state.control?.monitor;
+    assert.ok(monitor?.phase === "pending" && monitor.registrationSha256 === undefined,
+      "external posted create requires a pending unregistered monitor");
+    const { launchSha256: launch, ...proof } = unboundCreateBinding(fleet, { removed: true });
+    assert.equal(proof.stateSha256, stateSha256, "external failure state changed");
+    const { dropletId: id, actionId } = state.createPending;
+    return { ...proof, launch, id, actionId, nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+  }
+  assert.ok(outcome === "busy" && state?.status === "running" && state.control?.monitor?.phase === "invalid"
+    && !state.archiveSha256 && !state.evidence && !state.validation && !state.collectedAt && !state.deletionIntentAt && !state.destroyedAt,
+    "external failure requires an uncollected invalid attempt");
+  const hasConflict = () => ["results.tgz", "monitor-terminal.json", "audit-delivery.lock", "state.json.tmp"].some((name) => present(join(local, name)))
+    || readdirSync(local).some((name) => /^(?:failed-native-|failed-setup-|evidence-|results\.tgz\.|monitor-audit-)/i.test(name))
+    || [createQuarantineFile, quarantineWitnessFile].some((name) => present(join(root, "receipts", name)));
+  assert.ok(!hasConflict(), "external failure cannot supersede other evidence or custody");
+  const capture = (name, max) => digest(regular(join(local, name), max));
+  const journal = join(local, "monitor-journal.jsonl");
+  const monitor = () => [capture("monitor-invalid.json", 8192), capture("monitor-local-closed.json", 8192),
+    capture("monitor-registration.json", 131072), fileHash(journal, streamLimits.journalBytes)];
+  const monitorFiles = monitor();
+  settledMonitor(local, state);
+  requireUnfinishedJournal(journal, state.control.monitor.id);
+  const intent = readLaunchIntent(fleet), batch = reportBatch(fleet, () => undefined);
+  assert.ok(batch && batch !== "busy", "external failure requires the original stopped batch owner");
+  const { pid, approvalSha256 } = batchLock(batch.bytes);
+  const locks = [];
+  const owner = readRetainedInvalidLocks(local, state, (path) => {
+    const lock = lockEvidence(path);
+    locks.push({ ...lock, path });
+    return lock.bytes;
+  });
+  assert.ok(owner.pid === pid && approvalSha256 === intent.approvalSha256 && Date.parse(owner.at) <= Date.parse(state.createIntentAt),
+    "external failure requires original launch custody");
+  assert.ok(!retainedInvalidOwner(local, state) && sameChildLocks(local, locks) && sameReportBatch(batch, reportBatch(fleet, () => undefined))
+    && isDeepStrictEqual(monitorFiles, monitor()) && stateSha256 === readGroup(fleet, group).stateSha256 && !hasConflict(),
+    "external failure custody changed or recovery is active");
+  return { round, group, accountId: provider.accountId, id: state.id, manifestSha256, stateSha256, launch: intent.sha256,
+    batchLockSha256: batch.sha256, operationLockSha256: locks[0].sha256, launchLockSha256: locks[1].sha256, monitorFiles,
+    nameSha256: digest(state.name), tagSha256: digest(state.tag) };
+}
+
+export function readExternalFailedHost(fleet) {
+  const dir = join(fleet.root, "receipts"), path = join(dir, externalFailedHostFile);
+  if (!present(path)) return;
+  physical(dir);
+  const bytes = regular(path, 8192), record = quarantineJson(bytes), binding = externalFailedHostBinding(fleet);
+  const operatorProofSha256 = record?.operatorProofSha256;
+  assert.ok(typeof operatorProofSha256 === "string" && /^[a-f0-9]{64}$/.test(operatorProofSha256), "external failure operator proof required");
+  assert.ok(isDeepStrictEqual(record, { schema: "benchmark-external-failed-host/v1", binding, operatorProofSha256 }),
+    "external failure binding differs");
+  const { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256 } = binding;
+  return { round, group, accountId, id, manifestSha256, stateSha256, launch, nameSha256, tagSha256,
+    root: fleet.root, externalFailureSha256: digest(bytes) };
+}
+
+export function recheckExternalFailedHost(root, row, successor) {
+  assert.equal(dirname(row.root), root, "external failure belongs to another continuation");
+  const fleet = readFleet(row.root, row.round, { priorSelection: true });
+  assert.ok(isDeepStrictEqual(readExternalFailedHost(fleet), row), "external failure custody changed");
+  if (successor?.single?.group === row.group) {
+    assert.ok(Number(successor.round.slice(1)) > Number(row.round.slice(1)), "external failure requires a higher round");
+    assert.notEqual(successor.commit, fleet.manifest.commit, "retry after external failure requires a different measured commit");
+  }
+}
+
 // Read-only per-group replay, shared by final inspection and staged admission.
 // It does not inspect/ignore a root operation lock: its caller owns that policy.
 export function recheckCollectedGroup(fleet, snapshot) {
@@ -363,6 +560,32 @@ export function recheckCreateErroredAttempt(root, row) {
   verifyCreateErrored(saved.local, saved.state);
   assert.equal(saved.state.createErrored.evidenceSha256, row.receiptSha256, "prior create failure receipt changed");
   assert.ok(saved.state.createErrored.dropletId === row.dropletId && saved.state.provider.accountId === row.accountId, "prior create failure changed");
+}
+
+// Admission already replayed the archive. At dispatch only recheck the exact
+// retirement custody that the approval consumed, without replaying native data.
+export function recheckExitOneRetirement(root, row) {
+  try {
+    assert.equal(dirname(row.root), root);
+    const fleet = readFleet(row.root, row.round, { priorSelection: true });
+    assert.equal(fleet.manifestSha256, row.manifestSha256);
+    assert.equal(readLaunchIntent(fleet).sha256, row.launch);
+    const saved = readGroup(fleet, row.group), { state, local } = saved;
+    assert.ok(saved.outcome === "available" && saved.stateSha256 === row.stateSha256
+      && failedExitOneScope(state) && state.status === "retired" && state.destroyedAt && state.retirement.kind === "native-failed");
+    assert.equal(state.provider.accountId, row.accountId);
+    assert.equal(state.id, row.id);
+    assert.equal(state.retirement.evidenceSha256, row.receiptSha256);
+    const receipt = regular(join(local, "failed-native-host.json"), 65536);
+    assert.equal(digest(receipt), row.receiptSha256);
+    assert.equal(digest(regular(join(local, "failed-native-reservation.json"), 1024 * 1024)), row.reservationSha256);
+    const { evidenceFingerprint } = JSON.parse(receipt);
+    assert.ok(typeof evidenceFingerprint === "string" && /^[a-f0-9]{64}$/.test(evidenceFingerprint)
+      && evidenceFingerprint === exitOneEvidenceFingerprint(local, state));
+    exitOneReadLocks(local);
+  } catch (cause) {
+    throw new Error("prior exit-one retirement changed or holds custody; do not create", { cause });
+  }
 }
 // A posted create is contradicted by a recorded reappearance, a witness or reappearance stage
 // beside it, or a contradicted bind (retired or not).
@@ -520,12 +743,18 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
           const historicalCheck = historicalLocks && (() => {
             assert.ok(historicalLocks(), "historical child locks changed");
           });
-          if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
+          let exitOneCheck;
+          if (failedExitOneCandidate(job.local, s)) {
+            exitOneReadLocks(job.local);
+            const { record, assertCustody } = verifyFailedExitOneRetirement(job.local, s, s.retirement.evidenceSha256, true);
+            assert.equal(record.launchIntentSha256, readLaunchIntent(fleet).sha256, "exit-one launch intent differs");
+            exitOneCheck = () => { exitOneReadLocks(job.local); assertCustody(); };
+          } else if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
           else verifyFailedNativeRetirement(job.local, s);
           assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
           if (historicalCheck) historicalCheck();
           else if (retained) assert.ok(noRecovery() && !retainedInvalidOwner(job.local, s), "retained lock owner changed during verification");
-          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck });
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck });
           add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
@@ -562,7 +791,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
   } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
   // A later sibling's replay may have overlapped failed-host recovery. Rebind
   // the status to the verified state and receipt, not the earlier display row.
-  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck } of retirements) {
+  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck, exitOneCheck } of retirements) {
     try {
       const job = readGroup(fleet, group);
       if (present(join(job.local, "stream-recovery.lock"))
@@ -573,6 +802,8 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       assert.equal(job.outcome, retained ? "busy" : "available");
       assert.equal(job.stateSha256, stateSha256);
       assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
+      exitOneCheck?.();
+      if (exitOneCheck) retainCheck?.(exitOneCheck);
       if (historicalCheck) retainCheck?.(historicalCheck);
     } catch { result.groups[index] = { group, outcome: "uncertain", error: "group-retirement-changed" }; }
   }

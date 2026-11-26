@@ -93,7 +93,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 | 6 | let the app's 4xx and 5xx bodies through | they are the app's error pages and redrawn forms (nginx's `proxy_intercept_errors` is off by default; [Requests and forms](requests-and-forms.md)) |
 | 7 | reuse a connection to the app for less time than `App::header_timeout` | the app closes an idle connection after it (30 seconds), and a request the proxy sends on it as it closes fails; nginx 1.29.7 and later reuse upstream connections by default, for 60 seconds, so set `keepalive_timeout` in the `upstream` block (below) |
 | 8 | expect a connection to the app per open stream | streams multiplexed over one HTTP/2 connection to the proxy still each hold an HTTP/1.1 connection to the app, so `App::max_connections`, if set, counts them |
-| 9 | check `/health/live` and `/health/ready` | both answer to an IP address or `localhost` as the host, so a health check needs no name; `/health/ready` answers within 800 ms (`App::ready_within`), so a probe timeout of one second or more reads its answer ([Health](app.md#health)) |
+| 9 | check `/health/live` and `/health/ready` | both answer to an IP address or `localhost` as the host, so a health check needs no name, only the `Host` line every HTTP/1.1 client sends (a probe written by hand with none gets `400`, unless it speaks HTTP/1.0; [Host names](app.md#host-names)); `/health/ready` answers within 800 ms (`App::ready_within`), so a probe timeout of one second or more reads its answer ([Health](app.md#health)) |
 | 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 | 12 | set `Policy::hsts` in the app when it is served only over HTTPS, even when the proxy or CDN already sends `Strict-Transport-Security` | the app sees plain HTTP from a proxy that ends TLS and reads no `X-Forwarded-Proto`, so `hsts` is how it knows its pages are `https`: with it, a write or a WebSocket handshake without `Sec-Fetch-Site` from a plain-http page on the app's host is refused, and without it that page passes ([design Limit 26](../design.md#limit-origin-scheme)); it also keeps a redirect's notice in the `__Host-` cookie ([WebSockets](app.md#websockets-and-relays)) |
@@ -833,8 +833,8 @@ binds a port of its own names it on the second, with `--port 8443` before `--pro
 to be a release that has `--port`. One without it builds nothing with the line: where the
 Dockerfile's own check of the command (below) has not refused it first, it refuses `--port`
 as an argument `corten build` does not take, before it builds the app. The fix is to move the
-version on the Dockerfile's install line to a release that has `--port`. Not tried in an image
-build: no release has the option yet.
+version on the Dockerfile's install line to a release that has `--port`: 0.3.0 is the first. An
+older release refusing `--port` in an image build has not been tried.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
@@ -858,13 +858,14 @@ What the argument asks of the app and its build, which the ordinary build does n
   release without the option is refused there, before the app is built. 0.2.0 is one: its
   `corten build` took no arguments and would build the ordinary binary without a word. A
   `corten` built from a commit between releases writes the number of the release before it,
-  so its Dockerfile is refused this way until that line names a release that has the option.
+  so its Dockerfile installs that release's command, not the commit's, and is refused this way
+  only when that release lacks the option (a command built before 0.3.0 wrote 0.2.0).
 - `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
   builds with its own, and `corten build` refuses a toolchain without the component, naming
   it; that file's `components` is where rustup takes it from. Not tried in an image build.
 - The build takes longer, and the app's target cache holds the instrumented copy beside the
   release. The starter's own image at `f909c0d2d`, its install line pointed at that checkout
-  since no release has the option yet, so the 45 seconds are not an install from crates.io;
+  since no release had the option then, so the 45 seconds are not an install from crates.io;
   one build each on a desktop with a lint run beside it:
   69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
   afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the
@@ -973,7 +974,8 @@ or offline-handoff campaign can
 [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
 after official timing or untimed JSON preparation, once the last native command's sealed
 lifetime verifies termination and an empty accounting scope, and every new user-space identity
-is a proved udev worker. Timing requires worker birth strictly after the sealed terminal cutoff;
+is a proved udev worker, including where the daemon and workers share the distribution's
+`/usr/bin/udevadm` executable. Timing requires worker birth strictly after the sealed terminal cutoff;
 untimed JSON preparation uses its pre-phase census cutoff instead. The bounded wait, worker exit
 and ordinary whole-host boundary checks must all pass. Replay uses the measured checkout: this
 cannot qualify old evidence that lacks the proof or discount activity during measurement.

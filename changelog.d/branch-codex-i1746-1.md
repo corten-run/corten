@@ -1,2 +1,0 @@
-- The header timeout counts from when an answer's last bytes reach the socket, not from when hyper takes its body, so a slow download is no longer cut partway, and with `send_timeout(None)` it no longer closes a client that stops reading a whole body.
-  ([#1746 The header timeout starts when hyper takes an answer's body, not when it is sent, so a slow download is cut partway (plain and TLS)](https://github.com/corten-run/corten/issues/1746))
