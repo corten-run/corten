@@ -11156,14 +11156,16 @@ rules something out.
     41,726 (3.3%), each with three allocations fewer; with a browser's header lines the same
     `GET` goes from 23,917 to 23,532 (1.6%) and the page, compressed, from 221,755 to 221,569
     (0.1%). A request with a body costs the same on both (22,834 and 22,824, 19 allocations),
-    since hyper answers it on both. A connection that waits for a request holds 7,424 bytes
-    against 8,472 after one short request, 7,558 against 12,564 after three with a browser's
-    header lines, and 2,279 against 2,698 before its client has sent a byte. These are
+    since hyper answers it on both. A connection that waits for a request holds 7,423 bytes
+    against 8,471 after one short request, 7,557 against 12,562 after three with a browser's
+    header lines, and 2,279 against 2,694 before its client has sent a byte (the median of three
+    readings of each). These are
     instructions, allocations and bytes, which measure work and memory and not speed. The change
     is one [Choice 76](#choice-counted-or-measured) has measured and not counted: with the switch
     on a connection writes to its socket at other times than hyper's does, no case of the kit asks
-    for the switch (the counts with it on are of the kit's probe with that one call added), and
-    its reason is a win in cycles. No cycles or times have been taken for it, so it claims no
+    for the switch (the counts with it on are of the kit's probe with that one call added), a
+    connection handed to hyper holds more idle memory than hyper's own (below), and its reason is
+    a win in cycles. No cycles or times have been taken for it, so it claims no
     CPU-cost win, and the plan that would read one across placements
     ([Choice 72](#choice-placement-runs)) is not yet declared.
 
@@ -11211,7 +11213,8 @@ rules something out.
     path through hyper, and byte-identical answers from the kit's nine requests. The compiled
     program is not the same, though, and the kit counts 3 to 48 instructions a request more than
     `main` with the switch off (10,560 to 10,564 on the shortest request, 43,096 to 43,144 on the
-    page; allocations the same; bytes an idle connection holds within 4 of `main`'s), 0.27% of a
+    page; allocations the same; of the bytes an idle connection holds, no median of three
+    readings above `main`'s), 0.27% of a
     case's count at most, which is inside the +0.5%
     [Choice 76](#choice-counted-or-measured) gives a counted change, from two causes that were
     each found. Up to 37 of them come from the manifest alone, on the requests
@@ -11259,9 +11262,9 @@ rules something out.
     direction on an attack, so it is recorded here as a known limit for an app that opts in and is
     to be fixed before the switch is on by default. An app behind a proxy that does not pipeline
     to its origin does not meet it. A second cost is smaller and by design: a connection handed
-    to hyper holds 10,083 bytes while it waits where hyper's own holds 8,470, the task it began in
+    to hyper holds 10,083 bytes while it waits where hyper's own holds 8,469, the task it began in
     and hyper's connection in an allocation of its own, which keeps a connection that is never
-    handed over at 7,424. The harness's attacks that send a body, whose connections are hyper's
+    handed over at 7,423. The harness's attacks that send a body, whose connections are hyper's
     from their first request, show it: huge-chunk peaked at 977 to 997 MiB against 905 to 939 and
     large-upload at 1,393 to 1,577 against 1,286 to 1,535 (nine runs each), and four more of the
     nine such attacks were 21 to 58 MiB higher in the runs made (one each, chunk-extension-flood
@@ -11295,10 +11298,11 @@ rules something out.
 
     Stands on: measured (instructions and allocations a request and bytes an idle connection
     holds, by `bench/request-cost` as it is on `main`, callgrind over a socket with jemalloc
-    preloaded, three counts of each case that agree within 1 and one run of each idle figure over
-    5,000 connections, for `main` at `8270df196`, for this change at `f02d8511f` with the switch
-    off and on, and for `8270df196` with this change's two manifest files alone; the figures are in
-    the text above; no cycles or times taken);
+    preloaded, three counts of each case that agree within 1 and three runs of each idle figure
+    over 5,000 connections, for `main` at `8270df196`, for this change at `f02d8511f` with the
+    switch off and on (on by one call added to the kit's probe), and for `8270df196` with this
+    change's two manifest files alone; the figures are in the text above; no cycles or times
+    taken);
     measured (the gate's long run, seed 20261124, at `f02d8511f`: 252,454 streams, 252,221 answered
     alike, the app answering in 175,462 of them, 233 in the one listed class, none failed; one
     run, which the same seed repeats);
@@ -11308,7 +11312,9 @@ rules something out.
     figures above, the pipelining flood, huge-chunk, large-upload and header-bomb nine runs each,
     with the switch on first in five and off first in four, chunk-extension-flood five and every
     other attack one; and what a connection holds after a request with a body, by
-    `bench/request-cost`'s idle reading over 5,000 connections, one run each);
+    `bench/request-cost`'s idle reading over 5,000 connections, three runs each: 10,082 and
+    10,083 twice with the switch on, 8,469 twice and 8,470 with it off, 8,469 three times on
+    `main`);
     platform (hyper 1.12.0 reads a request's head with httparse 1.10.1 under the settings and
     constructors `crates/corten/src/h1/head.rs` copies, writes an answer's head as that file
     writes it, reads 8,192 bytes at first, and keeps a connection after an unread body only if

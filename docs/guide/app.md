@@ -243,13 +243,13 @@ differ:
    `max_connections` bound. This is why the switch is off unless set; behind a proxy that does
    not pipeline to the app it does not arise. And a connection that has been handed to hyper
    holds about 1.6 KiB more while it waits than one hyper served from the start (10,083 bytes
-   against 8,470), so an app whose connections mostly carry bodies gains nothing in memory.
+   against 8,469), so an app whose connections mostly carry bodies gains nothing in memory.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
 connection, at `f02d8511f`): an unstaged route's short answer goes from 10,564 to 8,984, a staged API route's
 `GET` from 18,376 to 16,789, and a 12 KB page from 43,144 to 41,726, each with three allocations
-fewer; a request with a body costs what it did. A connection waiting for a request holds 7,424
-bytes where hyper's holds 8,472. No time has been measured yet, so this is less work for a
+fewer; a request with a body costs what it did. A connection waiting for a request holds 7,423
+bytes where hyper's holds 8,471. No time has been measured yet, so this is less work for a
 request and not yet a claim that it is faster.
 
 ## Access logs
