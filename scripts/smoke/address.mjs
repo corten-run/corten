@@ -775,6 +775,168 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ vetoStart, vetoed }),
   );
 
+  // A page's own `navigate` listener that submits a marked form as a navigation to another page
+  // begins, after the runtime's listener: the runtime has begun that visit, though the browser
+  // shows the navigation as on its way only once the event is dispatched. The answer, which comes
+  // while the navigation waits for its page, draws nothing and leaves the navigation to finish.
+  await page.goto(home);
+  const navigating = await hold(month, "nav");
+  await page.evaluate(() =>
+    /** @type {any} */ (window).navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (new URL(event.destination.url).search !== "?scope=month") return;
+      const button = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]'));
+      button.form?.requestSubmit(button);
+    }),
+  );
+  await trackForm();
+  const listenerAnswer = page.waitForResponse((r) => r.url() === week && r.request().headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await startMonth();
+  const listenerNavSent = await navigating.sent;
+  const listenerAnswered = await listenerAnswer;
+  const listenerDone = await finished();
+  const listenerStill = await state();
+  navigating.release();
+  const listenerNav = await finishMonth();
+  await navigating.clear();
+  const listenerAfter = await state();
+  check(
+    "a marked patch a navigate listener sends as a navigation to another page begins draws nothing and lets the navigation finish",
+    listenerNavSent && listenerAnswered && listenerDone && listenerStill.shown === "all" && listenerStill.at !== "?scope=week" && listenerNav === "finished" &&
+      listenerAfter.at === "?scope=month" && listenerAfter.shown === "month",
+    JSON.stringify({ listenerNavSent, listenerAnswered, listenerDone, listenerStill, listenerNav, listenerAfter }),
+  );
+
+  // The page read again for a refused replacement is another visit as it begins: another marked
+  // answer, let go while that read is on its way, draws nothing and puts no address in the entry.
+  // What the page draws is said from the page as it happens: the page can be read from no more
+  // while its read is on its way.
+  /** @type {string[]} */
+  const drawnWhile = [];
+  /** @type {(value?: unknown) => void} */
+  let heldEnded = () => {};
+  const heldEnd = new Promise((resolve) => (heldEnded = resolve));
+  await page.exposeFunction("__addressSeen", (/** @type {string} */ seen) => (seen === "ended" ? heldEnded() : drawnWhile.push(seen)));
+  await page.goto(home);
+  const held = `${home}?scope=held`;
+  /** @type {() => void} */
+  let releaseHeld = () => {};
+  const heldAnswer = new Promise((resolve) => (releaseHeld = () => resolve(undefined)));
+  await page.route(held, async (route) => {
+    await heldAnswer;
+    await route.fulfill({ headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<section id="smoke-address"><output>held</output></section>' }).catch(() => {});
+  });
+  /** @type {() => void} */
+  let releaseReload = () => {};
+  const reloadHeld = new Promise((resolve) => (releaseReload = () => resolve(undefined)));
+  await page.route(home, async (route) => {
+    if (route.request().resourceType() !== "document") return route.fallback();
+    await reloadHeld;
+    await route.continue().catch(() => {});
+  });
+  const heldSent = page.waitForRequest((r) => r.url() === held, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate((action) => {
+    const say = /** @type {(seen: string) => void} */ (/** @type {any} */ (window).__addressSeen);
+    /** @type {any} */ (window).navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (event.navigationType === "replace" && new URL(event.destination.url).search === "?scope=week") event.preventDefault();
+    });
+    const form = document.createElement("form");
+    form.action = action;
+    form.dataset.patch = "";
+    form.dataset.address = "";
+    const field = document.createElement("input");
+    field.name = "scope";
+    field.value = "held";
+    form.append(field);
+    document.body.append(form);
+    new MutationObserver(() => say(`${location.search} ${document.querySelector("#smoke-address output")?.textContent}`)).observe(
+      /** @type {Element} */ (document.querySelector("main")),
+      { childList: true, subtree: true },
+    );
+    let busy = false;
+    new MutationObserver(() => {
+      if (form.hasAttribute("aria-busy")) return void (busy = true);
+      if (busy) setTimeout(() => requestAnimationFrame(() => say("ended")));
+    }).observe(form, { attributes: true, attributeFilter: ["aria-busy"] });
+    form.requestSubmit();
+  }, home);
+  const heldOut = await heldSent;
+  const reloadSent = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const reloading = await reloadSent;
+  releaseHeld();
+  // WebKit stops the held request as the page is read again; nothing ends it the page can say.
+  await Promise.race([heldEnd, new Promise((resolve) => setTimeout(resolve, 3000))]);
+  const reloaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  releaseReload();
+  const reloadDone = await reloaded;
+  await page.unroute(home);
+  await page.unroute(held);
+  const afterReload = { heldOut, reloading, drawnWhile, done: reloadDone, ...(await state()) };
+  check(
+    "a marked patch let go while the page is read again for a refused replacement draws nothing and puts no address in the entry",
+    heldOut && reloading && drawnWhile.length > 0 && drawnWhile.every((seen) => seen === " week") && afterReload.done && afterReload.at === "" && afterReload.shown === "all",
+    JSON.stringify(afterReload),
+  );
+  // A GET queued behind a write of the form is an older press than one of the form a read drew in
+  // its place: Day, pressed there, is not dropped for Week when the write's answer comes.
+  await page.goto(home);
+  await page.route(ordinary, (route) => route.fulfill({ headers, body: markup }));
+  await addOrdinary();
+  const writing = await hold(home, "action", 204);
+  const dayLater = await hold(`${home}?scope=day`, "action");
+  await page.evaluate(() => {
+    /** @type {string[]} */
+    const reads = [];
+    Object.assign(window, { __reads: reads, __saving: document.getElementById("smoke-address-form") });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && /^\?scope=(day|week)$/.test(url.search) && new Headers(init?.headers).get("corten") === "action") reads.push(url.search);
+      return fetch_.call(this, input, init);
+    };
+  });
+  await press("Save");
+  const writeSent = await writing.sent;
+  await press("Week");
+  const formRedrawn = await redraw();
+  await press("Day");
+  const laterSent = await dayLater.sent;
+  writing.release();
+  const writeDone = await wait(() => !(/** @type {any} */ (window).__saving.hasAttribute("aria-busy")));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  dayLater.release();
+  const laterDrawn = await wait(() => location.search === "?scope=day" && document.querySelector("#smoke-address output")?.textContent === "day");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  await writing.clear();
+  await dayLater.clear();
+  await page.unroute(ordinary);
+  const superseded = { reads: await page.evaluate(() => /** @type {any} */ (window).__reads), ...(await state()) };
+  check(
+    "a GET queued behind a write is dropped by a press of the form a read drew in its place",
+    writeSent && formRedrawn && laterSent && writeDone && laterDrawn && superseded.reads.join() === "?scope=day" && superseded.at === "?scope=day" && superseded.shown === "day",
+    JSON.stringify({ writeSent, formRedrawn, laterSent, writeDone, laterDrawn, superseded }),
+  );
+
+  // A replacement the browser refuses with an exception (WebKit's SecurityError at its limit of
+  // history updates) is refused all the same: the entry's own page is read again, whole.
+  await page.goto(home);
+  await page.evaluate(() => {
+    const replace = history.replaceState;
+    history.replaceState = function (...args) {
+      if (!String(args[2]).endsWith("?scope=week")) return replace.apply(this, args);
+      history.replaceState = replace;
+      throw new DOMException("history.replaceState() called too often", "SecurityError");
+    };
+  });
+  const thrownRead = page.waitForRequest((r) => r.url() === home && r.resourceType() === "document", { timeout: 5000 }).then(() => true, () => false);
+  const thrownLoaded = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const thrown = { read: await thrownRead, loaded: await thrownLoaded, ...(await state()) };
+  check(
+    "a marked patch whose replacement throws reads the entry's own page again",
+    thrown.read && thrown.loaded && thrown.at === "" && thrown.shown === "all",
+    JSON.stringify(thrown),
+  );
   const patch = async (/** @type {number} */ status, /** @type {string} */ body) => {
     await page.goto(home);
     const start = await state();

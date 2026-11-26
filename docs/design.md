@@ -10658,7 +10658,9 @@ rules something out.
     reload read the page at the address, as for any entry. A page's own `navigate` listener can
     cancel that `replaceState`, which then changes nothing and throws nothing: the runtime reads
     the address after the call, and when it is not the one asked for, reloads the entry's own
-    page, so what the screen shows is the page at the address the entry has.
+    page, so what the screen shows is the page at the address the entry has. A browser can refuse
+    it with an exception (WebKit past its limit of history updates), which is the same refusal. The
+    reload begins to leave the page, so another marked answer on its way draws nothing.
 
     A marked answer draws only on the visit it was sent from, and on the history entry it was sent
     from: a navigation the runtime takes to a page (a link, Back or Forward, a redirect it follows)
@@ -10667,7 +10669,10 @@ rules something out.
     `hashchange`), so Back and then Forward to the entry the answer was sent from still leave it,
     and a script's `pushState` is another entry by its key where the Navigation API is (without
     it, nothing fires for one, and it is not seen). One pressed while a navigation to another page
-    is on its way belongs to none. A page drawn in place on the same entry is the same visit:
+    is on its way belongs to none, from the runtime's `navigate` listener on: a later listener of
+    the page can send one as the event is dispatched, before the browser shows the navigation as on
+    its way (`navigation.transition`) and, where the address waits for the page, while the entry is
+    still the one the visit was on; drawn, its replace would abort that navigation. A page drawn in place on the same entry is the same visit:
     another form's answer, a script's `replaceState`, and the page reading itself again
     (`ReadAgain`), whose navigation the answer's `replaceState` cancels, as a script's does; it
     reads again later, at the new address, and an address on another path starts the read over
@@ -10690,7 +10695,8 @@ rules something out.
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
     navigation, its submits are ordered as any form's are, a press dropping a read the form sent
-    before a read drew it again in place (found by its id, which a patch requires), and two marked
+    before a read drew it again in place (found by its id, which a patch requires), on its way or
+    waiting for a write of that form, and two marked
     forms' answers are drawn as they come, the address that of the last one that moved it. The route at each such address
     answers its part with `req.patch_or`, drawing all that the address changes, a link or form
     that carries the address included (a `keep_query` form's hidden inputs are the query it was
@@ -10751,16 +10757,19 @@ rules something out.
       keeping every submit by the form's id, which this round tried first: a write pressed as a
       navigation to the same page began then made a press of the form that page drew wait for it,
       though that page is another visit (the smoke's write-failure case caught it). Only a read
-      is dropped by id; a write is neither dropped nor waited for across a redraw.
+      is dropped by id, on its way or waiting for a write; a write is neither dropped nor
+      waited for across a redraw.
 
-    What it costs: the runtime every page loads is 893 bytes larger raw (46,502 to 47,395), 357
-    with gzip (16,718 to 17,075) and 329 with brotli (15,106 to 15,435), paid once a release by
+    What it costs: the runtime every page loads is 1,045 bytes larger raw (46,502 to 47,547), 421
+    with gzip (16,718 to 17,139) and 362 with brotli (15,106 to 15,468), paid once a release by
     every user. A `data-patch` submit reads one attribute and its form's id, and looks through the
-    submits on their way (rarely more than one) for a read of that id; only a marked GET
+    submits on their way (rarely more than one) for a read of that id, or a read waiting for a
+    write of it; only a marked GET
     captures its visit and entry, compares them where it could draw and builds an address, which
     it reads back once after the replace. A patch tracks whether it placed every element as it
     walks them, without a separate scan, and a navigation the runtime takes to a page, a
-    `popstate` and a `hashchange` each add one to a counter; the navigation keeps its signal. On the server nothing runs that did not: `html!` writes the mark as
+    `popstate`, a `hashchange` and a reload the runtime starts each add one to a counter; the
+    navigation keeps its signal until it ends (`navigatesuccess`, `navigateerror`). On the server nothing runs that did not: `html!` writes the mark as
     an attribute and refuses a misplaced one when the markup compiles.
 
     Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
@@ -10769,7 +10778,10 @@ rules something out.
     a `navigate` of type `replace` that the runtime does not intercept and a page's listener can
     cancel without an exception, and aborts a navigation the runtime has under way; Back and Forward
     between entries that differ by their `#id` fire `popstate`, with and without the Navigation
-    API; in Chromium, Firefox and WebKit; the smoke's checks in all three);
+    API; `navigation.transition` is set only once every `navigate` listener has run, and the
+    entry changes only when a navigation whose address waits for its page commits; in Chromium,
+    Firefox and WebKit; the smoke's checks in all three; WebKit's throw past its limit of history
+    updates is simulated there, not reached);
     reasoned (the form's mark says which answers are the page at their address, which neither the
     handler nor the runtime can tell; a replace in the task that draws leaves nothing able to see
     the patch without its address; one fenced to its visit and entry cannot touch another entry,
@@ -10787,7 +10799,7 @@ rules something out.
     stops aborting a navigation under way in one of the engines, or a traversal between `#id`
     entries stops firing `popstate` in one.
 
-    Last checked: 2026-11-25, the runtime's size with this change on main `9e209a32f` against
+    Last checked: 2026-11-25, the runtime's size with this change on main `153d10e9c` against
     that main, and the page's and the patch's bodies on `6ca02c26e`; 2026-11-25, the watchlist smoke on the same
     server in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, every `data-address`
     check passing in each.

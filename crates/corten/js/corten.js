@@ -2629,8 +2629,14 @@ const navigation = /** @type {Navigation | undefined} */ (window.navigation);
  */
 let pageVisit = 0;
 for (const type of ["popstate", "hashchange"]) addEventListener(type, () => (pageVisit += 1));
-/** The signal of the navigation that started the visit, while it may still be on its way. @type {AbortSignal | null} */
+/**
+ * The signal of the navigation that started the visit, until it ends: from the runtime's
+ * `navigate` listener on, before the browser shows it on its way (`navigation.transition`), which
+ * it does only once every listener has run. A navigation that fails ends without its signal aborting.
+ * @type {AbortSignal | null}
+ */
 let moving = null;
+for (const type of ["navigatesuccess", "navigateerror"]) navigation?.addEventListener(type, () => (moving = null));
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -3206,6 +3212,8 @@ let left = 0;
  * @param {Notice} [notice]
  */
 function reload(notice = null) {
+  // The page on screen is being left: no marked answer draws on it ({@link onThisVisit}).
+  pageVisit += 1;
   left += 1;
   if (notice && !notice.has("r")) {
     try {
@@ -3244,12 +3252,13 @@ const queuedVisits = new WeakMap();
  * has now: false once the runtime takes a navigation to another page (Back, a link), or the entry
  * changes without one (Back to a `#id` of the page, even if Forward comes back to it; a script's
  * `pushState`, seen by its key where the Navigation API is). A page drawn in place, the page
- * reading itself again or a `replaceState` keeps both. Pressed while a navigation to another page
- * is on its way, for none: the page on screen is being left.
+ * reading itself again or a `replaceState` keeps both, and the runtime reloading it keeps neither.
+ * Pressed while a navigation to another page is on its way (from the runtime's `navigate`
+ * listener on: one a later listener sends too), for none: the page on screen is being left.
  * @returns {() => boolean}
  */
 function onThisVisit() {
-  if (navigation?.transition && moving && !moving.aborted) return () => false;
+  if (moving && !moving.aborted) return () => false;
   const visit = pageVisit;
   const key = navigation?.currentEntry?.key;
   return () => visit === pageVisit && key === navigation?.currentEntry?.key;
@@ -3376,9 +3385,14 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   // The submit this one replaces ends once this one holds the marks they share, so the form and a
   // button sending again are not cleared and marked again.
   previous?.controller.abort();
-  // So does a read the form this one was drawn in place of sent: an older press of the same form.
+  // So does a read the form this one was drawn in place of sent, or that waits for its write: an
+  // older press of the same form. The write and a write waiting for it stay.
   const id = idOf(form);
-  if (id) for (const [was, sending] of submits) if (was !== form && !sending.write && idOf(was) === id) sending.controller.abort();
+  if (id)
+    for (const [was, sending] of submits)
+      if (was !== form && idOf(was) === id)
+        if (!sending.write) sending.controller.abort();
+        else if (sending.next !== undefined && sendsAs(was, sending.next).method === "get") sending.next = undefined;
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {
@@ -3469,9 +3483,13 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
               const path = location.pathname;
               // Not if what it drew started another visit (a script that navigates as it connects).
               if (!here() || to === location.href) return;
-              history.replaceState(history.state, "", to);
-              // A page's `navigate` listener that cancels it refuses the address: what is on screen
-              // must be the page at the entry's, so that page is read again, whole.
+              try {
+                history.replaceState(history.state, "", to);
+              } catch {
+                // Refused by the browser (WebKit throws past its limit of history updates).
+              }
+              // A page's `navigate` listener that cancels it, or the browser, refuses the address:
+              // what is on screen must be the page at the entry's, so that page is read again, whole.
               if (location.href !== to) reload();
               // Read again at the new address, which without the Navigation API goes by the path.
               else if (location.pathname !== path) readAgainLater();

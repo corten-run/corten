@@ -2241,15 +2241,19 @@ finds no place and a 5xx (which may still draw) leave it, while removing an elem
 longer has counts as done. A 4xx patch that draws (a 422) moves it, and so does a page answer
 (`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
-draws nothing and fires no `corten:error`, as for any submit a navigation cuts off. One that
+draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and so does
+one sent as a navigation to another page begins (by a script's `navigate` listener too). One that
 comes while the page reads itself again (`ReadAgain`), or after another form's answer was
 drawn in place, draws as usual, and the read starts again later at the new address. A script of
-the page whose `navigate` listener cancels the replace refuses the address: the runtime then
-reloads the page at the entry's address rather than leave the answer under it. A GET pressed
+the page whose `navigate` listener cancels the replace refuses the address, as does a browser
+that throws for it (WebKit past its limit of history updates): the runtime then reloads the page
+at the entry's address rather than leave the answer under it, and another marked answer on its
+way draws nothing. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page. A press of
-the form a read drew in place of the one pressed drops a GET that one sent, found by the form's
-id, as a press of the same form does. Two marked forms are not ordered against each other: their answers are drawn
+the form a read drew in place of the one pressed drops a GET that one sent, or that waits for
+its Save, found by the form's id, as a press of the same form does; give the form a
+`#[derive(Id)]` id, as below. Two marked forms are not ordered against each other: their answers are drawn
 as they come.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
@@ -2259,12 +2263,18 @@ whose rest costs more to read (a panel's period beside a long report) is
 `data-patch data-address`: a change reads only the part, and keeps the screen's one entry.
 
 ```rust,ignore
+#[derive(Id)]
+struct ScopePanelId;
+
+#[derive(Id)]
+struct ScopeFormId;
+
 #[component]
 fn ScopePanel<'a>(scope: Scope, rows: &'a [Sale]) -> impl Patch {
     let f = StrategyQuery::FIELDS;
     html! {
         <section id={ScopePanelId}>
-            <form method="get" action={url::Strategy::default()} data-patch data-address>
+            <form id={ScopeFormId} method="get" action={url::Strategy::default()} data-patch data-address>
                 <select name={f.scope}>..</select>
                 <button>"Apply"</button>
             </form>
