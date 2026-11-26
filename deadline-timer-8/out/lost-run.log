@@ -1,0 +1,18 @@
+tree of d79cbad1add1e49f19679c8b28e215def8ed50c6
+== as it is 21:31:02
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1177 filtered out; finished in 1.99s
+exit 0
+broken: crates/corten/src/deadline.rs
+broken: crates/corten/src/deadline.rs
+broken: crates/corten/src/app.rs
+== the wake lost 21:40:52
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun ... FAILED
+thread 'tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun' (2123) panicked at crates/corten/src/tests/server.rs:2410:5:
+at its deadline, not when its connection's time was up: 1.802512398s
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1177 filtered out; finished in 2.85s
+exit 101
+LOST-DONE 21:44:56
+exit 0

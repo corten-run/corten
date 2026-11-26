@@ -1,0 +1,6 @@
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20198.1    10.998  20198.1/10.998 20198.1/10.998  (longest hold 3.8 s)
+after-sdelay1          20198.1    10.998  20198.1/10.998 20198.1/10.998  (longest hold 5.7 s)
+after-sdelay1-x2       20198.3    11.000  20198.3/11.000 20198.3/11.000  (longest hold 8.3 s)
+after-sdelay1-x3       20198.3    11.000  20198.3/11.000 20198.3/11.000  (longest hold 11.3 s)
+after-sdelay1-x3-get   20198.3    11.000  20198.3/11.000 20198.3/11.000  (longest hold 12.4 s)

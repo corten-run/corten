@@ -1,0 +1,24 @@
+   Compiling corten-run v0.3.0 (/w/lost/src/crates/corten)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 01s
+     Running unittests src/lib.rs (/w/lost/target/debug/build/corten-run/6693c0edf8abafa2/out/corten-6693c0edf8abafa2)
+
+running 2 tests
+test tests::server::shutdown_holds_a_connection_whose_requests_waited_to_its_requests_deadline ... ok
+test tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun ... FAILED
+
+failures:
+
+---- tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun stdout ----
+
+thread 'tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun' (2123) panicked at crates/corten/src/tests/server.rs:2410:5:
+at its deadline, not when its connection's time was up: 1.802512398s
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::server::a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_has_begun
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1177 filtered out; finished in 2.85s
+
+error: test failed, to rerun pass `-p corten-run --lib`
+exit 101

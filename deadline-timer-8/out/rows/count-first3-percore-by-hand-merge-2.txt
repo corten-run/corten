@@ -1,0 +1,2 @@
+case              median     least      most  runs | allocations a request: median, runs | frees: runs
+get                19478     19476     19538  19538 19476 19478 | 16.000, 16.000 15.998 16.000 | 16.009 15.998 16.000

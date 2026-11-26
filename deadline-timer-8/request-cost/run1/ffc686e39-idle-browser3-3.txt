@@ -1,0 +1,1 @@
+12534 bytes a connection (5000 that answered 3 get-browser, opened in 8.4 s; 7729152 before, 70397952 after)

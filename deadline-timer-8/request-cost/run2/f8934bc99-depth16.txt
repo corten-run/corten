@@ -1,0 +1,5 @@
+case              median     least      most  seconds  other threads  counts
+pipeline            8504      8504      8504      1.4       243 in 1  8504 8504 8504
+get                16643     16643     16644      1.7       479 in 1  16643 16644 16643
+unstaged           10453     10453     10453      1.4       236 in 1  10453 10453 10453
+text               15626     15626     15627      2.2       479 in 1  15627 15626 15626

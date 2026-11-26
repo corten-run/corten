@@ -1,0 +1,10 @@
+case           allocations     frees  calls
+get                  16.00     16.00  free=16.00 malloc=16.00
+post                 19.00     18.00  free=18.00 malloc=18.00 realloc=1.00
+unstaged             14.00     14.00  free=14.00 malloc=14.00
+pipeline             11.00     11.00  free=11.00 malloc=11.00
+text                 15.00     15.00  free=15.00 malloc=15.00
+page                 20.00     20.00  free=20.00 malloc=20.00
+get-browser          19.00     19.00  free=19.00 malloc=19.00
+text-browser         20.00     20.00  free=20.00 malloc=20.00
+page-browser         28.00     28.00  free=28.00 malloc=28.00

@@ -1,0 +1,19 @@
+== main: symbols naming the wrapper or the connection's poll
+0000000000393150 t <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStream>>>, hyper_util::service::glue::TowerToHyperServic
+0000000000395e40 t <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>>> as c
+== b: symbols naming the wrapper or the connection's poll
+00000000002e0340 t core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStre
+00000000002e0460 t core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue:
+00000000002fc710 t core::ptr::drop_glue::<(core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStream>>>
+00000000002a4fd0 T corten::deadline::asked
+0000000000393730 t <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStream>>>, hyper_util::service::
+0000000000396630 t <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten:
+== newbase: symbols naming the wrapper or the connection's poll
+00000000003a3f00 t <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStream>>>, hyper_util::service::glue::TowerToHyperService<corten::app::Conne
+00000000003a6bf0 t <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>> as core::future::future::
+== merge: symbols naming the wrapper or the connection's poll
+00000000002f0b30 t core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStre
+00000000002f0c50 t core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue:
+00000000002b24c0 T corten::deadline::asked
+0000000000397ea0 t <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio_rustls::server::TlsStream<tokio::net::tcp::stream::TcpStream>>>, hyper_util::service::glue::TowerToHyperSe
+000000000039ada0 t <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::TowerToHyperService<corten::app::Connection>>> 

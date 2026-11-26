@@ -1,0 +1,1 @@
+2690 bytes a connection (5000 that sent nothing, opened in 1.4 s; 7577600 before, 21028864 after)

@@ -1,0 +1,1 @@
+8423 bytes a connection (5000 that answered 1 pipeline, opened in 4.4 s; 7512064 before, 49627136 after)

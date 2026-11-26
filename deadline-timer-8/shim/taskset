@@ -1,0 +1,6 @@
+#!/bin/bash
+# The count scripts pin the server with `taskset -c 0`. While the rows session counts on CPU 0 in
+# another container, this session pins to another CPU instead: `taskset -c <n> cmd...` becomes
+# `taskset -c $AFTER_CPU cmd...`. Instructions and bytes do not depend on which CPU it is.
+shift 2
+exec /usr/bin/taskset -c "${AFTER_CPU:-6}" "$@"

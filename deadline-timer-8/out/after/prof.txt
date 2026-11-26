@@ -1,0 +1,107 @@
+== row1 default: a = main, b = b
+ b less a        a        b  function
+   +386.0      0.0    386.0  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -369.0    369.0      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    -16.5      5.2    -11.3  0x00000000000aac90
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+     -7.6      1.0     -6.6  0x00000000000a8f50
+     -3.2      0.8     -2.3  pthread_mutex_trylock@@GLIBC_2.34
+    -30.5                    (all others)
+    -54.8  20596.6  20541.8  total
+-- main default: the functions that poll a connection
+own instructions a request:
+     369.00  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_u
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_u
+-- b default: the functions that poll a connection
+own instructions a request:
+     386.00  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stre
+       0.00  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stre
+      0.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+== row1 percore-by-hand: a = main, b = b
+ b less a        a        b  function
+   +385.8      0.0    385.8  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<t
+   -368.8    368.8      0.0  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.6      9.0     25.7  0x00000000000aac90
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+     +7.7      1.7      9.4  0x00000000000a8f50
+     +3.4      1.6      5.0  pthread_mutex_trylock@@GLIBC_2.34
+    +29.3                    (all others)
+    +60.0  19986.8  20046.8  total
+-- main percore-by-hand: the functions that poll a connection
+own instructions a request:
+     368.80  <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_u
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <core::pin::Pin<&mut hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_u
+-- b percore-by-hand: the functions that poll a connection
+own instructions a request:
+     385.80  <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stre
+       0.00  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <core::pin::Pin<&mut corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stre
+      0.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+== row1 default: a = newbase, b = merge
+ b less a        a        b  function
+   +386.0      0.0    386.0  <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stre
+   -369.0    369.0      0.0  <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_u
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+     +4.9    442.9    447.8  tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{clo
+    +13.1                    (all others)
+    +21.0  19864.9  19885.9  total
+-- newbase default: the functions that poll a connection
+own instructions a request:
+     369.00  <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::
+-- merge default: the functions that poll a connection
+own instructions a request:
+     386.00  <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyp
+       0.00  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyp
+      0.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+== row1 percore-by-hand: a = newbase, b = merge
+ b less a        a        b  function
+   +386.0      0.0    386.0  <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stre
+   -369.0    369.0      0.0  <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_u
+    -31.0    372.0    341.0  corten::page::run::<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}, corten::page::errors_rendered<corten::app::Plain<()>>::{closur
+    +16.0      0.0     16.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::page::within_deadline<corten::app::Plain<()>>::{closure#0}>>
+    +15.0      0.0     15.0  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Timer>>
+    -14.0     14.0      0.0  core::ptr::drop_glue::<corten::page::within<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box
+     +0.7                    (all others)
+     +3.7  19256.5  19260.2  total
+-- newbase percore-by-hand: the functions that poll a connection
+own instructions a request:
+     369.00  <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyper_util::service::glue::
+-- merge percore-by-hand: the functions that poll a connection
+own instructions a request:
+     386.00  <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyp
+       0.00  core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W
+calls a request (caller -> callee):
+      1.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> <corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::Watched<tokio::net::tcp::stream::TcpStream>>, hyp
+      0.000  corten::app::serve_listener::<tokio::net::tcp::listener::TcpListener, corten::app::plain<tokio::net::tcp::stream::TcpStream>, core::future::ready::Ready<core::result::Res
+             -> core::ptr::drop_glue::<core::pin::PinMacroHelper<corten::deadline::Keeps<hyper::server::conn::http1::UpgradeableConnection<hyper_util::rt::tokio::TokioIo<corten::watch::W

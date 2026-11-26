@@ -1,0 +1,55 @@
+== idle main rc=0 20:31:40
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20158.1     9.998  20158.1/9.998 20158.1/9.998  (longest hold 3.6 s)
+after-sdelay1          20158.3    10.000  20158.3/10.000 20158.1/9.998  (longest hold 6.1 s)
+after-sdelay1-x2       20158.3    10.000  20158.3/10.000 20158.3/10.000  (longest hold 7.0 s)
+after-sdelay1-x3       20158.3    10.000  20158.3/10.000 20158.3/10.000  (longest hold 9.6 s)
+after-sdelay1-x3-get   20158.3    10.000  20158.3/10.000 20158.3/10.000  (longest hold 11.5 s)
+== idle b rc=0 20:34:11
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20286.1     9.998  20286.1/9.998 20286.1/9.998  (longest hold 4.0 s)
+after-sdelay1          20286.3    10.000  20286.1/9.998 20286.3/10.000  (longest hold 5.7 s)
+after-sdelay1-x2       20398.3    11.000  20398.3/11.000 20398.3/11.000  (longest hold 9.1 s)
+after-sdelay1-x3       20398.3    11.000  20398.3/11.000 20398.3/11.000  (longest hold 10.3 s)
+after-sdelay1-x3-get   20398.3    11.000  20398.3/11.000 20398.3/11.000  (longest hold 12.3 s)
+== idle newbase rc=0 20:36:38
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20198.1    10.998  20198.1/10.998 20198.1/10.998  (longest hold 3.8 s)
+after-sdelay1          20198.1    10.998  20198.1/10.998 20198.1/10.998  (longest hold 5.7 s)
+after-sdelay1-x2       20198.3    11.000  20198.3/11.000 20198.3/11.000  (longest hold 8.3 s)
+after-sdelay1-x3       20198.3    11.000  20198.3/11.000 20198.3/11.000  (longest hold 11.3 s)
+after-sdelay1-x3-get   20198.3    11.000  20198.3/11.000 20198.3/11.000  (longest hold 12.4 s)
+== idle merge rc=0 20:39:03
+state                    bytes    blocks  runs (bytes/blocks)
+after-get              20326.1    10.998  20326.1/10.998 20326.1/10.998  (longest hold 3.6 s)
+after-sdelay1          20326.3    11.000  20326.1/10.998 20326.3/11.000  (longest hold 5.5 s)
+after-sdelay1-x2       20438.3    12.000  20438.3/12.000 20438.3/12.000  (longest hold 8.3 s)
+after-sdelay1-x3       20438.3    12.000  20438.3/12.000 20438.3/12.000  (longest hold 12.2 s)
+after-sdelay1-x3-get   20438.3    12.000  20438.3/12.000 20438.3/12.000  (longest hold 11.3 s)
+== prof count main default rc=0 20:39:10
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                20597     20597     20597  20597 | 16.000, 16.000 | 1.006
+== prof count main percore-by-hand rc=0 20:39:17
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19987     19987     19987  19987 | 15.997, 15.997 | 1.000
+== prof count b default rc=0 20:39:24
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                20542     20542     20542  20542 | 16.000, 16.000 | 1.000
+== prof count b percore-by-hand rc=0 20:39:33
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                20047     20047     20047  20047 | 15.999, 15.999 | 1.000
+== prof count newbase default rc=0 20:39:42
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19865     19865     19865  19865 | 16.002, 16.002 | 1.000
+== prof count newbase percore-by-hand rc=0 20:39:50
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19257     19257     19257  19257 | 16.000, 16.000 | 1.000
+== prof count merge default rc=0 20:39:58
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19886     19886     19886  19886 | 16.000, 16.000 | 1.016
+== prof count merge percore-by-hand rc=0 20:40:06
+case              median     least      most  runs | allocations a request: median, runs | parks a request: runs
+get                19260     19260     19260  19260 | 15.998, 15.998 | 1.000
+== prof rc=0
+AFTER-DONE 20:40:12
+exit 0

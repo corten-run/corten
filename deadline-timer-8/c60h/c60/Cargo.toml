@@ -1,0 +1,16 @@
+[package]
+name = "c60"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+corten = { package = "corten-run", path = "/src/crates/corten", default-features = false }
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
