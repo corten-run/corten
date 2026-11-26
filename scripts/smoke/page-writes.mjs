@@ -1464,7 +1464,9 @@ export async function pageWrites(page, browser) {
     // What the write changed: the section, which its patch draws and every page after it draws too
     // (its whole pages, and a navigation's answer, which carries the layout's elements that are the
     // page's), and the brand, which only a whole page draws. The section's text is the fixture's own,
-    // so a page that drew neither the patch nor a page after the write does not show it.
+    // so a page that drew neither the patch nor a page after the write does not show it. The patch's
+    // element alone carries `data-smoke-patch`, so whether the patch itself was ever drawn, even for a
+    // moment before a page drew over it, is told apart from the pages that draw the same section.
     const patchedSection = "Section the write patched";
     /** `body` with the section the write patched in place of the server's. @param {string} body */
     const withSection = (body) => body.replace(/<nav(\b[^>]*\bid="sector-nav"[^>]*)>[\s\S]*?<\/nav>/, `<nav$1>${patchedSection}</nav>`);
@@ -1472,7 +1474,7 @@ export async function pageWrites(page, browser) {
       if (!headers) return withSection(brand(body));
       delete headers["corten-shell"];
       headers["corten-patch"] = "";
-      return `<nav id="sector-nav" data-on="connect:quoted.show()">${patchedSection}</nav>`;
+      return `<nav id="sector-nav" data-smoke-patch data-on="connect:quoted.show()">${patchedSection}</nav>`;
     };
     const { own, seen } = await writtenPage(patched);
     seen.nav = (body) => (seen.written ? withSection(body) : body);
@@ -1483,6 +1485,51 @@ export async function pageWrites(page, browser) {
         own.evaluate(() => {
           const nav = document.getElementById("sector-nav");
           return { text: nav?.textContent ?? null, page: !!nav?.hasAttribute("data-corten-page") };
+        }),
+      );
+    /**
+     * Watches the page, from before the write is sent, for the patch's own element
+     * (`[data-smoke-patch]`) entering it: put in, or marked, at any moment, however soon it is taken
+     * out again (a MutationObserver's records keep every insertion). The watch lasts 120 s at most;
+     * `patchDrawn` reads it, a watch that ended or was lost (a full load) reading as not kept.
+     */
+    const watchPatch = () =>
+      readWithin(
+        "the watch for the patch's element",
+        own.evaluate(() => {
+          const w = /** @type {any} */ (window);
+          const MARK = "[data-smoke-patch]";
+          /** @param {Node} node */
+          const holds = (node) => node instanceof Element && (node.matches(MARK) || !!node.querySelector(MARK));
+          const record = { kept: true, drawn: !!document.querySelector(MARK), take: () => {} };
+          /** @param {MutationRecord[]} records */
+          const note = (records) => {
+            for (const r of records) {
+              // An attribute record is the mark set on, or taken off, an element in the page: either way
+              // it was there.
+              if (r.type === "attributes" || Array.from(r.addedNodes).some(holds)) record.drawn = true;
+            }
+          };
+          const observer = new MutationObserver(note);
+          observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-smoke-patch"] });
+          record.take = () => note(observer.takeRecords());
+          setTimeout(() => {
+            record.take();
+            observer.disconnect();
+            record.kept = false;
+          }, 120000);
+          w.__smokePatch = record;
+        }),
+      );
+    /** What the watch saw (`watchPatch`): `{ kept, drawn }`, with the records not yet delivered read. */
+    const patchDrawn = () =>
+      readWithin(
+        "whether the patch's element was drawn",
+        own.evaluate(() => {
+          const record = /** @type {any} */ (window).__smokePatch;
+          if (!record) return { kept: false, drawn: null };
+          record.take();
+          return { kept: record.kept, drawn: record.drawn };
         }),
       );
     /** @type {() => void} */
@@ -1503,6 +1550,7 @@ export async function pageWrites(page, browser) {
           await route.fallback().catch(() => {});
         }),
       );
+      await watchPatch();
       await own.click("main form button");
       const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
       await own.click('main a[href="/smoke/quoted"]');
@@ -1517,22 +1565,34 @@ export async function pageWrites(page, browser) {
         );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       const section = await sectionOf();
+      const patch = await patchDrawn();
       // The link's page read whole draws what the write changed: its brand, and the section the
-      // write patched, drawn by that page (its own element), not by the patch left behind.
+      // write patched, drawn by that page (its own element), not by the patch left behind, which
+      // never entered the page, not even for a moment before that page drew over it.
       const leftWhole =
-        stalled && seen.answers === 1 && arrived && shown.brand === "Watchlist, written" && section.text === patchedSection && section.page && shown.same && seen.asked.includes("GET /smoke/quoted page");
-      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown, section }));
+        stalled &&
+        seen.answers === 1 &&
+        arrived &&
+        shown.brand === "Watchlist, written" &&
+        section.text === patchedSection &&
+        section.page &&
+        patch.kept &&
+        patch.drawn === false &&
+        shown.same &&
+        seen.asked.includes("GET /smoke/quoted page");
+      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown, section, patch }));
       // The patch was answered before that page was asked for, so the page's layout drew it: the
       // navigation after reads <main> alone, not the whole page again. Only its reads of
       // /smoke/written count: the pointer left on the link clicked above can make the page that comes
       // prefetch /smoke/quoted, after the navigation's read (#2035). It needs all the step above
       // passed on: the write answered once with its scripts held, the link's page read whole and
       // come, and what the write changed (the brand and the patched section) drawn in the document
-      // the page kept. Without them no patch was left behind and drawn, and a return that reads
-      // <main> alone shows nothing. The return must leave that section drawn.
+      // the page kept, by that page and never by the patch. Without them no patch was left behind and
+      // drawn, and a return that reads <main> alone shows nothing. The return must leave that section
+      // drawn, the patch's element still never in the page.
       const returnName = "a write's patch answered before a navigation left it is drawn by that page, and the next navigation reads <main> alone";
       if (!leftWhole) {
-        check(returnName, false, `no write's patch held, left by a whole navigation and drawn by its page before the return: ${JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown, section })}`);
+        check(returnName, false, `no write's patch held, left by a whole navigation and drawn by its page before the return: ${JSON.stringify({ stalled, answers: seen.answers, arrived, asked: seen.asked, shown, section, patch })}`);
       } else {
         const sinceReturn = seen.asked.length;
         await within(
@@ -1550,7 +1610,12 @@ export async function pageWrites(page, browser) {
           );
         const reads = seen.asked.slice(sinceReturn).filter((a) => a.startsWith("GET /smoke/written "));
         const kept = await sectionOf();
-        check(returnName, returned && reads.join() === "GET /smoke/written nav" && kept.text === patchedSection, JSON.stringify({ returned, reads, asked: seen.asked, section: kept }));
+        const after = await patchDrawn();
+        check(
+          returnName,
+          returned && reads.join() === "GET /smoke/written nav" && kept.text === patchedSection && after.kept && after.drawn === false,
+          JSON.stringify({ returned, reads, asked: seen.asked, section: kept, patch: after }),
+        );
       }
     } finally {
       release();

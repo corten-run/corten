@@ -497,8 +497,11 @@ window or on another form, does not count as the body's.
 The check that a navigation leaving a write's patch before it is drawn reads the next page whole
 requires that page to show what the write changed: its brand, and the section the patch draws,
 which every page after the write draws too, drawn by that page's own section element and not by the
-patch. The check that the next navigation then reads `<main>` alone requires that section still
-drawn after it.
+patch. The patch's element alone carries a mark, and a MutationObserver set before the write is sent
+records whether that element ever enters the page, however briefly; the check fails if it ever did,
+so a patch drawn for a moment and then drawn over by the page does not pass. The check that the next
+navigation then reads `<main>` alone requires that section still drawn after it, and the patch's
+element still never in the page.
 These cases, the check that a write's patch answered before a navigation is drawn by that page,
 the two checks of a write's patch to the layout beside another write's own page, and each case that
 holds a script or write while it follows the link to `/smoke/quoted` close their page in a
@@ -580,8 +583,13 @@ HTML comment or in the text of a raw-text element (`<script>`, `<style>`, `<text
 is none. The head's tag is a `<noscript data-corten-read-again data-corten-head>` in the page's
 `<head>`, or, in a navigation's answer, which has none, one of its top-level elements; its wait is
 read from it and from each `<meta http-equiv="refresh">` in it as a browser without JavaScript
-parses it. The part's tag is the `<template data-corten-read-again data-from>` the runtime reads in
-`<main>`. A fixture never supplies or repairs the server's read-again tags or waits. Only when the write has
+parses it. These are read first; then the fixture takes out what the runtime takes out before it
+draws `<main>`, in its order: it empties every `<noscript>`, cuts a whole page to what a
+navigation's answer holds, and takes out the top-level layout elements that are the page's
+(`data-corten-page`), the title and every `data-corten-head` element at any depth, which the runtime
+moves to the head. The part's tag is the `<template data-corten-read-again data-from>` left after
+that, which the runtime reads in `<main>`: one inside a `<noscript>` or a `data-corten-head` element
+is none. A fixture never supplies or repairs the server's read-again tags or waits. Only when the write has
 already landed, and the server says `Saved.`, does the stand-in answer as the server does while it
 lands. Only the leave-before-read case changes the server's tags: once they are found waiting one
 second, it sets those waits to its own longer one, changing nothing else. It finds where each wait

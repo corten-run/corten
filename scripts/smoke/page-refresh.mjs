@@ -67,11 +67,18 @@ function readAgainFault(page, answer, address, status) {
  * top-level ones, where the server writes its head tags before the page. Each has its wait and the
  * `content` of each `<meta http-equiv="refresh">` in it as a browser without JavaScript reads them,
  * parsed with scripting off (a `<noscript>` the runtime's template parses as text is parsed again
- * so, as a `<noscript>` in a head). With `part`, the part's tags are the
- * `<template data-corten-read-again data-from>` reading again from `part` that the runtime reads in
- * `<main>` (`readPartsAgain`): those in a whole page's `<main>`, or in a navigation's answer but for
- * those in its head tags and in the layout elements that are the page's (`data-corten-page`), which
- * the runtime takes out of it. Each wait is the attribute's value as the parse gives it, or null.
+ * so, as a `<noscript>` in a head). These are read first, as the parse gives them; then what the
+ * runtime takes out before it draws `<main>` is taken out, in its order: every `<noscript>` is
+ * emptied (`parse`, `swapDocument`); a whole page is cut to what a navigation's answer holds, its
+ * title, head tags and section stylesheets, the layout elements that are the page's
+ * (`data-corten-page`, but for one inside another) and `<main>`'s children (`swapDocument` with its
+ * layout not drawn, where those elements are not `<main>`'s); the top-level elements that are the
+ * page's are taken out (in a navigation's answer only when its text holds ` data-corten-page`, as
+ * `swapPage` checks), then its first `<title>`, then every element marked `data-corten-head`, at any
+ * depth, which goes to the document's head. With `part`, the part's tags are the
+ * `<template data-corten-read-again data-from>` reading again from `part` in what is left, which the
+ * runtime puts in `<main>` and reads there (`readPartsAgain`): one in a `<noscript>` or in an element
+ * marked `data-corten-head` is none. Each wait is the attribute's value as the parse gives it, or null.
  * Bounded to 5 s (`readWithin`).
  * @param {import("@playwright/test").Page} page @param {string[]} answers @param {string | undefined} part @param {boolean} whole
  * @returns {Promise<{ head: { wait: string | null, refresh: (string | null)[] }[], parts: { wait: string | null }[] }[]>}
@@ -99,23 +106,57 @@ function readAgainTagsIn(page, answers, part, whole) {
         };
         return answers.map((answer) => {
           /** @type {Element[]} */ let heads;
-          /** @type {Element[]} */ let parts;
+          /** @type {DocumentFragment | null} */ let content = null;
+          /** What the runtime has emptied or cut once it has parsed the answer. @type {() => void} */ let cut;
           let elements = true;
           if (whole) {
             const doc = new DOMParser().parseFromString(w.__html(answer), "text/html");
             heads = Array.from(doc.head.querySelectorAll("noscript[data-corten-read-again][data-corten-head]"));
-            parts = Array.from(doc.querySelector("main")?.querySelectorAll(PART) ?? []);
+            cut = () => {
+              // `swapDocument`: every <noscript> emptied, then what a navigation's answer holds, with
+              // the layout not drawn (the elements that are the page's are not <main>'s then).
+              for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
+              const main = doc.querySelector("main");
+              if (!main) return;
+              const head = [doc.querySelector("title"), ...Array.from(doc.head.querySelectorAll("[data-corten-head], link[data-corten-style]"))].filter(
+                (el) => el !== null,
+              );
+              const marked = Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter(
+                (el) => !el.parentElement || !el.parentElement.closest("[data-corten-page]"),
+              );
+              content = doc.createDocumentFragment();
+              content.append(...head, ...marked, ...Array.from(main.childNodes));
+            };
           } else {
             const template = document.createElement("template");
             template.innerHTML = w.__html(answer);
-            const top = Array.from(template.content.children);
-            heads = top.filter((el) => el.localName === "noscript" && el.hasAttribute("data-corten-read-again") && el.hasAttribute("data-corten-head"));
-            const out = top.filter((el) => el.hasAttribute("data-corten-head") || el.hasAttribute("data-corten-page"));
-            parts = Array.from(template.content.querySelectorAll(PART)).filter((el) => !out.some((o) => o.contains(el)));
+            heads = Array.from(template.content.children).filter(
+              (el) => el.localName === "noscript" && el.hasAttribute("data-corten-read-again") && el.hasAttribute("data-corten-head"),
+            );
             elements = fragmentElements;
+            cut = () => {
+              // `parse`: every <noscript> emptied.
+              for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
+              content = template.content;
+            };
+          }
+          // The head's tags as the parse gives them, read before the runtime empties them.
+          const head = heads.map((el) => ({ wait: el.getAttribute("data-corten-read-again"), refresh: refreshes(el, elements) }));
+          cut();
+          /** @type {Element[]} */ let parts = [];
+          const left = /** @type {DocumentFragment | null} */ (content);
+          if (left) {
+            // `swapPage`, in its order: the top-level elements that are the page's, the title, then
+            // every head tag at any depth, each out of what goes in <main>.
+            if (whole || answer.includes(" data-corten-page")) {
+              for (const el of Array.from(left.children)) if (el.hasAttribute("data-corten-page")) el.remove();
+            }
+            left.querySelector("title")?.remove();
+            for (const el of Array.from(left.querySelectorAll("[data-corten-head]"))) el.remove();
+            parts = Array.from(left.querySelectorAll(PART));
           }
           return {
-            head: heads.map((el) => ({ wait: el.getAttribute("data-corten-read-again"), refresh: refreshes(el, elements) })),
+            head,
             parts: part === undefined ? [] : parts.filter((el) => el.getAttribute("data-from") === part).map((el) => ({ wait: el.getAttribute("data-corten-read-again") })),
           };
         });
