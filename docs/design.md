@@ -8579,22 +8579,27 @@ rules something out.
     handler (one that polls another route on its own stack) is polled within the outer watch, so
     a key the inner answer drew marks the outer one private too, even when the handler drops the
     inner answer: a private answer that could have been shared, never the other way round; the
-    inner request's own answer is marked through its own signal. Measured on 2026-11-22 with
+    inner request's own answer is marked through its own signal. Measured on 2026-11-26 with
     `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
-    request before and after: a `Public` page given from the store 16,948 and 16,987 (+0.23%);
-    one made for each request (`kept_answers(0)`) 19,581 and 19,653 (+0.37%), the watch and the
-    signal the route holds; a `Public` JSON body given 16,012 and 16,045 (+0.21%), made for each
-    54,343 and 54,346; a private page 16,800 and 16,797; a `Public` text body from an unstaged
-    route 7,807 and 7,829 (+0.28%); text from an unstaged route that is not `Public` 6,446 and
-    6,439; and a `Public` page with a keyed form, the one case that draws a key, 22,182 and
-    22,477 (+1.33%), from marking the request and dropping a tag it may have been given. Before
-    `NoStore`, a tuple's refusing part and a given tag were covered, the four staged `Public`
-    cases with no key counted 16,961, 19,627, 16,019 and 54,320, 19 to 26 fewer: those cases
-    take none of the branches that changed, and the difference is not traced to a line. Saying
-    whether an answer may be `Public` by a function rather than a constant then added 6 or 7 to
-    each staged page and none to JSON or an unstaged route; no `may_share` is left in the
-    release build's symbols, so it is not a call, and the 6 or 7 are not traced to a line
-    either. These are instruction counts, not cycles. The stages' signal past the middleware was
+    request at main (`9b8834fcc`) and with this change (`9c8cd07e7`): a `Public` page given from
+    the store 16,044 and 16,198 (+0.96%); one made for each request (`kept_answers(0)`) 19,015 and
+    19,166 (+0.79%); a `Public` JSON body given 15,580 and 15,734 (+0.99%), made for each 54,247
+    and 54,354 (+0.20%); a private page, whose form draws a key, 17,537 and 17,886 (+1.99%); a
+    `Public` text body from an unstaged route 7,736 and 7,766 (+0.39%); text from an unstaged
+    route that is not `Public` 6,439 and 6,438; and a `Public` page with a keyed form 21,391 and
+    21,807 (+1.94%). Of the 154 of the page given from the store, 87 are copies of the route's
+    future, a pointer larger, 66 polling the future that holds the stages' signal past the
+    middleware (`middleware::Keyed`) and 20 `middleware::handle`, less 28 in `page::run`: what
+    holding that signal costs a staged request. The page made for each request counts 151 more,
+    the watch around its handler adding nothing a count shows. The two pages that draw a key add
+    the look for the mark on the answer (`cache::unrepeatable` and the extensions map, 73 for the
+    private page and 146 for the keyed one), 24 more where `Keyed` finds that mark, and dropping
+    a tag it may have been given (`HeaderMap::remove` and its hashing, 86). The previous head,
+    `7a7ac7aa8`, whose watch marked the request's signal as well, counted 34 more for the page
+    made for each request, 20 for the JSON made for each and 44 for the keyed page, the signal
+    each watched route's future held, and the other cases within about 1. No `may_share` is left
+    in the release build's symbols, so saying whether an answer may be `Public` is not a call.
+    These are instruction counts, not cycles. The stages' signal past the middleware was
     counted on 2026-11-26 with `bench/request-cost` (Last checked), instructions a request, median
     of three, at `027178adf` (this change with main merged, without it) and `4944bffac` (with it):
     `get` 18,300 and 18,420 (+0.66%), `post` 22,748 and 22,868, `text` 17,140 and 17,266 (+0.74%),
@@ -8604,8 +8609,10 @@ rules something out.
     case allocates more. In `text` 87 of the 126 are three more copies of the route's future, a
     pointer larger, as `page::run` moves it, 18 building it and 14 polling it and the look for the
     mark; the copies are where the compiler placed the move, not traced further. Against main
-    (`9b8834fcc`) the whole change reads `get` +87, `post` +85, `text` +91, `page` +124,
-    `page-browser` +127, `unstaged` and `pipeline` -1 and -2. A first
+    (`9b8834fcc`) the whole change at `9c8cd07e7` reads `get` +78 (18,335 and 18,413), `post`
+    +76, `text` +91, `page` +111, `get-browser` +79, `text-browser` +92, `page-browser` +112,
+    at a depth of 16 `get` +80 and `text` +91, and `unstaged` and `pipeline` -2 and -1, with the
+    same allocations. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -9581,22 +9588,18 @@ rules something out.
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-26 for the stages' signal
     past the middleware, the probe of `bench/request-cost` at `4944bffac` against `027178adf` and
-    `9b8834fcc`, built one after another in one directory with rustc 1.100.0, counted with valgrind
-    3.24.0 in a `rust:1-trixie` container on a 12-CPU workstation, answers compared first with no
-    difference; 2026-11-22 for the watch for a submit key, `1a36081dd` (this change, with
-    main merged at `d3e1b4efb`) against its merge base with main, `361724c85`, and before that
-    `d3e1b4efb` against `361724c85` and `f4a4472a3` against `a0eeeacca` (whose crates are the
-    same as `361724c85`'s), each with the same
-    `tests::cache::what_settling_a_page_costs` (the function, its doc and its two unstaged routes
-    as at `0ced821d8`, 4,172 bytes, SHA-256
-    `a1e48f7272d3a4cce21df616f5733ce0deef6d7f471dd6e3d5e31f60b9d63870`, copied into
-    each base unchanged), built with rustc 1.100.0 in
-    release with all features and counted under callgrind (valgrind 3.24.0, Debian's
-    `libjemalloc2`), each count the difference of a run of 1,200 requests and one of 200, eight
-    cases in three rounds alternating which build ran first, every round within two
-    instructions of the others, the same rounds of `0ced821d8` against `250e4b81c`, before main
-    was merged, giving the same counts within two instructions, and no cycles under load
-    measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    `9b8834fcc`, and at `9c8cd07e7` against `9b8834fcc`, each pair built one after another in one
+    directory with rustc 1.100.0, counted with valgrind 3.24.0 in a `rust:1-trixie` container on a
+    12-CPU workstation, answers compared first with no difference; 2026-11-26 for the watch for a
+    submit key, `9c8cd07e7` and `7a7ac7aa8` (this change) against main's `9b8834fcc`, each with
+    the same `tests::cache::what_settling_a_page_costs` (the function, its doc and its two
+    unstaged routes as at `9c8cd07e7`, which `7a7ac7aa8` has unchanged, applied to
+    `9b8834fcc`), built at one path with rustc 1.100.0 in release with all features and counted
+    under callgrind (valgrind 3.24.0, Debian's `libjemalloc2`, in a `rust:1-trixie` container),
+    each count the difference of a run of 1,200 requests and one of 200, eight cases in two rounds
+    in opposite orders of the builds, every count within 1.1 instructions of the other round's,
+    the counts by function read with `callgrind_annotate` for five of the cases, and no cycles
+    under load measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
