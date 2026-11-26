@@ -795,17 +795,18 @@ test("retained orphan receipt survives a proved reuse of its stopped Windows own
   const { pid } = JSON.parse(fs.readFileSync(lock));
   const receipt = path.join(old, "receipts", "external-failed-host.json");
   const timestamps = (file) => {
-    const s = fs.lstatSync(file);
-    return [s.birthtimeMs, s.mtimeMs, s.ctimeMs];
+    // Replay reads integer milliseconds; floating stats can round up at the boundary.
+    const s = fs.lstatSync(file, { bigint: true });
+    return [s.birthtimeMs, s.mtimeMs, s.ctimeMs].map(Number);
   };
-  const lastLock = Math.ceil(Math.max(...[lock, path.join(local, "operation.lock"),
-    path.join(path.dirname(local), ".groups-launch.lock")].flatMap(timestamps)));
+  const lastLock = Math.max(...[lock, path.join(local, "operation.lock"),
+    path.join(path.dirname(local), ".groups-launch.lock")].flatMap(timestamps));
   const receiptStamp = new Date(lastLock + 1000);
   fs.utimesSync(receipt, receiptStamp, receiptStamp);
   const latest = Math.max(...timestamps(receipt));
   const beforeReceipt = lastLock + 1;
   assert.ok(beforeReceipt < latest);
-  await delay(Math.max(20, Math.ceil(latest) + 20 - Date.now()));
+  await delay(Math.max(20, latest + 20 - Date.now()));
   const started = Date.now(), stop = process.kill.bind(process);
   assert.ok(started > latest);
   const tree = treeHash(old);
@@ -813,7 +814,7 @@ test("retained orphan receipt survives a proved reuse of its stopped Windows own
   assert.throws(() => externalFailedHostBinding(fleet, { orphaned: true }), /original stopped batch owner/);
   assert.throws(() => readExternalFailedHost(fleet, { processStart: () => undefined }), /original stopped batch owner/);
   assert.throws(() => readExternalFailedHost(fleet, { processStart: () => beforeReceipt }), /original stopped batch owner/);
-  assert.throws(() => readExternalFailedHost(fleet, { processStart: () => Math.floor(latest) }), /original stopped batch owner/);
+  assert.throws(() => readExternalFailedHost(fleet, { processStart: () => latest }), /original stopped batch owner/);
   assert.throws(() => readExternalFailedHost(fleet, { processStart: () => Date.now() + 60000 }), /original stopped batch owner/);
   const row = readExternalFailedHost(fleet, { processStart: (id) => id === pid ? started : undefined });
   assert.equal(row.round, "r20");
