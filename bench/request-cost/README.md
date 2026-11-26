@@ -327,37 +327,39 @@ node bench/request-cost/compare.mjs --readings
 node bench/request-cost/compare.mjs <base's directory> <head's directory> --description <file>
 ```
 
-What hosted runners gave, in the job's first two runs, for the pull request that added it
+What hosted runners gave, in the job's first three runs, for the pull request that added it
 ([#2124 Count what a request costs for a pull request against its base in a hosted job](https://github.com/corten-run/corten/pull/2124)):
-`651d61f71` and then `28d9af174`, each against `1bef46229`, whose crates are the same as
-theirs, so that the second run's two probes were one binary, byte for byte (4 CPUs each, of an
-Intel Xeon Platinum 8573C and of an AMD EPYC 9V45; valgrind 3.26.0, rustc 1.100.0):
+`651d61f71`, `28d9af174` and `20960f56d`, each against `1bef46229`, whose crates are the
+same as theirs, so that a run's two probes were one binary, byte for byte (the second and third
+runs printed their checksums). Each runner had 4 CPUs, of an Intel Xeon Platinum 8573C, an AMD
+EPYC 9V45 and an AMD EPYC 7763, with valgrind 3.26.0 and rustc 1.100.0:
 
-1. The job took 5 minutes 19 seconds and 4 minutes 7 seconds. In the first, 52 seconds built
-   the probe against base with nothing built before and 40 against head with base's crates
-   built, 193 took the 62 runs of the kit, and 8 installed valgrind, jemalloc and libzstd's
-   headers. The second restored the first's compiled crates from a cache (66 MB), as the
-   workflows' other Rust jobs do: 32 and 26 seconds to build, 154 for the runs. The runners
-   differed, so what the cache saved is not told apart from the runner's speed; it is at most
-   what a first build takes over a second, 12 seconds, and the job keeps no cache.
-2. No run was refused. The runners allow 65,536 open files, each idle run's 5,000 connections
-   opened in 0.2 to 1.1 seconds, and 13,372 and 13,215 sockets were in `TIME_WAIT` when the
-   last ended.
-3. Each row's twelve counts, six a run, spanned at most 1 instruction in all 13 rows, on
-   both CPU models alike (`get` 18,504 and 18,505, `page-browser` 219,794 and 219,795), no
+1. The job took 5 minutes 19 seconds, 4 minutes 7 and 5 minutes 42. In the first and third,
+   the probe built against base, with nothing built before, in 52 and 64 seconds, and against
+   head, with base's crates built, in 40 and 39; the 62 runs of the kit took 193 and 212. The
+   second restored the first's compiled crates from a cache (66 MB), as the workflows' other
+   Rust jobs do: 32 and 26 seconds to build, and 154 for the runs, on another runner.
+   Installing valgrind, jemalloc and libzstd's headers took 8 to 13 seconds. A cache saves at
+   most what a first build takes over a second, 12 and 25 seconds here, and a pull request's
+   cache serves only its own later runs, so the job keeps none.
+2. No run was refused, of 186. The runners allow 65,536 open files, each idle run's 5,000
+   connections opened in 0.2 to 2.2 seconds, and 13,215 to 13,443 sockets were in
+   `TIME_WAIT` when a job's last run ended.
+3. Each row's eighteen counts, six a job, spanned at most 1 instruction in all 13 rows, on the
+   three CPU models alike (`get` 18,504 and 18,505, `page-browser` 219,794 and 219,795), no
    median differed from the other build's by more than 1, and every allocation count was the
    same. That is as close as the 16-CPU host under
    [How a number is read](#how-a-number-is-read) read one binary.
-4. An idle reading's six runs spanned 1 to 4 bytes a connection in a job (over both: 8,430 to
-   8,433 after one request, 12,522 to 12,525 after three of a browser's, 2,657 to 2,661
-   before any byte).
+4. An idle reading's six runs spanned 1 to 4 bytes a connection in a job (over the three:
+   8,430 to 8,433 after one request, 12,522 to 12,525 after three of a browser's, 2,655 to
+   2,661 before any byte).
 
 The idle rule can read a rise between two builds that are the same, since it compares two
 medians of three by a span of three: base's 12,523 12,524 12,523 and a head of 12,524 12,525
 12,525 would be one. With every run drawn from one distribution it does so in about one
 comparison in twelve, so in about one job in five over the three readings (simulated, 2,000,000
 jobs: 8.7% of comparisons and 23.8% of jobs for a normal distribution, 5.6% and 15.7% for
-whole bytes spread as closely as the runs above). Neither run read one. A job that fails on
+whole bytes spread as closely as the runs above). None of the three runs read one. A job that fails on
 idle memory alone, by a byte or two, is to be read with that in mind; by the rule its runs are
 still not taken again for their result.
 
