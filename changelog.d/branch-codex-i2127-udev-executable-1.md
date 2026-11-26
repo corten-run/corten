@@ -1,0 +1,1 @@
+Benchmark cleanup can let proved udev workers settle on hosts where systemd-udevd uses `/usr/bin/udevadm`, without changing the [host cleanup checks](bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle).
