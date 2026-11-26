@@ -52,7 +52,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # No cargo cache: one saved at most 12 and 25 seconds of jobs of over five minutes (the
+      # No cargo cache: one saved at most 12 to 25 seconds of jobs of over five minutes (the
       # kit's page, The hosted job), and a pull request's cache serves only its own later runs.
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - uses: actions/setup-node@v7
