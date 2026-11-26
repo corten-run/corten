@@ -648,12 +648,19 @@ function windowsEvidence(windows, n, seconds) {
     else assert.deepEqual([w.p95, w.p99], [null, null], `window ${index}: latency without requests`);
   });
 }
+// The most VUs a pass's load runs: a convergence pass's closed-loop users, or the fixed rate's maxVUs.
+// A captured cell's k6 requests less its completed iterations are at most vus_max (readLoadSummary),
+// and vus_max at most this limit (validateLoadExecution): each VU has at most one unfinished iteration.
+export const loadVus = (options) => (options.kind === "convergence" ? options.vus : fixedRateLoad.maxVUs);
 // A cell's windows, graceful-stop tail and unrecorded requests must add up to k6's own request total;
-// no window's latency may be above k6's aggregate maximum; and k6's aggregate failures are at least
-// the windows' and at most the windows' plus every request outside them (tail and unrecorded).
+// its unfinished iterations are at most the load's VUs (loadVus); no window's latency may be above
+// k6's aggregate maximum; and k6's aggregate failures are at least the windows' and at most the
+// windows' plus every request outside them (tail and unrecorded).
 // Checked when a cell is captured and again when a saved pass is read.
-export function reconcileCell(c) {
+export function reconcileCell(c, vus) {
+  assert.ok(Number.isSafeInteger(vus) && vus > 0, "the load's VUs");
   assert.ok(Number.isSafeInteger(c.requests) && Number.isSafeInteger(c.iterations) && c.iterations >= 0 && c.iterations <= c.requests, `${cellKey(c)}: k6 request and iteration totals`);
+  assert.ok(c.requests - c.iterations <= vus, `${cellKey(c)}: more unfinished iterations than the load has VUs`);
   assert.ok(Number.isSafeInteger(c.tail) && c.tail >= 0 && Number.isSafeInteger(c.unrecorded) && c.unrecorded >= 0, `${cellKey(c)}: tail and unrecorded requests`);
   assert.equal(c.windows.reduce((sum, w) => sum + w.requests, 0) + c.tail + c.unrecorded, c.requests, `${cellKey(c)}: windows, tail and unrecorded requests do not add up to k6's request total`);
   assert.ok(c.unrecorded <= c.requests - c.iterations, `${cellKey(c)}: more unrecorded requests than unfinished iterations`);
@@ -803,7 +810,7 @@ function checkConvergence(s) {
     // k6's aggregate (which also counts the graceful stop), has no verdict, so none is saved.
     assert.ok(c.windows.every((x) => x.failed === 0), `${cellKey(c)}: a cell with failed requests in its windows has no verdict`);
     assert.equal(c.failedRequests, 0, `${cellKey(c)}: a cell with failed requests in k6's aggregate has no verdict`);
-    reconcileCell(c);
+    reconcileCell(c, loadVus(s.options));
     assert.deepEqual(c.verdict, flattenPoint(c.windows), `${cellKey(c)}: saved verdict differs from the stated tolerance reading`);
   }
   return s;
@@ -967,7 +974,7 @@ function checkSoak(s) {
     if (c.failure !== undefined) { failedCell(c); continue; }
     fields(c, ["app", "source", "target", "windows", "tail", "unrecorded", "requests", "iterations", "latencyMaxMs", "rate", "memory", "p99", "failed", "failedRequests", "restarts"], `${cellKey(c)}: a soak cell`);
     windowsEvidence(c.windows, s.options.windows, s.options.windowSeconds);
-    reconcileCell(c);
+    reconcileCell(c, loadVus(s.options));
     const m = c.memory;
     if (m?.unavailable !== undefined) {
       fields(m, ["samples", "unavailable", "startMiB", "endMiB", "growthMiB", "growthPct"], `${cellKey(c)}: unavailable memory`);

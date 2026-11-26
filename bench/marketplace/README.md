@@ -282,7 +282,9 @@ reportable, each of them reading "no reading" with its code's text. A saved cell
 but records a failed request is refused. k6's engine clock is checked as a timed
 phase's is (`validateLoadExecution`). A saved pass is refused if it finished at another commit,
 if its cleanup failed or is not confirmed complete, if its window totals do not add up to k6's
-request count, if a window's p95 or p99 is above k6's aggregate latency maximum, if k6's aggregate
+request count, if k6's requests less its completed iterations are more than the load's VUs (a
+convergence pass's users, a soak's 1,000; each VU has at most one unfinished iteration, which a
+captured cell's `vus_max` already bounds), if a window's p95 or p99 is above k6's aggregate latency maximum, if k6's aggregate
 failures are fewer than its windows' or more than its windows' plus the requests outside them (the
 graceful-stop tail and unrecorded requests), or if it has no adapters, sources or targets.
 
@@ -486,7 +488,8 @@ the load's 1,000 VUs (`maxVUs` in `window-load.js`, which `window-load.test.mjs`
 flight when the last interval ended, so they are among that boundary's outstanding iterations, and
 work lost at the stop cannot explain a backlog in an earlier interval. A soak with every arrival on
 schedule and no request completed in any interval (all of them in the graceful-stop tail, or all
-unrecorded) is refused at the first boundary.
+unrecorded) is refused at the first boundary; a saved one with all of them unrecorded is refused
+already on its totals, since more of its iterations are unfinished than the load has VUs.
 Otherwise it reports the shortfall, names each interval that did not hold with its arrivals and
 schedule, and does not present the cell as a fixed-rate result. The reader recomputes every
 interval's claim from the saved arrivals, so a saved soak cannot claim an interval held. The counts it prints are k6's own, never the schedule's. Memory is

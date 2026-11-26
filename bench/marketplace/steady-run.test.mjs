@@ -60,7 +60,8 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
  * (its acknowledgement lost); `failRemove(name)` fails every removal of that container;
  * `oomOnLoad` marks the app OOM-killed when the load ends; `restartOnLoad` restarts it in place (a
  * docker restart: the same ID and RestartCount, a new StartedAt). Its clock is the runner's
- * (`now`): a load run moves it on by `startupMs` before the container's StartedAt and by `runMs`
+ * (`now`): the host's clock, or with `epochMs` that fixed time, which moves only when the daemon or
+ * the test moves it on (`offset`). A load run moves it on by `startupMs` before the container's StartedAt and by `runMs`
  * (by default the engine clock `clockMs`, written to the clock file) before its FinishedAt.
  * `override(args, state)` answers a command first: an Error is thrown, a string returned (for docker
  * logs, the container's stdout), undefined leaves it to the daemon. A docker logs call with `file`
@@ -73,7 +74,7 @@ function k6Export(counts, { graceFailed = 0, windowFailed = {}, clockMs = 120_00
  * `--cpus`, `--cpuset-cpus` and `--memory`.
  */
 function fakeDocker({ exportFor, withhold = () => false, lose = () => false, failRemove = () => false, oomOnLoad = false, restartOnLoad = false, loadMs = 0, clockMs = 120_000, runMs = clockMs, startupMs = 0, override = () => undefined,
-  duringLoad = () => {}, inspected = (info) => info, probeStderr = "" } = {}) {
+  duringLoad = () => {}, inspected = (info) => info, probeStderr = "", epochMs = null } = {}) {
   const containers = new Map(), networks = new Map(), calls = [], late = [];
   let next = 1;
   const id = () => (next++).toString(16).padStart(64, "0");
@@ -90,7 +91,7 @@ function fakeDocker({ exportFor, withhold = () => false, lose = () => false, fai
   const filterOf = (args) => args[args.indexOf("--filter") + 1];
   // ids: the ID each create made, by name, including a withheld one.
   const state = { containers, networks, calls, late, ids: {}, offset: 0, startIssuedMs: null, listeners: [] };
-  state.now = () => Date.now() + state.offset;
+  state.now = () => (epochMs ?? Date.now()) + state.offset;
   state.emit = (cid, action) => { const nanos = (BigInt(state.now()) * 1_000_000n).toString(); for (const listener of state.listeners) listener(cid, action, nanos); };
   state.app = () => [...containers.values()].find((c) => c.kind === "app");
   const iso = () => new Date(state.now()).toISOString();
@@ -1593,9 +1594,13 @@ test("a create whose acknowledgement was lost counts as cleaned up only once wha
   // leaves it out: only the lookup by its attempt label finds it.
   const omits = (args) => (args[0] === "ps" && args.includes(`label=${ownerLabelKey}=marketplace-test-run`) ? "" : undefined);
   const lost = (name) => name === "marketplace-test-run-k6";
+  // The run's clock and the daemon's are one fixed time that moves only when the daemon or a sleep
+  // moves it on, so the 30 ms reconciliation window's first lookup is made however long the host
+  // takes between the window's start and that lookup.
+  const controlled = (extra) => { const fake = fakeDocker({ epochMs: Date.parse("2026-11-25T00:00:00Z"), ...extra }); return [fake, runClock({ now: fake.now, sleep: async (ms) => { fake.offset += ms; } })]; };
   // Its removal by ID also fails: cleanup is not complete and the copy a container may mount is kept.
-  const stuck = fakeDocker({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits, failRemove: lost });
-  const s = await run(stuck, options, folder("stuck"));
+  const [stuck, stuckClock] = controlled({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits, failRemove: lost });
+  const s = await run(stuck, options, folder("stuck"), { clock: stuckClock });
   assert.equal(s.cells[0].failure, "container");
   const cleanup = cleanupOf(folder("stuck"));
   assert.deepEqual(cleanup.unacknowledged.map((a) => [a.name, a.outcome, a.found]), [["marketplace-test-run-k6", "not removed", 1]]);
@@ -1605,8 +1610,8 @@ test("a create whose acknowledgement was lost counts as cleaned up only once wha
   assert.ok(existsSync(join(folder("stuck"), "mounted-fixture", "marketplace.json")), "the copy is kept");
   assert.equal(stuck.containers.size, 1);
   // Its removal by ID succeeds: it is removed whatever the sweep listed, and only then is the copy removed.
-  const found = fakeDocker({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits });
-  const r = await run(found, options, folder("found"));
+  const [found, foundClock] = controlled({ exportFor: () => k6Export(flat(8)), lose: lost, override: omits });
+  const r = await run(found, options, folder("found"), { clock: foundClock });
   const record = cleanupOf(folder("found"));
   assert.deepEqual(record.unacknowledged.map((a) => [a.name, a.outcome]), [["marketplace-test-run-k6", "removed"]]);
   assert.ok(found.calls.some((c) => c.args[0] === "rm" && c.args.at(-1) === found.ids["marketplace-test-run-k6"]), "removed by its ID");

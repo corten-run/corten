@@ -60,7 +60,7 @@ import { validateMarketplace } from "./records.mjs";
 import { records } from "./fixtures.mjs";
 import { locales } from "./contract.mjs";
 import { ownedResources, reconcileWindow, runClock } from "./alert-probe-run.mjs";
-import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, containerChecks, convergenceSchema, cpuModelDigest, eventFormat, eventRow, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell,
+import { appBefore, appInstance, appliedSettings, atLaunch, checkFixture, containerChecks, convergenceSchema, cpuModelDigest, eventFormat, eventRow, failureCodes, flattenPoint, flattenRule, heldThrough, markerIs, ownerLabelKey, passScope, readDropped, readEvents, readWindows, reconcileCell, loadVus,
   savedOptions, savedValue, servedCold, soakMemoryClock, soakSchema, startedBeforeLoad, summarizeSoak, timedStartup, validateConvergence, validateSoak, verdictText, windowClock } from "./steady-contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -675,7 +675,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
         if (inWindows) throw coded("failed-requests", new Error(`${inWindows} requests failed in the pass's windows; no verdict`));
         if (load.failed) throw coded("failed-requests", new Error(`${load.failed} requests failed in k6's aggregate, which includes the graceful stop; no verdict`));
         Object.assign(cell, { windows, tail, unrecorded, requests, iterations, latencyMaxMs, failedRequests: load.failed });
-        await step("load-evidence", () => reconcileCell(cell));
+        await step("load-evidence", () => reconcileCell(cell, loadVus(options)));
         return Object.assign(cell, { verdict: flattenPoint(windows) });
       }
       // A memory sampling failure makes only the memory reading unavailable (summarizeSoak); the
@@ -684,7 +684,7 @@ export async function runSteady({ options, folder, runId, docker, git, interrupt
       const samples = statsError ? null : (stats?.samples?.[app] ?? []).map((s) => ({ atSeconds: (s.t - memoryOriginMs) / 1000, mib: s.mem }));
       Object.assign(cell, await step("load-evidence", () => summarizeSoak({ windows, tail, unrecorded, requests, iterations, latencyMaxMs, memory: samples, before: appBefore(before), after: end, events: read.events, rate: options.rate,
         droppedIterations: readDropped(k6Summary), failedRequests: load.failed, arrivals })));
-      await step("load-evidence", () => reconcileCell(cell));
+      await step("load-evidence", () => reconcileCell(cell, loadVus(options)));
       return cell;
     } finally {
       if (sampler) { try { await sampler.stop(); } catch {} }

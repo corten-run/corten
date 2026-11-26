@@ -290,6 +290,10 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.cells[0].unrecorded = 1; v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /more unrecorded requests than unfinished iterations/],
     [(v) => { delete v.cells[0].iterations; }, /a convergence cell has fields its schema does not save, or lacks one it does/],
     [(v) => { v.cells[0].iterations = v.cells[0].requests + 1; }, /request and iteration totals/],
+    // Each of the pass's 32 VUs has at most one unfinished iteration, so k6's requests less its
+    // completed iterations are at most 32: no completed iteration at all, or 33 unfinished, is refused.
+    [(v) => { v.cells[0].iterations = 0; }, /^Error: [a-z]+ [a-z]+ [a-z]+: more unfinished iterations than the load has VUs$/],
+    [(v) => { v.cells[0].iterations = v.cells[0].requests - 33; }, /^Error: [a-z]+ [a-z]+ [a-z]+: more unfinished iterations than the load has VUs$/],
     [(v) => { v.options.apps = []; v.images = {}; v.cells = []; }, /at least one of its apps/],
     [(v) => { v.cells[0].latencyMaxMs = 1; }, /latency above k6's aggregate http_req_duration maximum/],
     [(v) => { v.cells[0].latencyMaxMs = null; }, /aggregate latency maximum/],
@@ -298,6 +302,8 @@ test("a saved convergence pass validates, recomputes every reading and sets no w
     [(v) => { v.host = { ...v.host, cpu: "Synthetic test only" }; delete v.host.cpuModelSha256; }, /the pass's host has fields its schema does not save/],
     [(v) => { v.host.cpuModelSha256 = "Synthetic test only"; }, /the pass's host cpuModelSha256 is not a value it saves/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateConvergence(v), pattern); }
+  // 32 unfinished iterations, one per VU, reconcile and read.
+  { const v = structuredClone(s); v.cells[0].iterations = v.cells[0].requests - 32; assert.equal(v.cells[0].unrecorded, 0); validateConvergence(v); }
   // Every acknowledged create removed (four for the pass and four for each of its eight cells), with
   // none unacknowledged and nothing recovered, reads.
   assert.deepEqual([s.cleanup.created, s.cleanup.removed, s.cleanup.recovered, s.cleanup.unacknowledged], [36, 36, 0, []]);
@@ -409,6 +415,10 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cells[0].restarts.replaced = true; }, /restart claim contradicts/],
     [(v) => { delete v.cells[0].restarts.replaced; }, /restarts/],
     [(v) => { v.cells[0].requests += 1; v.cells[0].iterations += 1; }, /do not add up/],
+    // The fixed rate runs at most 1000 VUs, each with at most one unfinished iteration: no completed
+    // iteration at all, or 1001 unfinished, is refused.
+    [(v) => { v.cells[0].iterations = 0; }, /^Error: corten fixture page: more unfinished iterations than the load has VUs$/],
+    [(v) => { v.cells[0].iterations = v.cells[0].requests - 1001; }, /^Error: corten fixture page: more unfinished iterations than the load has VUs$/],
     [(v) => { v.finishedCommit = "e".repeat(40); }, /finishes at the commit/],
     [(v) => { v.cleanup.complete = false; }, /cleanup is not confirmed/],
     [(v) => { delete v.measurement.memoryClock; }, /the pass's CPU settings and measurement has fields/],
@@ -421,6 +431,8 @@ test("a soak reports memory at the start and end, p99 per interval and any resta
     [(v) => { v.cells[0].failedRequests = 270001; }, /aggregate failures/],
     [(v) => { v.cells[0].failedRequests = 1; }, /aggregate failures/],
   ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateSoak(v), pattern); }
+  // 1000 unfinished iterations, one per VU, reconcile and read.
+  { const v = structuredClone(s); v.cells[0].iterations = v.cells[0].requests - 1000; assert.equal(validateSoak(v).cells[0].rate.held, true); }
   // A stop, an OOM kill or an exit with no start after it is an observation, not restart evidence:
   // saved with no restart, it reads.
   for (const mutate of [(r) => { r.runningAtEnd = false; }, (r) => { r.oomKilled = true; }, (r) => { r.events = [{ action: "die", atSeconds: 5 }]; r.eventStream = "seen"; }]) {
@@ -674,11 +686,13 @@ test("a soak refuses a backlog of started iterations larger than the load's VUs 
   const forged = structuredClone(s);
   Object.assign(forged.cells[0], { windows: intervals(none), tail: 270001, p99: { first: null, last: null, max: null } });
   assert.throws(() => validateSoak(forged), /^Error: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight$/);
-  // A saved soak with those counts unrecorded: its cell reconciles (270,001 requests, none of them a
-  // finished iteration), and the reader refuses it at the first boundary rather than reading it held.
+  // A saved soak with those counts unrecorded (270,001 requests, none of them a finished iteration):
+  // the reader refuses it rather than reading it held, already on its totals, since 270,001 unfinished
+  // iterations are more than the load's 1000 VUs hold (the runner's summary above refuses the same
+  // counts at the first boundary).
   const unrecorded = structuredClone(s);
   Object.assign(unrecorded.cells[0], { windows: intervals(none), tail: 0, unrecorded: 270001, requests: 270001, iterations: 0, p99: { first: null, last: null, max: null } });
-  assert.throws(() => validateSoak(unrecorded), /^Error: more iterations were outstanding at the end of interval 0 than the load's 1000 VUs hold in flight$/);
+  assert.throws(() => validateSoak(unrecorded), /^Error: corten fixture page: more unfinished iterations than the load has VUs$/);
 });
 
 test("memory that cannot be read leaves the restart, stop and OOM observations in place", () => {
