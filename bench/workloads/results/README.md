@@ -9,7 +9,7 @@ The [group definitions](../README.md) describe the features each comparison requ
 |---|---|---|---|
 | Lean catalog page | [30b39d455](https://github.com/corten-run/corten/commit/30b39d455ad4c9840e1a4206cbd716f519448f1a) | 2026-11-21 | [Throughput, CPU, memory, latency, cold start and pass ranges](r24/catalog-page/report.md). Five of seven passed every phase. |
 | JSON API | | | No verified result yet |
-| Localized marketplace | | | No verified result yet |
+| Localized marketplace | [28cdc5bc7](https://github.com/corten-run/corten/commit/28cdc5bc7ec3a48cb0db7288f9d448becfdff81f) | 2026-11-26 | [Localized pages and locale-neutral JSON](r84/localized-marketplace/report.md). Eight adapters passed the feature gate; load failures are marked by phase. |
 | Mixed production | | | No verified result yet |
 | Fullstack browser | | | No verified result yet |
 | Client-heavy | | | No verified result yet |
@@ -23,3 +23,9 @@ contenders at **25,709** and **8,688 pages/s**, respectively. Express and FastAP
 64-user phases but recorded timeouts at 256 users. Their numbers remain visible in the
 report and are not used to rank them. The [evidence record](r24/catalog-page/provenance.json)
 includes the exact per-pass timeout counts and the source archive checksum.
+
+The localized marketplace rotates English, French, and German in one timed page profile
+per data source. JSON is locale-neutral. At 150 requests/s on the in-memory page, Corten
+recorded **0.26 ms** p95, **11.31 MiB** steady container memory, and **171 ms** to the first
+complete HTTP 200 from container start in the separate cold probe. The [evidence record](r84/localized-marketplace/provenance.json)
+binds the report to the collected archive. Connection-flood resistance was not measured.

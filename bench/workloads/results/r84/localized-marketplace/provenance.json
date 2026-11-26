@@ -1,0 +1,18 @@
+{
+  "group": "localized-marketplace",
+  "fleetRound": "r84",
+  "nativeRound": "r84",
+  "measuredCommit": "28cdc5bc7ec3a48cb0db7288f9d448becfdff81f",
+  "startedAt": "2026-11-26T00:46:48.356Z",
+  "finishedAt": "2026-11-26T02:55:35.831Z",
+  "hardware": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
+  "placement": { "size": "c-8", "region": "sfo3", "onlineCpus": "0-7" },
+  "archiveSha256": "748eabc350e37fab5cc8501cd229f884821306984860d0732895f2996f85a408",
+  "archiveBytes": 11766279,
+  "archiveSummarySuffix": "/00-localized-marketplace-timing/native/summary.json",
+  "summarySha256": "20fe8f13dfec90d2a46587c2d65bd13264d8494ccc6326ef496351944bc19c8d",
+  "nativeReportSha256": "73d8ff4175b2962273d4c644b4a312ab36ac25e592b45e5d0eefacee341ad5cf",
+  "result": "Verified complete attempt with recorded contender failures",
+  "connectionFloodResistance": "not measured",
+  "archiveLocator": null
+}
