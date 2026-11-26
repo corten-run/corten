@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -15,20 +15,18 @@ fn dev_gives_the_app_the_port_its_flag_names_over_port() {
         // An app of its own for each run, so no run copies over a binary another started.
         seen.push(port_given(&base, &app(&base, at), args, &base.join(format!("port-{at}"))));
     }
-    // A port is read only once `corten dev` has said its app exited, so with every port read
-    // nothing is left running in the directory and it is removed. Otherwise a child may still be
-    // at work there, and the directory is kept and named. A failed removal is reported after the
-    // assertions, so it does not hide what the runs found.
-    let removed = seen.iter().all(|(port, _)| port.is_some()).then(|| std::fs::remove_dir_all(&base));
-    for ((args, expected), (port, said)) in cases.iter().zip(&seen) {
-        assert_eq!(
-            port.as_deref(),
-            Some(*expected),
-            "corten dev {args:?} with PORT=4500 said:\n{said}\n(kept {})",
-            base.display()
-        );
+    // A port is read only once `corten dev` has said its app exited, so with every port read and
+    // every `corten dev` seen to exit nothing is left running in the directory and it is removed.
+    // Otherwise a child may still be at work there, and the directory is kept and named. A failed
+    // removal is reported after the assertions, so it does not hide what the runs found.
+    let done = seen.iter().all(|(port, _, stopped)| port.is_some() && stopped.is_ok());
+    let removed = done.then(|| std::fs::remove_dir_all(&base));
+    for ((args, expected), (port, said, stopped)) in cases.iter().zip(&seen) {
+        let kept = base.display();
+        assert_eq!(port.as_deref(), Some(*expected), "corten dev {args:?} with PORT=4500 said:\n{said}\n(kept {kept})");
+        assert!(stopped.is_ok(), "corten dev {args:?}: {stopped:?} (kept {kept})");
     }
-    removed.expect("every run read its port").expect("removing the test's directory");
+    removed.expect("every run read its port and stopped").expect("removing the test's directory");
 }
 
 /// An argument `corten dev` does not take is refused before Cargo runs, so a misspelled flag
@@ -55,8 +53,9 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
             break Some(status);
         }
         if start.elapsed() > Duration::from_secs(30) {
-            let _ = dev.kill();
-            let _ = dev.wait();
+            // A run that took the argument: stopped, or said not to have stopped.
+            let stopped = stop(&mut dev);
+            assert!(stopped.is_ok(), "corten dev --prot 4000 ran on: {stopped:?} (kept {})", base.display());
             break None;
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -82,7 +81,11 @@ fn stand_in(name: &str) -> PathBuf {
     let base = (0..)
         .map(|attempt| {
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
-            std::env::temp_dir().join(format!("corten-dev-{name}-{}-{nanos}-{attempt}", std::process::id()))
+            // Absolute, so the paths given to `corten dev`, which runs in another directory, name
+            // the same files whatever `TMPDIR` says.
+            std::path::absolute(std::env::temp_dir())
+                .unwrap()
+                .join(format!("corten-dev-{name}-{}-{nanos}-{attempt}", std::process::id()))
         })
         .find(|base| match std::fs::create_dir(base) {
             Ok(()) => true,
@@ -111,8 +114,9 @@ fn app(base: &Path, at: usize) -> PathBuf {
 }
 
 /// Runs `corten dev` with `args` until the app it starts has written its `PORT` to `out` and
-/// `corten dev` has said the app exited: that port, and what `corten dev` wrote to stderr.
-fn port_given(base: &Path, root: &Path, args: &[&str], out: &Path) -> (Option<String>, String) {
+/// `corten dev` has said the app exited: that port, what `corten dev` wrote to stderr, and whether
+/// `corten dev` was seen to exit once stopped ([`stop`]).
+fn port_given(base: &Path, root: &Path, args: &[&str], out: &Path) -> (Option<String>, String, Result<(), String>) {
     let said = out.with_extension("stderr");
     let mut dev = Command::new(env!("CARGO_BIN_EXE_corten"))
         .arg("dev")
@@ -139,7 +143,22 @@ fn port_given(base: &Path, root: &Path, args: &[&str], out: &Path) -> (Option<St
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let _ = dev.kill();
-    let _ = dev.wait();
-    (port, std::fs::read_to_string(&said).unwrap_or_default())
+    let stopped = stop(&mut dev);
+    (port, std::fs::read_to_string(&said).unwrap_or_default(), stopped)
+}
+
+/// Stops `child` and waits at most 5 seconds to see it exit: an error when it was not seen to,
+/// rather than a wait with no end.
+fn stop(child: &mut Child) -> Result<(), String> {
+    // A child that has exited already refuses the kill; whether it exited is what is looked at.
+    let killed = child.kill();
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if start.elapsed() < Duration::from_secs(5) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => return Err(format!("not seen to exit 5 s after it was stopped (kill: {killed:?})")),
+            Err(error) => return Err(format!("its exit could not be read: {error} (kill: {killed:?})")),
+        }
+    }
 }
