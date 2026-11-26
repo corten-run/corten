@@ -1398,7 +1398,11 @@ it last of eight
 (counted over a socket at `5c7b006dc`, each build in turn, each figure the
 difference of the two builds' medians of three runs, with main built a
 second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
-55; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+55; [design Choice 28](../design.md#choice-fixed-stages)). Since its name is read sixteen bytes at a
+look, that is 85 more with `Host` first (0.75% of an unstaged request; 84 and 0.51% through the
+stages), 227 with it second and 286 with it last of eight, most of that for a later line the
+two searches for it; an app that names its hosts pays 2 to 9 fewer than before (`b52f57475`
+against `fca4ccd58` and main, counted the same way). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 

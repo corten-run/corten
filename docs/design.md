@@ -2616,6 +2616,39 @@ rules something out.
     read of the names in turn, for its mark, and then by the hashed search. So half a percent of
     such a request (64 of an unstaged one's 12,709) is not reached by a reader that looks at
     every byte, and one that looked at fewer would answer a `Host` that is none.
+    Read again at `b52f57475` for
+    [#2115 The Host check in #2037 costs an app that answers any host 111 to 312 instructions a request, and its cycles miss is not yet told apart from code arrangement](https://github.com/corten-run/corten/issues/2115):
+    a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,
+    `shop.example`) is read in line as its first and last eight bytes, which the compiler joins
+    into one look at sixteen; a longer one is read sixteen at a look out of line, and any other
+    name by the table as before; and the check at a route that says `unstaged` decides once
+    whether the app holds names, so the reader of an app that answers to any host holds none.
+    Counted over a socket against main and this change's base, the head of
+    [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)
+    (below), an unstaged request to an app that answers to any host costs 85 more than main
+    with `Host` first (0.75%), 227 with it second and 286 with it last of eight, where the base
+    cost 112, 255 and 312; a `GET` through the stages 84 (0.51%), 227 and 283, where it cost
+    102, 244 and 302; and a request to an app that names its hosts costs 2 to 9 fewer than the
+    base. Half a percent of the unstaged request (56) is still not reached, and what is left is
+    a read of every byte and the call to it. Of the 94 instructions the check runs for
+    `localhost:8080` first, by callgrind's count of each instruction, 11 are the call, 3 choose
+    the reader with no names, 10 find the line, 3 see that the target names no host, 8 look at
+    the value's shape (empty, `[`, its length), 35 take the port off the end, a byte at a time,
+    and 24 read the name, sixteen bytes in one look; the server's call counts 8 fewer than
+    main's. The port and the name come to 59, past half a percent on their own. With `Host` on
+    a later line the 140 to 200 more are the two searches for it that the check before this one
+    already made (the server's read of the names for its mark, 66 with it last of eight, and the
+    hashed one, about 130), which this change leaves as they were. Tried and not kept, each an
+    uncommitted variant counted once beside the build it changed: the check called in line where
+    the route reads the request, which took 14 more from an unstaged request (11,334 against
+    11,348) and added 38 to 39 to every request through the stages counted (16,671 against 16,633 in
+    an app that answers to any host, 16,757 against 16,718 in one that names its hosts), since
+    the compiler then called `HeaderMap::get` in the stages' handler in place of putting it in
+    line there: code arrangement, not work the check does; the stages' check deciding once as
+    well, 6 to 7 more through the stages; the port's last eight bytes read at once as one word,
+    0 to 3 fewer, which did not earn its 25 lines; and the later lines read in turn, the next
+    seven names and then the hashed search, 69 to 70 fewer with `Host` second and 15 to 16 more
+    with it last of eight, as before.
     The refusals stay. The three of `Host` are what HTTP requires, which is correctness and comes
     before the count (the README's Values), and a route that skipped them would answer a request
     with two `Host` lines that every other route refuses. The three by choice cost nothing beside
@@ -2626,7 +2659,7 @@ rules something out.
     was for a request whose first header line is `Host` in an app that names its hosts, the lane's
     and step 4's 98 and 94 still counted against it. For a request with `Host` on a later line or
     none it moves by what the refusals cost, the 19 to 60 counted, and in an app that answers to any
-    host by the 111 to 311 counted, which is the read of `Host` every other app paid already (about
+    host by the 85 to 286 counted since `b52f57475` (111 to 311 at `5c7b006dc`), which is the read of `Host` every other app paid already (about
     400 of the host check's 494) come to it for the refusals; no further in either. The harness the
     bound's counts came from is not in the repository and was not run for this change, so what an
     unstaged route counts there now is not known; by the counts that were taken it is less than it
@@ -2820,7 +2853,26 @@ rules something out.
     fewer in one count and none in the next; and the later lines read in turn for `Host` in place of
     the hashed search, which took 70 to 80 from a request with `Host` second and 18 from one with it
     last of eight and added 12 to every request with it first, or, held out of line, added about 80
-    to one with it last of eight); measured (callgrind, release, three runs each, the stages written as combinators
+    to one with it last of eight); measured (callgrind, release, jemalloc, rustc 1.100.0 and
+    valgrind 3.24.0 on Debian 13, a request counted as callgrind's collection over 1,000
+    requests on one keep-alive connection after 240 it does not count, a bench app the
+    repository does not hold, `Host: localhost:8080` first, after an `Accept` line and last of a
+    browser's eight, the any-host reader at `b52f57475` against its base `fca4ccd58`, main
+    `ba6a7fe56` and main built a second time as the control, each built from the same path, the
+    four counted one after another for each request and that three times, median, every build's
+    three runs within 2 of each other and the control within 1 of main: an unstaged route in an
+    app that answers to any host 11,352, 12,081 and 16,989 with `Host` first, second and last of
+    eight, against the base's 11,379, 12,109 and 17,015 and main's 11,267, 11,854 and 16,703;
+    in one that names its hosts 11,434, 12,163 and 17,070 against 11,443, 12,172 and 17,079 and
+    main's 11,567, 12,154 and 17,025; a `GET` through the stages in an app that answers to any
+    host 16,637, 17,507 and 22,795 against 16,655, 17,525 and 22,814 and main's 16,553, 17,281
+    and 22,511; in one that names its hosts 16,718, 17,588 and 22,876 against 16,720, 17,590 and
+    22,878 and main's 16,855, 17,583 and 22,835; allocations the same in the three builds, 13.64
+    a request at the unstaged route and 18.60 through the stages with `Host` first; in process,
+    `tests/router_cost.rs`, the run of 1,200 less the run of 200 over 1,000, the three in turn
+    three times, every run within 1: an unstaged route 5,387 against 5,392 and main's 5,332, and
+    the parameter route through the stages 11,764 against 11,764 and 11,716. No cycles were
+    counted, and no control that shares no code with Corten); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -2910,8 +2962,8 @@ rules something out.
     with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
     through its lane, 7,030 and 7,076 since step 4), and over what its host check has cost
     since it refuses what HTTP does not allow (`5c7b006dc`: 19 to 49 for a request whose first
-    header line is not `Host`, and in an app that answers to any host 111 with `Host` first and
-    311 with it last of eight), when a control that shares no code with
+    header line is not `Host`, and in an app that answers to any host 85 with `Host` first and
+    286 with it last of eight since `b52f57475`), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -2955,7 +3007,10 @@ rules something out.
     when a stage comes to read something of an answer or its request that the pass's two tests
     cannot vary, so that nothing would hold the two paths equal.
 
-    Last checked: 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
+    Last checked: 2026-11-25, the any-host reader at `b52f57475` against `fca4ccd58` and main
+    `ba6a7fe56` built twice, callgrind over a socket on the same kind of bench app and in process
+    with `tests/router_cost.rs`, rustc 1.100.0, valgrind 3.24.0 (no cycles under load measured
+    here either); before that 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
     `c46092aeb`, against main built again and against `68057e40d`, callgrind over a socket on a
     bench app the repository does not hold (the next check writes its own: one keep-alive
     connection, a `GET` to a route that says `unstaged` and to routes through the stages, with `Host: localhost` and its port first,
