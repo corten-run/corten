@@ -11,7 +11,7 @@ import test from "node:test";
 import { createProviderEngine as providerTransport, isSettledAccountFailure, isSettledCatalogFailure } from "./cloud-engine-test-fixture.mjs";
 import { providerTransport as workerTransport } from "./cloud-provider.mjs";
 import { context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
-import { fleetCatalogCommand, preloginUserData, tags } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetRegion, preloginUserData, tags } from "./cloud-contract.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -88,11 +88,12 @@ test("placement catalog retains both directions for supported candidates and dro
   const sizes = [
     { slug: "c-8", available: true, regions: ["nyc1", "blr1", "lon1"] },
     { slug: "c-16", available: true, regions: ["sfo2"] },
+    { slug: "c-32", available: true, regions: ["sfo2"] },
     { slug: "c-4", available: true, regions: ["lon1"] },
   ];
   const regions = [
     { slug: "sfo3", available: true, sizes: [] },
-    { slug: "sfo2", available: true, sizes: ["c-16"] },
+    { slug: "sfo2", available: true, sizes: ["c-16", "c-32"] },
     { slug: "lon1", available: true, sizes: ["c-8", "c-4"] },
     { slug: "blr1", available: true, sizes: ["c-8"] },
     { slug: "nyc1", available: true, sizes: ["c-8"] },
@@ -106,10 +107,36 @@ test("placement catalog retains both directions for supported candidates and dro
   } });
   const result = await run([...fleetCatalogCommand, "--context", context]);
   assert.deepEqual(JSON.parse(result.stdout), {
-    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1]],
+    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1], sizes[2]],
     regions: [regions[0], regions[1], { ...regions[2], sizes: ["c-8"] }, regions[3]],
   });
   assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200", "/v2/regions?page=1&per_page=200"]);
+});
+
+test("an unusable optional c-32 offer does not hide default, catalog or c-16 placements", async () => {
+  for (const row of [
+    { slug: "c-32", available: true },
+    { slug: "c-32", available: true, regions: [null] },
+    { slug: "c-32", available: "true", regions: ["sfo2"] },
+  ]) {
+    const { sizes, regions } = syntheticPlacement();
+    sizes.push(row);
+    regions.find((entry) => entry.slug === "sfo2").sizes.push("c-32");
+    const run = providerTransport({ repo: resolve("."), createMode: null, spawn, request({ method, path }) {
+      assert.equal(method, "GET");
+      const kind = path === "/v2/sizes?page=1&per_page=200" ? "sizes" : "regions";
+      assert.equal(path, `/v2/${kind}?page=1&per_page=200`);
+      const rows = kind === "sizes" ? sizes : regions;
+      return { status: 200, value: { [kind]: rows, meta: { total: rows.length } } };
+    } });
+    const projected = JSON.parse((await run([...fleetCatalogCommand, "--context", context])).stdout);
+    for (const mode of [{ group: "json-api" }, { group: "catalog-page" },
+      { group: "json-api", loadLayout: "json-c16-generator-v1" }]) {
+      assert.equal(fleetRegion(projected, "sfo3", { staged: true, ...mode }), "sfo3");
+    }
+    assert.throws(() => fleetRegion(projected, "sfo3", { staged: true, group: "json-api", loadLayout: "json-c32-generator-v1" }),
+      /missing or invalid fleet catalog entry: c-32/);
+  }
 });
 
 test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {

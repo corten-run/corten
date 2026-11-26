@@ -75,6 +75,7 @@ test("captured pre-create worker uses the real committed placements including bo
   for (const [group, mode, blockers] of [
     ["catalog-page", catalogFleetPlacement.loadLayout, []],
     ["json-api", jsonFleetPlacement.loadLayout, []],
+    ["json-api", "json-c32-generator-v1", []],
     ["live-delivery", "dedicated-lon1", []],
     ["hardening", "dedicated", []],
   ]) assert.deepEqual(await check(group, mode), blockers);
@@ -105,6 +106,27 @@ test("the opted-in JSON API c-16 layout widens only k6 and binds only the json-a
   for (const group of groupNames.filter((name) => name !== "json-api"))
     assert.throws(() => campaigns.bindGroupCampaign({ ...request, group }, "json-c16-generator-v1"), /unknown group placement/);
   assert.throws(() => campaigns.bindGroupCampaign(request, catalogFleetPlacement.loadLayout), /unknown group placement/);
+});
+test("only the declared JSON API c-32 arm can bind or replay a c-32 native partition", () => {
+  const request = { round: "r25", commit, group: "json-api" }, mode = "json-c32-generator-v1";
+  const plan = campaigns.bindGroupCampaign(request, mode), [b] = plan.bindings;
+  const [d] = campaigns.bindGroupCampaign(request).bindings;
+  validateCampaign(plan);
+  assert.deepEqual(b.host, { ...d.host, size: "c-32", region: "sfo2" });
+  for (const key of ["execution", "selection", "validation", "preparation"]) assert.deepEqual(b[key], d[key]);
+  assert.deepEqual(b.resources.requestedCpuEnv, { ...c16Env, JSON_API_LOAD_LAYOUT: mode, JSON_API_LOAD_CPUS: "4-23" });
+  assert.deepEqual(b.resources.expectedCpus, { ...d.resources.expectedCpus,
+    load: { ...d.resources.expectedCpus.load, quota: 20, cpuset: "4-23", args: ["--cpus", "20", "--cpuset-cpus", "4-23"] } });
+  assert.deepEqual(nativeControlPartition(b).cpus, { app: "1", load: "4-23", api: "2-3" });
+  for (const group of groupNames.filter((name) => name !== "json-api"))
+    assert.throws(() => campaigns.bindGroupCampaign({ ...request, group }, mode), /unknown group placement/);
+  for (const change of [(x) => { delete x.campaignMode; }, (x) => { delete x.host.size; },
+    (x) => { x.host.size = "c-16"; }, (x) => { delete x.resources.requestedCpuEnv.JSON_API_LOAD_LAYOUT; },
+    (x) => { x.resources.expectedCpus.load.cpuset = "4-31"; }]) {
+    const changed = structuredClone(plan); change(changed.bindings[0]);
+    assert.throws(() => nativeControlPartition(changed.bindings[0]), /c-32/);
+    assert.throws(() => validateCampaign(changed), /differs from fixed native bindings/);
+  }
 });
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
   const request = { round: "r25", commit, group: "json-api" };

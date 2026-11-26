@@ -30,8 +30,12 @@ test("fixed entry accepts one exact registry group, never app filters or overrid
     ...["catalog-page", "localized-marketplace", "mixed-production"].map((group) => ["--group", group, "--load-layout", "json-c16-generator-v1"]),
     ["--group", "json-api", "--placement", "json-c16-generator-v1"], ["--group", "json-api", "--load-layout", ""]])
     assert.throws(() => parseCampaignArgs([...args, ...tail]));
-  assert.deepEqual(parseCampaignArgs([...args, "--group", "json-api", "--load-layout", "json-c16-generator-v1"]),
-    { round: "r17", commit, stateRoot: "/bench/campaign", group: "json-api", loadLayout: "json-c16-generator-v1" });
+  for (const layout of ["json-c16-generator-v1", "json-c32-generator-v1"]) {
+    assert.deepEqual(parseCampaignArgs([...args, "--group", "json-api", "--load-layout", layout]),
+      { round: "r17", commit, stateRoot: "/bench/campaign", group: "json-api", loadLayout: layout });
+    assert.throws(() => parseCampaignArgs([...args, "--group", "catalog-page", "--load-layout", layout]), /unknown group placement/);
+    assert.throws(() => parseCampaignArgs([...args, "--group", "json-api", "--placement", layout]), /unknown group placement/);
+  }
   assert.deepEqual(parseCampaignArgs([...args, "--group", "catalog-page", "--load-layout", "c16-generator-v1"]),
     { round: "r17", commit, stateRoot: "/bench/campaign", group: "catalog-page", loadLayout: "c16-generator-v1" });
   for (const placement of ["dedicated-sfo2", "dedicated-lon1", "dedicated-blr1"]) {

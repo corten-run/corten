@@ -7129,16 +7129,33 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
-    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
-    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
-    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
-    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
-    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
-    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
-    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
-    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
-    count on one connection with glibc's allocator changed level by about 370 with no change to
+    Revisit when: a change to the connection task, whichever way it is declared, raises a plain
+    HTTP request by more than the budget [design Choice 76](#choice-counted-or-measured) holds a
+    counted change to, +0.5% of its base's instructions a request, on
+    [`bench/request-cost`](../bench/request-cost/README.md)'s `get`, `unstaged`, `pipeline` or
+    `text`, one request at a time or 16, with base and head counted the way
+    [Pull requests](../CONTRIBUTING.md#pull-requests), item 2.1, counts a counted change, which
+    the hosted `Request Cost` job does for every pull request that changes what a request is
+    built from, as a change to the connection task does (for a change declared measured the job
+    reports the counts and fails nothing, so the line is read from its summary; the line is
+    drawn from each change's own base and is not the fixed count it was until 2026-11-26, whose
+    history is in Last checked and in
+    [#2167 Choice 60's Revisit-when names a fixed count (17,557 instructions at one commit) that main has since fallen about 580 below, on a harness that is not in the repository](https://github.com/corten-run/corten/issues/2167);
+    the budget is 64 instructions on `unstaged` and about 95 on `get` by the counts of
+    [design Choice 76](#choice-counted-or-measured), and less on the cheaper rows, about 52 on
+    `pipeline` and about 41 on it at 16, so twenty to forty-five times the 2.1 accepted above
+    and on every row more than the 10 and the 30 turned down there: one change can add what was
+    refused then and not reopen this Choice, and the figure is that Choice's proposal and moves
+    with it; what changes
+    that each stay under the budget add up to this line does not see, and nothing reopens this
+    Choice for it: [design Choice 76](#choice-counted-or-measured) leans for that on
+    the trend, [`bench/placement/trend`](../bench/placement/trend/README.md), which reads
+    `main`'s cycles, not its instructions, against the last release and gates nothing, and on
+    the kit's counts a release takes of its candidate against the last release
+    ([RELEASING.md](../RELEASING.md#readiness-checkpoints)); the kit counts with jemalloc
+    preloaded, which is what a rise read with glibc's allocator was to be counted again with
+    before it was believed, since in `tests::server::what_a_request_over_tcp_costs` a count on
+    one connection with glibc's allocator changed level by about 370 with no change to
     what a request does; the 2.1 above is not a regression still to fix); a compiler or code
     change lets the one loop poll the plain task at what it cost before the metadata path, which
     removes the residual (the rerun of Last checked counts the two the same and cannot say whether
@@ -7166,7 +7183,25 @@ rules something out.
     the first session's binary of this change was built from `9060dfb2a` and the second's from
     `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
     that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
-    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again; 2026-11-26,
+    that harness once more, to see where the fixed count Revisit when then named stood (the
+    24,287.261 accepted here was the request's whole count on 2026-11-17 on the harness that is
+    not in the repository, the one built again reads the same commit about 1,214 lower, the
+    commits from there to `main` at `8d5160be2` lowered it by 5,302 more, and the connection's
+    wait for shutdown, polled only when it was woken, by 218 more, which gave 17,552.8 at
+    `9060dfb2a`, and the line was put at the top of what two sessions read there, about
+    17,557, which left 0 to 5 instructions over them, so it reopened this Choice for a
+    rise of a few instructions when it was written and for none under about 580 once `main`
+    was at `d15d3ac3a`): two sessions of three rounds, `9060dfb2a` 17,554.920 (range
+    17,554.778-17,556.058) and 17,554.916 (range 17,553.216-17,555.770), inside what 2026-11-25
+    read, and `main` at `d15d3ac3a` 16,972.596 (range 16,971.613-16,975.479) and 16,974.877
+    (range 16,972.395-16,975.306), about 580 under that count, and with jemalloc preloaded
+    16,000.617 and 16,001.631 against 15,412.503 and 15,414.189, where four of those twelve
+    readings lay about 43 from their build's level and moved no median (about what
+    [the kit's page](../bench/request-cost/README.md#how-a-number-is-read) gives for a count read
+    from totals at exit, as this harness reads one, when the clock's thread ends before the
+    process). Revisit when was
+    restated that day as each change's own budget, by the maintainer's decision.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
@@ -8049,9 +8084,11 @@ rules something out.
     each later build that names it is refused until the copy is stopped, by a refusal that
     names such a copy among what may hold the port. Nor both, the argument and
     the variable, which keeps each of those costs; `corten dev` made to read its `--port` as
-    this one is read, in the same change: the two commands read it differently (`--port=<n>`
-    is build's alone, and `dev` passes its value on to the app unchecked, a `0` included,
-    which the app binds as a free port), and that is left for a change of its own; a copy's status after `SIGTERM` read as the
+    this one is read, in the same change: the two commands read it differently then
+    (`--port=<n>` was build's alone, and `dev` passed its value on to the app unchecked, a `0`
+    included, which the app binds as a free port), and that was left for a change of its own,
+    since made: `dev` reads it with build's reader and refuses any other argument
+    ([#2046 corten dev `--port=<n>` is passed over without a word and the app starts on 3000; corten build takes both spellings](https://github.com/corten-run/corten/issues/2046)); a copy's status after `SIGTERM` read as the
     build's failure, which would stop the build in the third timing above when the copy that
     could not bind exits with an error's status, and would refuse an app that exits non-zero on
     `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
@@ -11310,7 +11347,9 @@ rules something out.
     budget and any win claimed in cycles, time or requests a second. The trend, `main` across
     placements against the last release, is the run
     [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
-    asks for, which nothing makes yet. It gates no pull request, for the reason
+    asks for: [`bench/placement`](../bench/placement/README.md#the-trend) has its plan, its
+    command and the page a run adds a row to, and no run has been made. It gates no pull
+    request, for the reason
     [design Choice 72](#choice-placement-runs) gives against gating a release: it reads every
     change since that release together and cannot attribute a cost to one.
 
@@ -11329,8 +11368,18 @@ rules something out.
     repository measures what a rise in a request's instructions costs it in cycles, so that a
     rise inside the budget costs under +1% is a bet too. Idle memory has a statistic of its
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
-    2,645 bytes a connection between runs: three runs a build, and a rise only when head's
-    median is above base's by more than base's three span. No run is taken again for its
+    2,645 bytes a connection between runs: three runs a build, and a rise only when the median
+    of head's growths of resident memory, in bytes, is above base's by more than the larger of
+    base's three span and one page. Resident memory is reported a page at a time, so base's
+    three can agree exactly and one page is the least step a run can show; one page is the
+    least allowed, the step of the reading, not a measured bound on its accuracy, and only over at
+    least as many connections as a page has bytes, so it is at most a byte a connection; a reading
+    over fewer decides nothing. The figures a
+    connection are rounded and do not decide it: on
+    [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
+    head read 1 byte a connection above base's three equal figures, which one page or two can
+    give, and the growths in bytes were not recorded
+    ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)). No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
@@ -11349,9 +11398,13 @@ rules something out.
     the changes that sentence names, and the author says why a change is of none of its kinds,
     which the review accepts, as a negative control's declaration is accepted. The trend reads
     what is left as it adds up (twenty costs at the budget are about 10% more instructions),
-    and does not exist yet; until it does, a release takes the kit's counts of its candidate
-    against the last release's tag ([RELEASING.md](../RELEASING.md#readiness-checkpoints)),
-    which anyone can take in minutes and which read instructions, not cycles. One kind on the
+    and no run of it has been made. A release takes the kit's counts of its candidate against
+    the last release's tag, which anyone can take in minutes and which read instructions, not
+    cycles, unless a row of the trend reads the commit of `main` that candidate is made from
+    against that tag with every workload read
+    ([RELEASING.md](../RELEASING.md#readiness-checkpoints)): a row of an earlier commit, of
+    another release or with a workload not read stands in for no count, and none does for a
+    release-preparation pull request that changes code a request runs. One kind on the
     list cannot be told from a diff, a future's size. The test `staged_page_future_sizes`
     prints the stage's and the handler's, the only futures any test in the repository sizes,
     so a change that edits an `async` body gives those two for base and head, and that a
@@ -11363,9 +11416,21 @@ rules something out.
     with a bound of +0.28%, one change in a reading that gated nothing.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
-    the simplest thing a hosted job can read
-    ([#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
-    asks for the job); a label is not, since a fork's author cannot set one. A change goes from
+    the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
+    one. The job
+    [#2112 No hosted job counts a pull request's instructions, allocations and idle memory a request against its base](https://github.com/corten-run/corten/issues/2112)
+    asked for now reads it: the `Request Cost` workflow counts a pull request that changes what
+    a request is built from against its merge base, on one runner, and holds the figures to
+    the rule ([the kit's page](../bench/request-cost/README.md#the-hosted-job)). So the line now
+    decides what the job does with a miss, and it stays; the job does not require it, and does
+    not confirm what a change declared measured then gives. The job counts; it cannot tell
+    from a diff a lock, a wake or a structure's layout, the kinds a count cannot judge, so the way is still the author's to
+    say and the review's to accept, and the line is what tells the job whether a miss fails
+    the change or is only reported: with `counted` a miss fails, with `measured` the counts
+    are reported and decide nothing, and with neither the job fails only on a miss and names
+    the line. The job reads the description from the event it was started by, and its green
+    check is counts of the pull request's own tree by its own kit, for a reviewer to read, not
+    an attestation by anything apart from the change. A change goes from
     counted to measured when a count sends it there. A pull request that declares a plan does
     not go from measured to counted, by item 2's rule that a declaration is never added or
     changed after a run to clear its result. A reading published under the rule as it stood
@@ -11392,8 +11457,11 @@ rules something out.
     result chosen; every edit to an `async` body measured, since any can change a future's
     size, which leaves the counted way nearly empty; a published reading deciding its pull
     request by whatever rule is in force when it merges, which lets a count clear a decided
-    miss; and a reading that was not decided keeping its pull request measured, for a reading
-    the rule no longer asks of such a change.
+    miss; a reading that was not decided keeping its pull request measured, for a reading
+    the rule no longer asks of such a change; and the line dropped now that a hosted job
+    counts, which leaves the job nothing to tell a change that is measured, and so must not
+    fail on its counts, from one that is counted, and leaves nobody saying a change is none of
+    the kinds a count cannot judge.
 
     Stands on: bet (a change of none of the listed kinds whose count stays inside the budget
     costs a request under +1% of its cycles, which nothing has measured, the figure being a
@@ -11405,12 +11473,27 @@ rules something out.
     which nothing sizes; a cost inside the budget on the kit's probe, whose handlers do nearly
     nothing, is inside it in an app, though the kit's page says a count is of one program's
     binary and never to be compared with another's; the kit's probe builds against the last
-    release's tag often enough for a release's count to be taken, which was not tried; and the
-    trend is made before counted costs add up past what a release can carry, no such run
-    having been made); measured (the kit's repeats as its page records them, 30 counts of one
+    release's tag often enough for a release's count to be taken, which was not tried; the
+    trend is made, weekly and before a release, before counted costs add up past what a
+    release can carry, its plan, command and page being in the placement kit and no such run
+    having been made; its threshold, `main` at least +2% over the release on a workload by the
+    lower bound of its cycles, is a proposal no reading stands behind and nobody has accepted,
+    the 2% above being of instruction counts between releases; and the placement kit's example
+    probe, on the two workloads the trend's plan takes from it, shows what costs around the
+    handler add up to, though two requests to one probe do not take every path a counted change
+    can cost on, and the release and `main` answer one of them differently, by a difference a
+    run records and nobody reviews, so part of what a run reads there is the answer and not
+    the path to it; and a rise of one page over base's three when they agree, at most a byte a
+    connection at the gate's settings, is too small a regression to refuse a change for, which
+    no reading has tested); measured (the kit's
+    repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
-    and 22 counts of four cases on a slower, loaded machine, none taken again here; the
+    and 22 counts of four cases on a slower, loaded machine, none taken again here; four runs
+    of the hosted job, on 4-CPU runners of three CPU models, with the same crates on both
+    builds, where the six counts a job of each of 13 rows spanned at most 1 instruction but
+    for one row of one run, `get`'s 3 of a budget of 91, and
+    the six runs a job of each idle reading 0 to 4 bytes a connection; the
     default band and the estimate of a reading across placements, which are
     [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
     not decide, so for a change this small the only cycles reading was across placements; a
@@ -11430,16 +11513,35 @@ rules something out.
     record them, whose count is the baseline, the changes before it not having been counted,
     or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
+    a rise of one page at the gate's settings is shown to repeat for a change, so the page let
+    pass hides a real regression;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; a release is made with no trend reading against the
+    last release counted inside the budget; the trend's first run with every workload read is
+    made, which shows what a run of its plan resolves and so informs a review of the threshold,
+    not what rise a release can carry; a run of the trend leaves a workload not read, whatever
+    its row gives as the reason (the probe does not build at the release's tag, the kit refuses
+    a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
+    does not resolve, a placement answers with another body), so nothing read what this Choice
+    leans on the trend to read; a release is
+    made with no trend reading against the
     one before it and no such count, so the guard this Choice leans on is not there; a future
     no test sizes is found to have grown under a counted change; repeats of one binary differ
     by more than a quarter of the budget in a case, so a count no longer resolves it; a placement
     run is read on the kit's probe, which its page says none has been, and shows what a few tens
-    of instructions between two commits are worth; a hosted job counts every pull request
-    against its base, so the line of the description can be checked or dropped; or a reading
+    of instructions between two commits are worth; the hosted job counts one binary more than
+    a quarter of the budget apart in a case, which fails no job and means its count no longer
+    resolves the budget there (two binaries of the same crates that differ so are where the
+    code was placed, which a count cannot tell from a change); the hosted job reads idle
+    memory to rise between two builds of the same crates, so it fails a change for what the
+    runner did (three runs a build drawn from one distribution read a rise in about one
+    comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
+    growths in 4,096-byte pages and base's span alone, and in about one in nineteen by those
+    growths with the one page allowed, on the same draws, at a spread of 1.5 bytes a
+    connection, each simulated, not a rate seen on runners, which the rule's idle statistic was
+    not chosen against); a job comes to tell the kinds a count cannot judge
+    from a diff, so the line says nothing the job does not know and can be dropped; or a reading
     across placements comes to cost what a count does, so cycles can be asked of every change.
 
     Last checked: 2026-11-25, the kit's page read at `3eb752d8e` for its repeats and its builds
@@ -11447,7 +11549,21 @@ rules something out.
     [design Choice 72](#choice-placement-runs) read at `9e209a32f` for the default band, the
     hours a reading across placements takes, the fourth run's 0.5% and the first run's reading
     of the kept answer's change; 2026-11-25, `crates` searched at `9e209a32f` for a test that
-    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found.
+    sizes a future (`size_of_val`), `staged_page_future_sizes` alone found; 2026-11-26, the
+    hosted job's runs on `651d61f71`, `28d9af174` and `20960f56d` against `1bef46229` and on
+    `1df3829c6` against `aa526350f`, each with its base's crates (valgrind 3.26.0, rustc
+    1.100.0): 62 runs of the kit each, none refused, in jobs of 4 minutes 7 seconds to
+    5 minutes 46, read from their summaries and their logs; 2026-11-26, the
+    trend's plan resolved with the last release at `a833b4e3e` (the tag `v0.2.0`) and `main` at
+    `28cdc5bc7`, in a Debian 13 container the placement kit's `setup.sh` prepared (the date is
+    that run's, in UTC): the kit's example probe built on both sides with the plan's toolchain
+    and build command, `unstaged` answered the same on both, and `plain` differed in its
+    `corten-shell` header, the script hash of its policy and its body, 6,124 bytes on each,
+    all of it in a dry run of the trend's command with a stand-in for `perf`, which reads
+    nothing, no run having been made; 2026-11-26, that dry run made again with `main` at
+    `aa526350f` and the command as it reads after its first review: both sides built, the
+    same difference on `plain` and none on `unstaged`, and each of the 36 placements answered
+    with the bodies the check had recorded for its sides, by their digests.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

@@ -4,11 +4,173 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { fixture, stat } from "./test-fixtures/host-lifetime-observer.mjs";
+import { inspectBrowserParticipants } from "./host-lifetime.mjs";
+import { fixture, missing, stat } from "./test-fixtures/host-lifetime-observer.mjs";
 
 const id = "4f".repeat(32), other = "5e".repeat(32), image = "sha256:" + "b".repeat(64);
 const scope = (container) => `/system.slice/docker-${container}.scope`;
 const zero = "0001-01-01T00:00:00Z";
+
+async function exitTransition(t, { change = () => {}, path = "stat", code = "ENOENT",
+  finishDelay = 0, wakeOffset = 0, inspectMs = 0 } = {}) {
+  let faults = 0, phase = 0, missingAt;
+  const procReads = [], inspections = [], waits = [];
+  const f = await fixture(t, [], true, () => { faults++; });
+  Atomics.wait.mock.mockImplementation((_array, _index, _value, ms) => {
+    waits.push(ms);
+    f.clock += ms + wakeOffset;
+    return "timed-out";
+  });
+  const started = new Date(Date.now() - 5000).toISOString();
+  const running = { Id: id, Image: image, RestartCount: 0, State: {
+    Status: "running", Running: true, Pid: 5000, Paused: false, Restarting: false,
+    OOMKilled: false, Dead: false, ExitCode: 0, StartedAt: started, FinishedAt: zero,
+  } };
+  const stopped = structuredClone(running);
+  Object.assign(stopped.State, { Running: false, Pid: 0, Status: "removing", ExitCode: 137 });
+  f.docker = (argv) => {
+    if (argv.includes("ls")) return phase === 3 ? "" : id;
+    assert.deepEqual(argv.slice(-3), ["container", "inspect", id]);
+    if (phase !== 1) return JSON.stringify([phase === 2 ? stopped : running]);
+    const elapsed = f.clock - missingAt;
+    const row = structuredClone(inspections.length && elapsed >= finishDelay ? stopped : running);
+    inspections.push([elapsed, row.State.Status]);
+    f.clock += inspectMs;
+    return JSON.stringify((inspections.length > 1 ? change(row, inspections.length) : undefined) ?? [row]);
+  };
+  f.override = (name) => {
+    const root = "/sys/fs/cgroup" + scope(id);
+    if (name === root + "/cgroup.procs") return "5000\n";
+    if (name === root + "/cpu.max") return "100000 100000\n";
+    if (name === root + "/memory.max") return "100\n";
+    if (!name.startsWith("/proc/5000/")) return;
+    if (phase === 1) {
+      procReads.push(name);
+      if (name === "/proc/5000/" + path) throw missing(code);
+    }
+    if (name.endsWith("/cgroup")) return "0::" + scope(id) + "\n";
+    if (name.endsWith("/stat")) return stat(5000);
+  };
+  f.clock += 100; await f.tick();
+  const live = f.samples().at(-1);
+  assert.ok(live.docker.participants[0].kernel);
+  phase = 1;
+  missingAt = f.clock += 100;
+  stopped.State.FinishedAt = new Date(Date.now() + finishDelay).toISOString();
+  await f.tick();
+  const exit = f.samples().at(-1);
+  phase = 2; f.clock = missingAt + 100; await f.tick();
+  const removing = f.samples().at(-1);
+  phase = 3; f.clock += 100; await f.tick();
+  const absent = f.samples().at(-1);
+  const replay = await f.finish();
+  return { f, faults, inspections, waits, procReads, live, exit, removing, absent, stopped, replay };
+}
+
+test("r95 exit: a missing opening stat followed by the same removing container is a stopped sample", async (t) => {
+  const { f, faults, inspections, waits, procReads, exit, stopped } = await exitTransition(t);
+  assert.deepEqual(f.terminal.firstDockerGap, undefined, "the exit does not create a sticky Docker gap");
+  assert.equal(faults, 0);
+  assert.deepEqual(inspections, [[0, "running"], [0, "removing"]]);
+  assert.deepEqual(waits, []);
+  assert.deepEqual(procReads, ["/proc/5000/stat"]);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [], participants: [{
+    startedAt: exit.at, endedAt: exit.at, container: {
+      id, imageId: image, restartCount: 0, state: stopped.State,
+    }, kernel: null,
+  }] });
+});
+
+test("r95 exit: a +60 ms finish replays in the original sample after one bounded pause", async (t) => {
+  const { f, faults, inspections, waits, procReads, live, exit, removing, absent, stopped, replay } =
+    await exitTransition(t, { finishDelay: 60, inspectMs: 2 });
+  assert.deepEqual(inspections, [[0, "running"], [2, "running"], [70, "removing"]]);
+  assert.deepEqual(waits, [66]);
+  assert.deepEqual(procReads, ["/proc/5000/stat"]);
+  assert.equal(faults, 0);
+  assert.equal(f.terminal.firstDockerGap, undefined);
+  assert.equal(Object.hasOwn(f.terminal, "dockerStartupRechecks"), false);
+  assert.equal(removing.at - exit.at, 100);
+  assert.equal(absent.at - exit.at, 200);
+  assert.equal(Date.parse(stopped.State.FinishedAt) - exit.at, 60);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [], participants: [{
+    startedAt: exit.at, endedAt: exit.at + 72, container: {
+      id, imageId: image, restartCount: 0, state: stopped.State,
+    }, kernel: null,
+  }] });
+  assert.deepEqual(removing.docker.participants[0].container, exit.docker.participants[0].container);
+  assert.deepEqual(absent.docker, { inventory: [], participants: [], gaps: [] });
+  const sampleWindow = { startedAt: live.at, endedAt: exit.docker.participants[0].endedAt };
+  const subject = { schema: "native-browser-host-subject/v2", executionWindow: sampleWindow, participants: [{
+    id, imageId: image, role: "application", window: sampleWindow, terminal: {
+      ...exit.docker.participants[0].container, state: { ...stopped.State, Status: "exited" },
+      limits: { NanoCpus: 1e9, Memory: 100 },
+    },
+  }] };
+  assert.equal(replay.status, "verified");
+  assert.equal(inspectBrowserParticipants(subject, replay), true);
+  replay.samples.find((s) => s.at === removing.at).docker.participants[0].container.state.FinishedAt = zero;
+  subject.participants[0].terminal.state.FinishedAt = zero;
+  assert.throws(() => inspectBrowserParticipants(subject, replay));
+});
+
+test("r95 exit: an exited inspect can also corroborate the missing opening stat", async (t) => {
+  const { f, faults, inspections, waits, exit } = await exitTransition(t, {
+    change: (c) => { c.State.Status = "exited"; },
+  });
+  assert.equal(faults, 0);
+  assert.equal(inspections.length, 2);
+  assert.deepEqual(waits, []);
+  assert.equal(f.terminal.firstDockerGap, undefined);
+  assert.equal(exit.docker.participants[0].container.state.Status, "exited");
+  assert.equal(exit.docker.participants[0].kernel, null);
+});
+
+for (const [label, options, expectedInspections, stage = "process-identity-open"] of [
+  ["disappears", { change: () => [] }, 2],
+  ["inspect errors", { change: () => { throw missing("EIO"); } }, 2],
+  ["has a different ID", { change: (c) => { c.Id = other; } }, 2],
+  ["has a different image", { change: (c) => { c.Image = "sha256:" + "c".repeat(64); } }, 2],
+  ["has a different start", { change: (c) => { c.State.StartedAt = c.State.FinishedAt; } }, 2],
+  ["has a different restart count", { change: (c) => { c.RestartCount++; } }, 2],
+  ["is running", { change: (c) => { Object.assign(c.State, { Running: true, Status: "running", Pid: 5000 }); } }, 2],
+  ["is restarting", { change: (c) => { c.State.Restarting = true; } }, 2],
+  ["still has a PID", { change: (c) => { c.State.Pid = 5000; } }, 2],
+  ["has a nonterminal status", { change: (c) => { c.State.Status = "created"; } }, 2],
+  ["has a zero finish", { change: (c) => { c.State.FinishedAt = zero; } }, 2],
+  ["has an impossible date", { change: (c) => { c.State.FinishedAt = "2026-02-29T00:00:00Z"; } }, 2],
+  ["has a finish before the sample", { change: (c) => { c.State.FinishedAt = c.State.StartedAt; } }, 2],
+  ["has a future finish", { change: (c) => { c.State.FinishedAt = "2026-11-26T01:00:00Z"; } }, 2],
+  ["has an inaccessible stat", { code: "EACCES" }, 1],
+  ["loses a later proc read", { path: "cgroup" }, 1, "process-cgroup-open"],
+]) test(`r95 exit: ${label} remains a gap`, async (t) => {
+  const { f, faults, inspections, waits, exit } = await exitTransition(t, options);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
+  assert.deepEqual(f.terminal.firstDockerGap, { stage, code: options.code ?? "ENOENT" });
+  assert.equal(faults, 1);
+  assert.equal(inspections.length, expectedInspections);
+  assert.deepEqual(waits, []);
+});
+
+for (const [label, options, expectedInspections, expectedWaits] of [
+  ["the pause oversleeps the deadline", { finishDelay: 60, wakeOffset: 6 }, 2, [70]],
+  ["the pause wakes too early", { finishDelay: 60, wakeOffset: -20 }, 2, [70]],
+  ["the first reinspection spends the deadline", { finishDelay: 74, inspectMs: 40 }, 2, []],
+  ["the first reinspection shows a different running PID", { finishDelay: 60,
+    change: (c) => { c.State.Pid++; } }, 2, []],
+  ["the first reinspection has malformed running state", { finishDelay: 60,
+    change: (c) => { delete c.State.OOMKilled; } }, 2, []],
+  ["the final inspect is still running", { finishDelay: 95 }, 3, [70]],
+  ["the final inspect shows a different generation", { finishDelay: 60,
+    change: (c, attempt) => { if (attempt === 3) c.RestartCount++; } }, 3, [70]],
+]) test(`r95 exit: preserves the gap when ${label}`, async (t) => {
+  const { f, faults, inspections, waits, exit } = await exitTransition(t, options);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
+  assert.deepEqual(f.terminal.firstDockerGap, { stage: "process-identity-open", code: "ENOENT" });
+  assert.equal(faults, 1);
+  assert.equal(inspections.length, expectedInspections);
+  assert.deepEqual(waits, expectedWaits);
+});
 
 // Each attempt reads the root stat at open, twice in the census and at close.
 async function transition(t, mode) {
