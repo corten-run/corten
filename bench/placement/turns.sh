@@ -37,11 +37,15 @@
 # not readable when they report none, or a diff or cmp that cannot compare (status 2), fails the
 # placement. Every curl is run with --disable, so no curl configuration of HOME's (a
 # retry, a header) changes a request or how long it may take, and with --noproxy '*', so no proxy
-# of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1.
+# of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1. Every curl has a bound:
+# a second for the check that nothing accepts on the two ports before the start, each readiness
+# request and each check of a port after a stop, and 10 s for an answer, so a server that takes a
+# connection and never answers holds turns.sh, and a signal it has held off, no longer than that.
 # Every server is run by serve.mjs, as verify.sh runs its base's, and stopped by it alone (TERM,
 # and KILL 5 s later for one that ignores TERM); turns.sh waits about 15 s at most for a stop and
-# then fails, saying the cleanup is unconfirmed, and fails too if anything still accepts on the
-# server's port after it, and a turns.sh killed outright still has its servers stopped.
+# then fails, saying the cleanup is unconfirmed, and, once every server it is stopping has ended,
+# fails too if anything still accepts on any of their ports, and a turns.sh killed outright still
+# has its servers stopped (by serve.mjs, after turns.sh has ended).
 # When A and B answer differently and no difference is expected, both servers are stopped first,
 # and only once both have ended and nothing takes a connection on either port does turns.sh say
 # "turns: <workload>: A and B answer differently, both servers stopped and their ports closed" and
@@ -49,7 +53,7 @@
 # Any other failure exits 1, or with the status of the command that failed (set -e), so it is that
 # line and status 4 together that say the answers differ and the cleanup after them is confirmed.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,50p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,54p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -59,8 +63,11 @@ rm -rf "$ans"; mkdir -p "$ans"; : >"$raw"
 fail() { echo "turns: $workload: $*" >&2; exit 1; }
 
 aport=18081; bport=18082
+# Before any start, nothing takes a connection on either port: curl's 7 is a refused one, and
+# anything else (an answer, or one taken and never answered, 28) is something already there.
 for port in $aport $bport; do
-    ! curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$port/" </dev/null || fail "something already answers on $port"
+    cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$port/" </dev/null || cst=$?
+    [ $cst = 7 ] || fail "something already accepts on $port (curl status $cst)"
 done
 : >"$out/serve-A.log"; : >"$out/serve-B.log"
 # Each server is run by serve.mjs, which starts it as its own child, writes its process number to
@@ -81,8 +88,8 @@ done
 # A trapped signal ends a wait early, with a status above 128, so a wait it woke is made again.
 # serve.mjs is run with an environment of PATH and HOME alone, and the wait for it is bounded:
 # about 15 s, more than its own 10 s at most. If it has not ended by then, turns.sh fails, saying
-# the cleanup is unconfirmed, and signals nothing. After each stop nothing may accept a connection
-# on the server's port (one connect, at most a second).
+# the cleanup is unconfirmed, and signals nothing. After a stop, once every server it stops has
+# ended, nothing may accept a connection on any of their ports (one connect each, at most a second).
 a=; b=; sup_A=; sup_B=; late=
 hold() { woke=; trap 'late=1; woke=1' HUP INT PIPE TERM; }
 release() { trap 'exit 1' HUP INT PIPE TERM; [ -z "$late" ] || exit 1; }
@@ -102,9 +109,9 @@ start() { # <A|B> <port> <binary>. Its environment is PATH, HOME, PORT and BIN a
 halt() { # <A|B>...: stops those servers that run, together, within about 15 s
     hold
     for v; do if [ "$v" = A ]; then exec 5>&-; else exec 6>&-; fi; done
-    st=0; n=0
+    st=0; n=0; probe=
     for v; do
-        if [ "$v" = A ]; then s=$sup_A; sup_A=; a=; hport=$aport; else s=$sup_B; sup_B=; b=; hport=$bport; fi
+        if [ "$v" = A ]; then s=$sup_A; sup_A=; a=; else s=$sup_B; sup_B=; b=; fi
         [ -n "$s" ] || continue
         rm -f "$out/serve-$v.pid"
         # kill -0 sends no signal: it asks whether the shell's own child, serve.mjs, is still
@@ -121,8 +128,15 @@ halt() { # <A|B>...: stops those servers that run, together, within about 15 s
             [ $sst -gt 128 ] && [ -n "$woke" ] || break
         done
         [ $sst = 0 ] || { echo "turns: $workload: serve.mjs, stopping $v's server, ended with status $sst" >&2; st=1; continue; }
-        # The server serve.mjs stopped has ended, and its listening socket with it: curl's 7 is a
-        # refused connection, and anything else is something that still accepts one.
+        probe="$probe $v"
+    done
+    # The servers serve.mjs stopped have ended, and their listening sockets with them: curl's 7 is
+    # a refused connection, and anything else is something that still accepts one. No port is
+    # checked until every stop has ended: one checked while another server's stop still runs (5 s
+    # and more for one that ignores TERM) could look closed and be opened again in that time, by
+    # something its START forked, say, and turns.sh end with it listening.
+    for v in $probe; do
+        if [ "$v" = A ]; then hport=$aport; else hport=$bport; fi
         cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$hport/" </dev/null || cst=$?
         [ $cst = 7 ] || { echo "turns: $workload: something still accepts on $hport after $v's server was stopped (curl status $cst): START must be, or exec, the server that listens, not start it and leave it" >&2; st=1; }
     done
@@ -133,7 +147,7 @@ trap 'halt A B || :' EXIT
 trap 'exit 1' HUP INT PIPE TERM
 ready() { # <A|B> <port>: that server answers, its process number from serve.mjs is then in $a or $b, and it is on the server's CPU
     i=0
-    until [ -f "$out/serve-$1.pid" ] && curl --disable --noproxy '*' -s -o /dev/null "http://127.0.0.1:$2/" </dev/null 5>&- 6>&-; do
+    until [ -f "$out/serve-$1.pid" ] && curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$2/" </dev/null 5>&- 6>&-; do
         i=$((i + 1)); [ $i -lt 100 ] || fail "nothing answers on $2"; sleep 0.1
     done
     p=$(cat "$out/serve-$1.pid")

@@ -441,7 +441,9 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
       continue;
     }
     failed = step(`check-${w}-answers`, "sh", ["-c", ANSWERS, "sh", work]);
-    if (failed && (failed.status === 124 || failed.status === 137)) { why[w] = `the two sides' answers were not compared within a placement's time limit, ${t.plan.placementSeconds} s, and the check was stopped`; continue; }
+    // Stopped at its deadline, the check may have compared the answers already (diff.txt can be
+    // there) but did not finish: its servers' stop is not confirmed, so nothing it left is read.
+    if (failed && (failed.status === 124 || failed.status === 137)) { why[w] = `the check of the two sides' answers did not finish within a placement's time limit, ${t.plan.placementSeconds} s, and was stopped, its servers' cleanup unconfirmed`; continue; }
     // A comparison that found the answers the same left a diff.txt, an empty one: none is nothing to read.
     const at = join(work, "compare", "answers"), diff = failed && !existsSync(join(at, "diff.txt")) ? "" : readFileSync(join(at, "diff.txt"), "utf8");
     // A difference is read only as turns.sh says one after a confirmed stop of both servers: its

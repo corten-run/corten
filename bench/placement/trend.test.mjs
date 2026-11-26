@@ -545,7 +545,16 @@ test("not read, never a pass: a side the kit refuses, answers not compared, a pi
   const late = command({ reports: PASS, differ: [], late: ["plain"] });
   assert.equal(late.exit, 3);
   assert.deepEqual(late.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("unstaged")]);
-  assert.ok(late.line.includes("`plain` not read: the two sides' answers were not compared within a placement's time limit, 600 s, and the check was stopped; `unstaged` -0.20% to +0.30%"), late.line);
+  assert.ok(late.line.includes("`plain` not read: the check of the two sides' answers did not finish within a placement's time limit, 600 s, and was stopped, its servers' cleanup unconfirmed; `unstaged` -0.20% to +0.30%"), late.line);
+  // Stopped at its deadline after it wrote the difference (timeout's TERM in its stop, or its KILL):
+  // the answers were compared, but the check did not finish, so the difference is not recorded.
+  for (const status of [124, 137]) {
+    const cut = command({ reports: PASS, differed: { plain: { status, text: "" } } });
+    assert.equal(cut.exit, 3, String(status));
+    assert.equal(readFileSync(join(cut.dir, "check-plain", "compare", "answers", "diff.txt"), "utf8"), DIFF);
+    assert.ok(cut.line.includes("`plain` not read: the check of the two sides' answers did not finish within a placement's time limit, 600 s, and was stopped, its servers' cleanup unconfirmed;"), `${status}: ${cut.line}`);
+    assert.ok(!existsSync(join(cut.dir, "expect-plain.txt")) && !cut.said.includes("answer differently. The run records this difference"), String(status));
+  }
   // A comparison that ended with status 0 and left no diff.txt, or one that cannot be read, found
   // nothing the run can read as "the same": that workload is not read, the other is, and the row is written.
   for (const [how, word] of [[true, "ENOENT"], ["dir", "EISDIR"]]) {
@@ -956,24 +965,26 @@ async function left(dir) {
 /**
  * A server as turns.sh starts one (<binary> <port>), writing beside the work directory's bin/:
  * its pid to pids when it starts, its liveness socket alive-<pid>.sock, and its pid to terms when
- * sent TERM, which it ignores. It answers body, and never answers a request for /hang, writing
- * its pid to hung.
+ * sent TERM, which it ignores. It answers body, and never answers a request for /hang, or with
+ * mute any request, writing its pid to hung.
  */
-const stubborn = (body) => `#!/usr/bin/env node
+const stubborn = (body, mute = false) => `#!/usr/bin/env node
 const at = (f) => require("node:path").join(__dirname, "..", f), note = (f) => require("node:fs").appendFileSync(at(f), process.pid + "\\n");
 setTimeout(() => process.exit(0), ${LIFE});
 require("node:net").createServer((c) => c.destroy()).listen(at("alive-" + process.pid + ".sock"));
 note("pids");
 process.on("SIGTERM", () => note("terms"));
-require("node:http").createServer((q, s) => { if (q.url === "/hang") note("hung"); else { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); } }).listen(Number(process.argv[2]), "127.0.0.1");
+require("node:http").createServer((q, s) => { if (${mute} || q.url === "/hang") note("hung"); else { s.setHeader("content-type", "text/plain"); s.end(${JSON.stringify(body)}); } }).listen(Number(process.argv[2]), "127.0.0.1");
 `;
 /**
  * turns.sh with no pair, A and B such servers answering base and head, as this test's own child
  * (killed through its handle at 60 s). signal is sent to turns.sh alone, through that handle, once
  * the work directory's file when holds a line. Returns as soon as turns.sh has exited, with what
  * still runs at that moment; the test then waits, past LIFE, for the servers to have ended.
+ * servers: a script for a side (base or head) in place of stubborn(its body); before: run with
+ * the work directory once the kit's ports are found free, before turns.sh is started.
  */
-async function stopping(t, name, { base, head, path = "/page", signal = null, when = null }) {
+async function stopping(t, name, { base, head, path = "/page", signal = null, when = null, servers = {}, before = null }) {
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   for (const port of [18081, 18082]) assert.ok(!taken(port), `port ${port} is in use, and the kit's ports are fixed: this test needs 18081 and 18082 free`);
@@ -981,7 +992,7 @@ async function stopping(t, name, { base, head, path = "/page", signal = null, wh
   mkdirSync(plan, { recursive: true });
   mkdirSync(join(work, "bin"));
   for (const [f, text] of [["headers.txt", ""], ["mask.sed", ""], ["mask.json", "[]\n"], ["request.lua", ""]]) writeFileSync(join(plan, f), text);
-  for (const [side, body] of [["base", base], ["head", head]]) writeFileSync(join(work, "bin", side), stubborn(body), { mode: 0o755 });
+  for (const [side, body] of [["base", base], ["head", head]]) writeFileSync(join(work, "bin", side), servers[side] ?? stubborn(body), { mode: 0o755 });
   t.after(async () => {
     const until = Date.now() + LIFE + 5000;
     for (let l = await left(work); l.running.length > 0 || l.busy.length > 0; l = await left(work)) {
@@ -989,6 +1000,7 @@ async function stopping(t, name, { base, head, path = "/page", signal = null, wh
       await wait(200);
     }
   });
+  if (before !== null) await before(work);
   const env = { ...process.env, KIT: here, START: "$BIN $PORT", REQ_PATH: path, STATUS: "200", EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, WRK_T: "1", WRK_C: "1", TURN: "1", WARMUP: "0", EXPECT: "", HEADERS: join(plan, "headers.txt"), SCRIPT: join(plan, "request.lua"), MASK: join(plan, "mask.sed"), MASK_JSON: join(plan, "mask.json") };
   const began = Date.now(), child = spawn("sh", [join(here, "turns.sh"), join(work, "compare"), "plain", "0", join(work, "bin", "base"), join(work, "bin", "head")], { stdio: ["ignore", "pipe", "pipe"], env });
   let said = "";
@@ -1006,7 +1018,7 @@ async function stopping(t, name, { base, head, path = "/page", signal = null, wh
   clearTimeout(limit);
   // What turns.sh said, once its output has closed (at most a few seconds more: a curl it started may hold it).
   await Promise.race([closed, wait(12000)]);
-  return { ...end, said, work, sent, sentTime, seconds: (ended - began) / 1000, ...now };
+  return { ...end, said, work, sent, sentTime, endedTime: ended, seconds: (ended - began) / 1000, ...now };
 }
 
 test("turns.sh, whose answers differ, sent TERM while it stops servers that ignore TERM, finishes the stop before it ends, says no difference, and nothing is left listening", LINUX, async (t) => {
@@ -1084,4 +1096,75 @@ test("turns.sh, killed outright while its servers run, still has them stopped wi
   assert.equal(noted(join(r.work, "pids")).length, 2, r.said);
   assert.deepEqual(now.running, [], `a server turns.sh started was still running ${ms} ms after turns.sh was killed`);
   assert.deepEqual(now.busy, [], `something still answered on the kit's ports ${ms} ms after turns.sh was killed`);
+});
+
+/**
+ * A server as stubborn() makes one but for TERM: on TERM it starts a process of its own session
+ * (as a START that forks a worker might leave one) that is quiet for a moment and then listens on
+ * its port, answering body, and then ends at once, so serve.mjs sees its stop end quickly. The
+ * process it starts ends by itself 12 s on.
+ */
+const reopening = (body) => `#!/usr/bin/env node
+const at = (f) => require("node:path").join(__dirname, "..", f), note = (f) => require("node:fs").appendFileSync(at(f), process.pid + "\\n");
+setTimeout(() => process.exit(0), ${LIFE});
+require("node:net").createServer((c) => c.destroy()).listen(at("alive-" + process.pid + ".sock"));
+note("pids");
+const port = Number(process.argv[2]), body = ${JSON.stringify(body)};
+const answer = "(q, s) => { s.setHeader('content-type', 'text/plain'); s.end(" + JSON.stringify(body) + "); }";
+const worker = "setTimeout(() => process.exit(0), 12000); setTimeout(() => require('node:http').createServer(" + answer + ").listen(" + port + ", '127.0.0.1'), 1500);";
+process.on("SIGTERM", () => {
+  note("terms");
+  require("node:child_process").spawn(process.execPath, ["-e", worker], { detached: true, stdio: "ignore" }).unref();
+  process.exit(0);
+});
+require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); s.end(body); }).listen(port, "127.0.0.1");
+`;
+
+for (const [what, head, status] of [["that differ", "bbbb", 4], ["that are the same", "aaaa", 0]]) test(`turns.sh, after answers ${what}, checks no port until both servers have ended, so one opened again while the other's stop runs fails it`, LINUX, async (t) => {
+  // A ends at once on TERM, leaving a process that opens A's port again 1.5 s later; B ignores
+  // TERM, so its stop takes 5 s. A port checked when A's stop alone has ended is closed, and
+  // turns.sh would say the stop was confirmed (${status}) with A's port answering.
+  const r = await stopping(t, `stop-reopen-${head}`, { base: "aaaa", head, servers: { base: reopening("aaaa") } });
+  assert.notEqual(r.status, status, r.said);
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("turns: plain: something still accepts on 18081 after A's server was stopped (curl status 0)"), r.said);
+  // Answers that are the same are said before that stop, and its failure is what ends turns.sh 1.
+  assert.ok(!r.said.includes("A and B answer differently") && (status === 0 || !r.said.includes("answers: same")), r.said);
+  assert.ok(!r.said.includes(": done, "), r.said);
+  assert.equal(noted(join(r.work, "terms")).length, 2, `each server was not sent TERM once: ${r.said}`);
+});
+
+test("turns.sh, sent TERM alone while a readiness request waits on a server that takes the connection and never answers, ends within a bound with both servers stopped", LINUX, async (t) => {
+  // B takes every connection and never answers, so turns.sh is in B's readiness request when TERM
+  // reaches it, and the shell holds off its trap until that curl ends. Each such request is
+  // bounded to a second, so turns.sh ends then, stopping both servers (KILL 5 s after the TERM they
+  // ignore), well before the test's own KILL at 60 s.
+  const r = await stopping(t, "stop-ready", { base: "aaaa", head: "aaaa", servers: { head: stubborn("aaaa", true) }, signal: "SIGTERM", when: "hung" });
+  assert.ok(r.sent, `B never took a readiness request, or turns.sh ended before TERM could be sent: ${r.said}`);
+  const after = (r.endedTime - r.sentTime) / 1000;
+  // The curl's second, then KILL 5 s after the servers' TERM.
+  assert.ok(after < 10, `turns.sh ended ${after} s after its TERM: ${r.said}`);
+  assert.deepEqual([r.status, r.signal], [1, null], r.said);
+  assert.equal(noted(join(r.work, "pids")).length, 2, r.said);
+  assert.equal(noted(join(r.work, "terms")).length, 2, `each server was not sent TERM once: ${r.said}`);
+  assert.deepEqual(r.running, [], `a server turns.sh started was still running when turns.sh ended: ${r.said}`);
+  assert.deepEqual(r.busy, [], `something still answered on the kit's ports when turns.sh ended: ${r.said}`);
+});
+
+test("turns.sh refuses at once a port something already takes connections on without answering, and starts no server", LINUX, async (t) => {
+  // A listener on A's port that takes a connection and never answers, ending by itself 8 s on.
+  let ended = null;
+  const before = async (work) => {
+    const ready = join(work, "listening");
+    const child = spawn(process.execPath, ["-e", `setTimeout(() => process.exit(0), 8000); require("node:net").createServer(() => {}).listen(18081, "127.0.0.1", () => require("node:fs").writeFileSync(${JSON.stringify(ready)}, ""));`], { stdio: "ignore" });
+    ended = new Promise((done) => child.on("exit", done));
+    t.after(() => Promise.race([ended, wait(15000)]));
+    for (let i = 0; i < 200 && !existsSync(ready); i++) await wait(25);
+    assert.ok(existsSync(ready), "the stand-in listener never listened");
+  };
+  const r = await stopping(t, "stop-preflight", { base: "aaaa", head: "aaaa", before });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("turns: plain: something already accepts on 18081 (curl status 28)"), r.said);
+  assert.deepEqual(noted(join(r.work, "pids")), [], `a server was started: ${r.said}`);
+  assert.ok(r.seconds < 5, `turns.sh took ${r.seconds} s to refuse the port`);
 });

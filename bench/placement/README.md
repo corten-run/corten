@@ -217,13 +217,18 @@ one of the commands above with its output under `<run dir>/log`:
    (the start command is exec'd, so that process is the server; `serve.mjs` waits idle on its
    input, on the driver's CPU), stopped through its input after the answers check, after each
    turn and however `turns.sh` ends, the placement's deadline TERM during the stop and a KILL of
-   `turns.sh` included, waited for about 15 s at most, and followed by one connection to the
-   server's port that nothing may take. The deadline's `timeout` signals `turns.sh`'s whole
+   `turns.sh` included, waited for about 15 s at most and, once every server that stop ends has
+   ended, followed by one connection to each of their ports that nothing may take (a port checked
+   while the other server's stop still ran could be opened again in that time). Before its first
+   start it makes one connection to each of its two ports, which nothing may take either. The deadline's `timeout` signals `turns.sh`'s whole
    process group, so its TERM reaches the servers too, and `serve.mjs`, sent it as well, stops
    each as it does when its input ends. The
    `curl`s in `verify.sh` and `turns.sh`, all to 127.0.0.1, run with `--disable`, so a `.curlrc`
    (a retry, a header) changes neither a request nor its bound, and with `--noproxy '*'`, so no
-   `http_proxy` or `ALL_PROXY` of the environment's answers for the servers. A release
+   `http_proxy` or `ALL_PROXY` of the environment's answers for the servers, and each has a
+   bound: a second for a readiness request or a check of a port, 10 s for an answer, so a server
+   that takes a connection and never answers holds neither script, nor a signal it has held off
+   until that `curl` ends, any longer. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
    found there is kept as the workload's `expect` for this run, but only as `turns.sh` reports
@@ -423,9 +428,15 @@ start command that forks its server leaves it listening, which must not read as 
 and a proxy of the environment's that answers everything, which no request may reach), on a CPU the test may run
 on, and fails saying so when the kit's two ports are in use. It also runs `turns.sh` itself on two servers that
 ignore TERM: after answers that are the same, sent TERM while it stops them after answers that
-differ (which then must say no difference), killed outright while they run, and under the
-check's own deadline, whose TERM reaches the whole process group, it must have both stopped
-within a bound, and leave nothing on the kit's ports, by the time it exits. `verify.test.mjs`, which `npm run
+differ (which then must say no difference), sent TERM alone while a readiness request waits on a
+server that takes the connection and never answers, and under the check's own deadline, whose
+TERM reaches the whole process group, it must have both stopped within a bound, and leave
+nothing on the kit's ports, by the time it exits; killed outright while they run, it cannot
+wait for them, and `serve.mjs` stops them after it has ended, within a bound the test counts
+from the KILL (9 s). With a server that ends at once on TERM but leaves a process that opens its
+port again 1.5 s later, while the other's stop takes 5 s, it must fail, after answers that differ
+and after the same, rather than say the stop was confirmed; and with something on its port that
+takes a connection and never answers before it starts, it must refuse at once and start no server. `verify.test.mjs`, which `npm run
 check` runs too, runs the second, `verify.sh`, and with a plan of no placement, on
 a base that ignores TERM: after its two starts, ended by a failed request while the base
 runs, sent TERM while it stops the base after a request that succeeded (which must then fail it)
