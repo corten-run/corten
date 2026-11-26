@@ -741,6 +741,14 @@ builds against.
 
 ### Other changes
 
+- A connection waits for shutdown without taking, at each of its reads and writes, a lock
+  that connections on every thread share. What shutdown does is unchanged
+  ([#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)).
+
+- An answer that brings no header but its `Content-Type` (most JSON and text answers) is given
+  its security headers and `Cache-Control` in one pass. What is sent is unchanged
+  ([#2067 Give an answer that brings none of its scope's header lines all of them in one pass](https://github.com/corten-run/corten/pull/2067)).
+
 - A `data-patch` write that fails after a navigation or the page's own read drew over its form is now said once no navigation is on its way: on the form drawn in its place on the same page, or else on the document, where `on:document:corten:error` and the `Toaster` hear it
   ([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)).
 
