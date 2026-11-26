@@ -1392,6 +1392,15 @@ from the archived watcher failures, not from the receipt, so a group retired thi
 way can be continued. The proof adds no write: the failure, archive and exit
 stay as they were, and it never qualifies the group.
 
+The drain proof observes host state that can change, so its DELETE carries the
+same deadline as the pinned unused proof: 60 seconds from the local start of the
+host query, checked before the receipt is written, again before the intent, and
+when the DELETE is sent, including after the DELETE's account preflight and in
+the provider request. A v1 or v2 setup retirement keeps its existing check of 60
+seconds from the proof's end, made before the intent. Expiry before the intent
+does not consume the intent; expiry after the intent forbids another DELETE, so a
+later collect only verifies the saved receipt and checks exact absence.
+
 The drain proof is narrow. It can settle only a setup job whose host shows no
 Docker socket or daemon at query time (in practice one that failed before
 `docker-install`), with the guardian's exact deadline record archived, and that

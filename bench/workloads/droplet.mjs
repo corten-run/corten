@@ -953,10 +953,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const retire = async (kind, evidence, finishedAtMs) => {
     const pinned = options.unusedBootstrapKnownHosts !== undefined;
-    const deleteProofExpiresAtMs = pinned ? evidence.startedAtMs + 60000 : undefined;
+    // A drain proof shows a host state that can change, so like the pinned unused proof
+    // its 60-second deadline from the query's start goes with the DELETE itself.
+    const drained = kind === "setup-failed" && evidence.schema === "benchmark-failed-setup-retirement/v3", bounded = pinned || drained;
+    const deleteProofExpiresAtMs = bounded ? evidence.startedAtMs + 60000 : undefined;
     const requireFreshProof = () => {
       const current = Date.now();
-      assert.ok(current >= finishedAtMs && (pinned ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
+      assert.ok(current >= finishedAtMs && (bounded ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
         "retirement proof expired before deletion");
     };
     await own(); check();
@@ -978,7 +981,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       unlinkSync(path); syncDirectory(local);
     }
     durable(path, bytes);
-    if (pinned) requireFreshProof();
+    if (bounded) requireFreshProof();
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);

@@ -458,13 +458,15 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
 
 // The first bootstrap session stays open until its watcher misses its deadline, so the
 // exit archive holds a real watch-failure and no receipt for it.
-for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof"]) test({
+for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
   // The restart recognizes the refused drain query only by its exact drain script digest.
   refused: "a drain query that exits nonzero refuses, and a restart sends no second query",
   "invalid-proof": "a drain query that exits zero with unusable proof refuses, and a restart sends no second query",
+  "delete-expired": "a drain proof that expires during the DELETE's account preflight sends no DELETE, and a restart sends none either",
+  "delete-in-time": "a drain proof still current after the DELETE's account preflight sends one DELETE with its own deadline",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -477,9 +479,14 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
   const token = fleet.jobs[1].token;
   kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource, drainSource: setupDrainSource }) + "\n");
-  let failed, queries = 0;
+  let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry;
   const run = async (binary, args, timeout, allowFail, expiry, control) => {
-    if (!control) return h.run(binary, args, timeout, allowFail);
+    if (!control) {
+      // After the intent, the first provider read is the DELETE's own account preflight.
+      if (stall && !stalled && binary === "doctl" && args[0] === "account" && h.saved().deletionIntentAt) { stalled = true; offset += stall; }
+      if (binary === "doctl" && args[2] === "delete") deleteExpiry = expiry;
+      return h.run(binary, args, timeout, allowFail);
+    }
     const s = h.saved(), script = args.at(-1), request = control.request;
     const exitArchive = request.epoch === "bootstrap" && script === bootstrapReadScript;
     const pack = exitArchive || script === "timeout 600 /bin/bash /bench/pack.sh";
@@ -553,6 +560,35 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     await assert.rejects(h.task({ run }).collect(), { controllerStage: "setup-host-proof-refused" });
     assert.equal(queries, 1); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
     assert.equal(existsSync(lock), false); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+    return;
+  }
+  if (mode === "delete-expired" || mode === "delete-in-time") {
+    // Only the provider preflight moves the clock: 61 seconds passes the proof's
+    // 60-second deadline from the query's start, 20 seconds does not.
+    const real = Date.now; t.mock.method(Date, "now", () => real() + offset);
+    stall = mode === "delete-expired" ? 61000 : 20000;
+    const deletesSent = () => h.calls.filter(([binary, ...args]) => binary === "doctl" && args[2] === "delete").length;
+    if (mode === "delete-in-time") {
+      assert.equal(await h.task({ run }).collect(), 1);
+      const record = JSON.parse(readFileSync(join(h.local, "failed-setup-host.json")));
+      assert.equal(record.schema, "benchmark-failed-setup-retirement/v3"); assert.ok(stalled);
+      assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.equal(deleteExpiry, record.startedAtMs + 60000);
+      assert.ok(h.saved().destroyedAt); assert.equal(queries, 1);
+      return;
+    }
+    await assert.rejects(h.task({ run }).collect(), /current retirement proof expired/);
+    const saved = h.saved(), record = JSON.parse(readFileSync(join(h.local, "failed-setup-host.json")));
+    assert.ok(stalled); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(record.schema, "benchmark-failed-setup-retirement/v3");
+    assert.equal(saved.status, "retired"); assert.equal(saved.retirement.kind, "setup-failed"); assert.equal(saved.retirement.evidenceSha256, digest(readFileSync(join(h.local, "failed-setup-host.json"))));
+    assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined); assert.equal(existsSync(lock), false);
+    // As on the pinned unused path, expiry after the intent forbids another DELETE: a restart
+    // verifies the saved receipt and checks exact absence, with no second query.
+    await assert.rejects(h.task({ run }).collect(), /deletion not confirmed/);
+    assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0); assert.equal(h.saved().destroyedAt, undefined);
+    h.hosts([]);
+    assert.equal(await h.task({ run }).collect(), 1);
+    assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.ok(h.saved().destroyedAt);
     return;
   }
   assert.equal(await h.task({ run }).collect(), 1);
