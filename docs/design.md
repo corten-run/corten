@@ -1928,6 +1928,82 @@ rules something out.
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
+    The router's own `404`, `405` and `501`, and its `400` for a named post none of the page's
+    handlers is for, carry a private mark in their extensions from where the router makes them
+    (`cache::Unshared`), so the error page in their place, and the failure sent as it is or as
+    JSON, are never shared ([caching](guide/app.md#caching)), whatever a middleware does to the
+    answer in place: another status, a redirect, a body of its own. One that answers with a
+    response it made itself, having run the route or not, has answered the request. Until round
+    10 of the review the router marked the request instead, on the signal the stages hold, which
+    `Next` carried past the app's middleware (`router::Unrouted`), and the cache rule read that
+    signal with the final status; a middleware that turned the router's `404` into a `200` or a
+    redirect in place then kept the CDN caching headers on it, and the answer's own mark does not
+    depend on its status. Before that, a mark in the answer's
+    extensions allocated the empty map on the bare `404` and, with its settlement after the page,
+    cost 1,336 instructions a request on the default missing-route probe
+    (`tests::cache::what_settling_a_page_costs`, `SETTLE_CASE=missing`: 19,421.7 at `7935404da`
+    against main `e7e89add8`'s 18,085.6), where the signal's bit and settling the page's few
+    headers as they are carried cost 364 (18,449.5 at `d9dbf11d2`), and an app's own error page
+    the same (`custom`: 18,783.9 against 18,420.3); against main `a0eeeacca`, 380 at `d7404206d`
+    (18,453.6 against 18,073.6, `custom` 18,788.8 against 18,408.3); and with the mark carried
+    by `Next`, 341 at `4630a2ff2` against main `cf4435c91` (18,411.6 in every run against
+    18,069.2 to 18,070.6; `custom` 18,748.3 to 18,748.4 against 18,407.3 to 18,408.8); and 322
+    at `402a11a08` against main `56e9b6b66` (18,421.6 in every run against 18,099.5 to 18,099.6;
+    `custom` 18,745.3 to 18,745.4 against 18,421.8 to 18,423.3). The named post's `400`, which
+    the router marks too at `402a11a08`, is settled there: 376 more than at `2e8d9bafc`, which
+    left it unmarked, and 579 more than main (`SETTLE_CASE=unnamed`, a
+    same-origin post naming a post the page has none of: 17,569.9 in every run against 17,193.8
+    to 17,193.9 and 16,988.6 to 16,991.0), on a failure only a post the app's own pages never
+    send meets. The chooser passing the signal on costs a named post that has a handler 12
+    (`tests::actions::what_a_page_with_posts_costs`, `ACTION_CASE=named`: 21,641.0 against
+    21,629.0 at `2e8d9bafc`; by function, 8 in `Chooser::answer`, 3 in `page::run` and 1 in the
+    handler's `answer`). A probe
+    whose middleware writes the CDN caching headers is cheaper than main (25,672.2 against
+    27,558.5 at `d7404206d`), but main sends those headers, so that pair is not like for like.
+    This probe is not the harness this Choice's 404 counts against axum come from, so it says
+    nothing about the axum bound in Revisit when. Since `696d96a71` the router's failure is also
+    marked on the answer as it goes out (`cache::Unshared`), so another app that relays it inline
+    keeps it private, which allocates the answer's extensions again: the router's `404` costs 853
+    against main `153be9116` (18,964.6 against 18,111.5; `custom` 19,283.5 against 18,429.3),
+    537 more than round 7's head merged with that main (`f02560816`), about 400 of it
+    allocating, filling and freeing the extensions map, and the named post's `400` 694 (17,717.9
+    against 17,023.9), 115 more than `f02560816`. With the six CDN caching headers written on
+    it, the named post's `400` costs 993 more than `f02560816` (27,025.3 against 26,032.5), as
+    those headers are now taken out as the answer goes out, after the security headers are
+    added, so the header map grows to hold them all first. At `57f2138a4`, which merged main
+    `7a275ef15`, the counts against that main are the same: the `404` 853 (18,964.7 against
+    18,111.5; `custom` 854) and the `400` 694 (17,718.0 against 17,023.9). With the CDN headers
+    the `400` costs 2,139 (27,032.2 against 24,893.2), 7 more than at `696d96a71`: by
+    function, `memcmp` called from `cache::drop_cdn_caching` as many times as before, taking
+    more instructions a call. With the mark on the answer alone, at `2960a7abe` against main
+    `63e7c3314` (whose `crates/` are `7a275ef15`'s), the router's `404` costs 1,512 instructions a
+    request (19,624.0 in every run against 18,111.6; `custom` 1,510: 19,939.6 against 18,429.4),
+    659 more than at `57f2138a4`: by function against main, the extensions map is now allocated
+    on the bare `404` as the router makes it and again on the error page in its place
+    (`hashbrown`'s insert, rehash and drop, `malloc` and `free`, about 800 together), reading the
+    two marks a replacement keeps (`cache::Marks::of`, 81) and looking for the CDN caching headers
+    to drop (`cache::drop_cdn_caching`, 187). The named post's `400` costs 978 (18,002.0 against
+    17,023.9), 284 more than at `57f2138a4`, and with the six CDN caching headers 2,416 (27,309.3
+    against 24,893.2). Correctness comes first (the README's Values): a mark on the request was
+    lost when a middleware edited the answer in place, and a mark on the answer is not. Since
+    round 11 of the review, the error page drawn in place of an answer whose extensions hold the
+    mark alone takes that map rather than a new one (`page::carried_from`); nothing else of the
+    failed answer's is carried. Against main `a138e2391` the router's `404` costs 1,152
+    instructions a request at `30cadaaeb` (19,257.6 against 18,105.5, each in every run; `custom`
+    1,153, medians 19,576.6 against 18,423.4) and the plain page 111 (16,509.6 against 16,398.6), the `404` 367 less than
+    the same head without the move (19,625.0; by function, `hashbrown`'s insert, rehash and drop,
+    `malloc` and `free`). Taking the map before the page is drawn kept it in the request's
+    future across that await and cost the plain page 12 (`memcpy`), so it is taken once the page
+    is drawn. In this Choice's own harness (step 2's, ported to the API of today's `App`), against
+    axum's router at `7e897bd68` in the same container, the PR's head counts a page's `404` at
+    17,417 against axum's 19,980 and an API's `404` at 11,932 against 14,101 (main `a138e2391`:
+    16,284 and 11,128), a page 12,991, one with a middleware 13,208, an API request 11,882 and an
+    unstaged route 6,474 against 21,216, 21,465, 15,726 and 8,479: fewer than axum's on each of
+    these, so Revisit when is not met by them. Card-market's item page and its JSON, which step 2
+    also counted, were not counted again: this conclusion is about the six shapes counted, and
+    the two left are neither met nor cleared by it until they are counted against a comparable
+    axum run.
+
     Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
     for a method the server knows that the target resource does not support, and MUST carry
@@ -2179,7 +2255,51 @@ rules something out.
     the 2-second case's rounds each, plain and TLS, at `ee411b38e`; 2026-11-20, the 2-second
     case at `5596df8b5` with the reading pattern varied, five rounds each: even 2 KiB reads
     every 125 ms from the socket over TLS and plain kept, tokio-rustls cut, 16 KiB a second
-    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut.
+    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut; 2026-11-22, the
+    router's `404` with and without an error page of the app's under callgrind (release,
+    jemalloc, three rounds alternating the builds, every run within 2 of the others) at
+    `d9dbf11d2` and `7935404da` against main `e7e89add8`, and at `d7404206d` against main
+    `a0eeeacca`, and at `4630a2ff2` against main `cf4435c91` (every run within 1.5 of the others),
+    and with the named post's `400` at `402a11a08` against main `56e9b6b66` and `2e8d9bafc`
+    (main six runs, every run within 2.4 of the others), and a named post by function against
+    `2e8d9bafc`; 2026-11-22, the router's `404`, with and without the app's error page, and the
+    named post's `400` at `696d96a71` against main `153be9116` and `f02560816` (three rounds
+    alternating the three builds, every run within 1.5 of the others), and the `404` and the
+    `400` by function against `f02560816`; 2026-11-22, the same and the `400` with the CDN
+    headers at `57f2138a4` against main `7a275ef15` (three rounds alternating the two builds,
+    every run within 2.2 of the others), and the `400` with the CDN headers by function against
+    `696d96a71`; 2026-11-22, the router's `404`, with and without the app's error page, and the
+    named post's `400`, with and without the CDN headers, at `2960a7abe` against main `63e7c3314`
+    (three rounds alternating the two builds, every run within 1.5 of the others), and the `404`
+    and the `400` by function against that main; 2026-11-22, the router's `404`, with and without
+    the app's error page, and the plain page at `30cadaaeb` (round 11's head), with and without the error page
+    taking the failed answer's map, against main `a138e2391` (three rounds alternating the
+    builds, every run within 2 of the others), and by function; 2026-11-22, a page's and an API's
+    `404`, a page with and without a middleware, an API request and an unstaged route in step 2's
+    harness at that head and that main against axum's router
+    at `7e897bd68` (jemalloc, three rounds alternating the three builds, every run within 16 of
+    the others); 2026-11-23, the router's `404` (the default error page) and the plain page at
+    `ef2c15eb8` (round 12's head) against main `04530f7e0` (its code as at `a02c81e86`, with the
+    head's probe; three rounds alternating the two builds, every run within 1.2 of the others):
+    the `404` 1,146 more (19,144.6 against 17,998.5), the plain page 105 more (16,384.6 against
+    16,279.7); 2026-11-23, the same two at `6fb4c7fcc` (round 13's head) against that main built
+    again (three rounds alternating the two builds, every run within 0.1 of the others): the `404`
+    1,180 more (19,158.6 against 17,978.5), the plain page 104 more (16,399.6 against 16,295.6);
+    2026-11-23, the same two at `ee2d8f7f0` (round 14's head) against main `a01dd5109`, which it
+    merged (three rounds alternating the two builds, every run within 1.2 of the others): the
+    `404` 1,156 more (19,154.6 against 17,998.5), the plain page 104 more (16,383.6 against
+    16,279.6); 2026-11-23, the same two at `2dc94faf2` (round 15's head) against main `14126d2a8`,
+    which it merged (three rounds alternating the two builds, every run within 0.3 of the others):
+    the `404` 1,180 more (19,155.6 against 17,975.6), the plain page 104 more (16,396.6 against
+    16,292.6); 2026-11-23, the same two at `b5f02010b` (round 16's code) against main `6f1bbf055`,
+    which it merged, and round 15's head `d2f6c8731` (three rounds alternating the three builds,
+    every run within 0.1 of the others): the `404` 1,177 more (19,155.6 against 17,978.5; round
+    15's head 19,155.5), the plain page 126 more (16,421.6 against 16,295.6), 25 more than round
+    15's head (16,396.6), all of it `cache::settle` looking for round 16's `Personal` mark;
+    2026-11-23, the plain page at `75a353e3f` (round 17's code) against round 16's head `0f91c708d`,
+    built with Rust 1.100.0 (three rounds alternating the two builds, every run within 1.8 of the
+    others): 2 fewer (16,400.6 against 16,402.7), and the `404` was not counted again, as round 17 does
+    not change its path.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2401,7 +2521,70 @@ rules something out.
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
     The stage future holds the request once. Each stage moves its handle to the next, and
     dispatch consumes it to give the request to the first middleware or, when there is none,
-    the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
+    the route. The compiler rejects a stage that reads it after hand-off. An answer that is no handler's
+    own (a refusal, an extractor's or a protocol's rejection, a panic's or the deadline's failure,
+    a debug build's error about the app's code, `/health/ready`'s `503`, and the page,
+    JSON failure or sign-in redirect Corten draws in place of one, the router's own failures, the
+    static files' `404` for a file the version lacks and `400` for a path that is not one, a
+    failure Corten sends in place of a page whose layout reads it could not fill (and a debug
+    build's diagnostic there), whatever that page was, a
+    refusal sent at another status with `Error::with_status`, a rejection an extractor made that a
+    handler met as a value and passes on with `?` (not a `FormRejection` the app made itself,
+    round 15; a `BodyError` or `UploadError` is the request's refusal whoever built it, an opt-in its
+    docs state, as both are exhaustive public enums with public variants and a mark of who built a
+    value would be a field in every variant, a breaking change, while the type alone only ever takes
+    a CDN's lifetime off an answer, never gives one to it, round 16), an MCP endpoint's own JSON-RPC
+    errors and the results it makes in a tool's place,
+    the empty answer sent in place of a body that failed as it was read to tag or compress it
+    (`cache::unread`, which also settles it `no-store`, round 15, and marks it a `NoStore` answer,
+    so an app that relays it inline and rewrites its header still sends it `private, no-store`,
+    round 16), and what an error page's own extractor answers in its place) carries a private mark in its
+    extensions (`cache::Unshared`), put there by the code that made it, and the cache rule decides
+    from the final answer alone on every exit, success or failure (`cache::settle`). The mark goes
+    wherever the answer goes: out of a task the handler spawned, from before the request came in,
+    from another app whose answer a middleware relays inline, under any status a middleware gives
+    it, in place or by moving the answer's parts. An answer the cache rule finds to be one visitor's
+    (it sets a cookie, read a caller, has the request's nonce, is a `Cache` answer to a request with
+    credentials, or is a tool's answer from an MCP endpoint whose `Tools::auth` found its caller, or
+    with `Tools::authorization` too any answer that check let through) carries a second mark
+    (`cache::Personal`), so another app that relays it inline, as it is or changed in place (its
+    cookie taken off included), settles it as personal too, and a middleware there cannot give it a
+    CDN's lifetime, though that app's own request read no caller; an answer that middleware makes
+    in its place is its own, and one nothing made personal is not marked. Round 8 left that relay
+    outside the issue; round 15's review found it, and the mark closes it in process (round 16;
+    round 17 for the cookie and the endpoint-wide check). Over HTTP an answer carries only its
+    headers, and no mark crosses that boundary. The error page drawn in place of an answer copies
+    its marks onto the page (`cache::Marks`), `NoStore` included; a failure Corten sends in place of
+    an answer it could not send as it was (a debug build's error, a page whose layout reads could
+    not be filled or that could not be read to be kept) is marked whatever that answer was and keeps
+    its `NoStore` (`cache::unshared_in_place_of`), as does the `500` for a tuple whose header part
+    is not one, whatever order its parts are in (round 15). Every failure Corten makes is made through
+    `Error::corten`, `cache::unshared` or `cache::unshared_in_place_of`, and `tests::cache` holds the
+    crate's source to them and checks each exit, since rounds 10 to 12 of the review each found
+    another exit made without the mark (round 13). The source check reads each failure the source
+    makes on its own, by the statement that makes it, not the function it is in, since round 13's
+    check let a failure through beside another one marked; it reads tokens, not Rust, and its
+    limits are written next to it (round 14). A value bound to a name is accepted only if every use
+    of it after the binding is marked, not the first (round 15). It replaced a count of refusals on the thread compared before and after each poll
+    (`402a11a08`), which lost the answers other code drew in a refusal's place (another app's
+    error page and sign-in redirect relayed inline, a JSON failure turned into a `200`) and a
+    refusal made outside the stages; a mark on the answer is what the answer is, wherever it was
+    polled. The router's own answers are marked when they are made, so a middleware that makes the
+    route's future and drops it unpolled, and answers with a response of its own, has answered the
+    request itself. Round 9's head also marked the request's signal as the router's answer was polled
+    (`router::Unrouted`), carried by `Next` (9 instructions a request on a plain page at
+    `4630a2ff2`), and boxed that future in `middleware::handle` (inline in the stage future, the
+    larger future cost the plain page about 116 instructions in copies, `4e7f650b2`); both are
+    gone, as the answer's mark is enough. Together, 100 instructions a request on a plain page at
+    `696d96a71` against main `153be9116` (16,504.6 against 16,404.6), 34 fewer than round 7's
+    head merged with that main (`f02560816`, 16,538.6): by function against it, `page::run` 26
+    fewer without the count, `page_or_error` 9 and `middleware::handle` 7 fewer, the dispatch
+    future's drop glue 1 fewer, `cache::settle` 7 more for reading the mark, and the stage future
+    1 more. After the merge of main `7a275ef15`, the same 100 at `57f2138a4` against it (16,504.7
+    against 16,404.6). Without the signal's mark, at `2960a7abe` against main `63e7c3314`, 105
+    (16,509.6 against 16,404.7), 5 more than at `57f2138a4`: by function against main, the cache
+    rule's header reads (`HeaderMap::get2` and its hashing, 70, `cache::settle` 17 and
+    `cache::sets_cookie` 15). The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     The stages read the incoming request's mode, credentials, validators, and the host and
@@ -2462,8 +2645,9 @@ rules something out.
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
     client that reads it as data sees nothing else change, and a PDF the browser opens still shows
     in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
-    `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
-    visitor's cookie to another; a panic is logged and answered `500` by the lane. It
+    `private, no-cache` (`private, no-store` when it says `no-store`) with no CDN caching header, so no shared cache hands one
+    visitor's cookie to another, and a `NoStore` answer is `private, no-store` with none either,
+    whatever the handler wrote after it; a panic is logged and answered `500` by the lane. It
     answers `get` alone and its handler reads no body: no same-origin check covers it, a form
     posted to it needs no preflight, so any site could make its visitors send one, and no deadline
     would end a slow body. An unstaged route whose path can answer at one of Corten's own paths
@@ -2666,6 +2850,24 @@ rules something out.
     in brackets, so `http://localhost:abc/`, `http://[v1.x]/` and `http://[fe80::1%25eth0]/` were
     routed in an app that answers to `localhost` (read in `c46092aeb`'s `security::named`, not
     run there); each is a `400` now, held by `tests::security` over a connection.
+    It was reopened again when a `NoStore` answer on an unstaged route, which no stage settles, was
+    found to go out with the CDN caching headers its handler or a relayed upstream wrote, and with
+    a `Cache-Control` written after the mark: the lane now reads the answer's `NoStore` mark. An
+    unstaged route that answers without one costs 11 instructions more for it, 7 of them in
+    `route::unstaged_headers` (`tests::cache::what_settling_a_page_costs` with `SETTLE_CASE` set to
+    `unstaged`: 6,405 at `ab6f8d3a2` against 6,394 for main `564034b86`, the same at `9e2002468`
+    against main `e7e89add8`, and 6,403.5 to 6,405.0 at `4630a2ff2` against 6,390.7 to 6,395.1 for
+    main `cf4435c91`, and 6,402.0 at `402a11a08` against 6,389.9 to 6,391.4 for main `56e9b6b66`, and 6,400.9 to
+    6,401.0 at `696d96a71` against 6,389.9 to 6,390.0 for main `153be9116`, and 6,398.8 to 6,401.0
+    at `57f2138a4` against 6,387.8 to 6,390.0 for main `7a275ef15`, and 6,400.9 to 6,401.0 at
+    `2960a7abe` against 6,387.8 to 6,390.0 for main `63e7c3314`;
+    the `service_fn` control 3,083 to 3,088 in each build), which takes it to about 109
+    over 6,932.
+    Correctness comes first (the README's Values), so the check stays. Removing the CDN headers as
+    the `NoStore` answer is made instead counted 1 more, but a header the handler writes after the
+    mark (a later part of the same tuple) would then go out, so it was not taken. The bound below
+    moves by those 11, as it moved for the host check, so the next change that adds to an unstaged
+    route reopens this again.
 
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as
@@ -2906,9 +3108,11 @@ rules something out.
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
-    than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
-    with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
-    through its lane, 7,030 and 7,076 since step 4), and over what its host check has cost
+    than about 100 instructions over 6,943 in the app's routes and 6,993 in an API's module with
+    jemalloc: what it cost with its checks in its handler at `8ddeaea2` (6,932 and 6,982), and the
+    11 that reading a `NoStore` mark added, measured in the app's routes and taken as the same in
+    an API's module, whose lane runs the same `unstaged_headers` (7,003 and 7,068 through its lane,
+    7,030 and 7,076 since step 4), and over what its host check has cost
     since it refuses what HTTP does not allow (`5c7b006dc`: 19 to 49 for a request whose first
     header line is not `Host`, and in an app that answers to any host 111 with `Host` first and
     311 with it last of eight), when a control that shares no code with
@@ -2978,9 +3182,123 @@ rules something out.
     Playwright 1.65.1 on Linux (tag `evidence/stage-header-checks-2002`), and 2026-11-24, the
     instruction counts with a listed line and with curl's (tags
     `evidence/stage-header-checks-2002` and `evidence/stage-header-checks-2002-review`);
-    2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
-    main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
-    2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
+    2026-11-26, at `7c1e7a795` (this change merged with main `aa526350f`, whose one pass at the
+    last stage now marks an answer that read a caller `Personal` and leaves one with a `Cache` mark
+    to the stages) against that main. Over a socket with `bench/request-cost` (rustc 1.100.0,
+    valgrind 3.24.0, one reading of three counts a build, each build's counts within 1 of each
+    other, the answers identical): `get` 6 fewer (18,335 against 18,341), `post` 7 fewer (22,785
+    against 22,792), the unstaged route 7 more (12,527 against 12,520), `pipeline` 7 more (10,568
+    against 10,561), `text` 36 fewer (17,175 against 17,211) and the page 118 more (43,216 against
+    43,098), with a browser's lines `get` 7 fewer (23,874 against 23,881), `text` 35 fewer (25,822
+    against 25,857) and the page 123 more (221,831 against 221,708), 16 at a time `pipeline` 8
+    more, `get` 6 fewer, `unstaged` 8 more and `text` 36 fewer, and the same allocations a request in
+    every case. In process with round 20's probe, both builds with Rust 1.99.1 in a Debian 12 image
+    and valgrind 3.19.0, so not comparable with round 20's counts (three rounds alternating the two
+    builds, every run within 0.1 of the others): the plain page 114 more (15,896.7 against
+    15,782.7), the `cookie` page 405 more (19,077.0 against 18,671.9), a tool's answer from an
+    endpoint whose `Tools::auth` found its caller 497 more (28,396.7 against 27,899.3) and the
+    unstaged route the same (6,573.2). These are instructions, not cycles, as below;
+    2026-11-25, at `af17ca8da` (this change merged with main `65419e4e1`, with round 20's test and
+    guide fixes) against that main, built with Rust 1.100.0 in a Debian 12 image other than round
+    18's (three rounds alternating the two builds, every run within 2.1 of the others): the
+    plain page 124 more (15,803.7 against 15,679.6), the `cookie` page 415 more (18,983.5 against
+    18,568.5), a tool's answer from an endpoint whose `Tools::auth` found its caller 834 more
+    (28,933.8 against 28,099.8) and the unstaged route 12 more (6,526.5 against 6,514.5). Main's
+    plain, `cookie` and tool counts are within 0.1 of round 18's for main `657c2fae3`, so main's
+    later commits left those paths as they were. These are instructions in process, not cycles, as
+    below;
+    2026-11-24, at `b3e4ae44e` (round 19's code, which marks an unstaged route's answer that sets a
+    cookie) against main `657c2fae3` and round 18's head `0737e881d`, built with Rust 1.100.0 in
+    another image than round 18's, so against main only these three builds compare (three rounds
+    alternating them, every run within 2.4 of the others): the plain page 124 more than main
+    (15,746.6 against 15,622.6) and the `cookie` page 415 more (18,911.6 against 18,496.6), each as
+    round 18's head, a tool's answer from an endpoint whose `Tools::auth` found its caller 828 more
+    (28,769.4 against 27,941.5) and 52 fewer than round 18's head, all of that in glibc's `memcmp`
+    with no code on that path changed, and the unstaged route 12 more (6,488.2 against 6,476.2), in
+    `unstaged_headers` (+8) and its handler (+4), 1 more than round 18's head. These are
+    instructions in process, not cycles, as below;
+    2026-11-24, at `0737e881d` (round 17's code merged with main `657c2fae3`) against that main,
+    built with Rust 1.100.0 (three rounds alternating the two builds, every run within 2.1 of the
+    others): the plain page 124 more (15,803.7 against 15,679.7), in the header map's lookups (+70)
+    and `settle` (+41), the `cookie` page 415 more (18,983.5 against 18,568.6), mostly settling it
+    as personal (`drop_cdn_caching` +190, `settle` +118) and the mark in its extensions (+81, +19,
+    +18), less 115 in `mentions_no_store`, and a tool's answer from an endpoint whose `Tools::auth`
+    found its caller 886 more (28,985.6 against 28,099.9), the mark round 16 described below
+    (`settle` +181, `drop_cdn_caching` +137, the extensions map +92, +87, +58 and +29, and +134 in
+    allocation) and +94 in `memcmp` and `StandardHeader::as_str`, not in round 16's breakdown and
+    not attributed further. Main's header comparisons put the head 597 to 656 under round 17's
+    counts below. These are instructions in process, not cycles, as below;
+    2026-11-23, at `75a353e3f` (round 17's code) against round 16's head `0f91c708d`,
+    built with Rust 1.100.0 (three rounds alternating the two builds and `ea8dd1ea8`, every run within
+    1.8 of the others): the plain page 2 fewer (16,400.6 against 16,402.7), the settle probe's
+    `cookie` page, a `Cache` answer that sets a cookie, which round 17 marks `Personal` for an app that
+    relays it inline, 137 more (19,580.5 against 19,443.6), all of it the mark: the hash map's insert
+    in the answer's extensions (+81), `Extensions::insert` (+19), the map's drop (+18) and `settle`
+    (+19), and a
+    tool's answer from an endpoint whose `Tools::auth` found its caller 12 more (29,641.8 against
+    29,629.8, and `ea8dd1ea8`, which looked for the cookie of an answer already marked, 114 more, in the
+    header map's lookups). These are instructions in process, not cycles, as below; 2026-11-23, the
+    plain page in `tests::cache::what_settling_a_page_costs` at
+    `b5f02010b` (round 16's code) against main `6f1bbf055`, which it merged, and round 15's head
+    `d2f6c8731` (three rounds alternating the three builds, every run within 3.6 of the others):
+    126 more (16,421.6 against 16,295.6), 25 more than round 15's head (16,396.6), all of it in
+    `cache::settle`, which looks for the `Personal` mark on every staged answer; 2026-11-23, the
+    MCP endpoint at `b5f02010b` against `6f1bbf055` the same way: a call the tool answers 167
+    more (27,735.0 against 27,568.0; round 15's head 165 more), the two failures round 15 marked
+    779 and 787 more (34,057.5 against 33,278.7; 31,831.4 against 31,044.2), and a tool's answer
+    from an endpoint whose `Tools::auth` found its caller, which round 16 marks `Personal`, 829
+    more (29,629.9 against 28,800.8; round 15's head 159 more), of which, by function against round
+    15's head, 670 is that mark: settling the answer as personal (`settle` +157,
+    `drop_cdn_caching` +137) and the answer's extensions map made, grown and dropped to hold it
+    (+92, +87, +58, and +134 in allocation), paid only by an endpoint that checks its caller.
+    These are instructions in process, not cycles, as below; 2026-11-23, the plain page in
+    `tests::cache::what_settling_a_page_costs` at
+    `2dc94faf2` (round 15's head) against main `14126d2a8`, which it merged (three rounds
+    alternating the two builds, every run within 0.1 of the others): 104 more (16,396.6 against
+    16,292.6); 2026-11-23, an MCP tool call in `tests::cache::what_an_mcp_call_costs` (an app's MCP
+    endpoint, one read tool, in process) at `2dc94faf2` against `14126d2a8`, the same way (every
+    run within 4.7 of the others): a call the tool answers 135 more (27,601.0 against 27,466.0), of which, by function,
+    125 is the cache rule reading the answer's headers (`settle`, `sets_cookie` and the header
+    map), not the endpoint, and 12 the tool call's handler; 2026-11-23, the two MCP failures this
+    round's head marks and settles as Corten's, at `2dc94faf2` against `14126d2a8` the same way: a call whose arguments do not fit the
+    tool, the `isError` result Corten makes in its place, 766 more (33,976.7 against 33,210.7), and
+    a call to a tool the endpoint does not have, Corten's JSON-RPC error, 771 more (31,769.4 against
+    30,998.2). These are instructions in process, not cycles: the quiet-host cycle run as round 15
+    declared it (the plain and kept pages, the router's and Corten's failures, the catalog's item
+    page and JSON) had no MCP workload, and the current declaration has two (an authenticated tool
+    call and a call to a tool the endpoint does not have) and has not been measured, so these counts are
+    the MCP endpoint's only evidence and its cycles under load are outstanding; 2026-11-23, the same plain page at
+    `ee2d8f7f0` (round 14's head) against main `a01dd5109`, which it merged (three rounds
+    alternating the two builds, every run within 1.2 of the others): 104 more (16,383.6 against
+    16,279.6); 2026-11-23, the same at
+    `6fb4c7fcc` (round 13's head) against main `04530f7e0` built again (three rounds alternating
+    the two builds, every run within 0.1 of the others): 104 more (16,399.6 against 16,295.6);
+    2026-11-23, the same at
+    `ef2c15eb8` (round 12's head) against main `04530f7e0` (its code as at `a02c81e86`, with the
+    head's probe; three rounds alternating the two builds, every run within 1.2 of the others):
+    105 more (16,384.6 against 16,279.7); 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
+    `tests::cache::what_settling_a_page_costs` at `30cadaaeb` against main `a138e2391` (three
+    rounds alternating the two builds, every run within 2.3 of the others): 111 more on the
+    plain page (16,509.6 against 16,398.6), 11 on the unstaged route (6,400.9 against 6,390.0)
+    and the control the same (3,084.7); 2026-11-22, the same in
+    `tests::cache::what_settling_a_page_costs` at `2960a7abe` against main `63e7c3314` (three
+    rounds alternating the two builds, every run within 2.2 of the others), and the plain page by
+    function against it; 2026-11-22, the same at `57f2138a4` against main `7a275ef15`, which it
+    merged (three rounds alternating the two builds, every run within 2.2 of the others);
+    2026-11-22, the same at `696d96a71` against main `153be9116` and
+    round 7's head merged with it (`f02560816`), three rounds alternating the three builds (every
+    run within 1.5 of the others), and the plain page by function against both; 2026-11-22, the
+    unstaged route and the `service_fn` control at `402a11a08` against main `56e9b6b66`
+    (callgrind, release, jemalloc, three rounds alternating the builds, main six, every run
+    within 3.7 of the others) and at `4630a2ff2` against main `cf4435c91` (every run within 4.4
+    of the others), and the plain page's instructions by function at `402a11a08` against
+    `2e8d9bafc` and at `4630a2ff2` against
+    `eaab8be27`; 2026-11-21, the same two at `ab6f8d3a2` against main `564034b86`, and at
+    `9e2002468`, after merging main `e7e89add8`, against it, the same counts (every run within 0.2
+    of the others); 2026-11-20,
+    `staged_page_future_sizes` at `3089d0a97`, after it failed on main: the stage future grew
+    from 2,632 to 3,008 bytes in a debug build and from 2,176 to 2,280 in a release one, holding
+    the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
     it). This Choice's catalog GET counts were taken with that snapshot and are what the stages
     cost with it, so the Choice stands and the measurements moved; 2026-11-19, the header lookup, extension
