@@ -48,8 +48,8 @@ jobs:
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
-      # The same unit tests with every server they start on Corten's own HTTP/1.1 connection
-      # (App::own_http1, docs/design.md#choice-own-http1).
+      # The same unit tests with the servers they start with the default connection on Corten's
+      # own HTTP/1.1 connection (App::own_http1, docs/design.md#choice-own-http1).
       - run: CORTEN_TEST_OWN_HTTP1=1 cargo test -p corten-run --all-features --lib
       - run: cargo test -p corten-run --no-default-features
       # The JSON features alone, as an app takes them: the workspace turns on serde's `rc`, which an
