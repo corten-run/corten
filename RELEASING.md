@@ -22,7 +22,8 @@ keeping or changing the cadence. No schedule is in effect until approved.
 2. Require passing [checks](CONTRIBUTING.md#checks), [independent review](CONTRIBUTING.md#review)
    and [performance evidence](CONTRIBUTING.md#pull-requests) where a change affects rendering,
    the runtime or the request path. Apply these to the changes being shipped, not only the
-   version bump. Until a trend run reads `main` against the last release, take
+   version bump. Until a trend run reads `main` against the last release (the command is in
+   [`bench/placement`](bench/placement/README.md#the-trend), and no run has been made), take
    [`bench/request-cost`](bench/request-cost/README.md)'s counts of the candidate and of the
    last release's tag and record both in the release-preparation pull request, or that its
    probe does not build against that tag. The first release to record them is the baseline:

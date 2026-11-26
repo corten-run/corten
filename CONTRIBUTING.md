@@ -572,10 +572,14 @@ establish a general ranking.
       description. A pull request that declares a plan once this paragraph is on `main` is
       measured and stays so: it does not go from measured to counted.
 
-      **Trend.** `main` is to be read across placements against the last release on a schedule,
-      so that costs that each passed do not add up unseen.
-      [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
-      asks for that run, and none has been made: until one is, no reading sees what counted
+      **Trend.** `main` is to be read across placements against the last release, weekly and
+      before each release, so that costs that each passed do not add up unseen
+      ([#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)).
+      One command of [`bench/placement`](bench/placement/README.md#the-trend) makes the run on
+      a quiet host and adds a row to [the trend's page](bench/placement/trend/README.md). A row
+      gates no pull request and no release: a run past the threshold (`main` at least +2% over
+      the release on a workload, a proposal) opens an issue that names the pull requests merged
+      since the run before. No run has been made: until one is, no reading sees what counted
       changes add up to in cycles, and a release takes the kit's counts of its candidate
       against the last release ([RELEASING.md](RELEASING.md#readiness-checkpoints)).
 
