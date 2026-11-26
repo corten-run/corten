@@ -2343,6 +2343,11 @@ builds against.
   site's name whatever host was asked for, not to the host the request named. A test of the
   site looks in the checkout for every file or directory the page links to in the repository
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
+- Under `corten dev` the log says, once for each route and verdict, whether a release build
+  would keep a `Public` route's answer to a `GET` that shows nothing about who asks while its
+  store has room, and if not the first reason and what to change
+  ([#1801 Nothing tells an author whether a Public page is kept, or why not](https://github.com/corten-run/corten/issues/1801)).
+  Of a body sent in pieces it says only what `corten dev` saw as it was sent.
 
 #### Changed
 
