@@ -407,24 +407,27 @@ export async function pageWrites(page, browser) {
   };
   {
     const { own, seen } = await writtenPage(brand);
-    const first = await shownOf(own);
-    await actWithin("the press of the form's button", own.click("main form button"));
-    const drawn = await writtenIn(own);
-    const shown = await shownOf(own);
-    check(
-      "a write's own page is whole, and what the write changed around <main> is drawn in the same document",
-      first.brand === "Watchlist" &&
-        drawn &&
-        seen.asked.at(-1) === "POST /smoke/written action" &&
-        !("corten-page" in seen.answered) &&
-        "corten-shell" in seen.answered &&
-        shown.brand === "Watchlist, written" &&
-        shown.same &&
-        shown.path === "/smoke/written" &&
-        shown.title === "Written | Watchlist",
-      JSON.stringify({ first: first.brand, drawn, asked: seen.asked, page: seen.answered["corten-page"] ?? null, shown }),
-    );
-    await closeContext(own.context(), "the whole write case's context");
+    try {
+      const first = await shownOf(own);
+      await actWithin("the press of the form's button", own.click("main form button"));
+      const drawn = await writtenIn(own);
+      const shown = await shownOf(own);
+      check(
+        "a write's own page is whole, and what the write changed around <main> is drawn in the same document",
+        first.brand === "Watchlist" &&
+          drawn &&
+          seen.asked.at(-1) === "POST /smoke/written action" &&
+          !("corten-page" in seen.answered) &&
+          "corten-shell" in seen.answered &&
+          shown.brand === "Watchlist, written" &&
+          shown.same &&
+          shown.path === "/smoke/written" &&
+          shown.title === "Written | Watchlist",
+        JSON.stringify({ first: first.brand, drawn, asked: seen.asked, page: seen.answered["corten-page"] ?? null, shown }),
+      );
+    } finally {
+      await closeContext(own.context(), "the whole write case's context");
+    }
   }
   // Left while the write's own page is on its way (its modules still loading), by a link to a page
   // in the same area and layout, which a navigation swaps in: the write is done, so that page is
@@ -1306,36 +1309,39 @@ export async function pageWrites(page, browser) {
     const refusal = (/** @type {string} */ body, /** @type {number} */ _writes, /** @type {Record<string, string> | undefined} */ headers) =>
       find(brand(headers ? body.replace("<button>Write</button>", `${"<br>".repeat(200)}<input name="price" aria-invalid="true" value="1.2"><button>Write</button>`) : body));
     const { own, seen } = await writtenPage(refusal, find);
-    seen.status = 422;
-    const entries = await readWithin("the page's history length", own.evaluate(() => history.length));
-    await actWithin("the layout field's fill", own.fill("#smoke-find", "abcdef"));
-    await actWithin("the press of the form's button", own.click("main form button"));
-    const drawn = await cameWithin(5000, own.waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 }));
-    const shown = await shownOf(own);
-    const state = await readWithin("the refused page's state", own.evaluate(() => {
-      const findIn = /** @type {HTMLInputElement | null} */ (document.getElementById("smoke-find"));
-      const field = document.activeElement?.getBoundingClientRect();
-      return {
-        entries: history.length,
-        find: findIn?.value,
-        // Shown, not whole: WebKit scrolls a focused field just far enough to show part of it.
-        inView: !!field && field.bottom > 0 && field.top < innerHeight,
-        scrolled: scrollY > 0,
-      };
-    }));
-    check(
-      "a write's own page that refuses it keeps the document, address and history, focuses the field it marked, in view, and keeps what the user typed in the layout",
-      drawn &&
-        shown.brand === "Watchlist, written" &&
-        shown.same &&
-        shown.path === "/smoke/written" &&
-        state.entries === entries &&
-        state.find === "abcdef" &&
-        state.inView &&
-        state.scrolled,
-      JSON.stringify({ drawn, shown, entries, state }),
-    );
-    await closeContext(own.context(), "the refused write case's context");
+    try {
+      seen.status = 422;
+      const entries = await readWithin("the page's history length", own.evaluate(() => history.length));
+      await actWithin("the layout field's fill", own.fill("#smoke-find", "abcdef"));
+      await actWithin("the press of the form's button", own.click("main form button"));
+      const drawn = await cameWithin(5000, own.waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 }));
+      const shown = await shownOf(own);
+      const state = await readWithin("the refused page's state", own.evaluate(() => {
+        const findIn = /** @type {HTMLInputElement | null} */ (document.getElementById("smoke-find"));
+        const field = document.activeElement?.getBoundingClientRect();
+        return {
+          entries: history.length,
+          find: findIn?.value,
+          // Shown, not whole: WebKit scrolls a focused field just far enough to show part of it.
+          inView: !!field && field.bottom > 0 && field.top < innerHeight,
+          scrolled: scrollY > 0,
+        };
+      }));
+      check(
+        "a write's own page that refuses it keeps the document, address and history, focuses the field it marked, in view, and keeps what the user typed in the layout",
+        drawn &&
+          shown.brand === "Watchlist, written" &&
+          shown.same &&
+          shown.path === "/smoke/written" &&
+          state.entries === entries &&
+          state.find === "abcdef" &&
+          state.inView &&
+          state.scrolled,
+        JSON.stringify({ drawn, shown, entries, state }),
+      );
+    } finally {
+      await closeContext(own.context(), "the refused write case's context");
+    }
   }
   // A write's own page whose frame differs from the page's draws <main> alone, and the layout's
   // elements that are the page's (the sector links, `page` in `html!`) with it, as a navigation
@@ -1351,16 +1357,19 @@ export async function pageWrites(page, browser) {
           : `<form${attrs}><input name="parentElement" type="hidden">${content}</form>`;
       });
     const { own } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
-    const first = await shownOf(own);
-    await actWithin("the press of the form's button", own.click("main form button"));
-    const drawn = await writtenIn(own);
-    const shown = await shownOf(own);
-    check(
-      `a write's own page in another frame draws <main> and its layout parts with a form control named ${shadow}`,
-      first.section === "Old section" && drawn && shown.section === "New section" && shown.same && shown.path === "/smoke/written",
-      JSON.stringify({ first: first.section, drawn, shown }),
-    );
-    await closeContext(own.context(), "the other frame case's context");
+    try {
+      const first = await shownOf(own);
+      await actWithin("the press of the form's button", own.click("main form button"));
+      const drawn = await writtenIn(own);
+      const shown = await shownOf(own);
+      check(
+        `a write's own page in another frame draws <main> and its layout parts with a form control named ${shadow}`,
+        first.section === "Old section" && drawn && shown.section === "New section" && shown.same && shown.path === "/smoke/written",
+        JSON.stringify({ first: first.section, drawn, shown }),
+      );
+    } finally {
+      await closeContext(own.context(), "the other frame case's context");
+    }
   }
   // A write sent without its `Prefer: corten-draws=whole`, as a runtime from before it sends one (a tab open across
   // the deploy that brought it): the server answers <main> alone, as it did then, which that
@@ -1411,20 +1420,23 @@ export async function pageWrites(page, browser) {
       headers["corten-shell"] = "old-deploy";
       return body.replace("Written by the form's own page.", "An old server refused this write.");
     });
-    seen.draws = false;
-    seen.status = 422;
-    const reloaded = cameWithin(5000, own.waitForEvent("framenavigated", { predicate: (frame) => frame === own.mainFrame(), timeout: 5000 }));
-    await readWithin("the press of the form's button", own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click()));
-    const loaded = await reloaded;
-    const shown = await shownOf(own);
-    const refused = await readWithin("the refused page's main", own.locator("main").textContent());
-    check(
-      "a legacy action answer with a different shell key reloads without drawing or resending the refusal",
-      loaded && "corten-page" in seen.answered && !shown.same && shown.path === "/smoke/written" && seen.writes === 1 &&
-        seen.asked.filter((ask) => ask === "GET /smoke/written -").length === 2 && !refused?.includes("refused this write"),
-      JSON.stringify({ loaded, shown, writes: seen.writes, asked: seen.asked, refused }),
-    );
-    await closeContext(own.context(), "the shell key case's context");
+    try {
+      seen.draws = false;
+      seen.status = 422;
+      const reloaded = cameWithin(5000, own.waitForEvent("framenavigated", { predicate: (frame) => frame === own.mainFrame(), timeout: 5000 }));
+      await readWithin("the press of the form's button", own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click()));
+      const loaded = await reloaded;
+      const shown = await shownOf(own);
+      const refused = await readWithin("the refused page's main", own.locator("main").textContent());
+      check(
+        "a legacy action answer with a different shell key reloads without drawing or resending the refusal",
+        loaded && "corten-page" in seen.answered && !shown.same && shown.path === "/smoke/written" && seen.writes === 1 &&
+          seen.asked.filter((ask) => ask === "GET /smoke/written -").length === 2 && !refused?.includes("refused this write"),
+        JSON.stringify({ loaded, shown, writes: seen.writes, asked: seen.asked, refused }),
+      );
+    } finally {
+      await closeContext(own.context(), "the shell key case's context");
+    }
   }
   // A write that answers a patch (here one for an element of the layout) is done once its answer
   // comes, but drawn only once the scripts the patch names load. Left by a link in that window,

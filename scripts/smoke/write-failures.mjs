@@ -455,7 +455,7 @@ export async function writeFailures(browser) {
         () => releaseRead(),
         () => failPost(),
         () => endCase(),
-        () => page?.unrouteAll({ behavior: "ignoreErrors" }),
+        () => page && within(5000, "the case's routes were not removed within 5 s", page.unrouteAll({ behavior: "ignoreErrors" })),
         () => within(10_000, "the case's browser context did not close within 10 s", context.close()),
       );
     }
@@ -583,7 +583,7 @@ async function readAgainAfterReplace(browser) {
     await cleanUp(
       () => releaseRead(),
       () => failPost(),
-      () => page?.unrouteAll({ behavior: "ignoreErrors" }),
+      () => page && within(5000, "the case's routes were not removed within 5 s", page.unrouteAll({ behavior: "ignoreErrors" })),
       () => within(10_000, "the case's browser context did not close within 10 s", context.close()),
     );
   }

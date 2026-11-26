@@ -627,10 +627,19 @@ than keeping the case from its cleanup. Every other driver action the cases of a
 itself again, of a patch's reads (its refusals included), of a write's own page and of the held slow
 part make before a check or its cleanup (a click, fill, key press or load) is bounded the same way
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
-own time by the smoke's clock, so one whose answer comes late or never counts as one that did not
-come. The check that a read the server
-fails stops the reads requires that read sent within five seconds of the press, counted from just
-before the check asks for the key press, and its 502 answer received in full (the browser finished
+own time by the smoke's clock. Where a check rests on a wait, that wait must come in its time, so one
+whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
+seconds, required by every check that waits for it), the wait for `Saving...` before a removal's
+`Saved.`, and the wait for a refused field's mark (five seconds), which must also still be on the
+field in the sample the check reads. The other waits in these cases only end a look, and the check
+rests on what is read after them or on what the page or the route recorded: a navigation's own
+`Saving...`, which the page notes by its own clock (above), and the held slow part's busy, done and
+failed marks, read once each wait has come or run out. The check that a read the server
+fails stops the reads takes as the press's read the first part read the check hears after the
+alert's own POST, itself heard from just before the check asks for the key press on, so a part read
+sent while the check fills or focuses the form is not taken for it. It requires that read sent within
+five seconds of the press, counted from that same moment, and that read's own answer, with status
+502, received in full (the browser finished
 loading that exact request) within five seconds of that read being sent, each judged by the time
 the check heard the browser's event (the request sent, and finished), not by when it looked, so a
 read or an answer heard after its five seconds fails it however soon the check then sees it; only

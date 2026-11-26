@@ -1,4 +1,4 @@
-import { base, engine, skip, check, steps, within, readWithin, opened, closeContext } from "./helpers.mjs";
+import { base, engine, skip, check, steps, within, readWithin, actWithin, opened, closeContext } from "./helpers.mjs";
 
 export async function patchUploads(errors, page, part) {
   const errorsBeforeUpload = errors.length;
@@ -667,8 +667,9 @@ export async function uploads(page, live, errors, signsIn) {
     /** @type {import("playwright").BrowserContext | undefined} */
     let noScript;
     // Its context is closed however the case ends, a throw while setting it up or reading an
-    // outcome included; making it and its page and closing it are each bounded to 30 s, Playwright's
-    // own timeout, and setting its cookies to 5 s.
+    // outcome included; making it and its page, closing it, its page's load and each fill and choice
+    // of a file are each bounded to 30 s, Playwright's own timeout, by the smoke's clock
+    // (`actWithin`), and setting its cookies to 5 s.
     try {
       const browser = /** @type {import("playwright").Browser} */ (page.context().browser());
       noScript = await opened("the no-JavaScript context", browser.newContext({ javaScriptEnabled: false }));
@@ -682,7 +683,7 @@ export async function uploads(page, live, errors, signsIn) {
           .then((cookies) => made.addCookies(cookies)),
       );
       const plainAccount = await within(30_000, "the no-JavaScript page was not made within 30 s", noScript.newPage());
-      await plainAccount.goto(`${base}/account`);
+      await actWithin("the no-JavaScript account page's load", plainAccount.goto(`${base}/account`));
       /** Why the posts stopped: the step an earlier post missed, or the check that failed, or "" while they go on. */
       let stopped = "";
       /**
@@ -754,7 +755,7 @@ export async function uploads(page, live, errors, signsIn) {
         if (!ok) stopped ||= `the check before it failed (${name})`;
       };
       const nameButton = "main form:has(input[name=name]) button";
-      await plainAccount.fill("main input[name=name]", "Ada");
+      await actWithin("the no-JavaScript name's fill", plainAccount.fill("main input[name=name]", "Ada"));
       const { answer: renamed, missed: renameMissed } = await post(nameButton);
       const at = new URL(plainAccount.url());
       const backAt = !!renamed && new URL(renamed.url()).search === "?do=name" && renamed.status() === 303 && at.pathname === "/account" && at.search === "";
@@ -764,7 +765,7 @@ export async function uploads(page, live, errors, signsIn) {
         backAt && (renamedMain ?? "").includes("Signed in as Ada."),
         renamed ? `${renamed.url()} ${renamed.status()} ${plainAccount.url()}` : renameMissed,
       );
-      if (!stopped) await plainAccount.fill("main input[name=name]", " ");
+      if (!stopped) await actWithin("the no-JavaScript refused name's fill", plainAccount.fill("main input[name=name]", " "));
       const { answer: refused, missed: refuseMissed } = await post(nameButton);
       const reason = refused ? await readWithin("the refused name's reason", plainAccount.textContent("#name-result")) : null;
       checkPost(
@@ -773,7 +774,7 @@ export async function uploads(page, live, errors, signsIn) {
         refused ? `${refused.status()} ${plainAccount.url()} ${reason}` : refuseMissed,
       );
       // From the page drawn at do=name, the picture's form still posts to its own address.
-      if (!stopped) await plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+      if (!stopped) await actWithin("the no-JavaScript picture's choice", plainAccount.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]));
       const { answer: uploadedPlain, missed: uploadMissed } = await post("main form[enctype] button");
       const plainType = uploadedPlain ? ((await readWithin("the picture post's content type", uploadedPlain.request().headerValue("content-type"))) ?? "") : "";
       const avatar = uploadedPlain ? await readWithin("the picture's result", plainAccount.textContent("#avatar-result")) : null;
