@@ -157,6 +157,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const wentTo = (nav) =>
       nav.saving ? "Saving... drawn by the navigation" : nav.sameDocument ? `no Saving... drawn by the navigation (the page at ${nav.at} says ${nav.status})` : `a new document loaded (at ${nav.at}, saying ${nav.status})`;
     const saved = () => page.textContent("#alert-status");
+    /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
+    const savedLine = '<p id="alert-status" role="status">Saved.</p>';
+    const savingLine = '<p id="alert-status" role="status">Saving...</p>';
     const savedSoon = () =>
       page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
     /** @type {string[]} */
@@ -237,8 +240,6 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       /** Whether the case has its baseline, and has let the first part read go. */
       let baselined = false;
       let documentStandIn = false;
-      const savedLine = '<p id="alert-status" role="status">Saved.</p>';
-      const savingLine = '<p id="alert-status" role="status">Saving...</p>';
       const pendingDocument = async (/** @type {import("@playwright/test").Route} */ route) => {
         documentAnswered = true;
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
@@ -870,18 +871,54 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // Firefox asks for.
     /** A page's markup without its parts' read-again tags, so it asks to be read whole. @param {string} body */
     const asWhole = (body) => body.replace(/<template data-corten-read-again[^>]*><\/template>/g, "");
+    /**
+     * Each read of a page these cases read whole by the runtime (`corten: nav`, or `page` for a
+     * whole read; a prefetch aside), by address (path and query), in the order it reached the route,
+     * with whether it was `go`'s navigation's own fetch, so a check can count the reads after it.
+     * @type {{ address: string, navigation: boolean }[]}
+     */
+    const wholeReads = [];
+    /** What each of `go`'s navigations here was answered with, by address, for a check's detail. @type {Map<string, string>} */
+    const wholeSeeded = new Map();
+    /**
+     * `body`, a whole page's answer, as the server writes it while its write lands: its status line
+     * saying `Saving...` and its head asking to be read again after `AGAIN_SECONDS` (the alerts
+     * page's own wait), whatever the store had when it was read. @param {string} body
+     */
+    const stillSaving = (body) => {
+      const head = `<noscript data-corten-read-again="${AGAIN_SECONDS}" data-corten-head><meta http-equiv="refresh" content="${AGAIN_SECONDS}"></noscript>`;
+      const bare = body.replace(/<noscript data-corten-read-again[^>]*>[\s\S]*?<\/noscript>/g, "").replace(savedLine, savingLine);
+      return bare.includes("</title>") ? bare.replace("</title>", `</title>${head}`) : `${head}${bare}`;
+    };
     const wholeOnly = async (/** @type {import("@playwright/test").Route} */ route) => {
-      if (route.request().headers()["corten"] === "action") return route.fallback();
-      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const request = route.request();
+      const mode = request.headers()["corten"];
+      if (mode === "action") return route.fallback();
+      const asked = new URL(request.url());
+      const address = asked.pathname + asked.search;
+      const prefetch = request.headers()["purpose"] === "prefetch" || !!request.headers()["sec-purpose"]?.includes("prefetch");
+      // The runtime's reads (`corten: nav`, or `page` for a whole read); `go`'s navigation's own
+      // fetch is the one that finds its token waiting.
+      const read = request.method() === "GET" && (mode === "nav" || mode === "page") && !prefetch;
+      const navigation = read && navTokens.has(address);
+      if (read) wholeReads.push({ address, navigation });
+      const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
-      const asked = new URL(route.request().url());
-      const mode = route.request().headers()["corten"];
       const whole = asWhole(await res.text());
-      // The runtime's navigation (`corten: nav`, or `page` for a whole read) carries `go`'s token.
-      const body = mode === "nav" || mode === "page" ? markNav(asked.pathname + asked.search, whole) : whole;
-      await route.fulfill({ status: res.status(), headers, body });
+      if (!navigation) return route.fulfill({ status: res.status(), headers, body: whole });
+      // The write lands 1.5 s after it is sent, and a loaded browser's navigation can reach the
+      // server after that, when the right answer is `Saved.` with nothing to read again, so the
+      // navigation's own fetch alone is answered as the server answers it while the write lands
+      // (#2035), as `seedNavigation` answers the part cases'. Every read after it is the server's.
+      const shows = whole.includes(savedLine) ? "Saved." : whole.includes(savingLine) ? "Saving..." : null;
+      if (!res.ok() || shows === null) {
+        wholeSeeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
+        return route.fulfill({ status: res.status(), headers, body: markNav(address, whole) });
+      }
+      wholeSeeded.set(address, `the stand-in, the server's saying ${shows}`);
+      await route.fulfill({ status: res.status(), headers, body: markNav(address, stillSaving(whole)) });
     };
     await page.route("**/alerts?saved=*", wholeOnly);
     page.on("request", onSaved);
@@ -1124,16 +1161,30 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // `Saving...` as the navigation drew it, recorded by the page (`go`), not looked at once it
       // returns, by when the page may have read itself again and say `Saved.`; `Saved.` once the
       // page has read itself again, in the same document.
-      const nav = await go(await pending());
+      const target = await pending();
+      const address = new URL(target).pathname + new URL(target).search;
+      const readFrom = wholeReads.length;
+      const nav = await go(target);
       await savedSoon();
       const status = await saved();
       const kept = await page.evaluate((token) => (/** @type {any} */ (window)).__marker === 6 && (/** @type {any} */ (window)).__smokeGo?.token === token, nav.token);
       check(
         "a page reached by the runtime's navigation reads itself again in place",
         nav.saving && nav.sameDocument && status === "Saved." && kept,
-        `${wentTo(nav)} -> ${status}${kept ? "" : ", the document not kept"}`,
+        `${wentTo(nav)} (answered with ${wholeSeeded.get(address) ?? "nothing seen"}) -> ${status}${kept ? "" : ", the document not kept"}`,
       );
-      check("each read replaces the history entry", (await page.evaluate(() => history.length)) === entries + 1, `${entries} -> ${await page.evaluate(() => history.length)}`);
+      // The page's reads of its own address after the navigation's fetch: with none, the history
+      // length shows only that the navigation added its entry, not what a read does to it. The
+      // navigation's answer says `Saving...`, so `Saved.` on the page is a read's answer drawn.
+      const since = wholeReads.slice(readFrom);
+      const navAt = since.findIndex((r) => r.navigation && r.address === address);
+      const polls = navAt < 0 ? 0 : since.slice(navAt + 1).filter((r) => r.address === address).length;
+      const length = await page.evaluate(() => history.length);
+      check(
+        "each read replaces the history entry",
+        polls > 0 && status === "Saved." && length === entries + 1,
+        `${entries} -> ${length} after ${navAt < 0 ? "no navigation fetch seen and " : ""}${polls} reads of ${address} after the navigation's, the page saying ${status}`,
+      );
       // Away while a write lands: once the page is in and has armed its read again (the head's
       // read-again tag), it is left at once, with no wait for its text. A write that landed before
       // the page came in arms nothing, so another is tried.

@@ -422,15 +422,18 @@ second after it loads and whenever its answer changes, so a click that found the
 link) before a swap can reach nothing and send nothing
 ([#2035 Five more Firefox smoke cases fail intermittently under load](https://github.com/corten-run/corten/issues/2035)).
 The second write of the check that a failed write stays shown after the page read itself whole is
-the exception: it is clicked, the click must land within five seconds of being asked for, and its
-write must reach the stand-in within five seconds of the click returning. A press in one page task
-can come between a whole read's answer and its draw, which replaces the form while the write is
-out; the runtime then says the failure on the form's successor or the document
+pressed the same way, in one page task whose press and write reaching the stand-in share one
+five-second budget, while the page's next read of itself after that whole read is held at the
+stand-in, answer and all: that read must reach the stand-in within five seconds of the whole read's
+draw being seen, and it is let go only after the press, once the failure is shown (within five
+seconds) or the press has failed. So no read's answer is drawn between the press finding the
+button and pressing it, nor while the write is out. A draw while the write is out replaces the
+form, and the runtime then says the failure on the form's successor or the document
 ([#2068 A write's failure is announced on the form a page read already replaced, so the page shows no failure](https://github.com/corten-run/corten/issues/2068)),
-and other cases test that. This check does not cover that order: it clicks only once the whole read before the click is
-drawn, which it tells from the write's own page by a mark the stand-in puts in each whole page
-after the write (the page's first read of itself after the stand-in answered the first write,
-asked within five seconds of that answer, and drawn as below). A write's own `<main>` they wait
+and other cases test that. This check does not cover that order: it presses only once the whole
+read before the press is drawn, which it tells from the write's own page by a mark the stand-in
+puts in each whole page after the write (the page's first read of itself after the stand-in
+answered the first write, asked within five seconds of that answer, and drawn as below). A write's own `<main>` they wait
 for is noted the moment it is drawn with no element busy, within five seconds of the check seeing
 the write sent, since the page's next read draws the form over it a second later; where a case
 also waits for the brand that write changed, the brand must show the write's value at that same
