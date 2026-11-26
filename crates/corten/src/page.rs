@@ -764,9 +764,9 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
     // the same text share a group: the runtime would clear the mark of one of them.
     let text = crate::fnv::extend(crate::fnv::OFFSET, urls.as_bytes());
     let hash = match &also {
-        None => entries.iter().fold(text, |hash, entry| {
-            crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])
-        }),
+        None => entries
+            .iter()
+            .fold(text, |hash, entry| crate::fnv::extend(hash, &[entry.1 as u8, (entry.0 >> 8) as u8, entry.0 as u8])),
         Some(also) => {
             let hash = entries.iter().fold(text, |hash, entry| {
                 crate::fnv::extend(crate::fnv::extend(hash, &[entry.1 as u8]), &(entry.0 as u64).to_le_bytes())
