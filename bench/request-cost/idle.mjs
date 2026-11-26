@@ -92,7 +92,7 @@ try {
   } catch (error) {
     throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
   }
-  const what = values.silent ? "sent nothing" : `answered ${requests} ${name}`;
+  const what = values.silent ? `sent nothing to the probe for ${name}` : `answered ${requests} ${name}`;
   console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after, ${after - before} grown, in ${page}-byte pages)`);
 } finally {
   await probe.stop();

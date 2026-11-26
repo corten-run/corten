@@ -186,11 +186,17 @@ test("idle.mjs prints a figure when the probe's open files grew by the connectio
   assert.equal(figure, Math.round(grown / 40));
 });
 
+test("idle.mjs names the case a silent run's probe was set up and warmed for", { skip }, async () => {
+  const run = await running("idle.mjs", ["--connections", "40", "--silent", "--case", "text"]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that sent nothing to the probe for text, opened in /m);
+});
+
 test("idle.mjs prints the page size getconf gives, and starts nothing without a whole one", { skip }, async () => {
   const large = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: "65536" });
   assert.equal(large.status, 0, large.stderr);
   assert.match(large.stdout, /grown, in 65536-byte pages\)$/m);
-  for (const page of ["fail", "4096.5", "0", "4k", "9".repeat(310)]) {
+  for (const page of ["fail", "4096.5", "0", "4k", "9007199254740992", "9".repeat(310)]) {
     const run = await running("idle.mjs", ["--connections", "40"], { STAND_IN_PAGE: page });
     assert.equal(run.status, 1, `page ${JSON.stringify(page)}`);
     assert.match(run.stderr, /getconf PAGESIZE did not give the page size/);
