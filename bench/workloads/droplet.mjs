@@ -63,7 +63,7 @@ const createErroredStop = () => Object.assign(new Error("provider create errored
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
-  inspectPreCreateInventory, quarantineTargets = [],
+  inspectPreCreateInventory, preCreateCensusTargets = [],
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now(),
   createReappearedIo = { durable, rename: renameSync } } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
@@ -1332,15 +1332,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await execute("git", ["merge-base", "--is-ancestor", state.commit, mergedHead]);
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
-          // With quarantine, both sightings and ordinary pre-create predicates use
-          // the same account-bracketed response. Only completeness can prove absence.
-          const quarantinePreCreate = quarantineTargets.length > 0;
-          const { rows: existing, complete } = quarantinePreCreate
-            ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", ...quarantineTargets, "--output", "json"])).stdout)
+          // With historical custody, sightings and ordinary pre-create predicates
+          // use the same account-bracketed response. Only completeness proves absence.
+          const strictCensus = preCreateCensusTargets.length > 0;
+          const { rows: existing, complete } = strictCensus
+            ? JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--pre-create-census", ...preCreateCensusTargets, "--output", "json"])).stdout)
             : { rows: await list(), complete: true };
-          assert.ok(Array.isArray(existing) && (!quarantinePreCreate
+          assert.ok(Array.isArray(existing) && (!strictCensus
             || existing.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)), "invalid pre-create census");
-          const completeInventory = complete === true && (!quarantinePreCreate || existing.length <= 200
+          const completeInventory = complete === true && (!strictCensus || existing.length <= 200
             && existing.every((d) => typeof d.name === "string" && Array.isArray(d.tags) && d.tags.length <= 256)
             && new Set(existing.map(({ id }) => id)).size === existing.length);
           try { inspectPreCreateInventory?.(existing, completeInventory); }
