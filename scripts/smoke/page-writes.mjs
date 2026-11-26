@@ -1,4 +1,4 @@
-import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, pause, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
+import { base, skip, check, pollFor, cleanUp, steps, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, exchange, letThrough, opened, closeContext } from "./helpers.mjs";
 
 export async function pageWrites(page, browser) {
   /** Whether the browser has the Navigation API, read within 5 s. */
@@ -50,11 +50,12 @@ export async function pageWrites(page, browser) {
    * A moment a read is counted from: the length of `seen.asked` then (`at`) and the time
    * (`Date.now()`, as `seen.askedAt`). Times are `Date.now()` here and in the page alike, so a time
    * the page records at an event compares with one the stand-in recorded: the browser runs on the
-   * machine that runs the checks.
-   * @typedef {{ at: number, time: number }} Since
+   * machine that runs the checks. `mono` is the same moment by the smoke's monotonic clock
+   * (`performance.now()`), for a bound the smoke counts from a press it made.
+   * @typedef {{ at: number, time: number, mono?: number }} Since
    */
-  /** Now, as a `Since`. @param {{ asked: string[] }} seen @returns {Since} */
-  const sinceNow = (seen) => ({ at: seen.asked.length, time: Date.now() });
+  /** Now, as a `Since`, by both clocks. @param {{ asked: string[] }} seen @returns {Since & { mono: number }} */
+  const sinceNow = (seen) => ({ at: seen.asked.length, time: Date.now(), mono: performance.now() });
   /**
    * A page of its own at /smoke/written, with the stand-in in front: `edit` changes each whole
    * page from the write's answer on (`written`), `before` each one until then, each given the count
@@ -97,7 +98,7 @@ export async function pageWrites(page, browser) {
       over: false,
       /** Why an answer was not given as meant (`exchange`), in the order they came. @type {string[]} */
       faults: [],
-      /** By write number, the length of `asked` and the time the browser finished that write with its marked answer. @type {Record<number, Since>} */
+      /** By write number, the length of `asked` and the time the browser finished that write with its marked answer, by both clocks. @type {Record<number, Since & { mono: number }>} */
       finished: {},
       written: false,
       fail: false,
@@ -212,6 +213,12 @@ export async function pageWrites(page, browser) {
     }
   };
   const brand = (/** @type {string} */ body) => body.replace(">Watchlist</span>", ">Watchlist, written</span>");
+  /**
+   * Whether the brand comes to read `text` within 5 s of `from`, the `performance.now()` time taken
+   * just before what draws it (a press, or a held answer let go), by the smoke's clock (`cameWithin`).
+   * @param {import("@playwright/test").Page} own @param {string} text @param {number} from
+   */
+  const brandBecomes = (own, text, from) => cameWithin(leftOf(from, 5000), own.waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 }));
   /** What the page shows of the layout, read within 5 s (`readWithin`). @param {import("@playwright/test").Page} own */
   const shownOf = (own) =>
     readWithin("what the page shows of the layout", own.evaluate(() => ({
@@ -221,10 +228,14 @@ export async function pageWrites(page, browser) {
       path: location.pathname,
       title: document.title,
     })));
-  /** Whether the write's own page comes in, within 5 s by the smoke's clock (`cameWithin`). @param {import("@playwright/test").Page} own */
-  const writtenIn = (own) =>
+  /**
+   * Whether the write's own page comes in within 5 s of `from`, the `performance.now()` time taken
+   * just before the press that sends the write, by the smoke's clock (`cameWithin`, `leftOf`).
+   * @param {import("@playwright/test").Page} own @param {number} from
+   */
+  const writtenIn = (own, from) =>
     cameWithin(
-      5000,
+      leftOf(from, 5000),
       own.waitForFunction(() => document.querySelector("main")?.textContent?.includes("Written by the form's own page.") && !document.querySelector("[aria-busy]"), null, {
         timeout: 5000,
       }),
@@ -402,14 +413,14 @@ export async function pageWrites(page, browser) {
       own.evaluate(
         ({ brand, inMain }) => {
           const w = /** @type {any} */ (window);
-          w.__writtenSeen = false;
+          w.__writtenSeen = null;
           const drawn = () =>
             !!document.querySelector("main")?.textContent?.includes("Written by the form's own page.") &&
             !document.querySelector(inMain ? "main[aria-busy], main [aria-busy]" : "[aria-busy]") &&
             (brand === null || document.querySelector("header span")?.textContent === brand);
           new MutationObserver((_, observer) => {
             if (!drawn()) return;
-            w.__writtenSeen = true;
+            w.__writtenSeen = Date.now();
             observer.disconnect();
           }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-busy"] });
         },
@@ -417,10 +428,18 @@ export async function pageWrites(page, browser) {
       ),
     );
   /**
-   * Whether `watchWritten` saw the write's own page drawn, within 5 s of the call, which a case makes
-   * the moment it sees the write sent. @param {import("@playwright/test").Page} own
+   * Whether `watchWritten` saw the write's own page drawn within 5 s of `from`, the `Date.now()` time
+   * taken just before the press that sends the write, by the time the page recorded as it drew it
+   * (`Date.now()` there, as `drawnBy` reads it): looked for until then, then once more (bounded to
+   * 5 s), so a check that looks late neither fails a draw in time nor passes one after them.
+   * @param {import("@playwright/test").Page} own @param {number} from
    */
-  const writtenSeen = async (own) => (await pollFor(5000, () => own.evaluate(() => /** @type {boolean} */ ((/** @type {any} */ (window)).__writtenSeen)))) === true;
+  const writtenSeen = async (own, from) => {
+    const by = from + 5000;
+    const look = () => own.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__writtenSeen) ?? false);
+    const drawn = (await pollFor(Math.max(0, by - Date.now()), look)) ?? (await within(5000, "the page did not say whether it drew the write's page within 5 s", look()).catch(() => false));
+    return typeof drawn === "number" && drawn <= by;
+  };
   /**
    * Marks a navigation's <main> with its read's place in `seen.asked` (as `seen.nav`), for
    * `watchMarks` to note the moment it is drawn. @param {string} body @param {number} at
@@ -452,8 +471,9 @@ export async function pageWrites(page, browser) {
     const { own, seen } = await writtenPage(brand);
     try {
       const first = await shownOf(own);
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const drawn = await writtenIn(own);
+      const drawn = await writtenIn(own, pressedAt);
       const shown = await shownOf(own);
       check(
         "a write's own page is whole, and what the write changed around <main> is drawn in the same document",
@@ -485,6 +505,8 @@ export async function pageWrites(page, browser) {
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
     /** @type {() => void} */
     let asked = () => {};
+    /** When the page asked for the held script, by the smoke's monotonic clock. @type {number | null} */
+    let askedAt = null;
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
     // The held script is let go and the page closed (bounded) however the case ends.
     try {
@@ -493,22 +515,31 @@ export async function pageWrites(page, browser) {
         5000,
         "the held script's route was not set within 5 s",
         own.route("**/scripts/quoted.js", async (route) => {
+          askedAt ??= performance.now();
           asked();
           await held;
           // Let through once let go, bounded, or aborted once the case is over.
           await within(5000, "", seen.over ? route.abort() : route.fallback()).catch(() => {});
         }),
       );
+      // The script asked for within 5 s of the press, by when the route heard it (`notedBy`), and
+      // the link pressed only then; its page in within 5 s of that press.
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+      const stalled = await notedBy(pressedAt + 5000, () => askedAt, waiting);
+      let arrived = false;
+      if (stalled) {
+        const linkAt = performance.now();
+        await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+        release();
+        arrived = await cameWithin(
+          leftOf(linkAt, 5000),
+          own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
+            timeout: 5000,
+          }),
+        );
+      }
       release();
-      const arrived = await cameWithin(
-        5000,
-        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("[aria-busy]"), null, {
-          timeout: 5000,
-        }),
-      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         leftName,
@@ -544,6 +575,8 @@ export async function pageWrites(page, browser) {
     seen.hold = (writes) => (writes === 1 ? first : undefined);
     /** @type {() => void} */
     let asked = () => {};
+    /** When the page asked for the held script, by the smoke's monotonic clock. @type {number | null} */
+    let askedAt = null;
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
     // The held write and script are let go and the page closed (bounded) however the case ends.
     try {
@@ -551,6 +584,7 @@ export async function pageWrites(page, browser) {
         5000,
         "the held script's route was not set within 5 s",
         own.route("**/scripts/quoted.js", async (route) => {
+          askedAt ??= performance.now();
           asked();
           await held;
           // Let through once let go, bounded, or aborted once the case is over.
@@ -565,22 +599,34 @@ export async function pageWrites(page, browser) {
         ),
       );
       await actWithin("the press of the form's button", own.click("main form button"));
+      const secondAt = performance.now();
       await actWithin("the press of the second form's button", own.click("#second-go"));
-      // The second write's page has come and waits for the module; then the first's comes and draws.
-      const stalled = await Promise.race([waiting, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      answerFirst();
-      const drewFirst = await cameWithin(
-        5000,
-        own.waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 }),
-      );
-      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+      // The second write's page has come and waits for the module, asked for within 5 s of the
+      // second press (`notedBy`); then the first's comes and draws, within 5 s of its answer let go,
+      // and only then is the link pressed, its page in within 5 s of that press.
+      const stalled = await notedBy(secondAt + 5000, () => askedAt, waiting);
+      let drewFirst = false;
+      let arrived = false;
+      if (stalled) {
+        const firstAt = performance.now();
+        answerFirst();
+        drewFirst = await cameWithin(
+          leftOf(firstAt, 5000),
+          own.waitForFunction(() => document.querySelector("header span")?.textContent === "Count 1" && !!document.querySelector("main p"), null, { timeout: 5000 }),
+        );
+      }
+      if (drewFirst) {
+        const linkAt = performance.now();
+        await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+        release();
+        arrived = await cameWithin(
+          leftOf(linkAt, 5000),
+          own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+            timeout: 5000,
+          }),
+        );
+      }
       release();
-      const arrived = await cameWithin(
-        5000,
-        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
-          timeout: 5000,
-        }),
-      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         bothName,
@@ -609,9 +655,10 @@ export async function pageWrites(page, browser) {
     const first = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
     /** @type {() => void} */
     let reached = () => {};
+    /** When the stand-in had done the first write and held its answer, by the smoke's monotonic clock. @type {number | null} */
+    let reachedAt = null;
     const done = new Promise((resolve) => (reached = () => resolve(true)));
-    seen.hold = (writes) => (writes === 1 ? (reached(), first) : undefined);
-    const brandIs = (/** @type {string} */ text) => cameWithin(5000, own.waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 }));
+    seen.hold = (writes) => (writes === 1 ? ((reachedAt ??= performance.now()), reached(), first) : undefined);
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
       await within(
@@ -621,19 +668,36 @@ export async function pageWrites(page, browser) {
           document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
         ),
       );
+      // Each step within 5 s of what starts it (`notedBy`, `brandBecomes`), and none pressed once one
+      // before it did not come: the first write done within 5 s of its press, the second's page drawn
+      // within 5 s of its press, the first's within 5 s of its answer let go, the link's page within
+      // 5 s of its press.
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await actWithin("the press of the second form's button", own.click("#second-go"));
-      const drewSecond = await brandIs("Count 2");
-      answerFirst();
-      const drewFirst = await brandIs("Count 1");
-      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
-      const arrived = await cameWithin(
-        5000,
-        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
-          timeout: 5000,
-        }),
-      );
+      const written = await notedBy(pressedAt + 5000, () => reachedAt, done);
+      let drewSecond = false;
+      let drewFirst = false;
+      let arrived = false;
+      if (written) {
+        const secondAt = performance.now();
+        await actWithin("the press of the second form's button", own.click("#second-go"));
+        drewSecond = await brandBecomes(own, "Count 2", secondAt);
+      }
+      if (drewSecond) {
+        const firstAt = performance.now();
+        answerFirst();
+        drewFirst = await brandBecomes(own, "Count 1", firstAt);
+      }
+      if (drewFirst) {
+        const linkAt = performance.now();
+        await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+        arrived = await cameWithin(
+          leftOf(linkAt, 5000),
+          own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+            timeout: 5000,
+          }),
+        );
+      }
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         laterName,
@@ -658,20 +722,28 @@ export async function pageWrites(page, browser) {
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
     /** @type {() => void} */
     let reached = () => {};
+    /** When the stand-in had done the write and held its answer, by the smoke's monotonic clock. @type {number | null} */
+    let reachedAt = null;
     const done = new Promise((resolve) => (reached = () => resolve(true)));
-    seen.hold = () => (reached(), held);
+    seen.hold = () => ((reachedAt ??= performance.now()), reached(), held);
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
+      // The server has done the write within 5 s of the press, its answer held (`notedBy`); only then
+      // is the link pressed, its page in within 5 s of that press.
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      // The server has done the write; its answer is held.
-      const written = await Promise.race([done, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
-      const arrived = await cameWithin(
-        5000,
-        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
-          timeout: 5000,
-        }),
-      );
+      const written = await notedBy(pressedAt + 5000, () => reachedAt, done);
+      let arrived = false;
+      if (written) {
+        const linkAt = performance.now();
+        await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+        arrived = await cameWithin(
+          leftOf(linkAt, 5000),
+          own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+            timeout: 5000,
+          }),
+        );
+      }
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       release();
       check(
@@ -709,14 +781,15 @@ export async function pageWrites(page, browser) {
       "/smoke/quoted",
     );
   /**
-   * Whether the page comes to show a write's failure in its header with nothing busy, within 5 s by
-   * the smoke's own clock (`within`): the driver's timeout counts from when it receives the wait, and
-   * a wait whose answer never comes would keep the case from its cleanup.
-   * @param {import("@playwright/test").Page} own
+   * Whether the page comes to show a write's failure in its header with nothing busy, within 5 s of
+   * `from`, the `performance.now()` time taken just before the press that sends the write, by the
+   * smoke's own clock (`within`, `leftOf`): the driver's timeout counts from when it receives the
+   * wait, and a wait whose answer never comes would keep the case from its cleanup.
+   * @param {import("@playwright/test").Page} own @param {number} from
    */
-  const failureShown = (own) =>
+  const failureShown = (own, from) =>
     within(
-      5000,
+      leftOf(from, 5000),
       "the failure was not shown within 5 s",
       own.waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }),
     ).then(
@@ -749,20 +822,22 @@ export async function pageWrites(page, browser) {
       );
       // The write the page's next read of itself follows: the failed one, or the legacy one after it.
       let follows = seen.writes + 1;
+      const pressedAt = performance.now();
       const sent = await pressWrite(own, seen, "main form button");
-      const failed = sent.ok && (await failureShown(own));
+      const failed = sent.ok && (await failureShown(own, pressedAt));
       /** @type {Pressed | null} */
       let legacySent = null;
       let legacyDrew = true;
       if (legacy) {
         seen.fail = false;
         seen.draws = false;
-        // Sent within 5 s from just before the press, then its <main> drawn within 5 s of the
-        // check seeing it sent.
+        // Sent within 5 s from just before the press, and its <main> drawn within 5 s of the press
+        // too, by the time the page recorded as it drew it.
         await watchWritten(own);
         follows = seen.writes + 1;
+        const legacyAt = Date.now();
         legacySent = await pressWrite(own, seen, "main form button");
-        legacyDrew = legacySent.ok && (await writtenSeen(own)) && "corten-page" in seen.answered;
+        legacyDrew = legacySent.ok && (await writtenSeen(own, legacyAt)) && "corten-page" in seen.answered;
       }
       // The page's first read of itself after the stand-in failed or answered that write, drawn
       // with the failure already shown (`nextPollDrawn`), and the failure still shown at a look at
@@ -789,8 +864,6 @@ export async function pageWrites(page, browser) {
       await closeContext(own.context(), "the failed write case's context");
     }
   }
-  /** Whether the brand comes to read `text`, within 5 s by the smoke's clock (`cameWithin`). @param {import("@playwright/test").Page} own @param {string} text */
-  const brandBecomes = (own, text) => cameWithin(5000, own.waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 }));
   // A write that answers a patch for an element of the layout, beside a write whose own page is
   // whole, from two forms. The stand-in gives the brand an id, so a patch can draw it: the server's
   // count of writes is drawn by each whole page, and by the second write's patch.
@@ -828,11 +901,19 @@ export async function pageWrites(page, browser) {
     try {
       await within(5000, "the second form was not added within 5 s", secondForm(own));
       await actWithin("the press of the form's button", own.click("main form button"));
+      const secondAt = performance.now();
       await actWithin("the press of the second form's button", own.click("#second-go"));
-      const patched = await brandBecomes(own, "Count 2");
-      answerFirst();
-      const drewOver = await brandBecomes(own, "Count 1");
-      const arrived = await toQuoted(own);
+      // The second write's patch drawn within 5 s of its press, the first's page within 5 s of its
+      // answer let go, and the link pressed only once both are.
+      const patched = await brandBecomes(own, "Count 2", secondAt);
+      let drewOver = false;
+      if (patched) {
+        const firstAt = performance.now();
+        answerFirst();
+        drewOver = await brandBecomes(own, "Count 1", firstAt);
+      }
+      /** @type {Pressed} */
+      const arrived = drewOver ? await toQuoted(own) : { ok: false, failed: "not pressed: a step before it did not come" };
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         overName,
@@ -860,12 +941,20 @@ export async function pageWrites(page, browser) {
     // The held write is let go and the page closed (bounded) however the case ends.
     try {
       await within(5000, "the second form was not added within 5 s", secondForm(own));
+      const firstAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
       await actWithin("the press of the second form's button", own.click("#second-go"));
-      const drewFirst = await brandBecomes(own, "Count 1");
-      answerSecond();
-      const patched = await brandBecomes(own, "Count 2");
-      const arrived = await toQuoted(own);
+      // The first write's page drawn within 5 s of its press, the second's patch within 5 s of its
+      // answer let go, and the link pressed only once both are.
+      const drewFirst = await brandBecomes(own, "Count 1", firstAt);
+      let patched = false;
+      if (drewFirst) {
+        const secondAt = performance.now();
+        answerSecond();
+        patched = await brandBecomes(own, "Count 2", secondAt);
+      }
+      /** @type {Pressed} */
+      const arrived = patched ? await toQuoted(own) : { ok: false, failed: "not pressed: a step before it did not come" };
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
         underName,
@@ -1055,26 +1144,28 @@ export async function pageWrites(page, browser) {
       // The write whose body is cut (or given): the page's next read of itself follows its answer, or,
       // with a second write, the body's release, before which it cannot fail.
       const first = seen.writes + 1;
+      const pressedAt = performance.now();
       const sent = await pressWrite(own, seen, overlap ? "#held-write button" : "main form button");
       /** The second write's press, with a second write. @type {Pressed | null} */
       let sentSecond = null;
-      // With a second write, the first's body is asked for within 5 s of its press being seen sent.
+      // With a second write, the first's body is asked for within 5 s of its press.
       let bodyAsked = !overlap;
       let drewOver = true;
       let released = !overlap;
       /** @type {Since | undefined} */
       let releasedAt;
       if (overlap && sent.ok) {
-        bodyAsked = await cameWithin(5000, own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function", null, { timeout: 5000 }));
+        bodyAsked = await cameWithin(leftOf(pressedAt, 5000), own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function", null, { timeout: 5000 }));
         drewOver = false;
         if (bodyAsked) {
           seen.status = 0;
           // The second write's own page drawn before the first's body is let go: its <main> and the
           // brand it brought at the same moment, nothing in <main> busy (the first form, outside it,
-          // waits for its body).
+          // waits for its body), within 5 s of its press.
           await watchWritten(own, "Watchlist, written", true);
+          const secondAt = Date.now();
           sentSecond = await pressWrite(own, seen, "main form button");
-          drewOver = sentSecond.ok && (await writtenSeen(own));
+          drewOver = sentSecond.ok && (await writtenSeen(own, secondAt));
           // Let go in a page task that does not wait for the body, bounded: whether the body came
           // and the failure it brings are what the bounded wait below checks. The page's next read
           // is counted from the release itself: its place among the reads is taken before the page
@@ -1188,15 +1279,17 @@ export async function pageWrites(page, browser) {
         heldAt = at;
         return heldRead;
       };
+      const firstAt = Date.now();
       const sentFirst = await pressWrite(own, seen, "main form button");
-      const drew = sentFirst.ok && (await writtenSeen(own));
+      const drew = sentFirst.ok && (await writtenSeen(own, firstAt));
       // Read whole while it reads itself again: the page's first read of itself after the stand-in
       // answered the write is asked within 5 s of that answer, and its answer drawn within 5 s of
       // that read (`drawnBy`), before the second write is clicked.
       const firstSettled = seen.settled[firstWrite];
       const wholeAt = firstSettled === undefined ? null : await readAsked(seen, firstSettled);
       const wholeBefore = wholeAt === null ? null : seen.asked[wholeAt];
-      const wholeDrawn = wholeAt !== null && (await drawnBy(own, wholeAt, seen.askedAt[wholeAt] + 5000)) !== null;
+      const wholeDraw = wholeAt === null ? null : await drawnBy(own, wholeAt, seen.askedAt[wholeAt] + 5000);
+      const wholeDrawn = wholeDraw !== null;
       seen.fail = true;
       // The second write is pressed in one page task (`pressWrite`) while the page's next read of
       // itself after the whole one is held at the stand-in (above), so no read's answer is drawn
@@ -1204,8 +1297,9 @@ export async function pageWrites(page, browser) {
       // lands on can reach no button, #2035), nor while the write is out (a draw then replaces the
       // form while the write is out, and the runtime says the failure on the form's successor or the
       // document, #2068, which other cases test). The held read must reach the stand-in within 5 s
-      // of the whole read's draw being seen; the press and its write reaching the stand-in share 5 s
-      // (`pressWrite`), and the failure must be shown within 5 s of that. Then the held read is let
+      // of the whole read's draw, by the time the page recorded for that draw and the time the read
+      // reached the stand-in; the press and its write reaching the stand-in share 5 s (`pressWrite`),
+      // and the failure must be shown within 5 s of the press. Then the held read is let
       // go: a whole read asked before the failure, which the runtime makes again as a read of <main>
       // (`deferWholeRead`, as the waiting-poll case below tests). The read checked below is the
       // first asked after the write failed, which the held one is not. Its 5 s count from the
@@ -1220,13 +1314,17 @@ export async function pageWrites(page, browser) {
       let failed = false;
       /** @type {number | undefined} */
       let secondWrite;
-      if (wholeDrawn) {
-        held = (await pollFor(5000, async () => heldAt !== null)) === true;
+      if (wholeDraw !== null) {
+        const heldBy = wholeDraw.time + 5000;
+        if (heldAt === null) await pollFor(Math.max(0, heldBy - Date.now()), async () => heldAt !== null);
+        const heldRead = heldAt;
+        held = heldRead !== null && /** @type {number} */ (seen.askedAt[heldRead]) <= heldBy;
         if (held) {
           secondWrite = seen.writes + 1;
+          const secondAt = performance.now();
           sentSecondAs = await pressWrite(own, seen, "main form button");
           sentSecond = sentSecondAs.ok;
-          failed = sentSecond && (await failureShown(own));
+          failed = sentSecond && (await failureShown(own, secondAt));
         }
       }
       releaseHeld();
@@ -1322,13 +1420,15 @@ export async function pageWrites(page, browser) {
       // The whole poll that reads the page a second after the write's page is drawn asks for the
       // stylesheet, within 5 s from just before the press.
       const asset = cameWithin(5000, own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }));
+      const sentAt = Date.now();
       got.sent = await pressWrite(own, seen, "main form button");
-      got.drew = got.sent.ok && (await writtenSeen(own));
+      got.drew = got.sent.ok && (await writtenSeen(own, sentAt));
       got.waiting = await asset;
       if (got.drew && got.waiting) {
         seen.fail = true;
+        const failingAt = performance.now();
         got.sentFailing = await pressWrite(own, seen, "main form button");
-        got.failed = got.sentFailing.ok && (await failureShown(own));
+        got.failed = got.sentFailing.ok && (await failureShown(own, failingAt));
       }
       if (got.failed) {
         // Once the held poll is out of the way, the next read asks for a partial response, and its
@@ -1374,8 +1474,9 @@ export async function pageWrites(page, browser) {
       seen.status = 422;
       const entries = await readWithin("the page's history length", own.evaluate(() => history.length));
       await actWithin("the layout field's fill", own.fill("#smoke-find", "abcdef"));
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const drawn = await cameWithin(5000, own.waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 }));
+      const drawn = await cameWithin(leftOf(pressedAt, 5000), own.waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 }));
       const shown = await shownOf(own);
       const state = await readWithin("the refused page's state", own.evaluate(() => {
         const findIn = /** @type {HTMLInputElement | null} */ (document.getElementById("smoke-find"));
@@ -1421,8 +1522,9 @@ export async function pageWrites(page, browser) {
     const { own, seen } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
     try {
       const first = await shownOf(own);
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const drawn = await writtenIn(own);
+      const drawn = await writtenIn(own, pressedAt);
       const shown = await shownOf(own);
       check(
         `a write's own page in another frame draws <main> and its layout parts with a form control named ${shadow}`,
@@ -1447,16 +1549,23 @@ export async function pageWrites(page, browser) {
     try {
       seen.draws = false;
       await within(5000, "the page's failure listener was not set within 5 s", own.evaluate(() => addEventListener("corten:error", () => ((/** @type {any} */ (window)).__failed = true))));
+      // The write's <main> drawn within 5 s of its press, and the link pressed only then, its page in
+      // within 5 s of that press.
+      const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
-      const drawn = await writtenIn(own);
+      const drawn = await writtenIn(own, pressedAt);
       const between = await readWithin("what the page shows after the write", shownOf(own));
-      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
-      const arrived = await cameWithin(
-        5000,
-        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
-          timeout: 5000,
-        }),
-      );
+      let arrived = false;
+      if (drawn) {
+        const linkAt = performance.now();
+        await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+        arrived = await cameWithin(
+          leftOf(linkAt, 5000),
+          own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+            timeout: 5000,
+          }),
+        );
+      }
       const failed = await readWithin("whether the page said a write failed", own.evaluate(() => !!(/** @type {any} */ (window)).__failed));
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       check(
@@ -1585,6 +1694,8 @@ export async function pageWrites(page, browser) {
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
     /** @type {() => void} */
     let asked = () => {};
+    /** When the page asked for the held script, by the smoke's monotonic clock. @type {number | null} */
+    let askedAt = null;
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
     // The held script is let go, its route removed and the page closed however the case ends, each
     // bounded, as setting the route is.
@@ -1593,6 +1704,7 @@ export async function pageWrites(page, browser) {
         5000,
         "the held script's route was not set within 5 s",
         own.route("**/scripts/quoted.js", async (route) => {
+          askedAt ??= performance.now();
           asked();
           await held;
           // Let through once let go, bounded, or aborted once the case is over.
@@ -1600,21 +1712,32 @@ export async function pageWrites(page, browser) {
         }),
       );
       await watchPatch();
-      await actWithin("the press of the form's button", own.click("main form button"));
       // The link is pressed only once the browser finished loading that exact write with its marked
-      // answer (its `smoke-write` mark), heard within 5 s, and the script its patch names is held: a
-      // fulfill that resolves need not have answered the write, and a request for the script does not
-      // say the write was answered.
-      const finished = (await pollFor(5000, async () => seen.finished[1] ?? false)) || null;
-      const stalled = await Promise.race([waiting, pause(5000).then(() => false)]);
-      await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+      // answer (its `smoke-write` mark) within 5 s of the press (`pressedAt`, taken just before the
+      // click is asked for), by the time the check heard it finish (`finished.mono`), and the page
+      // asked for the script its patch names, which is held, within 5 s of that finish: a fulfill
+      // that resolves need not have answered the write, and a request for the script does not say
+      // the write was answered. Without both, the link is not pressed and the case fails.
+      const pressedAt = performance.now();
+      await actWithin("the press of the form's button", own.click("main form button"));
+      const finishedBy = pressedAt + 5000;
+      const heard = (await pollFor(Math.max(0, finishedBy - performance.now()), async () => seen.finished[1] ?? false)) || null;
+      const finished = heard !== null && heard.mono <= finishedBy ? heard : null;
+      if (finished !== null && askedAt === null) await cameWithin(leftOf(finished.mono, 5000), waiting);
+      const stalled = finished !== null && askedAt !== null && askedAt <= finished.mono + 5000;
+      let arrived = false;
+      if (finished !== null && stalled) {
+        const linkAt = performance.now();
+        await actWithin("the press of the link to /smoke/quoted", own.click('main a[href="/smoke/quoted"]'));
+        release();
+        arrived = await cameWithin(
+          leftOf(linkAt, 5000),
+          own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
+            timeout: 5000,
+          }),
+        );
+      }
       release();
-      const arrived = await cameWithin(
-        5000,
-        own.waitForFunction(() => location.pathname === "/smoke/quoted" && !!document.querySelector("main output#quoted") && !document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
-          timeout: 5000,
-        }),
-      );
       const shown = await readWithin("what the page shows after the link", shownOf(own));
       const section = await sectionOf();
       const patch = await patchDrawn();
@@ -1633,7 +1756,8 @@ export async function pageWrites(page, browser) {
         patch.drawn === false &&
         shown.same &&
         seen.asked.includes("GET /smoke/quoted page");
-      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, finished, faults: seen.faults, arrived, asked: seen.asked, shown, section, patch }));
+      const timing = { pressedAt, finishedIn: heard === null ? null : Math.round(heard.mono - pressedAt), scriptAskedIn: askedAt === null ? null : Math.round(askedAt - pressedAt) };
+      check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, finished, timing, faults: seen.faults, arrived, asked: seen.asked, shown, section, patch }));
       // The patch was answered before that page was asked for, so the page's layout drew it: the
       // navigation after reads <main> alone, not the whole page again. Only its reads of
       // /smoke/written count: the pointer left on the link clicked above can make the page that comes
@@ -1648,13 +1772,14 @@ export async function pageWrites(page, browser) {
         check(returnName, false, `no write's patch held, left by a whole navigation and drawn by its page before the return: ${JSON.stringify({ stalled, answers: seen.answers, finished, faults: seen.faults, arrived, asked: seen.asked, shown, section, patch })}`);
       } else {
         const sinceReturn = seen.asked.length;
+        const returnAt = performance.now();
         await within(
           5000,
           "the page was not sent back to /smoke/written within 5 s",
           own.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/written")),
         );
         const returned = await cameWithin(
-          5000,
+          leftOf(returnAt, 5000),
           own.waitForFunction(() => location.pathname === "/smoke/written" && !!document.querySelector("main form") && !document.querySelector("main[aria-busy], main [aria-busy]"), null, {
             timeout: 5000,
           }),

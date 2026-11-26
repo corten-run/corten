@@ -157,6 +157,27 @@ const cameWithin = (ms, waiting) =>
   );
 
 /**
+ * What is left of `ms` counted from `from`, a `performance.now()` time taken just before the press
+ * (a click, a key press, a load, a page task that presses) a wait follows, never below 0: a wait for
+ * what the press leads to counts from the press, not from when the driver's action returned.
+ * @param {number} from @param {number} ms
+ */
+const leftOf = (from, ms) => Math.max(0, from + ms - performance.now());
+
+/**
+ * Whether an event a listener or route notes, at the time `at()` gives (`performance.now()` as it
+ * is heard, null until then), was noted by `by`: waits for `came` (which settles once it is noted)
+ * only until `by`, then decides by the time noted, so a check that looks late neither fails an
+ * event noted in time nor passes one noted after `by`.
+ * @param {number} by @param {() => number | null} at @param {Promise<unknown>} came
+ */
+const notedBy = async (by, at, came) => {
+  if (at() === null) await cameWithin(Math.max(0, by - performance.now()), came);
+  const noted = at();
+  return noted !== null && noted <= by;
+};
+
+/**
  * Waits `ms` by a timer of the smoke's own. A driver command (`page.waitForTimeout`) has no bound
  * on its answer: one whose answer never comes would keep a case from its cleanup.
  * @param {number} ms
@@ -552,4 +573,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, pause, steps, pollFor, cleanUp, exchange, letThrough, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, pause, steps, pollFor, cleanUp, exchange, letThrough, opened, closeContext };

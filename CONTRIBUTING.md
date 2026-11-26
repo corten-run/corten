@@ -442,8 +442,9 @@ and other cases test that. This check does not cover that order: it presses only
 read before the press is drawn, which it tells from the write's own page by a mark the stand-in
 puts in each whole page after the write (the page's first read of itself after the stand-in
 answered the first write, asked within five seconds of that answer, and drawn as below). A write's own `<main>` they wait
-for is noted the moment it is drawn with no element busy, within five seconds of the check seeing
-the write sent, since the page's next read draws the form over it a second later; where a case
+for is noted the moment it is drawn with no element busy, with the time the page drew it, and must
+be drawn within five seconds counted from just before the press that sent the write, since the
+page's next read draws the form over it a second later; where a case
 also waits for the brand that write changed, the brand must show the write's value at that same
 moment, so a brand drawn by a later whole read does not count.
 The checks that a failure stays shown while the page reads itself again require the page's first
@@ -481,8 +482,8 @@ its routes and closes its page however it ends, setting and removing its route e
 five seconds. The
 cut-body cases take a failure as the body's only when the page's own wrapper of that write's
 answer, which runs once its headers came, says it cut (or gave) the body; with a second write,
-that wrapper must be asked for the first write's body within five seconds of the check seeing the
-first write sent, and the second write's own `<main>` and the brand it brought must be drawn at the
+that wrapper must be asked for the first write's body within five seconds counted from just before
+the press of the first write, and the second write's own `<main>` and the brand it brought must be drawn at the
 same moment, with nothing in `<main>` busy (the first form, outside it, still waits for its body),
 before the first write's body is let go, in a page task that does not wait for the body, bounded
 to five seconds. The body cut (or given in full) and its failure must then both come within five
@@ -502,7 +503,9 @@ window or on another form, does not count as the body's.
 The check that a navigation leaving a write's patch before it is drawn reads the next page whole
 requires the browser to have finished loading that write with the stand-in's answer for it (its
 `requestfinished`, with the answer's own `smoke-write` mark, heard within five seconds of the press
-of the form's button), before the case presses the link, and that page to show what the write
+of the form's button, the press and the finish taken by the same monotonic clock), and the held
+script the patch asks for to have been asked within five seconds of that finish, before the case
+presses the link, which it presses only once both are confirmed; and that page to show what the write
 changed: its brand, and the section the patch draws,
 which every page after the write draws too, drawn by that page's own section element and not by the
 patch. The patch's element alone carries a mark, and a MutationObserver set before the write is sent
@@ -632,7 +635,7 @@ replaces the history entry counts only once that read's answer is drawn. The che
 place (`#alert-status`) reads itself again has the page's load of its receipt answered still saving
 whatever the store says by then, so a write that landed before the load cannot pass it, and
 requires `Saved.` drawn at the place by the answer to a later read of that receipt within six
-seconds the same way: with the Navigation API, the runtime's read in the document the case loaded
+seconds of the load's start the same way: with the Navigation API, the runtime's read in the document the case loaded
 (a full load of the receipt is not the page reading itself again in place); without it, a load of
 the receipt. That document is told by an init script added before the load, which numbers each
 document the tab makes from then on in the order they are made (a count in the page's session
@@ -640,15 +643,21 @@ storage, which a reload keeps): the document once the load returns and once the 
 be the first, so a full load at any moment after the case's own, even one before Playwright's load
 returns, fails it. The init script and its count are removed however the case ends, each bounded to
 five seconds. The check that a page waiting for a write stops once it no longer asks, after a full
-load, marks each answer to a load or read of the receipt with its place, and an init script added
-before the write is sent (the write lands 1.5 s after it is sent, so a slow addition must not leave
-the load to find it landed) notes in the page's session storage the first of them the page draws
-`Saved.` from: it requires that note, read once the wait for `Saved.` has seen it within its six
-seconds, to name an answer to a read after the case's load, not the load's own, and no read of the
+load, marks each answer to a load or read of the receipt with its place, and answers its first load
+still saving whatever the store says by then, as the place case's is, so a write that landed before
+the load cannot leave the page nothing to read again. An init script added before the write is sent
+notes in the page's session storage, the moment each is drawn, the first status line the page draws
+(which must be that load's own `Saving...`, not a later look once the load returns) and the first
+answer the page draws `Saved.` from: it requires that note, read once the wait for `Saved.` has seen
+it within six seconds of the load's start, to name an answer to a read after the case's load, not the load's own, and no read of the
 alerts page after that answer's own request in the log of the page's requests, as the log stands
 once 2.2 s have passed by the smoke's monotonic clock since the check read the note, so a read sent
 between the draw and the check's look counts against it. The check that navigating away stops the
-reads requires no fetch of `/alerts` the page started after its press of the News link, both
+reads requires a read of the page still on its way at the press: the page's first read of itself
+after the navigation's own fetch is held at its route from before the page is asked to navigate, so
+the page cannot draw `Saved.` before the press and leave nothing to cancel, and that read must fail
+while still held, after the press, and is let go only once News is drawn. It requires too no fetch
+of `/alerts` the page started after its press of the News link, both
 numbered in the page by one count in the order they happen, so a fetch started in the same instant
 as the press counts as after it (News can come from a prefetch sent before the press, so no request
 marks the moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
@@ -665,9 +674,17 @@ part make before a check or its cleanup (a click, fill, key press or load) is bo
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
 own time by the smoke's clock. Where a check rests on a wait, that wait must come in its time, so one
 whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
-seconds, required by every check that waits for it), the wait for `Saving...` before a removal's
-`Saved.`, and the wait for a refused field's mark (five seconds), which must also still be on the
-field in the sample the check reads. The other waits in these cases only end a look, and the check
+seconds, required by every check that waits for it), the `Saving...` a submit or a removal draws
+before its `Saved.`, and a refused field's mark (five seconds), which must also still be on the
+field in the sample the check reads. Three rules keep such a wait honest, in every case: what the
+check relies on is observed by a listener, route or note in the page installed before the press
+(or load) that leads to it, never sampled before it is installed (the page notes a `Saving...` the
+moment it is drawn, armed before the key press, so a `Saved.` drawn soon after does not hide it); a
+wait for what a press causes is started, or its note armed, before that press, not after the
+driver's action returns; and its time is counted from just before the press or load, not from
+when the action returned, so a slow driver does not stretch it. The waits for `Saved.` after a
+runtime navigation start once that navigation's own draw is confirmed, which the page times by its
+own clock (above). A case does not make its next press until what it rests on is confirmed in time. The other waits in these cases only end a look, and the check
 rests on what is read after them or on what the page or the route recorded: a navigation's own
 `Saving...`, which the page notes by its own clock (above), and the held slow part's busy, done and
 failed marks, read once each wait has come or run out. The check that a read the server
@@ -694,7 +711,8 @@ bounded to five seconds, after which its route is removed (bounded the same) and
 the same, as its request listener is removed. Each answer the slow part's routes give (a request let
 through, a read aborted or held and let go, the empty patch below) is bounded to five seconds, and
 the empty patch is not sent once its case has ended; a patch not sent fails its check. The first check of a held slow part looks at it only
-once its load's read has reached the route, waiting up to five seconds for it: Firefox marks the
+once its load's read has reached the route, within five seconds counted from just before the load
+(or, after a client navigation, the press of the link): Firefox marks the
 part busy as its fetch starts, which can be before the route sees it. The link a failed slow part
 shows is pressed in the page too; the page it opens must commit within five seconds counted from
 just before the press, a budget the press task shares, and have its part read in within five

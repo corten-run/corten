@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, opened, closeContext, exchange } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, leftOf, opened, closeContext, exchange } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -119,16 +119,19 @@ export async function partReads(page, browser, swaps, noSwaps) {
           }))(),
         );
       /**
-       * Whether the route has seen `count` part reads within 5 s from now. The part is busy once its
-       * fetch starts, which in Firefox can be before the route sees it. Looked for by the route's own
-       * count, with no call to the browser, so a call that never settles cannot keep the case from
-       * its `finally`; a read the route sees after the 5 s does not count.
-       * @param {number} count
+       * Whether the route has seen `count` part reads within 5 s of `from`, a `performance.now()`
+       * time taken just before the load or press that sends the read (`leftOf`), so the time the
+       * driver took to return from it is not added. The part is busy once its fetch starts, which in
+       * Firefox can be before the route sees it. Looked for by the route's own count, with no call to
+       * the browser, so a call that never settles cannot keep the case from its `finally`; a read the
+       * route sees after the 5 s does not count.
+       * @param {number} count @param {number} from
        */
-      const routeSaw = async (count) => (await pollFor(5000, async () => reads >= count)) === true;
+      const routeSaw = async (count, from) => (await pollFor(leftOf(from, 5000), async () => reads >= count)) === true;
+      const loadedFrom = performance.now();
       await actWithin("the held part's page load", held.goto(`${base}/`));
       await within(5000, "the part was not busy within 5 s", held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 })).catch(() => {});
-      const readInTime = await routeSaw(1);
+      const readInTime = await routeSaw(1, loadedFrom);
       const loaded = { ...(await placeholder()), readInTime };
       // Busy: the runtime ran and sent the read, which the route holds unanswered.
       check(
@@ -140,13 +143,14 @@ export async function partReads(page, browser, swaps, noSwaps) {
         held.on("request", onDocument);
         await actWithin("the press of the link to News", held.click('header nav a[href="/news"]'));
         await within(30_000, "the News page was not drawn within 30 s", held.waitForFunction(() => document.title === "News | Watchlist"));
+        const homeFrom = performance.now();
         await actWithin("the press of the link home", held.click('header nav a[href="/"]'));
         await within(
           5000,
           "the part was not busy on the page drawn within 5 s",
           held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }),
         ).catch(() => {});
-        const readInTime = await routeSaw(2);
+        const readInTime = await routeSaw(2, homeFrom);
         const drawn = { ...(await placeholder()), documents, readInTime };
         check("and so does it in a page a client navigation drew", readInTime && drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
       } else skip("and so does it in a page a client navigation drew", noSwaps);
