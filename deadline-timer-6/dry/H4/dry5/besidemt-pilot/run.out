@@ -1,0 +1,21 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029-3 pilot besidemt run d8eba523-a6c3-42bf-b827-b8ac51bdebea verify start 21:58:23
+verify: 6 placements answer as their unpadded binary
+== park start 21:58:25
+park: 3 turns in the state
+== check start 21:58:30
+pilot-besidemt: checked 1 requests: same
+== checks ok 21:58:33; 3 placements to run
+1 pilot-besidemt p001 ok 21:58:43
+2 pilot-besidemt p002 ok 21:58:54
+3 pilot-besidemt p003 ok 21:59:04
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

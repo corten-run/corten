@@ -1,0 +1,7 @@
+base turn 1: 13148 requests, no error; idle connection held; PARK holds: 13150 waits that can block in the turn, 1.00 a request of 13148; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+base turn 2: 13198 requests, no error; idle connection held; PARK holds: 13199 waits that can block in the turn, 1.00 a request of 13198; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+base turn 3: 12996 requests, no error; idle connection held; PARK holds: 12998 waits that can block in the turn, 1.00 a request of 12996; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 1: 12663 requests, no error; idle connection held; PARK holds: 12664 waits that can block in the turn, 1.00 a request of 12663; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 2: 12816 requests, no error; idle connection held; PARK holds: 12817 waits that can block in the turn, 1.00 a request of 12816; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+head turn 3: 12994 requests, no error; idle connection held; PARK holds: 12995 waits that can block in the turn, 1.00 a request of 12994; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+park: 6 turns in the state

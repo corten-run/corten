@@ -1,0 +1,6 @@
+1. wrong answer: stopped before any turn (exit 1, no counts file): run-pair: after: base and head answer differently
+2. failed requests: the turn was not recorded (exit 1, 0 rows): run-pair: after: errors in pair w1 base: w1 base 82485 0 0 0 81462 0
+3. time limit: stopped (exit 124), no recorded pair, no server left
+4. state: 19 made-up captures read as they should (STATE-SELFTEST-OK)
+6. report: 52 made-up results read as they should (52 of 52 cases)
+SELFTEST-OK

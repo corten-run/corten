@@ -1,0 +1,20 @@
+ok   three waits then plain on 64 connections: holds
+ok   sixteen waits then plain on 64 connections: holds
+ok   two waits only on every connection: fails: 64 connections sent fewer than 3 requests for /wait before their first for /private (least 2)
+ok   one connection with two waits: fails: 1 connections sent fewer than 3 requests for /wait before their first for /private (least 2)
+ok   a wait after a plain: fails: 1 connections sent a request for /wait after one for /private
+ok   63 connections: fails: 63 connections, not 64
+ok   65 connections: fails: 65 connections, not 64
+ok   a packet that begins no request: fails: 1 packets with data that begin neither request
+ok   a connection with no plain request: fails: 1 connections sent no request for /private
+ok   as many requests as were answered: holds
+ok   one request fewer than were answered: fails: the capture holds 320 requests and wrk counted 321 answered: it is not the whole turn
+ok   exactly the requests the threads' calls sent: holds
+ok   one request fewer than the threads' calls sent: fails: the capture holds 320 requests and wrk's threads called request() 322 times, one of them before any connection was open: 321 were sent, so the capture is not the turn's requests exactly
+ok   one request more than the threads' calls sent: fails: the capture holds 320 requests and wrk's threads called request() 320 times, one of them before any connection was open: 319 were sent, so the capture is not the turn's requests exactly
+ok   a second wait sent again in place of a third: fails: connection 40005: a packet sends again data already sent (a retransmission), which is no new request; 1 connections sent fewer than 3 requests for /wait before their first for /private (least 2)
+ok   a retransmission on a connection that holds the rule otherwise: fails: connection 40002: a packet sends again data already sent (a retransmission), which is no new request
+ok   a gap in a connection's data: fails: connection 40002: 40 bytes are missing before a packet: the capture lacks data that was sent
+ok   a capture cut inside its last record: fails: the capture ends inside its last record (68 of 77 bytes): it was cut
+ok   a capture cut inside a record's header: fails: the capture ends 11 bytes into a record's header: it was cut
+STATE-SELFTEST-OK

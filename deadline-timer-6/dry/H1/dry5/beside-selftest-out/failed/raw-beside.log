@@ -1,0 +1,19 @@
+## pair w1 base
+# started on Wed Nov 25 21:58:18 2026
+
+610455715,,cycles:u,849066256,100.00,,
+789777637,,cycles:k,849066256,100.00,,
+534516881,,instructions:u,849066256,100.00,0.88,insn per cycle
+83663581,,L1-icache-load-misses,849066256,100.00,,
+Running 1s test @ http://127.0.0.1:18081/no-such-path
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    51.61us    6.83us 219.00us   90.16%
+    Req/Sec    19.18k   472.49    19.51k    90.91%
+  20966 requests in 1.10s, 31.33MB read
+  Non-2xx or 3xx responses: 20966
+Requests/sec:  19062.79
+Transfer/sec:     28.49MB
+RESULT 20966 0 0 0 20966 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 1515 ms after its last answer, nothing received since

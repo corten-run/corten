@@ -1,0 +1,12 @@
+== cycles-deadline-2029-3 pilot close run 2d528517-3ecd-4783-802d-e4d7c72d7b1c verify start 21:53:49
+verify: 6 placements answer as their unpadded binary
+== check start 21:53:51
+pilot-close: checked 1 requests: same
+== checks ok 21:53:54; 3 placements to run
+1 pilot-close p002 ok 21:54:02
+2 pilot-close p003 ok 21:54:11
+3 pilot-close p001 ok 21:54:20
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

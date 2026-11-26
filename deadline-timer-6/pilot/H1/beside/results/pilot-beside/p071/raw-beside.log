@@ -1,0 +1,324 @@
+## pair w1 base
+# started on Thu Nov 26 00:44:09 2026
+
+1818951350,,cycles:u,2423384185,100.00,,
+2427848596,,cycles:k,2423384185,100.00,,
+2253372067,,instructions:u,2423384185,100.00,1.24,insn per cycle
+201397495,,L1-icache-load-misses,2423384185,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.75us    6.64us 241.00us   86.29%
+    Req/Sec    18.41k   171.30    18.78k    74.19%
+  56755 requests in 3.10s, 386.89MB read
+Requests/sec:  18309.03
+Transfer/sec:    124.81MB
+RESULT 56755 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3481 ms after its last answer, nothing received since
+## pair w1 head
+# started on Thu Nov 26 00:44:12 2026
+
+1765057651,,cycles:u,2421500915,100.00,,
+2459337132,,cycles:k,2421500915,100.00,,
+2231815927,,instructions:u,2421500915,100.00,1.26,insn per cycle
+207307355,,L1-icache-load-misses,2421500915,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.24us    6.47us 329.00us   88.76%
+    Req/Sec    18.23k   221.95    18.62k    64.52%
+  56212 requests in 3.10s, 383.19MB read
+Requests/sec:  18133.62
+Transfer/sec:    123.61MB
+RESULT 56212 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3484 ms after its last answer, nothing received since
+## pair 1 base
+# started on Thu Nov 26 00:44:16 2026
+
+1827604103,,cycles:u,2420836505,100.00,,
+2425617159,,cycles:k,2420836505,100.00,,
+2259129280,,instructions:u,2420836505,100.00,1.24,insn per cycle
+197864585,,L1-icache-load-misses,2420836505,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.60us    6.66us 250.00us   89.98%
+    Req/Sec    18.45k   199.69    18.81k    61.29%
+  56900 requests in 3.10s, 387.88MB read
+Requests/sec:  18355.48
+Transfer/sec:    125.13MB
+RESULT 56900 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3491 ms after its last answer, nothing received since
+## pair 1 head
+# started on Thu Nov 26 00:44:20 2026
+
+1841119086,,cycles:u,2422941966,100.00,,
+2437745399,,cycles:k,2422941966,100.00,,
+2224471749,,instructions:u,2422941966,100.00,1.21,insn per cycle
+201954750,,L1-icache-load-misses,2422941966,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.46us    6.47us 222.00us   88.57%
+    Req/Sec    18.17k   187.00    18.51k    74.19%
+  56027 requests in 3.10s, 381.93MB read
+Requests/sec:  18073.69
+Transfer/sec:    123.21MB
+RESULT 56027 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3489 ms after its last answer, nothing received since
+## pair 2 head
+# started on Thu Nov 26 00:44:24 2026
+
+1817127235,,cycles:u,2426671381,100.00,,
+2454044338,,cycles:k,2426671381,100.00,,
+2235945526,,instructions:u,2426671381,100.00,1.23,insn per cycle
+207418975,,L1-icache-load-misses,2426671381,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.34us   15.49us   1.25ms   96.47%
+    Req/Sec    18.25k   247.84    18.78k    67.74%
+  56315 requests in 3.10s, 383.89MB read
+Requests/sec:  18167.21
+Transfer/sec:    123.84MB
+RESULT 56315 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3487 ms after its last answer, nothing received since
+## pair 2 base
+# started on Thu Nov 26 00:44:27 2026
+
+1810770761,,cycles:u,2423941891,100.00,,
+2444451018,,cycles:k,2423941891,100.00,,
+2250792625,,instructions:u,2423941891,100.00,1.24,insn per cycle
+195235944,,L1-icache-load-misses,2423941891,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.80us    6.52us 276.00us   85.94%
+    Req/Sec    18.38k   193.76    18.74k    61.29%
+  56690 requests in 3.10s, 386.45MB read
+Requests/sec:  18288.05
+Transfer/sec:    124.67MB
+RESULT 56690 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3486 ms after its last answer, nothing received since
+## pair 3 base
+# started on Thu Nov 26 00:44:31 2026
+
+1793503301,,cycles:u,2421037620,100.00,,
+2454352482,,cycles:k,2421037620,100.00,,
+2240985568,,instructions:u,2421037620,100.00,1.25,insn per cycle
+204399801,,L1-icache-load-misses,2421037620,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.05us    6.45us 247.00us   86.37%
+    Req/Sec    18.31k   295.01    18.90k    77.42%
+  56443 requests in 3.10s, 384.76MB read
+Requests/sec:  18207.52
+Transfer/sec:    124.12MB
+RESULT 56443 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3487 ms after its last answer, nothing received since
+## pair 3 head
+# started on Thu Nov 26 00:44:35 2026
+
+1749639106,,cycles:u,2420419091,100.00,,
+2455733091,,cycles:k,2420419091,100.00,,
+2255993392,,instructions:u,2420419091,100.00,1.29,insn per cycle
+198125694,,L1-icache-load-misses,2420419091,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.69us    6.46us 282.00us   86.53%
+    Req/Sec    18.42k   219.71    18.81k    64.52%
+  56821 requests in 3.10s, 387.34MB read
+Requests/sec:  18329.75
+Transfer/sec:    124.95MB
+RESULT 56821 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3486 ms after its last answer, nothing received since
+## pair 4 head
+# started on Thu Nov 26 00:44:38 2026
+
+1780703121,,cycles:u,2418391142,100.00,,
+2445368288,,cycles:k,2418391142,100.00,,
+2249646414,,instructions:u,2418391142,100.00,1.26,insn per cycle
+203660660,,L1-icache-load-misses,2418391142,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.81us    6.35us 242.00us   87.28%
+    Req/Sec    18.38k   182.69    18.72k    67.74%
+  56664 requests in 3.10s, 386.27MB read
+Requests/sec:  18278.77
+Transfer/sec:    124.60MB
+RESULT 56664 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3490 ms after its last answer, nothing received since
+## pair 4 base
+# started on Thu Nov 26 00:44:42 2026
+
+1774160605,,cycles:u,2420524227,100.00,,
+2443156176,,cycles:k,2420524227,100.00,,
+2257104357,,instructions:u,2420524227,100.00,1.27,insn per cycle
+195962751,,L1-icache-load-misses,2420524227,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.59us    6.32us 234.00us   85.20%
+    Req/Sec    18.45k   212.34    18.98k    80.65%
+  56849 requests in 3.10s, 387.53MB read
+Requests/sec:  18338.59
+Transfer/sec:    125.01MB
+RESULT 56849 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3486 ms after its last answer, nothing received since
+## pair 5 base
+# started on Thu Nov 26 00:44:46 2026
+
+1804150441,,cycles:u,2422666650,100.00,,
+2457118360,,cycles:k,2422666650,100.00,,
+2223915507,,instructions:u,2422666650,100.00,1.23,insn per cycle
+207766513,,L1-icache-load-misses,2422666650,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.46us    6.32us 221.00us   84.74%
+    Req/Sec    18.16k   179.06    18.52k    74.19%
+  56013 requests in 3.10s, 381.83MB read
+Requests/sec:  18069.32
+Transfer/sec:    123.18MB
+RESULT 56013 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3481 ms after its last answer, nothing received since
+## pair 5 head
+# started on Thu Nov 26 00:44:49 2026
+
+1810421612,,cycles:u,2420924913,100.00,,
+2439650816,,cycles:k,2420924913,100.00,,
+2260643325,,instructions:u,2420924913,100.00,1.25,insn per cycle
+208344960,,L1-icache-load-misses,2420924913,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.58us    6.75us 276.00us   89.71%
+    Req/Sec    18.47k   199.61    18.90k    64.52%
+  56941 requests in 3.10s, 388.16MB read
+Requests/sec:  18367.38
+Transfer/sec:    125.21MB
+RESULT 56941 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3480 ms after its last answer, nothing received since
+## pair 6 head
+# started on Thu Nov 26 00:44:53 2026
+
+1810026875,,cycles:u,2424711992,100.00,,
+2450934807,,cycles:k,2424711992,100.00,,
+2257388327,,instructions:u,2424711992,100.00,1.25,insn per cycle
+209151673,,L1-icache-load-misses,2424711992,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.66us    6.39us 223.00us   86.51%
+    Req/Sec    18.43k   195.65    18.88k    64.52%
+  56859 requests in 3.10s, 387.60MB read
+Requests/sec:  18341.06
+Transfer/sec:    125.03MB
+RESULT 56859 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3484 ms after its last answer, nothing received since
+## pair 6 base
+# started on Thu Nov 26 00:44:57 2026
+
+1771432931,,cycles:u,2417547433,100.00,,
+2442308623,,cycles:k,2417547433,100.00,,
+2264012769,,instructions:u,2417547433,100.00,1.28,insn per cycle
+197820585,,L1-icache-load-misses,2417547433,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.49us    6.53us 243.00us   89.97%
+    Req/Sec    18.50k   221.91    18.97k    70.97%
+  57023 requests in 3.10s, 388.72MB read
+Requests/sec:  18395.15
+Transfer/sec:    125.40MB
+RESULT 57023 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3488 ms after its last answer, nothing received since
+## pair 7 base
+# started on Thu Nov 26 00:45:00 2026
+
+1787224600,,cycles:u,2425890503,100.00,,
+2467872631,,cycles:k,2425890503,100.00,,
+2231538769,,instructions:u,2425890503,100.00,1.25,insn per cycle
+203196779,,L1-icache-load-misses,2425890503,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.27us    7.04us 270.00us   88.42%
+    Req/Sec    18.22k   249.59    18.82k    70.97%
+  56205 requests in 3.10s, 383.14MB read
+Requests/sec:  18130.48
+Transfer/sec:    123.59MB
+RESULT 56205 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3492 ms after its last answer, nothing received since
+## pair 7 head
+# started on Thu Nov 26 00:45:04 2026
+
+1791869759,,cycles:u,2423617599,100.00,,
+2464938287,,cycles:k,2423617599,100.00,,
+2235785980,,instructions:u,2423617599,100.00,1.25,insn per cycle
+203206121,,L1-icache-load-misses,2423617599,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    54.16us    7.15us 253.00us   88.05%
+    Req/Sec    18.26k   180.79    18.67k    70.97%
+  56311 requests in 3.10s, 383.86MB read
+Requests/sec:  18166.85
+Transfer/sec:    123.84MB
+RESULT 56311 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3484 ms after its last answer, nothing received since
+## pair 8 head
+# started on Thu Nov 26 00:45:08 2026
+
+1753108486,,cycles:u,2419524477,100.00,,
+2455271942,,cycles:k,2419524477,100.00,,
+2263019804,,instructions:u,2419524477,100.00,1.29,insn per cycle
+202717960,,L1-icache-load-misses,2419524477,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.47us    6.63us 218.00us   90.08%
+    Req/Sec    18.48k   224.50    19.16k    70.97%
+  56998 requests in 3.10s, 388.55MB read
+Requests/sec:  18386.75
+Transfer/sec:    125.34MB
+RESULT 56998 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3489 ms after its last answer, nothing received since
+## pair 8 base
+# started on Thu Nov 26 00:45:11 2026
+
+1783389851,,cycles:u,2419050410,100.00,,
+2433335925,,cycles:k,2419050410,100.00,,
+2266950907,,instructions:u,2419050410,100.00,1.27,insn per cycle
+195418251,,L1-icache-load-misses,2419050410,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  1 threads and 1 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    53.40us    6.27us 214.00us   85.24%
+    Req/Sec    18.51k   176.96    18.83k    61.29%
+  57097 requests in 3.10s, 389.22MB read
+Requests/sec:  18419.08
+Transfer/sec:    125.56MB
+RESULT 57097 0 0 0 0 0
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3489 ms after its last answer, nothing received since

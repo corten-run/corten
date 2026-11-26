@@ -1,0 +1,53 @@
+ok `after`: every placement's verdict names its 2 requests: A/A +0.02% and +0.02% swapped, resolved; change bound +0.02% against +1%: meets +1%
+ok `after`: one placement's verdict names 1 request of its 2: incomplete, "no bound (incomplete): does not pass": p003: its two builds' answers were not found the same on the workload's 2 requests (verdict "checked 1 requests: same")
+ok `plain`: every placement's verdict names its 1 request: A/A +0.02% and +0.02% swapped, resolved; change bound +0.02% against +1%: meets +1%
+ok `plain`: one placement's verdict names 2 requests: incomplete, "no bound (incomplete): does not pass": p003: its two builds' answers were not found the same on the workload's 1 request (verdict "checked 2 requests: same")
+ok `plain`: one placement's answers differed: incomplete, "no bound (incomplete): does not pass": p003: its two builds' answers were not found the same on the workload's 1 request (verdict "checked 1 requests: differ only as /x says")
+ok `plain`: a turn's kernel cycles are 0: incomplete, "no bound (incomplete): does not pass": p003: unusable row 1,base,100000,1000000000,0,2000000000,300000
+ok `plain`: a turn's user instructions are 0: incomplete, "no bound (incomplete): does not pass": p003: unusable row 1,base,100000,1000000000,500000000,0,300000
+ok `plain`: the base's map file is empty: refused: map-base.map.gz is empty or is not an LLD map with a .text: no record from the unpadded link's map, so no reading across placements
+ok `plain`: the head's map is an empty text, compressed: refused: map-head.map.gz is empty or is not an LLD map with a .text: no record from the unpadded link's map, so no reading across placements
+ok `plain`: the head's record of aligned sections is empty: refused: aligned-head.txt is empty or has no ALIGNED line for the head: no record from the unpadded link's map, so no reading across placements
+ok `plain`: the base's record is the head's: refused: aligned-base.txt is empty or has no ALIGNED line for the base: no record from the unpadded link's map, so no reading across placements
+ok `plain`: the head has one section aligned to 32 bytes: refused: aligned-head.txt: the side has code aligned beyond 16 bytes (1 input sections, widest alignment 32), which this kit does not place
+ok `plain`: the record counts 3 sections and the map holds 2: refused: aligned-base.txt counts 3 input sections of .text and map-base.map.gz holds 2: the record is not that map's
+ok `plain`: no map of the head: refused: no aligned-head.txt or map-head.map.gz: no record from the unpadded link's map, so no reading across placements
+ok `plain`: the head's map holds a section aligned to 32 bytes beside a record saying 16: refused: map-head.map.gz holds code aligned beyond 16 bytes (1 input sections of .text, widest alignment 32), which this kit does not place
+ok `plain`: the same map, and its record is not the one made from it: refused: aligned-head.txt is not the record maprec.mjs makes from map-head.map.gz (the map's last line is "ALIGNED head: 1 input sections of .text aligned beyond 16 bytes of 2; widest alignment 32; 0 symbols from the first on"): the record is not that map's
+ok `plain`: the head's map holds a section aligned to 32 bytes and its record says so: refused: aligned-head.txt: the side has code aligned beyond 16 bytes (1 input sections, widest alignment 32), which this kit does not place
+ok `plain`: the base's record has a line its map does not give: refused: aligned-base.txt is not the record maprec.mjs makes from map-base.map.gz (the map's last line is "ALIGNED base: 0 input sections of .text aligned beyond 16 bytes of 2; widest alignment 16; 0 symbols from the first on"): the record is not that map's
+ok `plain`: the base's map has a line that is no map's: refused: map-base.map.gz: no record can be made from it (a line that is not a map's: made up), so no reading across placements
+ok `plain`: the change's medians lie about +3%: A/A +0.02% and +0.02% swapped, resolved; change bound +3.02% against +1%: misses +1%
+ok `beside`: the change's medians lie about +3%: A/A +0.02% and +0.02% swapped, resolved; change bound +3.02% against +5%: meets +5%
+ok `besidemt`: the change's medians lie about +3%: A/A +0.02% and +0.02% swapped, resolved; change bound +3.02% against +5%: meets +5%
+ok `beside`: the change's medians lie about +6%: A/A +0.02% and +0.02% swapped, resolved; change bound +6.02% against +5%: misses +5%
+ok `beside`: the change's medians lie about +5%, its bound just over it: A/A +0.02% and +0.02% swapped, resolved; change bound +5.02% against +5%: misses +5%
+ok `beside`: the A/A's medians lie about +2%, the change's about +3%: A/A +2.02% and -1.94% swapped, not resolved; change bound +3.02% against +5%: not resolved: does not pass
+ok `beside`: the A/A's medians lie about -2% (over +1% with the labels swapped alone): A/A -1.98% and +2.06% swapped, not resolved; change bound +3.02% against +5%: not resolved: does not pass
+ok `after`: the change's medians lie about +3% (no wider margin for it): A/A +0.02% and +0.02% swapped, resolved; change bound +3.02% against +1%: misses +1%
+ok `beside`: one turn's log has no line of the idle connection held: incomplete, "no bound (incomplete): does not pass": p003: 1 of its 6 turns do not show the idle connection set up once and held once: pair w1 base (1 set up, 0 held, 1 lines of it)
+ok `besidemt`: one turn's idle connection failed: incomplete, "no bound (incomplete): does not pass": p003: 1 of its 6 turns do not show the idle connection set up once and held once: pair w1 base (0 set up, 1 held, 2 lines of it)
+ok `beside`: a placement has no raw log: incomplete, "no bound (incomplete): does not pass": p003: its log holds 0 turns (none), not once each the 6 of its pairs, so its turns do not each show the idle connection set up and held
+ok `beside`: the idle connection asked for another path: incomplete, "no bound (incomplete): does not pass": p003: 6 of its 6 turns do not show the idle connection set up once and held once: pair w1 base (0 set up, 1 held, 2 lines of it); pair w1 head (0 set up, 1 held, 2 lines of it); pair 1 base (0 set up, 1 held, 2 lines of it); pair 1 head (0 set up, 1 held, 2 lines of it); pair 2 base (0 set up, 1 held, 2 lines of it); pair 2 head (0 set up, 1 held, 2 lines of it)
+ok `beside`: one turn lacks both of the idle connection's lines and another carries them twice: incomplete, "no bound (incomplete): does not pass": p003: 2 of its 6 turns do not show the idle connection set up once and held once: pair w1 base (0 set up, 0 held, 0 lines of it); pair w1 head (2 set up, 2 held, 4 lines of it)
+ok `besidemt`: one turn is in the log twice and another not at all: incomplete, "no bound (incomplete): does not pass": p003: its log holds 6 turns (w1 base, w1 head, 1 base, 1 head, 2 base, 1 head), not once each the 6 of its pairs, so its turns do not each show the idle connection set up and held
+ok `beside`: the change's medians lie about +3% and the head runs 95 more instructions a request: A/A +0.02% and +0.02% swapped, resolved; change bound +3.02% against +5%: meets +5%
+ok `beside`: the change's medians lie about +3% and the head runs 94 more instructions a request: A/A +0.02% and +0.02% swapped, resolved; change bound +3.02% against +5%: not read as declared (the set timer is not shown in the counted turns): does not pass
+ok `besidemt`: the change's medians lie about 0% and the head runs no more instructions a request: A/A +0.02% and +0.02% swapped, resolved; change bound +0.02% against +5%: not read as declared (the set timer is not shown in the counted turns): does not pass
+ok `beside`: the change's medians lie about +6% and the head runs no more instructions a request (a miss stays a miss): A/A +0.02% and +0.02% swapped, resolved; change bound +6.02% against +5%: misses +5%
+ok `plain`: the head runs no more instructions a request (no such floor for it): A/A +0.02% and +0.02% swapped, resolved; change bound +0.02% against +1%: meets +1%
+ok `beside`: no record of the watched turns: refused: beside: no watched turn 1 of the base shown with no timeout on any wait that can block (no timer in the wheel) (park/verdicts.txt)
+ok `beside`: the head's watched turns show no timeout: refused: beside: no watched turn 3 of the head shown with a timeout on every wait that can block (the idle connection's timer in the wheel) (park/verdicts.txt)
+ok `besidemt`: the base's second watched turn shows a timeout: refused: besidemt: no watched turn 2 of the base shown with no timeout on any wait that can block (no timer in the wheel) (park/verdicts.txt)
+ok `besidemt`: two watched turns of the head, not three: refused: besidemt: no watched turn 3 of the head shown with a timeout on every wait that can block (the idle connection's timer in the wheel) (park/verdicts.txt)
+ok `beside`: a dry run of the gated part with the base as both sides: A/A +0.02% and +0.02% swapped, resolved; change bound +0.02% against +5%: not read as declared (the set timer is not shown in the counted turns): does not pass
+ok `beside`: the same results with no word of a dry run: refused: kit.txt's part gated is not plan.env's pilot
+ok `beside`: a dry run with the base as both sides whose "head" shows a timeout: refused: beside: no watched turn 1 of the head shown with no timeout on any wait that can block (no timer in the wheel) (park/verdicts.txt)
+ok `plain`: a placement was stopped at its time limit (no ended line, one pair of its two): incomplete, "no bound (incomplete): does not pass": p003: placement.txt has no started and ended lines (8 lines): its pairs were not all in
+ok `beside`: a placement failed its answers' check (no counts, no ended line): incomplete, "no bound (incomplete): does not pass": p003: no counts-beside.csv
+ok `plain`: the results hold a retries.txt: refused: the results hold a retries.txt: this kit runs no placement again, so a run that did is not read
+ok `plain`: the results hold a failed attempt moved aside: refused: the results hold a failed/ directory: this kit runs no placement again and moves no failed one aside, so a run that did is not read
+ok `plain`: plan.env names a count of retries: refused: plan.env names RETRY_MAX: this kit runs no placement again
+ok `plain`: the schedule's first placement was run after all the others (as one run again would be): refused: change-plain p18 (seq 2) started before aa-plain p18 (seq 1) ended: the placements did not run one after another in the schedule's order
+ok `plain`: results of the kit before this one: refused: kit.txt names kit cycles-deadline-2029-2, not cycles-deadline-2029-3
+52 of 52 cases

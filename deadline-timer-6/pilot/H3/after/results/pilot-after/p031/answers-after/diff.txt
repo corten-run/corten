@@ -1,0 +1,2 @@
+== check 1: /private -H 'Accept:' -H 'User-Agent:'
+== check 2: /wait -H 'Accept:' -H 'User-Agent:'

@@ -1,0 +1,23 @@
+ok 300 waits with no timeout, read as the base: PARK holds: 300 waits that can block in the turn, 1.00 a request of 300; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+ok 300 waits with a timeout, read as the head: PARK holds: 300 waits that can block in the turn, 1.00 a request of 300; every one with a timeout, from 29691 to 29990 ms; 0 more that cannot (a timeout of 0) passed over
+ok 300 waits with no timeout, read as the head: PARK FAILED: 300 of 300 waits that can block had no timeout, the first at line 1 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+ok 300 waits with a timeout, read as the base: PARK FAILED: 300 of 300 waits that can block had a timeout, the first at line 1 (29990 ms): a timer stood in the wheel where the workload is declared to have none
+ok one wait of 300 with no timeout, read as the head: PARK FAILED: 1 of 300 waits that can block had no timeout, the first at line 151 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+ok one wait of 300 with a timeout of 5 ms, read as the base: PARK FAILED: 1 of 300 waits that can block had a timeout, the first at line 151 (5 ms): a timer stood in the wheel where the workload is declared to have none
+ok waits with no timeout and as many with a timeout of 0 between them, read as the base: PARK holds: 300 waits that can block in the turn, 1.00 a request of 300; every one with no timeout; 300 more that cannot (a timeout of 0) passed over
+ok the same, read as the head (a wait that cannot block is no sign of a timer): PARK FAILED: 300 of 300 waits that can block had no timeout, the first at line 1 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+ok waits with a timeout and as many with a timeout of 0, read as the head: PARK holds: 300 waits that can block in the turn, 1.00 a request of 300; every one with a timeout, from 29691 to 29990 ms; 300 more that cannot (a timeout of 0) passed over
+ok 300 waits with a timeout of 0 and nothing else: PARK FAILED: 0 waits that can block read (and 300 that cannot), fewer than 100: the turn was not watched
+ok waits written in two parts beside another thread's lines, with a timeout: PARK holds: 120 waits that can block in the turn, 1.20 a request of 100; every one with a timeout, from 250 to 250 ms; 0 more that cannot (a timeout of 0) passed over
+ok waits written in two parts, with no timeout, read as the head: PARK FAILED: 120 of 120 waits that can block had no timeout, the first at line 3 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+ok the last wait unfinished when strace was stopped, and a signal's line: PARK holds: 200 waits that can block in the turn, 1.00 a request of 200; every one with a timeout, from 29791 to 29990 ms; 0 more that cannot (a timeout of 0) passed over
+ok a wait strace was detached from: PARK holds: 200 waits that can block in the turn, 1.00 a request of 200; every one with no timeout; 0 more that cannot (a timeout of 0) passed over
+ok epoll_pwait with a timeout: PARK holds: 200 waits that can block in the turn, 1.00 a request of 200; every one with a timeout, from 172 to 172 ms; 0 more that cannot (a timeout of 0) passed over
+ok epoll_pwait2 with no timeout, read as the head: PARK FAILED: 200 of 200 waits that can block had no timeout, the first at line 1 (none): no timer stood in the wheel where the workload is declared to have the idle connection's
+ok epoll_pwait2 with a timeout: PARK holds: 200 waits that can block in the turn, 1.00 a request of 200; every one with a timeout, from 29500 to 29500 ms; 0 more that cannot (a timeout of 0) passed over
+ok 40 waits: PARK FAILED: 40 waits that can block read (and 0 that cannot), fewer than 100: the turn was not watched
+ok an empty output: PARK FAILED: 0 waits that can block read (and 0 that cannot), fewer than 100: the turn was not watched
+ok a line of another call: PARK FAILED: line 201 is not a wait for an event: 4242 read(7, "GET", 8192) = 3
+ok a wait whose arguments are cut: PARK FAILED: line 201 is a wait whose timeout is not read: 4242 epoll_wait(5, ...) = 1
+ok no requests: PARK FAILED: no requests in the turn
+22 of 22 cases

@@ -1,0 +1,116 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029-3 pilot wait run a0e75e6d-cfed-4b31-917c-cc049168bb48 verify start 22:16:58
+verify: 200 placements answer as their unpadded binary
+== check start 22:17:43
+pilot-wait: checked 1 requests: same
+== checks ok 22:17:50; 100 placements to run
+1 pilot-wait p062 ok 22:18:53
+2 pilot-wait p005 ok 22:19:55
+3 pilot-wait p070 ok 22:20:57
+4 pilot-wait p082 ok 22:21:59
+5 pilot-wait p075 ok 22:23:02
+6 pilot-wait p092 ok 22:24:04
+7 pilot-wait p063 ok 22:25:06
+8 pilot-wait p076 ok 22:26:09
+9 pilot-wait p015 ok 22:27:11
+10 pilot-wait p010 ok 22:28:13
+11 pilot-wait p037 ok 22:29:16
+12 pilot-wait p011 ok 22:30:18
+13 pilot-wait p031 ok 22:31:20
+14 pilot-wait p024 ok 22:32:22
+15 pilot-wait p098 ok 22:33:24
+16 pilot-wait p009 ok 22:34:26
+17 pilot-wait p008 ok 22:35:28
+18 pilot-wait p019 ok 22:36:31
+19 pilot-wait p049 ok 22:37:33
+20 pilot-wait p050 ok 22:38:35
+21 pilot-wait p094 ok 22:39:37
+22 pilot-wait p091 ok 22:40:39
+23 pilot-wait p038 ok 22:41:42
+24 pilot-wait p079 ok 22:42:44
+25 pilot-wait p058 ok 22:43:46
+26 pilot-wait p061 ok 22:44:49
+27 pilot-wait p025 ok 22:45:51
+28 pilot-wait p032 ok 22:46:53
+29 pilot-wait p056 ok 22:47:55
+30 pilot-wait p021 ok 22:48:58
+31 pilot-wait p085 ok 22:50:00
+32 pilot-wait p059 ok 22:51:02
+33 pilot-wait p089 ok 22:52:05
+34 pilot-wait p022 ok 22:53:07
+35 pilot-wait p034 ok 22:54:09
+36 pilot-wait p012 ok 22:55:12
+37 pilot-wait p064 ok 22:56:14
+38 pilot-wait p096 ok 22:57:16
+39 pilot-wait p077 ok 22:58:19
+40 pilot-wait p041 ok 22:59:21
+41 pilot-wait p067 ok 23:00:23
+42 pilot-wait p066 ok 23:01:25
+43 pilot-wait p083 ok 23:02:28
+44 pilot-wait p095 ok 23:03:30
+45 pilot-wait p039 ok 23:04:32
+46 pilot-wait p042 ok 23:05:35
+47 pilot-wait p057 ok 23:06:37
+48 pilot-wait p068 ok 23:07:39
+49 pilot-wait p090 ok 23:08:42
+50 pilot-wait p018 ok 23:09:44
+51 pilot-wait p069 ok 23:10:47
+52 pilot-wait p030 ok 23:11:49
+53 pilot-wait p029 ok 23:12:51
+54 pilot-wait p040 ok 23:13:54
+55 pilot-wait p048 ok 23:14:56
+56 pilot-wait p026 ok 23:15:58
+57 pilot-wait p099 ok 23:17:00
+58 pilot-wait p052 ok 23:18:03
+59 pilot-wait p001 ok 23:19:05
+60 pilot-wait p004 ok 23:20:07
+61 pilot-wait p036 ok 23:21:09
+62 pilot-wait p002 ok 23:22:11
+63 pilot-wait p023 ok 23:23:14
+64 pilot-wait p044 ok 23:24:16
+65 pilot-wait p051 ok 23:25:18
+66 pilot-wait p028 ok 23:26:21
+67 pilot-wait p080 ok 23:27:23
+68 pilot-wait p073 ok 23:28:25
+69 pilot-wait p020 ok 23:29:27
+70 pilot-wait p081 ok 23:30:30
+71 pilot-wait p003 ok 23:31:32
+72 pilot-wait p097 ok 23:32:34
+73 pilot-wait p088 ok 23:33:36
+74 pilot-wait p047 ok 23:34:39
+75 pilot-wait p072 ok 23:35:41
+76 pilot-wait p053 ok 23:36:43
+77 pilot-wait p060 ok 23:37:45
+78 pilot-wait p074 ok 23:38:48
+79 pilot-wait p100 ok 23:39:50
+80 pilot-wait p017 ok 23:40:52
+81 pilot-wait p054 ok 23:41:55
+82 pilot-wait p035 ok 23:42:57
+83 pilot-wait p027 ok 23:43:59
+84 pilot-wait p086 ok 23:45:01
+85 pilot-wait p013 ok 23:46:03
+86 pilot-wait p065 ok 23:47:06
+87 pilot-wait p087 ok 23:48:08
+88 pilot-wait p078 ok 23:49:10
+89 pilot-wait p045 ok 23:50:13
+90 pilot-wait p084 ok 23:51:15
+91 pilot-wait p043 ok 23:52:17
+92 pilot-wait p007 ok 23:53:19
+93 pilot-wait p033 ok 23:54:22
+94 pilot-wait p016 ok 23:55:24
+95 pilot-wait p055 ok 23:56:26
+96 pilot-wait p014 ok 23:57:29
+97 pilot-wait p006 ok 23:58:31
+98 pilot-wait p046 ok 23:59:33
+99 pilot-wait p093 ok 00:00:35
+100 pilot-wait p071 ok 00:01:38
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

@@ -1,0 +1,2 @@
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-FAILED: the server closed the idle connection

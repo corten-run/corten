@@ -1,0 +1,25 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029-3 gated after run 1905f5a8-f637-4f85-b024-0f2e8ce0f7cb verify start 22:00:08
+verify: 9 placements answer as their unpadded binary
+== state start 22:00:11
+state: 6 turns reach and keep the state
+== check start 22:00:32
+aa-after: checked 2 requests: same
+change-after: checked 2 requests: same
+== checks ok 22:00:38; 6 placements to run
+1 aa-after p002 ok 22:00:47
+2 change-after p002 ok 22:00:56
+3 change-after p001 ok 22:01:05
+4 aa-after p001 ok 22:01:13
+5 aa-after p003 ok 22:01:22
+6 change-after p003 ok 22:01:31
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

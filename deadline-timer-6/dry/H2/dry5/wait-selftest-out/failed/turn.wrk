@@ -1,0 +1,10 @@
+Running 1s test @ http://127.0.0.1:18081/no-such-path
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.91ms    1.41ms  23.63ms   98.95%
+    Req/Sec    40.85k     3.24k   51.67k    90.00%
+  81121 requests in 1.02s, 121.23MB read
+  Non-2xx or 3xx responses: 81121
+Requests/sec:  79256.96
+Transfer/sec:    118.44MB
+RESULT 81121 0 0 0 81121 0

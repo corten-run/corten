@@ -1,0 +1,16 @@
+== cycles-deadline-2029-3 gated plain run 94b133df-a3a6-4666-aae5-8dc8d64b6655 verify start 21:56:14
+verify: 9 placements answer as their unpadded binary
+== check start 21:56:17
+aa-plain: checked 1 requests: same
+change-plain: checked 1 requests: same
+== checks ok 21:56:23; 6 placements to run
+1 aa-plain p002 ok 21:56:32
+2 change-plain p002 ok 21:56:41
+3 change-plain p003 ok 21:56:50
+4 aa-plain p003 ok 21:56:59
+5 aa-plain p001 ok 21:57:08
+6 change-plain p001 ok 21:57:17
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

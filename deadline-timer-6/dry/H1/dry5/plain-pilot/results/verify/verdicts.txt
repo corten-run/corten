@@ -1,0 +1,6 @@
+base-p320 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p15120 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p25824 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p22848 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p12160 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received
+base-p38336 as base: checked 4 requests: same; bodies of 6124, 6124, 6124 and 2 bytes as received

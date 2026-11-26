@@ -1,0 +1,9 @@
+comparison pilot-after placement 7 workload after
+A base-p35808 3ab0fe6b4d94134e8bbe6c409e26295b8224878929aa353a82df00e4f6a9fb61
+B base-p32464 45bc90e6b8d9d4bb44cd149bbbbe65f47800ed86fb0eba2b7eda6c1ddf8ba548
+kit cycles-deadline-2029-3
+run 0c15b3c5-ca40-4b6f-8546-c57556efef11
+plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+seq 73
+started 2026-11-26T01:20:06Z
+ended 2026-11-26T01:21:08Z

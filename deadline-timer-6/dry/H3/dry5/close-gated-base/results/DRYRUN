@@ -1,0 +1,1 @@
+DRY RUN: K=3, R=2, TURN=1; fail seq none; not a measurement; part gated with the base as both sides

@@ -1,0 +1,4 @@
+/private -H 'Accept:' -H 'User-Agent:'
+/wait -H 'Accept:' -H 'User-Agent:'
+/wait -H 'Accept:' -H 'User-Agent:' -H 'Connection: close'
+/unstaged -H 'Accept:' -H 'User-Agent:'

@@ -1,0 +1,16 @@
+== cycles-deadline-2029-3 gated unstaged run 7da11089-63cc-408b-b9d3-5235bcfefbca verify start 21:56:19
+verify: 9 placements answer as their unpadded binary
+== check start 21:56:22
+aa-unstaged: checked 1 requests: same
+change-unstaged: checked 1 requests: same
+== checks ok 21:56:28; 6 placements to run
+1 aa-unstaged p001 ok 21:56:37
+2 change-unstaged p001 ok 21:56:46
+3 change-unstaged p002 ok 21:56:54
+4 aa-unstaged p002 ok 21:57:03
+5 aa-unstaged p003 ok 21:57:12
+6 change-unstaged p003 ok 21:57:21
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

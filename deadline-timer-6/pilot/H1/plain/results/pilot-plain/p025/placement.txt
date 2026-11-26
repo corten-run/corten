@@ -1,0 +1,9 @@
+comparison pilot-plain placement 25 workload plain
+A base-p11072 2df59ba39ab7ca3cf2b3dc572cd64a2675de758d8e25db7be5d9320440cd287d
+B base-p16224 dfb53373e215257a80d1da8d3c952f9ee94174fb49b620e3d3750f033c2293d4
+kit cycles-deadline-2029-3
+run 5d8cdc40-7784-4cb5-baf7-c936e0ba765d
+plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+seq 80
+started 2026-11-25T23:40:39Z
+ended 2026-11-25T23:41:41Z

@@ -1,0 +1,16 @@
+== cycles-deadline-2029-3 gated wait run 189862e3-d7c9-49e5-a2f3-f628bbeadacf verify start 21:55:45
+verify: 9 placements answer as their unpadded binary
+== check start 21:55:47
+aa-wait: checked 1 requests: same
+change-wait: checked 1 requests: same
+== checks ok 21:55:53; 6 placements to run
+1 aa-wait p001 ok 21:56:02
+2 change-wait p001 ok 21:56:11
+3 change-wait p002 ok 21:56:20
+4 aa-wait p002 ok 21:56:28
+5 aa-wait p003 ok 21:56:37
+6 change-wait p003 ok 21:56:46
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

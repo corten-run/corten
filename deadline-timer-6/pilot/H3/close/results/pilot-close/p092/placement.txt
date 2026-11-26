@@ -1,0 +1,9 @@
+comparison pilot-close placement 92 workload close
+A base-p14512 b6868af0af59c9dd9afa0d6fdc9aa4d2c3f2427162b5cc47831d045b22b8d5f0
+B base-p10272 067e05bb15954fccac9dd7854b5a26c3c89e7ee62c2813f8a6d3f2c10124a6c8
+kit cycles-deadline-2029-3
+run 01f41d47-c11d-47c8-a0d7-b9362e86f074
+plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+seq 12
+started 2026-11-25T22:29:28Z
+ended 2026-11-25T22:30:30Z

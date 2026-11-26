@@ -1,0 +1,8 @@
+PART5_TEST: a dry run of the wrapper, not a measurement
+host 8ace4f4b Debian GNU/Linux 13 (trixie) 6.12.117+deb13-amd64 8 CPUs; load 0.08 0.35 0.32; 2026-11-25T22:02:35Z
+tar c70b37987861adc8e7aa0fd089a8a3945a316c437ebe725d93dcf8981a5be632; plan.md 3eb84ccd4bb0c529d4776d05c757089b29c2e0b5938d7aa6bc5d4cc42df6bfdb; /m/dl/plan.env:KIT=cycles-deadline-2029-3
+== wait: setup and build 22:02:35
+== wait: run 22:03:22
+wait: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md 22:03:55
+left over after: 
+PART5-ENDED pilot 2026-11-25T22:03:55Z: every workload of the host has ended

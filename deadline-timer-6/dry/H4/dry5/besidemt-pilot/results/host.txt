@@ -1,0 +1,102 @@
+Wed Nov 25 21:58:23 UTC 2026
+part: pilot; workload: besidemt
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           40 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+CPU family:                              6
+Model:                                   85
+Thread(s) per core:                      1
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                7
+BogoMIPS:                                5387.34
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 arat vnmi pku ospke avx512_vnni arch_capabilities
+Virtualization:                          VT-x
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               256 KiB (8 instances)
+L1i cache:                               256 KiB (8 instances)
+L2 cache:                                32 MiB (8 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-7
+Vulnerability Gather data sampling:      Unknown: Dependent on hypervisor status
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+
+perf_event_paranoid -1 nmi_watchdog 0 (runs as root)
+6.12.117+deb13-amd64
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+perf version 6.12.118
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+GNU assembler (GNU Binutils for Debian) 2.44
+cc (Debian 14.2.0-19) 14.2.0
+curl 8.14.1 (x86_64-pc-linux-gnu) libcurl/8.14.1 OpenSSL/3.5.7 zlib/1.3.1 brotli/1.1.0 zstd/1.5.7 libidn2/2.3.8 libpsl/0.21.2 libssh2/1.11.1 nghttp2/1.64.0 nghttp3/1.8.0 librtmp/2.3 OpenLDAP/2.6.10
+v20.19.2
+base .comment: GCC: (Debian 14.2.0-19) 14.2.0;Linker: LLD 23.1.5 (/checkout/src/llvm-project/llvm 0a5579eb649d3634a9c30ac873300cc2944fa070);rustc version 1.100.0 (0ef1bc386 2026-11-09)
+base 26ab0e37f753ffc4f9418bc28ad7825a924d08e1
+Package: libjemalloc2
+Version: 5.3.0-3
+Package: libzstd1
+Version: 1.5.7+dfsg-1+deb13u1
+Package: wrk
+Version: 4.1.0-4+b1
+binaries (sha256, size):
+base e398529480767b068f11cfac47e2287557b58cc569dd4d4dbb34298c87ad1c88 4507544 bytes
+base-p320 2a5a0682995b1999359ecf30a004698df0723c18b9b48d05509e64119fc2e92f 4507904 bytes
+base-p15120 bc809dfa7c07bdc87e9cb09745241d6ad6db3a210b27ba8aa5b0c68cdaea5177 4522704 bytes
+base-p25824 06c42b625f0e9738c3cb4da155f87c1dd02d9f51d110356d86095ec96b21fa17 4533408 bytes
+base-p22848 7b731ea1c926c3cb3ef2ac26bba0895cc3115df7a60c22ec748ee5a7517b2b25 4530432 bytes
+base-p12160 c40a963c14849bf00ca9922b5160ab6b7d36f975d34a87862a840a39c92619ea 4519744 bytes
+base-p38336 137143afe7bf6e06519e9cf6ed662652e05c7da4188df10957d7573ed38b1f13 4545920 bytes
+placements (layout against the side's unpadded binary):
+base-p320 2a5a0682995b1999359ecf30a004698df0723c18b9b48d05509e64119fc2e92f 4507904 bytes; all functions in both: 3336; moved by exactly the pad: 3336; not moved: 0; shifts: +320 B: 3336; same offset in a 64-byte line: 3336, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3263 of 3263
+base-p15120 bc809dfa7c07bdc87e9cb09745241d6ad6db3a210b27ba8aa5b0c68cdaea5177 4522704 bytes; all functions in both: 3336; moved by exactly the pad: 3336; not moved: 0; shifts: +15120 B: 3336; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3263 of 3263
+base-p25824 06c42b625f0e9738c3cb4da155f87c1dd02d9f51d110356d86095ec96b21fa17 4533408 bytes; all functions in both: 3336; moved by exactly the pad: 3336; not moved: 0; shifts: +25824 B: 3336; same offset in a 64-byte line: 0, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3263 of 3263
+base-p22848 7b731ea1c926c3cb3ef2ac26bba0895cc3115df7a60c22ec748ee5a7517b2b25 4530432 bytes; all functions in both: 3336; moved by exactly the pad: 3336; not moved: 0; shifts: +22848 B: 3336; same offset in a 64-byte line: 3336, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3263 of 3263
+base-p12160 c40a963c14849bf00ca9922b5160ab6b7d36f975d34a87862a840a39c92619ea 4519744 bytes; all functions in both: 3336; moved by exactly the pad: 3336; not moved: 0; shifts: +12160 B: 3336; same offset in a 64-byte line: 3336, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3263 of 3263
+base-p38336 137143afe7bf6e06519e9cf6ed662652e05c7da4188df10957d7573ed38b1f13 4545920 bytes; all functions in both: 3336; moved by exactly the pad: 3336; not moved: 0; shifts: +38336 B: 3336; same offset in a 64-byte line: 3336, in a 4 KiB page: 0; A's neighbours still next in B, in order: 3263 of 3263
+6 placements: functions moved by exactly their pad 20016 of 20016; neighbours kept 19578 of 19578
+started as: env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:524288 PROBE_ALLOCATOR=jemalloc <binary> <port> plain-mt
+plan: part pilot, workload besidemt, K=3 placements, R=2 recorded pairs each after 1 unrecorded, TURN=1 s, cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u
+PADS_P: 320 15120 25824
+PADS_Q: 22848 12160 38336
+every turn on a fresh start; server CPU 2, wrk -t1 -c1 on CPUs 4, driver and perf CPU 7; idle connection: /wait
+kit cycles-deadline-2029-3 run d8eba523-a6c3-42bf-b827-b8ac51bdebea plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+os: Debian GNU/Linux 13 (trixie)
+kernel.randomize_va_space 2
+schedule seed 7407; placement timeout 300 s; no placement is run again
+DRY RUN: not a measurement

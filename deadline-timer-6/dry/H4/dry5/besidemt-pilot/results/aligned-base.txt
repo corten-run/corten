@@ -1,0 +1,1 @@
+ALIGNED base: 0 input sections of .text aligned beyond 16 bytes of 3364; widest alignment 16; 0 symbols from the first on

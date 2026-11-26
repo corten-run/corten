@@ -1,0 +1,6 @@
+1 aa-wait 1
+2 change-wait 1
+3 change-wait 2
+4 aa-wait 2
+5 aa-wait 3
+6 change-wait 3

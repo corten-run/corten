@@ -1,0 +1,13 @@
+== check 1: /unstaged -H 'Accept:' -H 'User-Agent:'
+2,5c2,5
+< content-type: text/plain; charset=utf-8
+< x-content-type-options: nosniff
+< content-security-policy: sandbox
+< content-length: 2
+---
+> content-type: text/html; charset=utf-8
+> Connection: keep-alive
+> Keep-Alive: timeout=5
+> Transfer-Encoding: chunked
+bodies differ: 2 and 35 bytes
+run-pair: unstaged: base and head answer differently

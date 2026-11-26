@@ -1,0 +1,19 @@
+== check 1: /private -H 'Accept:' -H 'User-Agent:'
+3,13c3,5
+< vary: corten, accept
+< vary: accept-encoding
+< corten-shell: a31c14e6a925200c
+< content-security-policy: default-src 'self'; script-src 'self' 'sha256-unwAHX/TzefptTPCSzgHI4NbL0yr+G0YCMsktyelKPU='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+< x-content-type-options: nosniff
+< referrer-policy: strict-origin-when-cross-origin
+< x-frame-options: DENY
+< cross-origin-opener-policy: same-origin
+< permissions-policy: accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()
+< cache-control: private, no-cache
+< content-length: 6124
+---
+> Connection: keep-alive
+> Keep-Alive: timeout=5
+> Transfer-Encoding: chunked
+bodies differ: 6124 and 35 bytes
+run-pair: beside: base and head answer differently

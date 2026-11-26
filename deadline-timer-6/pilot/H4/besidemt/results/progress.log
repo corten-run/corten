@@ -1,0 +1,111 @@
+== cycles-deadline-2029-3 pilot besidemt run 85c139d9-ce41-41a7-83fa-674bc260111a verify start 00:06:05
+verify: 200 placements answer as their unpadded binary
+== park start 00:06:53
+park: 3 turns in the state
+== check start 00:07:04
+pilot-besidemt: checked 1 requests: same
+== checks ok 00:07:11; 100 placements to run
+1 pilot-besidemt p057 ok 00:08:18
+2 pilot-besidemt p046 ok 00:09:24
+3 pilot-besidemt p015 ok 00:10:30
+4 pilot-besidemt p088 ok 00:11:36
+5 pilot-besidemt p031 ok 00:12:43
+6 pilot-besidemt p080 ok 00:13:49
+7 pilot-besidemt p074 ok 00:14:55
+8 pilot-besidemt p032 ok 00:16:01
+9 pilot-besidemt p026 ok 00:17:08
+10 pilot-besidemt p042 ok 00:18:14
+11 pilot-besidemt p095 ok 00:19:20
+12 pilot-besidemt p020 ok 00:20:26
+13 pilot-besidemt p086 ok 00:21:32
+14 pilot-besidemt p021 ok 00:22:39
+15 pilot-besidemt p009 ok 00:23:45
+16 pilot-besidemt p004 ok 00:24:51
+17 pilot-besidemt p016 ok 00:25:58
+18 pilot-besidemt p008 ok 00:27:04
+19 pilot-besidemt p019 ok 00:28:10
+20 pilot-besidemt p061 ok 00:29:16
+21 pilot-besidemt p093 ok 00:30:23
+22 pilot-besidemt p053 ok 00:31:29
+23 pilot-besidemt p077 ok 00:32:35
+24 pilot-besidemt p017 ok 00:33:42
+25 pilot-besidemt p041 ok 00:34:48
+26 pilot-besidemt p028 ok 00:35:55
+27 pilot-besidemt p034 ok 00:37:01
+28 pilot-besidemt p047 ok 00:38:07
+29 pilot-besidemt p049 ok 00:39:14
+30 pilot-besidemt p058 ok 00:40:20
+31 pilot-besidemt p065 ok 00:41:26
+32 pilot-besidemt p013 ok 00:42:32
+33 pilot-besidemt p070 ok 00:43:39
+34 pilot-besidemt p010 ok 00:44:45
+35 pilot-besidemt p039 ok 00:45:51
+36 pilot-besidemt p040 ok 00:46:58
+37 pilot-besidemt p087 ok 00:48:04
+38 pilot-besidemt p069 ok 00:49:10
+39 pilot-besidemt p082 ok 00:50:16
+40 pilot-besidemt p100 ok 00:51:23
+41 pilot-besidemt p075 ok 00:52:29
+42 pilot-besidemt p063 ok 00:53:35
+43 pilot-besidemt p099 ok 00:54:42
+44 pilot-besidemt p024 ok 00:55:48
+45 pilot-besidemt p098 ok 00:56:54
+46 pilot-besidemt p068 ok 00:58:01
+47 pilot-besidemt p059 ok 00:59:07
+48 pilot-besidemt p029 ok 01:00:13
+49 pilot-besidemt p048 ok 01:01:20
+50 pilot-besidemt p055 ok 01:02:26
+51 pilot-besidemt p067 ok 01:03:32
+52 pilot-besidemt p056 ok 01:04:39
+53 pilot-besidemt p005 ok 01:05:45
+54 pilot-besidemt p085 ok 01:06:51
+55 pilot-besidemt p096 ok 01:07:57
+56 pilot-besidemt p084 ok 01:09:04
+57 pilot-besidemt p023 ok 01:10:10
+58 pilot-besidemt p079 ok 01:11:16
+59 pilot-besidemt p012 ok 01:12:22
+60 pilot-besidemt p050 ok 01:13:29
+61 pilot-besidemt p071 ok 01:14:35
+62 pilot-besidemt p001 ok 01:15:42
+63 pilot-besidemt p066 ok 01:16:48
+64 pilot-besidemt p011 ok 01:17:54
+65 pilot-besidemt p037 ok 01:19:01
+66 pilot-besidemt p090 ok 01:20:07
+67 pilot-besidemt p083 ok 01:21:13
+68 pilot-besidemt p043 ok 01:22:19
+69 pilot-besidemt p022 ok 01:23:26
+70 pilot-besidemt p002 ok 01:24:32
+71 pilot-besidemt p062 ok 01:25:38
+72 pilot-besidemt p073 ok 01:26:45
+73 pilot-besidemt p054 ok 01:27:51
+74 pilot-besidemt p092 ok 01:28:57
+75 pilot-besidemt p052 ok 01:30:03
+76 pilot-besidemt p044 ok 01:31:10
+77 pilot-besidemt p006 ok 01:32:16
+78 pilot-besidemt p060 ok 01:33:23
+79 pilot-besidemt p064 ok 01:34:29
+80 pilot-besidemt p025 ok 01:35:36
+81 pilot-besidemt p076 ok 01:36:42
+82 pilot-besidemt p030 ok 01:37:48
+83 pilot-besidemt p035 ok 01:38:54
+84 pilot-besidemt p033 ok 01:40:01
+85 pilot-besidemt p072 ok 01:41:07
+86 pilot-besidemt p003 ok 01:42:14
+87 pilot-besidemt p027 ok 01:43:20
+88 pilot-besidemt p036 ok 01:44:26
+89 pilot-besidemt p078 ok 01:45:32
+90 pilot-besidemt p051 ok 01:46:38
+91 pilot-besidemt p089 ok 01:47:45
+92 pilot-besidemt p014 ok 01:48:51
+93 pilot-besidemt p045 ok 01:49:57
+94 pilot-besidemt p007 ok 01:51:03
+95 pilot-besidemt p081 ok 01:52:10
+96 pilot-besidemt p097 ok 01:53:16
+97 pilot-besidemt p018 ok 01:54:22
+98 pilot-besidemt p038 ok 01:55:28
+99 pilot-besidemt p094 ok 01:56:35
+100 pilot-besidemt p091 ok 01:57:41
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

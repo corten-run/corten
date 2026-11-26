@@ -1,0 +1,9 @@
+comparison pilot-beside placement 14 workload beside
+A base-p36880 340afca86bd905a33c5b30f271782eaec0feb8ecbe8844ec8a4437b556f14cc2
+B base-p27312 0e819be88948accb4fbd413dc2c9fac26ab55968092e0ce443d5bffecf52b201
+kit cycles-deadline-2029-3
+run bb7e5b34-cb02-4396-8c3b-e78cc86ba43a
+plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+seq 76
+started 2026-11-26T01:29:37Z
+ended 2026-11-26T01:30:43Z

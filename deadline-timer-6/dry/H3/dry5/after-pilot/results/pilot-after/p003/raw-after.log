@@ -1,0 +1,108 @@
+## pair w1 base
+# started on Wed Nov 25 21:58:26 2026
+
+1412897957,,cycles:u,1056645109,100.00,,
+1720878117,,cycles:k,1056645109,100.00,,
+2868707832,,instructions:u,1056645109,100.00,2.03,insn per cycle
+149081604,,L1-icache-load-misses,1056645109,100.00,,
+Running 1s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.01ms    1.21ms  21.71ms   98.08%
+    Req/Sec    35.35k     9.03k   66.22k    85.71%
+  73851 requests in 1.10s, 503.43MB read
+Requests/sec:  67203.44
+Transfer/sec:    458.12MB
+AFTER thread 1: request() called 33934 times, GET /wait from the first 512
+AFTER thread 2: request() called 39980 times, GET /wait from the first 512
+RESULT 73851 0 0 0 0 0
+## pair w1 head
+# started on Wed Nov 25 21:58:27 2026
+
+1393165246,,cycles:u,1032402124,100.00,,
+1712943238,,cycles:k,1032402124,100.00,,
+2932242637,,instructions:u,1032402124,100.00,2.10,insn per cycle
+147830330,,L1-icache-load-misses,1032402124,100.00,,
+Running 1s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.25ms    3.15ms  41.44ms   98.37%
+    Req/Sec    36.16k     7.56k   57.20k    85.71%
+  75496 requests in 1.10s, 514.65MB read
+Requests/sec:  68673.18
+Transfer/sec:    468.14MB
+AFTER thread 1: request() called 40023 times, GET /wait from the first 512
+AFTER thread 2: request() called 35536 times, GET /wait from the first 512
+RESULT 75496 0 0 0 0 0
+## pair 1 base
+# started on Wed Nov 25 21:58:28 2026
+
+1399013315,,cycles:u,1044209266,100.00,,
+1720213924,,cycles:k,1044209266,100.00,,
+2895722826,,instructions:u,1044209266,100.00,2.07,insn per cycle
+153021020,,L1-icache-load-misses,1044209266,100.00,,
+Running 1s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.08ms    1.81ms  28.67ms   97.79%
+    Req/Sec    35.65k     7.86k   62.37k    85.71%
+  74550 requests in 1.10s, 508.20MB read
+Requests/sec:  67810.39
+Transfer/sec:    462.25MB
+AFTER thread 1: request() called 39958 times, GET /wait from the first 512
+AFTER thread 2: request() called 34656 times, GET /wait from the first 512
+RESULT 74550 0 0 0 0 0
+## pair 1 head
+# started on Wed Nov 25 21:58:30 2026
+
+1402312581,,cycles:u,1049716380,100.00,,
+1729214179,,cycles:k,1049716380,100.00,,
+2930976475,,instructions:u,1049716380,100.00,2.09,insn per cycle
+148647220,,L1-icache-load-misses,1049716380,100.00,,
+Running 1s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.08ms    1.94ms  29.85ms   98.38%
+    Req/Sec    36.19k     7.73k   62.99k    85.71%
+  75458 requests in 1.10s, 514.39MB read
+Requests/sec:  68599.18
+Transfer/sec:    467.63MB
+AFTER thread 1: request() called 40508 times, GET /wait from the first 512
+AFTER thread 2: request() called 35013 times, GET /wait from the first 512
+RESULT 75458 0 0 0 0 0
+## pair 2 head
+# started on Wed Nov 25 21:58:31 2026
+
+1423205021,,cycles:u,1050551117,100.00,,
+1748290586,,cycles:k,1050551117,100.00,,
+3000806525,,instructions:u,1050551117,100.00,2.11,insn per cycle
+149319901,,L1-icache-load-misses,1050551117,100.00,,
+Running 1s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.01ms    1.52ms  25.41ms   98.20%
+    Req/Sec    37.01k     7.49k   62.84k    85.71%
+  77264 requests in 1.10s, 526.70MB read
+Requests/sec:  70287.22
+Transfer/sec:    479.14MB
+AFTER thread 1: request() called 41476 times, GET /wait from the first 512
+AFTER thread 2: request() called 35852 times, GET /wait from the first 512
+RESULT 77264 0 0 0 0 0
+## pair 2 base
+# started on Wed Nov 25 21:58:33 2026
+
+1401829995,,cycles:u,1048334944,100.00,,
+1742495036,,cycles:k,1048334944,100.00,,
+2932303182,,instructions:u,1048334944,100.00,2.09,insn per cycle
+151582070,,L1-icache-load-misses,1048334944,100.00,,
+Running 1s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.02ms    1.45ms  25.88ms   97.94%
+    Req/Sec    36.16k     8.25k   65.12k    85.71%
+  75494 requests in 1.10s, 514.63MB read
+Requests/sec:  68640.08
+Transfer/sec:    467.91MB
+AFTER thread 1: request() called 40609 times, GET /wait from the first 512
+AFTER thread 2: request() called 34949 times, GET /wait from the first 512
+RESULT 75494 0 0 0 0 0

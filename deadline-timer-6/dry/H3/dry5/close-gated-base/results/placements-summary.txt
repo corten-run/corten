@@ -1,0 +1,1 @@
+9 placements: functions moved by exactly their pad 30024 of 30024; neighbours kept 29367 of 29367

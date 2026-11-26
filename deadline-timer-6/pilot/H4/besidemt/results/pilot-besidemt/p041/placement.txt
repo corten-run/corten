@@ -1,0 +1,9 @@
+comparison pilot-besidemt placement 41 workload besidemt
+A base-p1856 d2d9273c186f984af3ebb6afc9be5eb5b1a7db2119599c4a0dbee60007c3f6ff
+B base-p23072 959f831e4e0657e6f5ef672296161e6981bd0daa1d2ba7d57466bfeefbea7ead
+kit cycles-deadline-2029-3
+run 85c139d9-ce41-41a7-83fa-674bc260111a
+plan 29e60d68dc3e7a5c1cc92b9493f7a1cd103158e02944a6b120599e912588d874
+seq 25
+started 2026-11-26T00:33:42Z
+ended 2026-11-26T00:34:48Z

@@ -1,0 +1,18 @@
+== cycles-deadline-2029-3 gated besidemt run 3a25ca48-a012-4e7c-856b-9b3a02524a25 verify start 22:00:51
+verify: 9 placements answer as their unpadded binary
+== park start 22:00:54
+park: 6 turns in the state
+== check start 22:01:03
+aa-besidemt: checked 1 requests: same
+change-besidemt: checked 1 requests: same
+== checks ok 22:01:10; 6 placements to run
+1 aa-besidemt p001 ok 22:01:20
+2 change-besidemt p001 ok 22:01:31
+3 change-besidemt p002 ok 22:01:41
+4 aa-besidemt p002 ok 22:01:51
+5 aa-besidemt p003 ok 22:02:01
+6 change-besidemt p003 ok 22:02:12
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

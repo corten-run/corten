@@ -1,0 +1,118 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 100 and meet the rule: 200 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 100 distinct q - p mod 4096 (25, 25, 25, 25 by quarter of a page)
+== cycles-deadline-2029-3 pilot after run 0c15b3c5-ca40-4b6f-8546-c57556efef11 verify start 00:04:10
+verify: 200 placements answer as their unpadded binary
+== state start 00:04:55
+state: 3 turns reach and keep the state
+== check start 00:05:12
+pilot-after: checked 2 requests: same
+== checks ok 00:05:19; 100 placements to run
+1 pilot-after p088 ok 00:06:21
+2 pilot-after p065 ok 00:07:24
+3 pilot-after p041 ok 00:08:26
+4 pilot-after p030 ok 00:09:28
+5 pilot-after p026 ok 00:10:31
+6 pilot-after p014 ok 00:11:33
+7 pilot-after p040 ok 00:12:35
+8 pilot-after p005 ok 00:13:38
+9 pilot-after p064 ok 00:14:40
+10 pilot-after p033 ok 00:15:42
+11 pilot-after p089 ok 00:16:45
+12 pilot-after p098 ok 00:17:47
+13 pilot-after p011 ok 00:18:49
+14 pilot-after p006 ok 00:19:52
+15 pilot-after p083 ok 00:20:54
+16 pilot-after p059 ok 00:21:56
+17 pilot-after p047 ok 00:22:59
+18 pilot-after p031 ok 00:24:01
+19 pilot-after p096 ok 00:25:03
+20 pilot-after p068 ok 00:26:06
+21 pilot-after p099 ok 00:27:08
+22 pilot-after p043 ok 00:28:10
+23 pilot-after p071 ok 00:29:12
+24 pilot-after p077 ok 00:30:15
+25 pilot-after p029 ok 00:31:17
+26 pilot-after p016 ok 00:32:19
+27 pilot-after p055 ok 00:33:22
+28 pilot-after p049 ok 00:34:24
+29 pilot-after p100 ok 00:35:26
+30 pilot-after p075 ok 00:36:28
+31 pilot-after p092 ok 00:37:31
+32 pilot-after p058 ok 00:38:33
+33 pilot-after p023 ok 00:39:35
+34 pilot-after p037 ok 00:40:38
+35 pilot-after p028 ok 00:41:40
+36 pilot-after p093 ok 00:42:42
+37 pilot-after p091 ok 00:43:44
+38 pilot-after p061 ok 00:44:47
+39 pilot-after p046 ok 00:45:49
+40 pilot-after p054 ok 00:46:51
+41 pilot-after p048 ok 00:47:54
+42 pilot-after p082 ok 00:48:56
+43 pilot-after p090 ok 00:49:58
+44 pilot-after p086 ok 00:51:01
+45 pilot-after p073 ok 00:52:03
+46 pilot-after p002 ok 00:53:05
+47 pilot-after p095 ok 00:54:08
+48 pilot-after p084 ok 00:55:10
+49 pilot-after p025 ok 00:56:12
+50 pilot-after p081 ok 00:57:15
+51 pilot-after p097 ok 00:58:17
+52 pilot-after p050 ok 00:59:19
+53 pilot-after p063 ok 01:00:22
+54 pilot-after p010 ok 01:01:24
+55 pilot-after p032 ok 01:02:26
+56 pilot-after p070 ok 01:03:28
+57 pilot-after p062 ok 01:04:31
+58 pilot-after p078 ok 01:05:33
+59 pilot-after p036 ok 01:06:35
+60 pilot-after p009 ok 01:07:38
+61 pilot-after p069 ok 01:08:40
+62 pilot-after p087 ok 01:09:42
+63 pilot-after p056 ok 01:10:44
+64 pilot-after p053 ok 01:11:47
+65 pilot-after p052 ok 01:12:49
+66 pilot-after p003 ok 01:13:51
+67 pilot-after p004 ok 01:14:54
+68 pilot-after p018 ok 01:15:56
+69 pilot-after p057 ok 01:16:58
+70 pilot-after p015 ok 01:18:01
+71 pilot-after p020 ok 01:19:03
+72 pilot-after p045 ok 01:20:06
+73 pilot-after p007 ok 01:21:08
+74 pilot-after p012 ok 01:22:10
+75 pilot-after p044 ok 01:23:12
+76 pilot-after p024 ok 01:24:14
+77 pilot-after p066 ok 01:25:17
+78 pilot-after p060 ok 01:26:19
+79 pilot-after p022 ok 01:27:21
+80 pilot-after p027 ok 01:28:24
+81 pilot-after p051 ok 01:29:26
+82 pilot-after p042 ok 01:30:28
+83 pilot-after p094 ok 01:31:31
+84 pilot-after p019 ok 01:32:33
+85 pilot-after p038 ok 01:33:36
+86 pilot-after p079 ok 01:34:38
+87 pilot-after p076 ok 01:35:40
+88 pilot-after p067 ok 01:36:42
+89 pilot-after p013 ok 01:37:45
+90 pilot-after p074 ok 01:38:47
+91 pilot-after p008 ok 01:39:49
+92 pilot-after p080 ok 01:40:52
+93 pilot-after p072 ok 01:41:54
+94 pilot-after p034 ok 01:42:56
+95 pilot-after p039 ok 01:43:58
+96 pilot-after p017 ok 01:45:01
+97 pilot-after p035 ok 01:46:03
+98 pilot-after p001 ok 01:47:05
+99 pilot-after p021 ok 01:48:08
+100 pilot-after p085 ok 01:49:10
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

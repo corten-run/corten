@@ -1,0 +1,22 @@
+host 697b86f9 Debian GNU/Linux 13 (trixie) 6.12.117+deb13-amd64 8 CPUs; load 0.00 0.00 0.00; 2026-11-25T21:52:57Z
+left over before: 
+the earlier kit's directory is now /m/old-1125215257/dl
+plan.md 6d63f7612c40815a85cbdf8cffe60952823fade7806b44ca4c5163175f00bf5e 65468 bytes; kit /m/dl/plan.env:KIT=cycles-deadline-2029-3
+== unstaged: setup and the pilot part's build 21:52:57
+== unstaged: the self-test 21:53:52
+SELFTEST-OK
+== unstaged: the pilot part's dry run 21:53:59
+unstaged pilot part: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md
+== unstaged: the gated part's build, the base as both sides 21:54:33
+== unstaged: the gated part's dry run, the base as both sides 21:56:18
+unstaged gated part: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md
+== besidemt: setup and the pilot part's build 21:57:21
+== besidemt: the self-test 21:58:15
+SELFTEST-OK
+== besidemt: the pilot part's dry run 21:58:22
+besidemt pilot part: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md
+== besidemt: the gated part's build, the base as both sides 21:59:04
+== besidemt: the gated part's dry run, the base as both sides 22:00:49
+besidemt gated part: run.sh exit 0: RUN-ENDED complete: every comparison complete; results/report.md
+left over after: 
+DRY5-DONE 22:02:12
