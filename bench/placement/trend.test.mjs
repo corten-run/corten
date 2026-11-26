@@ -719,7 +719,7 @@ const LINUX = { skip: tools ? false : "needs Linux with taskset, timeout, curl a
 // side: a value for a header of its own, x-side, so two servers can answer in a header alone.
 const serve = (body, side = null) => `require("node:http").createServer((q, s) => { s.setHeader("content-type", "text/plain"); ${side === null ? "" : `s.setHeader("x-side", ${JSON.stringify(side)}); `}s.end(${JSON.stringify(body)}); }).listen(Number(process.argv[2]), "127.0.0.1");`;
 const mute = 'require("node:net").createServer(() => {}).listen(Number(process.argv[2]), "127.0.0.1");';
-const taken = (port) => spawnSync("curl", ["-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
+const taken = (port) => spawnSync("curl", ["--disable", "-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
 const full = (body) => createHash("sha256").update(body).digest("hex"), digest = (body) => full(body).slice(0, 16);
 // The check of two sides' answers, base and head each a script node runs, stopped after seconds.
 // expect: the text of an expected difference, given to turns.sh as a plan's is (the command's
@@ -811,10 +811,24 @@ test("the answers check on real servers: a difference diff or cmp reported that 
     assert.equal(r.status, 1, `${name}: ${r.said}`);
     assert.ok(r.said.includes("reported a difference that") && r.said.includes("answers/diff.txt does not hold: missing evidence") && !r.said.includes("answers: same"), `${name}: ${r.said}`);
   }
-  // The same answers through the same stand-in: nothing differs, so the empty diff.txt is right.
+  // The same answers through the same stand-in: nothing differs, but a link to /dev/null is not a
+  // diff.txt of the check's own, empty or not, so it is missing evidence and not "answers: same".
   const same = answers("answers-swallowed-same", serve("aaaa"), serve("aaaa"), 60, { first });
-  assert.equal(same.status, 0, same.said);
-  assert.ok(same.said.includes("answers: same"), same.said);
+  assert.equal(same.status, 1, same.said);
+  assert.ok(same.said.includes("answers/diff.txt is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence") && !same.said.includes("answers: same"), same.said);
+});
+
+test("the answers check on real servers: a diff.txt that is gone when diff and cmp report the same answers fails it as missing evidence, and does not read as the same answers", LINUX, () => {
+  // A stand-in for cmp unlinks diff.txt after diff wrote it, just before the bodies are compared.
+  const first = stand("unlinked", "cmp", 'case "$3" in */B.body) rm -f "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
+  const r = answers("answers-unlinked", serve("aaaa"), serve("aaaa"), 60, { first });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes("answers/diff.txt is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence") && !r.said.includes("answers: same"), r.said);
+  // The same stand-in on two answers that differ: cmp's difference is written to diff.txt afresh,
+  // and with the headers alike it is the whole of it, so the check fails only on the difference.
+  const two = answers("answers-unlinked-two", serve("aaaa"), serve("bbbb"), 60, { first });
+  assert.equal(two.status, 1, two.said);
+  assert.ok(two.said.includes("turns: plain: A and B answer differently"), two.said);
 });
 
 test("the answers check on real servers: a diff that cannot compare (status 2) fails it, and does not read as a difference or the same answers", LINUX, () => {

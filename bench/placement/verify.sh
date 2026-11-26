@@ -14,7 +14,11 @@
 # after the plan's placementSeconds; each of the two starts of the base is given 100 tries of a
 # readiness request bounded to a second, and is stopped however verify.sh ends: TERM, and KILL
 # if it is still running 5 s later, so a server that ignores TERM holds verify.sh no longer
-# (serve.mjs, below).
+# (serve.mjs, below). serve.mjs stops the process START is, and nothing it started: START must be,
+# or exec, the server that listens. After each stop nothing may accept a connection on 18083 (one
+# connect, at most a second): one that does, a server START forked and left, say, fails verify.sh.
+# Every curl is run with --disable, so no curl configuration of HOME's (a retry, a header)
+# changes a request or stretches its bound.
 # Every server is started with an environment of PATH, HOME, PORT and BIN alone, kept in
 # <out dir>/server-env.txt. Writes <out dir>/<side>-p<pad>/ and
 # <out dir>/verdicts.txt, one line a binary: "<binary> as <side>: answers: same; ...".
@@ -42,9 +46,9 @@ release() { trap 'exit 1' HUP INT PIPE TERM; [ -z "$late" ] || exit 1; }
 halt() {
     hold
     exec 3>&-
-    st=0
+    st=0; stopped=
     if [ -n "$sup" ]; then
-        s=$sup
+        s=$sup; stopped=1
         while :; do
             woke=; st=0; wait "$s" || st=$?
             [ $st -gt 128 ] && [ -n "$woke" ] || break
@@ -52,6 +56,12 @@ halt() {
         sup=
     fi
     [ $st = 0 ] || echo "verify: serve.mjs, stopping the base's server, ended with status $st" >&2
+    # The server serve.mjs stopped has ended, and its listening socket with it: curl's 7 is a
+    # refused connection, and anything else is something that still accepts one.
+    if [ $st = 0 ] && [ -n "$stopped" ]; then
+        cst=0; curl --disable -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null || cst=$?
+        [ $cst = 7 ] || { echo "verify: something still accepts on 18083 after the base's server was stopped (curl status $cst): START must be, or exec, the server that listens, not start it and leave it" >&2; st=1; }
+    fi
     release
     return $st
 }
@@ -69,12 +79,12 @@ for s in 1 2; do
     exec 4<&-
     release
     i=0
-    until curl -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null 3>&-; do
+    until curl --disable -s --max-time 1 -o /dev/null http://127.0.0.1:18083/ </dev/null 3>&-; do
         i=$((i + 1)); [ $i -lt 100 ] || { echo "verify: nothing answers on 18083" >&2; exit 1; }; sleep 0.1
     done
     set --
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    curl -sS --max-time 10 -D "$out/start-$s.raw-headers" -o /dev/null "$@" "http://127.0.0.1:18083$REQ_PATH" </dev/null 3>&-
+    curl --disable -sS --max-time 10 -D "$out/start-$s.raw-headers" -o /dev/null "$@" "http://127.0.0.1:18083$REQ_PATH" </dev/null 3>&-
     halt || exit 1
 done
 node "$KIT/mask.mjs" starts "$MASK_JSON" "$out/start-1.raw-headers" "$out/start-2.raw-headers" || { echo "VERIFY FAILED: the plan's mask" >&2; exit 1; }

@@ -8,6 +8,9 @@
 // could not be started, ended before it was stopped, or this process was stopped by a signal
 // rather than by its input ending (the server stopped as above all the same); 3 if the server is
 // still running 5 s after KILL, so a stop takes at most about 10 s however the server behaves.
+// It stops its child and nothing the child started: the command must be, or exec, the server that
+// listens. One that starts the server and waits can end on TERM and leave the server listening,
+// which verify.sh's check of its port after each stop then fails.
 import { spawn } from "node:child_process";
 
 const [command, ...args] = process.argv.slice(2);

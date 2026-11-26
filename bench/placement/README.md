@@ -33,7 +33,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `probe.env` | The build's environment, names to text. The build sees these, `PATH`, `HOME`, where `rustup` and `cargo` keep their files, the toolchain and the kit's own three variables, and nothing else of the shell `build.sh` is run from. |
 | `probe.build` | The build command, run in the probe's copy. |
 | `probe.binary` | The built binary under the target directory, as `release/probe`. |
-| `probe.start` | The command that serves `$BIN` on `127.0.0.1:$PORT`: the allocator, its settings and the probe's configuration belong here, since a server sees `PATH`, `HOME`, `PORT` and `BIN` and nothing else of the shell `run.sh` is run from. A workload may give a `start` of its own. |
+| `probe.start` | The command that serves `$BIN` on `127.0.0.1:$PORT`: the allocator, its settings and the probe's configuration belong here, since a server sees `PATH`, `HOME`, `PORT` and `BIN` and nothing else of the shell `run.sh` is run from. It must be, or `exec`, the process that listens: the kit stops the process the command is and nothing it started, so a command that starts the server and waits (a shell that does not `exec` it, say) can end on TERM and leave the server listening, and `verify.sh` fails when anything still accepts on its port after a stop. A workload may give a `start` of its own. |
 | `host.cpuModel` | Text the host's CPU model must contain, or `null` for any. |
 | `host.cpus` | `server`, `load` (a list) and `driver`: CPUs of their own for the server, `wrk`, and the driver with `perf`. |
 | `load` | `threads` and `connections` of `wrk`, and a turn's `seconds`. |
@@ -205,7 +205,11 @@ one of the commands above with its output under `<run dir>/log`:
    [`serve.mjs`](serve.mjs), the server's parent, which sends those two signals through its child
    handle alone (a number it has not yet reaped cannot name another process) and stops the server
    when `verify.sh`'s end of its input closes, so a signal during the stop does not cut it short
-   and a `verify.sh` killed outright leaves no server running. A release
+   and a `verify.sh` killed outright leaves no server running. `serve.mjs` stops its child alone,
+   so after each stop `verify.sh` makes one connection to its port, of at most a second, and
+   fails if anything takes it: a start command that left the server running. The kit runs every
+   `curl` with `--disable`, so a `.curlrc` (a retry, a header) changes neither a request nor its
+   bound. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
    found there is kept as the workload's `expect` for this run
@@ -289,7 +293,7 @@ while it ran.
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
 | The mask | `verify.sh`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. A masked header the two starts send alike stops the run, with a range or without. |
-| Answers | `plan.mjs`, `verify.sh`, `turns.sh` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. A `diff.txt` that cannot be written or does not hold a difference `diff` or `cmp` reported, or a `diff` or `cmp` that cannot compare, fails the placement. |
+| Answers | `plan.mjs`, `verify.sh`, `turns.sh` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. A `diff.txt` that cannot be written or does not hold a difference `diff` or `cmp` reported, one that is not there, not a regular file of its own (a link, to `/dev/null` say) or not readable when they report none, or a `diff` or `cmp` that cannot compare, fails the placement. |
 | Turns | `turns.sh` | Every turn on a fresh start on the server's CPU; a failed request, or a counter that is zero or under 100%, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
 | Eligibility and K | `pilot.mjs`, `plan.mjs --sized-from` | The A/A may size a run, on this plan's setup as far as item 11 below compares it, and the K passes under each model kept, at that K itself. A K nothing checked is said to be unchecked in every reading. |
@@ -395,13 +399,16 @@ Those tests run two shell scripts, and only on Linux: `trend.test.mjs` runs the 
 check, which is `turns.sh` with no pair turned, on servers of its own (the same answer, two
 bodies of one length, a third body of that length under the difference the two made, a
 difference in a header alone and, under it, another body both sides share, a
-`diff.txt` that cannot be written, one that takes every write and holds none of the difference `diff` and `cmp` reported, and a `diff` that cannot compare, each of those three with a
+`diff.txt` that cannot be written, one that takes every write and holds none of the difference `diff` and `cmp` reported (and, for the same answers, is no regular file), one unlinked after `diff` wrote it, and a `diff` that cannot compare, each of those four with a
 stand-in for a tool `turns.sh` runs, and a side that never answers), on a CPU the test may run
 on, and fails saying so when the kit's two ports are in use. `verify.test.mjs`, which `npm run
 check` runs too, runs the second, `verify.sh`, and with a plan of no placement, on
 a base that ignores TERM: after its two starts, ended by a failed request while the base
 runs, sent TERM while it stops the base and killed outright while the base runs, it must have
-the base stopped within a bound and leave nothing on its port; and `serve.mjs` on its own, which
+the base stopped within a bound and leave nothing on its port; it must fail when a start command
+forks the server and leaves it listening, and give each readiness request to a base that never
+answers at most a second under a `.curlrc` that asks for retries. Each of its servers ends by
+itself within a bound, so no test signals one by its number; and `serve.mjs` on its own, which
 must stop a server when its input ends (KILL 5 s after TERM for one that ignores TERM), and end
 at once, saying so, when its server ends before it is stopped. What `build.sh`, `run.sh`, `verify.sh` and
 `turns.sh` refuse otherwise is held by the selftest alone, on a host that has `perf` and `wrk`,
