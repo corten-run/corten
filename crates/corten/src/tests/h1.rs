@@ -160,6 +160,11 @@ fn routes() -> Routes {
             .route("/fail", get(|| async { Err::<&str, _>(crate::Error::new("the handler failed")) }))
             .route("/interim", get(|| async { (StatusCode::PROCESSING, "not an answer") }))
             .route("/close", get(|| async { ([(header::CONNECTION, "close")], "bye") }))
+            .route("/length", get(|| async { ([(header::CONTENT_LENGTH, "2")], "hi") }))
+            .route("/length-of-a-stream", get(move || async move { ([(header::CONTENT_LENGTH, "20495")], stream().await) }))
+            .route("/chunked", get(|| async { ([(header::TRANSFER_ENCODING, "chunked")], "hi") }))
+            .route("/gzip-chunked", get(|| async { ([(header::TRANSFER_ENCODING, "gzip, chunked")], "hi") }))
+            .route("/switch", get(|| async { (StatusCode::SWITCHING_PROTOCOLS, "not a switch") }))
             .route("/unread", crate::router::post(|| async { "unread" }))
             .route("/read", crate::router::post(|body: Bytes| async move { format!("read {}", body.len()) })),
     )
@@ -208,6 +213,16 @@ async fn an_answer_is_hypers_byte_for_byte() {
             false,
         ),
         ("a chunked body read", chunked, false),
+        ("a length the handler wrote", get("/length"), false),
+        ("HEAD of a length the handler wrote", head("/length"), false),
+        ("a length the handler wrote for a stream", get("/length-of-a-stream"), false),
+        ("HEAD of a length the handler wrote for a stream", head("/length-of-a-stream"), false),
+        ("a transfer coding the handler wrote", get("/chunked"), false),
+        ("HEAD of a transfer coding the handler wrote", head("/chunked"), false),
+        ("two transfer codings the handler wrote", get("/gzip-chunked"), false),
+        ("a transfer coding the handler wrote, to HTTP/1.0", "GET /chunked HTTP/1.0\r\n\r\n".into(), true),
+        ("a length the handler wrote, to HTTP/1.0", "GET /length HTTP/1.0\r\n\r\n".into(), true),
+        ("101 to a request that asked for no switch", get("/switch") + GET, true),
         ("an interim status for an answer", get("/interim"), true),
         ("the handler closes", get("/close"), true),
         ("the client closes", format!("GET / HTTP/1.1\r\n{HOST}connection: close\r\n\r\n"), true),
@@ -1433,5 +1448,554 @@ async fn the_future_a_connection_is_served_in_is_small() {
     assert_eq!(statuses(&got), [200]);
     let size = crate::h1::SERVE.get();
     assert!((1..=1_024).contains(&size), "{size} bytes");
+    own.stop().await;
+}
+
+/// A service for a test that drives a connection itself: each request is answered by a function.
+struct Does<F>(F);
+
+impl<F: FnMut(Request<Body>) -> Response> tower_service::Service<Request<Body>> for Does<F> {
+    type Response = ::http::Response<crate::watch::Answered>;
+    type Error = std::convert::Infallible;
+    type Future = crate::watch::Answer<std::future::Ready<Result<Response, std::convert::Infallible>>>;
+
+    fn poll_ready(&mut self, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let inner = std::future::ready(Ok((self.0)(req)));
+        crate::watch::Answer { inner, watch: None, connect: false }
+    }
+}
+
+/// One end of a connection in memory whose two directions hold different amounts.
+type Pipe = tokio::io::Join<tokio::io::ReadHalf<tokio::io::SimplexStream>, tokio::io::WriteHalf<tokio::io::SimplexStream>>;
+
+/// A connection in memory: what the server writes waits in `to_client` bytes of room until the
+/// client reads it, and what the client writes in a megabyte. The client's end, then the server's.
+/// An end that is dropped closes nothing: a side is closed by its `shutdown`.
+fn pipes(to_client: usize) -> (Pipe, Pipe) {
+    let (server_reads, client_writes) = tokio::io::simplex(1 << 20);
+    let (client_reads, server_writes) = tokio::io::simplex(to_client);
+    (tokio::io::join(client_reads, client_writes), tokio::io::join(server_reads, server_writes))
+}
+
+/// Lets the other futures of the test's task run until they wait.
+async fn turns() {
+    for _ in 0..6 {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// The buffer of answers holds what is unsent and no more, however long its client keeps some of
+/// it unsent. A client leaves six kilobytes of answers unread, less than makes the connection
+/// wait for it, and from then on takes one answer and sends one request, thousands of times: the
+/// buffer is never empty, every answer the client took has left it, and it never holds more than
+/// a write's worth and the answer being written. (Before, it was emptied only once all of it had
+/// gone, so it held every byte sent since: 144 MB in a review's run of this client.)
+#[tokio::test]
+async fn the_buffer_of_answers_holds_what_is_unsent_and_no_more() {
+    use crate::h1::{FLUSH_AT, OUT};
+    const ROUNDS: usize = 3_000;
+    let (mut client, server) = tokio::io::duplex(512);
+    let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
+    let serving = crate::h1::serve(server, Hi(handled.clone()), 32 * 1024, &ending);
+    let asking = async move {
+        client.write_all(GET.as_bytes()).await.unwrap();
+        let (mut first, mut buf) = (Vec::new(), [0u8; 256]);
+        while !first.ends_with(b"\r\n\r\nhi") {
+            let read = client.read(&mut buf).await.unwrap();
+            assert!(read > 0, "closed after {:?}", String::from_utf8_lossy(&first));
+            first.extend_from_slice(&buf[..read]);
+        }
+        let each = first.len();
+        turns().await;
+        OUT.set((0, 0));
+        // Answers nobody reads: what the pipe holds, and six kilobytes that stay in the buffer.
+        let unread = (512 + 6_000) / each;
+        for _ in 0..unread {
+            client.write_all(GET.as_bytes()).await.unwrap();
+            turns().await;
+        }
+        let mut answer = vec![0u8; each];
+        for _ in 0..ROUNDS {
+            client.read_exact(&mut answer).await.unwrap();
+            assert!(answer.starts_with(b"HTTP/1.1 200 OK\r\n") && answer.ends_with(b"\r\n\r\nhi"), "an answer, whole and in its place");
+            client.write_all(GET.as_bytes()).await.unwrap();
+            turns().await;
+        }
+        (each, unread)
+    };
+    let both = async { tokio::join!(serving, asking) };
+    let (handed, (each, unread)) = tokio::time::timeout(Duration::from_secs(60), both).await.expect("the client is done");
+    assert!(handed.is_none(), "no request here is hyper's");
+    assert_eq!(handled.load(SeqCst), 1 + unread + ROUNDS, "every request was answered");
+    let (most, room) = OUT.get();
+    assert!(most >= 4_000, "answers waited in the buffer for their client: {most} bytes at the most");
+    assert!(most <= FLUSH_AT + each, "the buffer held {most} bytes, of answers of {each}");
+    assert!(room <= 2 * (FLUSH_AT + each), "the buffer had room for {room} bytes");
+}
+
+/// Shutdown that begins while an answer streams ends the connection at that answer's end, on both
+/// connections: a request that waits behind it is not begun, though it arrived before shutdown
+/// did. (Shutdown is asked about once more when an answer is whole, not only before its head is
+/// written.)
+#[tokio::test]
+async fn shutdown_begun_while_an_answer_streams_ends_the_connection_at_that_answer() {
+    let mut answers = Vec::new();
+    for own in BOTH {
+        let (release, begun) = (Arc::new(tokio::sync::Notify::new()), Arc::new(AtomicUsize::new(0)));
+        let stream = {
+            let release = release.clone();
+            move || {
+                let release = release.clone();
+                async move {
+                    let later = async move {
+                        release.notified().await;
+                        Ok::<_, std::io::Error>(Bytes::from_static(b"later"))
+                    };
+                    let early = futures_util::stream::iter([Ok(Bytes::from_static(b"early"))]);
+                    Body::from_stream(futures_util::StreamExt::chain(early, futures_util::stream::once(later)))
+                }
+            }
+        };
+        let behind = {
+            let begun = begun.clone();
+            move || {
+                begun.fetch_add(1, SeqCst);
+                async { "hi" }
+            }
+        };
+        let table = Table::new().route("/", get(behind)).route("/events", get(stream));
+        let Served { addr, stop, server } = Served::start(App::new(Routes::from(table)), own).await;
+        let mut idle = TcpStream::connect(addr).await.unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client.write_all(format!("GET /events HTTP/1.1\r\n{HOST}\r\n{GET}").as_bytes()).await.unwrap();
+        let early = until(&mut client, "5\r\nearly\r\n").await;
+        assert_eq!(statuses(&early), [200], "own: {own}: {early}");
+        stop.send(()).unwrap();
+        // Shutdown has reached the connections when the one that waits for a request is closed.
+        assert_eq!(read(&mut idle, SOON).await, (String::new(), true), "own: {own}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release.notify_one();
+        let (rest, closed) = read(&mut client, SOON).await;
+        assert!(closed, "own: {own}: the connection is closed behind the answer: {rest}");
+        assert_eq!(rest, "5\r\nlater\r\n0\r\n\r\n", "own: {own}: the answer is whole, and the last");
+        assert_eq!(begun.load(SeqCst), 0, "own: {own}: the request behind it was begun after shutdown had");
+        answers.push(dateless(&early) + &rest);
+        tokio::time::timeout(SOON, server).await.expect("shutdown ends").unwrap().unwrap();
+    }
+    assert_eq!(answers[1], answers[0]);
+}
+
+/// A handler whose answer's body gives `pieces` and then fails, without waiting.
+fn failing(pieces: &'static [&'static [u8]]) -> impl Fn() -> std::future::Ready<Body> + Clone {
+    move || {
+        let pieces = pieces.iter().map(|piece| Ok(Bytes::from_static(piece)));
+        let failure = std::iter::once(Err(std::io::Error::other("the body failed")));
+        std::future::ready(Body::from_stream(futures_util::stream::iter(pieces.chain(failure))))
+    }
+}
+
+/// An answer whose body fails before any of it had to go is not begun, on both connections: the
+/// client gets the answers before it, whole, and then the connection is closed, with no status
+/// line for an answer it cannot have. So for a body that fails at once, and for one that fails
+/// behind pieces that fit a write, the last of them one too large to copy: Corten's connection
+/// takes the next piece from a body before it sends a piece that fills its buffer, as hyper does.
+#[tokio::test]
+async fn an_answer_whose_body_fails_before_any_of_it_went_is_not_begun() {
+    static LARGE: [&[u8]; 1] = [&X];
+    static BOTH_SIZES: [&[u8]; 2] = [b"first", &X];
+    let app = || {
+        let table = Table::new()
+            .route("/", get(|| async { "hi" }))
+            .route("/at-once", get(failing(&[])))
+            .route("/behind-a-little", get(failing(&[b"first", b"second"])))
+            .route("/behind-a-large-piece", get(failing(&LARGE)))
+            .route("/behind-both", get(failing(&BOTH_SIZES)));
+        App::new(Routes::from(table))
+    };
+    let hyper = Served::start(app(), false).await;
+    let own = Served::start(app(), true).await;
+    for path in ["/at-once", "/behind-a-little", "/behind-a-large-piece", "/behind-both"] {
+        for before in [0, 1, 3] {
+            let request = format!("{}GET {path} HTTP/1.1\r\n{HOST}\r\n{GET}", GET.repeat(before));
+            let (theirs, ours) = (hyper.closed(&request).await, own.closed(&request).await);
+            assert_eq!(statuses(&ours), vec![200; before], "{path} behind {before}: {ours:.300}");
+            assert!(before == 0 || ours.ends_with("\r\n\r\nhi"), "{path} behind {before}: {ours:.300}");
+            assert_eq!(dateless(&ours), dateless(&theirs), "{path} behind {before}");
+        }
+    }
+    hyper.stop().await;
+    own.stop().await;
+}
+
+/// An answer whose body fails after some of it has gone is cut short, on both connections: the
+/// client has its head and the pieces that came before the failure, no end of the body, and a
+/// closed connection, and the request behind it is not begun.
+#[tokio::test]
+async fn an_answer_whose_body_fails_after_some_of_it_went_is_cut_short() {
+    let mut answers = Vec::new();
+    for own in BOTH {
+        let (release, begun) = (Arc::new(tokio::sync::Notify::new()), Arc::new(AtomicUsize::new(0)));
+        let stream = {
+            let release = release.clone();
+            move || {
+                let release = release.clone();
+                async move {
+                    let later = async move {
+                        release.notified().await;
+                        Err::<Bytes, _>(std::io::Error::other("the body failed"))
+                    };
+                    let early = futures_util::stream::iter([Ok(Bytes::from_static(b"early"))]);
+                    Body::from_stream(futures_util::StreamExt::chain(early, futures_util::stream::once(later)))
+                }
+            }
+        };
+        let behind = {
+            let begun = begun.clone();
+            move || {
+                begun.fetch_add(1, SeqCst);
+                async { "hi" }
+            }
+        };
+        let table = Table::new().route("/", get(behind)).route("/events", get(stream));
+        let served = Served::start(App::new(Routes::from(table)), own).await;
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        client.write_all(format!("GET /events HTTP/1.1\r\n{HOST}\r\n{GET}").as_bytes()).await.unwrap();
+        let early = until(&mut client, "5\r\nearly\r\n").await;
+        assert_eq!(statuses(&early), [200], "own: {own}: {early}");
+        release.notify_one();
+        assert_eq!(read(&mut client, SOON).await, (String::new(), true), "own: {own}");
+        assert_eq!(begun.load(SeqCst), 0, "own: {own}");
+        answers.push(dateless(&early));
+        served.stop().await;
+    }
+    assert_eq!(answers[1], answers[0]);
+}
+
+/// A body that panics takes no answer before it with it, on both connections: the answers to the
+/// requests that came with its request reach the client whole, and then the connection is closed.
+/// (Corten's connection writes the answers to requests that arrived together into one buffer,
+/// and that buffer is sent, not dropped, when a body's panic ends the connection.)
+#[tokio::test]
+async fn a_body_that_panics_takes_no_answer_before_it() {
+    let panics = || async {
+        let poll = |_: &mut std::task::Context<'_>| -> std::task::Poll<Option<Result<Bytes, std::io::Error>>> {
+            panic!("a body panicked, as this test has one do")
+        };
+        Body::from_stream(futures_util::stream::poll_fn(poll))
+    };
+    let mut answers = Vec::new();
+    for own in BOTH {
+        let table = Table::new().route("/", get(|| async { "hi" })).route("/panics", get(panics));
+        let served = Served::start(App::new(Routes::from(table)), own).await;
+        let got = served.closed(format!("{}GET /panics HTTP/1.1\r\n{HOST}\r\n{GET}", GET.repeat(3))).await;
+        assert_eq!(statuses(&got), [200; 3], "own: {own}: {got}");
+        assert!(got.ends_with("\r\n\r\nhi"), "own: {own}: {got}");
+        // The server is as it was: the next connection is answered.
+        assert_eq!(statuses(&served.closed(last()).await), [200], "own: {own}");
+        answers.push(dateless(&got));
+        served.stop().await;
+    }
+    assert_eq!(answers[1], answers[0]);
+}
+
+/// A head that is wrong is refused once the wrong bytes have come, whether or not its end ever
+/// does, on both connections. The head here is longer than a first read of Corten's connection
+/// and shorter than one of hyper's, so the wrong line comes to Corten's in a second read, behind
+/// a part that held no end, where it looks only for an end: it reads what has come before it
+/// waits for more, or gives the client up, as hyper reads a head after every read.
+#[tokio::test]
+async fn a_head_that_is_wrong_is_refused_before_its_end_comes() {
+    let hyper = Served::start(App::new(routes()), false).await;
+    let own = Served::start(App::new(routes()), true).await;
+    let long = format!("GET / HTTP/1.1\r\n{HOST}x-long: {}\r\n", "v".repeat(3_000));
+    assert!(long.len() > crate::h1::FIRST && long.len() < 8_192);
+    let cases = [
+        ("a space in a name", format!("{long}bad name: x\r\n"), 0),
+        ("a space in a name, and half the next line", format!("{long}bad name: x\r\nx-a: "), 0),
+        ("a control byte in a value", format!("{long}x-a: a\x01b"), 0),
+        ("behind an answer", format!("{GET}{long}bad name: x\r\n"), 1),
+    ];
+    for (name, request, before) in cases {
+        for half_closed in [false, true] {
+            let mut got = Vec::new();
+            for served in [&hyper, &own] {
+                let mut client = TcpStream::connect(served.addr).await.unwrap();
+                client.write_all(request.as_bytes()).await.unwrap();
+                if half_closed {
+                    client.shutdown().await.unwrap();
+                }
+                let (answers, closed) = read(&mut client, SOON).await;
+                assert!(closed, "{name}, half closed: {half_closed}: the connection is closed: {answers}");
+                got.push(answers);
+            }
+            let mut expected = vec![200; before];
+            expected.push(400);
+            assert_eq!(statuses(&got[1]), expected, "{name}, half closed: {half_closed}: {}", got[1]);
+            assert_eq!(dateless(&got[1]), dateless(&got[0]), "{name}, half closed: {half_closed}");
+        }
+    }
+    // A head that is right as far as it has come is waited for, and not answered when its client
+    // closes its side, on both.
+    for served in [&hyper, &own] {
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        client.write_all(format!("{long}x-a: 1\r\n").as_bytes()).await.unwrap();
+        assert_eq!(read(&mut client, Duration::from_millis(300)).await, (String::new(), false));
+        client.shutdown().await.unwrap();
+        assert_eq!(read(&mut client, SOON).await, (String::new(), true));
+    }
+    hyper.stop().await;
+    own.stop().await;
+}
+
+/// An answer written after the connection waited for its client to take the one before it says
+/// the time it is written at. The thread's `Date` text is brought up to date when a connection's
+/// task has waited, and a write that waits for its client is a wait: here for over a second,
+/// with the next request already read, behind an answer larger than the pipe.
+#[tokio::test]
+async fn an_answer_written_after_a_write_waited_says_the_time_it_is_written_at() {
+    let (mut client, server) = tokio::io::duplex(512);
+    let ending = AtomicBool::new(false);
+    let service = Does(|req: Request<Body>| match req.uri().path() {
+        "/large" => Response::new(Body::from(vec![b'l'; 100_000])),
+        _ => Response::new(Body::from("hi")),
+    });
+    let serving = crate::h1::serve(server, service, 32 * 1024, &ending);
+    let asking = async move {
+        client.write_all(format!("GET /large HTTP/1.1\r\n{HOST}\r\n{GET}").as_bytes()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        let (mut got, mut buf) = (Vec::new(), vec![0u8; 16 * 1024]);
+        while !got.ends_with(b"\r\n\r\nhi") {
+            let read = client.read(&mut buf).await.unwrap();
+            assert!(read > 0, "closed after {} bytes", got.len());
+            got.extend_from_slice(&buf[..read]);
+        }
+        String::from_utf8(got).unwrap()
+    };
+    let both = async { tokio::join!(serving, asking) };
+    let (_, got) = tokio::time::timeout(Duration::from_secs(30), both).await.expect("both answers");
+    let dates: Vec<&str> = got.match_indices("date: ").map(|(at, _)| &got[at + 6..at + 35]).collect();
+    assert_eq!((statuses(&got), dates.len()), (vec![200, 200], 2), "{got:.300}");
+    assert_ne!(dates[1], dates[0], "the second answer was written over a second after the first");
+}
+
+/// An IO that gives what the client sent a few bytes a read and takes what the server writes a
+/// few bytes a write, waiting now and then, in one buffer or in several, and fails a write once
+/// it has taken `fails_at` bytes. What it took is in `output`.
+struct Chopped {
+    input: Vec<u8>,
+    at: usize,
+    output: Arc<std::sync::Mutex<Vec<u8>>>,
+    dice: Dice,
+    /// The most a read gives and a write takes.
+    most: usize,
+    vectored: bool,
+    fails_at: Option<usize>,
+}
+
+impl Chopped {
+    fn amount(&mut self, of: usize) -> usize {
+        of.min(1 + self.dice.below(self.most))
+    }
+
+    /// One time in four: not now, and the task is woken to ask again.
+    fn waits(&mut self, cx: &mut std::task::Context<'_>) -> bool {
+        let waits = self.dice.below(4) == 0;
+        if waits {
+            cx.waker().wake_by_ref();
+        }
+        waits
+    }
+
+    fn takes(&mut self, cx: &mut std::task::Context<'_>, bufs: &[&[u8]]) -> std::task::Poll<std::io::Result<usize>> {
+        if self.waits(cx) {
+            return std::task::Poll::Pending;
+        }
+        let mut left = self.amount(bufs.iter().map(|buf| buf.len()).sum());
+        let mut output = self.output.lock().unwrap();
+        if self.fails_at.is_some_and(|at| output.len() + left > at) {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        let took = left;
+        for buf in bufs {
+            let part = left.min(buf.len());
+            output.extend_from_slice(&buf[..part]);
+            left -= part;
+        }
+        std::task::Poll::Ready(Ok(took))
+    }
+}
+
+impl tokio::io::AsyncRead for Chopped {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        // At the end of what the client sent, its side is closed.
+        if this.at < this.input.len() {
+            if this.waits(cx) {
+                return std::task::Poll::Pending;
+            }
+            let give = this.amount((this.input.len() - this.at).min(buf.remaining()));
+            buf.put_slice(&this.input[this.at..this.at + give]);
+            this.at += give;
+        }
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncWrite for Chopped {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        self.get_mut().takes(cx, &[buf])
+    }
+
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let bufs: Vec<&[u8]> = bufs.iter().map(|buf| &**buf).collect();
+        self.get_mut().takes(cx, &bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.vectored
+    }
+
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// A handoff follows the answers before it however the socket takes them: a byte a write or
+/// thousands, with waits between, in one buffer or in several. When the connection is given back
+/// for hyper, every answer before the request that is hyper's has gone, whole, and what hyper
+/// will read is that request and what came behind it, each byte once. And where a write fails,
+/// at any byte of those answers, the connection is over and is not handed to hyper.
+#[tokio::test]
+async fn a_handoff_follows_the_answers_before_it_however_the_socket_takes_them() {
+    let theirs = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello{GET}");
+    let serve = |sent: String, most: usize, vectored: bool, fails_at: Option<usize>, seed: u64| async move {
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let io = Chopped { input: sent.into_bytes(), at: 0, output: output.clone(), dice: Dice(seed), most, vectored, fails_at };
+        let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
+        let serving = crate::h1::serve(io, Hi(handled.clone()), 32 * 1024, &ending);
+        let handed = tokio::time::timeout(Duration::from_secs(30), serving).await.expect("the connection ends, or is handed over");
+        let answers = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        (handed, answers, handled.load(SeqCst))
+    };
+    let mut dice = Dice(31);
+    let mut each = 0;
+    for round in 0..300u64 {
+        let before = dice.below(260);
+        let (most, vectored) = ([1, 3, 17, 300, 5_000, 40_000][round as usize % 6], round % 2 == 0);
+        let (handed, answers, handled) = serve(GET.repeat(before) + &theirs, most, vectored, None, round).await;
+        let name = format!("round {round}: {before} requests before, writes of {most} at most");
+        let (io, read, _service) = handed.unwrap_or_else(|| panic!("{name}: the connection is hyper's"));
+        assert_eq!(handled, before, "{name}: no request that is hyper's reached the service");
+        assert_eq!(statuses(&answers), vec![200; before], "{name}");
+        assert!(before == 0 || answers.ends_with("\r\n\r\nhi"), "{name}: the last answer before it is whole");
+        each = each.max(answers.len() / before.max(1));
+        let mut given = Vec::new();
+        crate::h1::Rewound::new(io, read).read_to_end(&mut given).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&given), theirs, "{name}");
+    }
+    // Long enough runs of answers to fill the buffer, and to give other tasks a turn.
+    assert!(each > 0 && 250 * each > 2 * crate::h1::FLUSH_AT);
+    let before = 12;
+    for fails_at in (0..before * each).step_by(7).chain([before * each - 1]) {
+        for most in [1, 40, 5_000] {
+            let (handed, answers, handled) = serve(GET.repeat(before) + &theirs, most, fails_at % 2 == 0, Some(fails_at), 5).await;
+            let name = format!("a write fails at byte {fails_at}, writes of {most} at most");
+            assert!(handed.is_none(), "{name}: the connection is not handed over");
+            assert!(answers.len() <= fails_at && handled <= before, "{name}: {} bytes written", answers.len());
+        }
+    }
+}
+
+/// Shutdown that begins while the answers before a request that is hyper's wait for their client
+/// ends the connection when they have gone: the request is not handed to hyper to begin, as a
+/// request found behind an answer is not begun once shutdown has.
+#[tokio::test]
+async fn shutdown_begun_before_a_handoff_ends_the_connection_at_the_answers_before_it() {
+    const BEFORE: usize = 20;
+    let (mut client, server) = pipes(512);
+    let (ending, handled) = (AtomicBool::new(false), Arc::new(AtomicUsize::new(0)));
+    let serving = crate::h1::serve(server, Hi(handled.clone()), 32 * 1024, &ending);
+    let asking = async {
+        let theirs = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello");
+        client.write_all((GET.repeat(BEFORE) + &theirs).as_bytes()).await.unwrap();
+        // The answers are more than the pipe holds: the connection waits for its client.
+        turns().await;
+        ending.store(true, SeqCst);
+        let (mut got, mut buf) = (Vec::new(), [0u8; 4096]);
+        loop {
+            match client.read(&mut buf).await.unwrap() {
+                0 => break,
+                read => got.extend_from_slice(&buf[..read]),
+            }
+        }
+        String::from_utf8(got).unwrap()
+    };
+    let both = async { tokio::join!(serving, asking) };
+    let (handed, got) = tokio::time::timeout(Duration::from_secs(30), both).await.expect("the connection is closed");
+    assert_eq!(statuses(&got), [200; BEFORE], "{got}");
+    assert!(handed.is_none(), "the connection is over, and not hyper's");
+    assert_eq!(handled.load(SeqCst), BEFORE);
+}
+
+/// An answer's trailers are not sent, and the `Trailer` line that would announce them is not
+/// written: the two lines of the difference the guide lists, and nothing else of the answer.
+/// hyper writes the line, and sends the trailers to a client that asked for them (`TE: trailers`).
+#[tokio::test]
+async fn an_answers_trailers_are_dropped_and_its_trailer_line_with_them() {
+    struct Trailed(u8);
+    impl http_body::Body for Trailed {
+        type Data = Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+            self.0 += 1;
+            std::task::Poll::Ready(match self.0 {
+                1 => Some(Ok(http_body::Frame::data(Bytes::from_static(b"body")))),
+                2 => {
+                    let mut trailers = ::http::HeaderMap::new();
+                    trailers.insert("x-t", ::http::HeaderValue::from_static("1"));
+                    Some(Ok(http_body::Frame::trailers(trailers)))
+                }
+                _ => None,
+            })
+        }
+    }
+    let app = || {
+        let trailed = || async { ([(header::TRAILER, "x-t")], Body::new(Trailed(0))) };
+        App::new(Routes::from(Table::new().route("/", get(|| async { "hi" })).route("/trailed", get(trailed))))
+    };
+    let hyper = Served::start(app(), false).await;
+    let own = Served::start(app(), true).await;
+    for asks in ["", "te: trailers\r\n"] {
+        let request = format!("GET /trailed HTTP/1.1\r\n{HOST}{asks}\r\n{GET}{}", last());
+        let (theirs, ours) = (hyper.closed(&request).await, own.closed(&request).await);
+        assert_eq!(statuses(&ours), [200, 200, 200], "asks {asks:?}: the connection goes on: {ours}");
+        assert!(!ours.contains("trailer") && !ours.contains("x-t"), "asks {asks:?}: {ours}");
+        assert!(ours.contains("\r\n\r\n4\r\nbody\r\n0\r\n\r\nHTTP/1.1 200 OK\r\n"), "asks {asks:?}: {ours}");
+        assert!(theirs.contains("trailer: x-t\r\n"), "asks {asks:?}: hyper announces them: {theirs}");
+        assert_eq!(theirs.contains("0\r\nx-t: 1\r\n\r\n"), !asks.is_empty(), "asks {asks:?}: hyper sends them if asked: {theirs}");
+        let without = theirs.replace("trailer: x-t\r\n", "").replace("0\r\nx-t: 1\r\n\r\n", "0\r\n\r\n");
+        assert_eq!(dateless(&ours), dateless(&without), "asks {asks:?}");
+    }
+    hyper.stop().await;
     own.stop().await;
 }

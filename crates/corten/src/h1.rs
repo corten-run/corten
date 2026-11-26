@@ -82,7 +82,7 @@ const READ_MOST: usize = 256 * 1024;
 /// there.
 pub(crate) const KEPT_READ: usize = READ;
 /// How many bytes of answers are held before they are written, whatever else is ready.
-const FLUSH_AT: usize = 16 * 1024;
+pub(crate) const FLUSH_AT: usize = 16 * 1024;
 /// The room the buffer of answers begins with.
 pub(crate) const OUT_FIRST: usize = 1024;
 /// The most room the buffer of answers has while its connection waits for a request with
@@ -105,6 +105,9 @@ std::thread_local! {
     /// How many times a connection of this thread began to wait for a request with nothing unread
     /// and nothing unsent, and the most room its two buffers had as it did.
     pub(crate) static IDLE: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// The most bytes the buffer of answers of a connection of this thread has held as a send
+    /// began, and the most room it had, for a test of the bound.
+    pub(crate) static OUT: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// What the client has sent and the connection has not read yet. A read appends to it
@@ -343,6 +346,8 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// Writes everything written so far to the IO and flushes it. Pending: the IO has no room,
     /// and wakes the task when it has.
     fn poll_send(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        #[cfg(test)]
+        OUT.set((OUT.get().0.max(self.out.len()), OUT.get().1.max(self.out.capacity())));
         loop {
             let rest = &self.out[self.sent..];
             let wrote = match &self.large {
