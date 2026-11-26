@@ -2355,7 +2355,7 @@ impl HostCheck {
     pub(crate) fn asked(&self, req: &Request) -> Asked {
         // Decided first, so the read for an app that answers to any host holds no names. The
         // stages' check (`Policy::asked`) does not: there it made every staged request cost more
-        // (design Choice 28).
+        // (docs/design.md#choice-fixed-stages).
         match self.0.as_deref() {
             None => asked(req, || host_lines(req.headers()), None),
             names => asked(req, || host_lines(req.headers()), names),
