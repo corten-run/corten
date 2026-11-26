@@ -11461,7 +11461,9 @@ rules something out.
     the response's URL, the
     redirect's when there was one, and the `#fragment` of the form's `action` or `formaction`,
     each as the browser's own GET writes it (a submit that sends no field keeps the query's `?`,
-    and an action that ends in a bare `#` keeps it, as `/scope?#`), keeping the entry's `history.state` (a fragment a redirect's `Location` names itself is not
+    and an action that ends in a bare `#` keeps it, as `/scope?#`; the runtime's request for any
+    GET `data-patch` form's answer, marked or not, has that query too, `?` and all, as the
+    browser's own GET of the form does), keeping the entry's `history.state` (a fragment a redirect's `Location` names itself is not
     seen, as `fetch` does not show it, the same as for a link the runtime follows); the same
     address calls nothing, and a nav link to the new address is marked current, as for a
     navigation. No entry is added, so Back goes to the page before the screen, and Forward and a
@@ -11579,7 +11581,8 @@ rules something out.
     press drops and whose answer is drawn and counted as any write's. The address moves only after
     the answer draws every element: a dropped answer, a 204, an empty patch or an element with no
     place leaves it, while a removal of an element the page no longer has is done, as the runtime
-    treats it for any patch. A drawn 4xx (a 422) moves it, being the destination's error view; a
+    treats it for any patch, if it names one: a removal without an `id`, or with an empty one,
+    draws nothing. A drawn 4xx (a 422) moves it, being the destination's error view; a
     5xx may draw, but is a failed request and never moves it. A page answer (`corten-page`) is
     the page at the address as much as a patch is, and moves it by the same rules once `<main>`
     is drawn in place; one the runtime cannot draw in place (another layout) loads the page in
@@ -11601,9 +11604,12 @@ rules something out.
     one drawn in its place, drops it wherever it is (on its way, waiting for a write, about to be
     sent again); once it draws, a press its draw makes does not stop it. Every read is checked
     against its press as the runtime reads the form for it, after the page's `formdata` listeners,
-    and nothing of the page runs between that and its fetch, so one a listener there made stale (a
-    newer press, a move to an `#id`) is not fetched, and nor is one pressed while a visit is on its
-    way. A press that asks for what a read of the form on
+    and again as its fetch starts, once the runtime has marked the form and its button busy,
+    which runs the page's code too (a customized button's `attributeChangedCallback`); nothing of
+    the page runs between that and the fetch, so one either made stale (a newer press, a move to
+    an `#id`) is not fetched, and nor is one pressed while a visit is on its way. A press is kept
+    only until its submit ends or it is let go unsent, so the ids of forms pressed do not pile up
+    for the page's life. A press that asks for what a read of the form on
     its way asks for (the same method, address and values) takes that read over while no answer to
     it has come, as the runtime sends the same request once for any form: its answer is drawn as
     this press's, on this press's entry. Once an answer has come it may be drawing (it waits for

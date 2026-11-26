@@ -2239,7 +2239,8 @@ not to the scope before this one, as after `history.replaceState`. A reload, a b
 reach what the screen shows, and a form that posts without an `action` sends to it. Only an
 answer that draws whole moves the address: a 204, an empty patch, a patch with an element that
 finds no place and a 5xx (which may still draw) leave it, while removing an element the page no
-longer has counts as done. A 4xx patch that draws (a 422) moves it, and so does a page answer
+longer has counts as done (by its `id`: a removal without one draws nothing). A 4xx patch that
+draws (a 422) moves it, and so does a page answer
 (`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and one
@@ -2284,7 +2285,9 @@ pressed on, as any press of the marked form; one pressed on a form without the m
 address. A newer press
 of the form, or of the one a patch drew in its place (found by the form's id), drops an older
 GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
-drawn, and a GET a `formdata` listener made stale is not sent at all. Presses count as the
+drawn, and a GET a `formdata` listener made stale is not sent at all, nor one the page's code
+made stale as the runtime marked the form busy (a customized button's
+`attributeChangedCallback` that moves the page). Presses count as the
 runtime takes them, after the page's `submit` listeners and before its `formdata` listeners, so
 a press a `submit` listener makes as it hears another counts first, and the press it heard is
 drawn with its address; once an answer is drawing, a press its draw makes (an element's

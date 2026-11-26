@@ -434,6 +434,33 @@ export async function dataAddress(browser) {
       browserGet.at === "/smoke/address?#" && browserGet.shown === "all" && runtimeGet.at === browserGet.at && runtimeGet.shown === "all",
       JSON.stringify({ browserGet, runtimeGet }),
     );
+    // So for a form without the mark: the browser's own GET of a submit with no field asks for the
+    // action with an empty query, `?` and all, and so does the runtime's request for its patch,
+    // which leaves the address.
+    const unmarkedAsked = async (/** @type {import("@playwright/test").Page} */ page, /** @type {boolean} */ script) => {
+      await page.goto(home);
+      await page.evaluate(() => document.querySelector('main form:not([id]) button[value="year"]')?.removeAttribute("name"));
+      const asked = page
+        .waitForRequest((r) => new URL(r.url()).pathname === "/smoke/address" && (script ? r.headers()["corten"] === "action" : r.resourceType() === "document"), { timeout: 5000 })
+        .then((r) => r.url().slice(new URL(r.url()).origin.length), () => null);
+      const year = page.getByRole("button", { name: "Year, in place", exact: true });
+      if (script) await year.click();
+      else await Promise.all([page.waitForNavigation({ timeout: 5000 }).catch(() => {}), year.click()]);
+      const target = await asked;
+      await page.waitForFunction(() => !Array.from(document.querySelectorAll("main form")).some((f) => f.hasAttribute("aria-busy")), undefined, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(script ? 300 : 0);
+      return { target, at: await page.evaluate(() => location.href.slice(location.origin.length)) };
+    };
+    const browserAsked = await unmarkedAsked(bare, false);
+    const scriptedUnmarked = await browser.newPage();
+    scriptedUnmarked.on("pageerror", (e) => errors.push(`unmarked unnamed: ${e.message}`));
+    const runtimeAsked = await unmarkedAsked(scriptedUnmarked, true);
+    await scriptedUnmarked.close();
+    check(
+      "a form without the mark whose submit sends no field asks for its action with the empty query the browser's own GET sends, and leaves the address",
+      browserAsked.target === "/smoke/address?" && browserAsked.at === "/smoke/address?" && runtimeAsked.target === browserAsked.target && runtimeAsked.at === "/smoke/address",
+      JSON.stringify({ browserAsked, runtimeAsked }),
+    );
     await noScript.close();
   }
   // Without the Navigation API the runtime still sends the form and draws its patch, and the
@@ -507,6 +534,14 @@ export async function dataAddress(browser) {
       retried.saveSent && retried.done && retried.starts === 0 && retried.at === "#smoke-address" && retried.shown === "all",
       JSON.stringify(retried),
     );
+    const busyPlain = await busyMoves(plain);
+    if (!busyPlain) skip("without the Navigation API a marked GET is not fetched once a submit button's attributeChangedCallback moves the page as it is marked busy", "no customized built-in elements");
+    else
+      check(
+        "without the Navigation API a marked GET is not fetched once a submit button's attributeChangedCallback moves the page as it is marked busy",
+        busyPlain.done && busyPlain.starts === 0 && busyPlain.at === "#smoke-address" && busyPlain.shown === "all",
+        JSON.stringify(busyPlain),
+      );
     // A script's `replaceState` while a marked answer is on its way: to another address, the entry
     // the press was on is gone and the answer draws nothing; to the same address with another state,
     // it is drawn. Either way the address is the one the script put in, as without the mark.
@@ -544,7 +579,7 @@ export async function dataAddress(browser) {
     const silent = await silentRefusal(plain);
     check(
       "without the Navigation API a marked patch whose replacement the browser refuses without a word stays drawn under the entry's address, and nothing reads the page again",
-      silent.drawn && !silent.read && silent.at === "" && silent.shown === "week",
+      silent.drawn && !silent.read && silent.replaces === 1 && silent.at === "" && silent.shown === "week",
       JSON.stringify(silent),
     );
     // The page reading itself again (`ReadAgain`, a tag put in the screen's head) goes by the
@@ -587,6 +622,14 @@ export async function dataAddress(browser) {
     check("without the Navigation API a marked patch that moves the address to another path reads the page again there", readAgain.moved && readAgain.read, JSON.stringify(readAgain));
     await plain.close();
   }
+  const kept = await pressesKept(browser);
+  if (!kept) skip("a form's press is let go once it settles", "no DevTools heap query (Chromium only)");
+  else
+    check(
+      "a form's press is kept only while its submit is on its way: of 41 ids pressed, the held one's while it is held, none once all have settled",
+      kept.drawn && kept.during.join() === "smoke-press-kept-held" && kept.done && kept.after.length === 0,
+      JSON.stringify(kept),
+    );
   check("no page errors on the data-address screens", errors.length === 0, errors.join(" | "));
 }
 
@@ -1253,13 +1296,15 @@ async function markedPatchVisits(browser, errors) {
 
   // A replacement the browser refuses with an exception (WebKit's SecurityError at its limit of
   // history updates) leaves the address as it was, the answer drawn under it: nothing reads the
-  // page again.
+  // page again. The runtime asks for it once, so no earlier guard of its own left the address.
   await page.goto(home);
   await page.evaluate(() => {
+    let asked = 0;
+    Object.assign(window, { __weekReplaces: () => asked });
     const replace = history.replaceState;
     history.replaceState = function (...args) {
       if (!String(args[2]).endsWith("?scope=week")) return replace.apply(this, args);
-      history.replaceState = replace;
+      asked += 1;
       throw new DOMException("history.replaceState() called too often", "SecurityError");
     };
   });
@@ -1269,10 +1314,10 @@ async function markedPatchVisits(browser, errors) {
   await trackForm();
   await press("Week");
   const thrownDone = await finished();
-  const thrown = { done: thrownDone, read: await thrownRead, loaded: await thrownLoaded, ...(await state()) };
+  const thrown = { done: thrownDone, read: await thrownRead, loaded: await thrownLoaded, ...(await state()), replaces: await page.evaluate(() => /** @type {any} */ (window).__weekReplaces()) };
   check(
     "a marked patch whose replacement throws stays drawn under the entry's address, and nothing reads the page again",
-    thrown.done && !thrown.read && !thrown.loaded && thrown.at === "" && thrown.shown === "week",
+    thrown.done && !thrown.read && !thrown.loaded && thrown.replaces === 1 && thrown.at === "" && thrown.shown === "week",
     JSON.stringify(thrown),
   );
   const patch = async (/** @type {number} */ status, /** @type {string} */ body) => {
@@ -1303,6 +1348,15 @@ async function markedPatchVisits(browser, errors) {
     "a marked patch that removes an element the page no longer has puts its address in the entry",
     [gone, goneAlone].every((p) => p.done && p.at === "?scope=week" && p.added === 0) && gone.shown === "Kept" && goneAlone.shown === "all",
     JSON.stringify({ gone, goneAlone }),
+  );
+  // A removal with no id, or an empty one, names no element: alone it draws nothing, and the
+  // address stays.
+  const noId = await patch(200, "<template data-remove></template>");
+  const emptyId = await patch(200, '<template id="" data-remove></template>');
+  check(
+    "a marked patch whose only removal has no id, or an empty one, leaves the address",
+    [noId, emptyId].every((p) => p.done && p.at === "" && p.added === 0 && p.shown === "all"),
+    JSON.stringify({ noId, emptyId }),
   );
 
   // A page answer (`corten-page`, `<main>`) is the page at the address asked for too: it is drawn
@@ -1804,7 +1858,7 @@ async function markedPatchVisits(browser, errors) {
   const silent = await silentRefusal(page);
   check(
     "a marked patch whose replacement the browser refuses without a word stays drawn under the entry's address, and nothing reads the page again",
-    silent.drawn && !silent.read && silent.at === "" && silent.shown === "week",
+    silent.drawn && !silent.read && silent.replaces === 1 && silent.at === "" && silent.shown === "week",
     JSON.stringify(silent),
   );
 
@@ -1890,6 +1944,17 @@ async function markedPatchVisits(browser, errors) {
     retriedMoved.saveSent && retriedMoved.done && retriedMoved.starts === 0 && retriedMoved.at === "#smoke-address" && retriedMoved.shown === "all",
     JSON.stringify(retriedMoved),
   );
+  // Marking the form and its button busy runs the page's code: a customized button's
+  // `attributeChangedCallback` that moves the page to an `#id` of it then. The read can no longer
+  // draw, and is not fetched.
+  const busyMoved = await busyMoves(page);
+  if (!busyMoved) skip("a marked GET is not fetched once a submit button's attributeChangedCallback moves the page as it is marked busy", "no customized built-in elements");
+  else
+    check(
+      "a marked GET is not fetched once a submit button's attributeChangedCallback moves the page as it is marked busy",
+      busyMoved.done && busyMoved.starts === 0 && busyMoved.at === "#smoke-address" && busyMoved.shown === "all",
+      JSON.stringify(busyMoved),
+    );
   await page.close();
 }
 
@@ -2274,17 +2339,19 @@ async function pressOnMove(page, type) {
 /**
  * Presses Week with `history.replaceState` made to do nothing for its address, and throw nothing,
  * as a browser that refuses it without a word does, and says whether its answer drew, whether the
- * page was read again and where the page is.
+ * page was read again, how often the runtime asked for the replacement and where the page is.
  * @param {import("@playwright/test").Page} page
  */
 async function silentRefusal(page) {
   const home = `${base}/smoke/address`;
   await page.goto(home);
   await page.evaluate(() => {
+    let asked = 0;
+    Object.assign(window, { __weekReplaces: () => asked });
     const replace = history.replaceState;
     history.replaceState = function (...args) {
       if (!String(args[2]).endsWith("?scope=week")) return replace.apply(this, args);
-      history.replaceState = replace;
+      asked += 1;
     };
   });
   const read = page.waitForRequest((r) => r.resourceType() === "document", { timeout: 3000 }).then(() => true, () => false);
@@ -2296,7 +2363,7 @@ async function silentRefusal(page) {
     .then(() => true, () => false);
   const [asked, reloaded] = [await read, await loaded];
   const result = { drawn, read: asked || reloaded };
-  const end = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
+  const end = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent, replaces: /** @type {any} */ (window).__weekReplaces() }));
   return { ...result, ...end };
 }
 
@@ -2367,6 +2434,135 @@ async function hashThenPress(page) {
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
   const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
   return { moved, drawn, ...end };
+}
+
+/**
+ * Presses Week by a customized submit button (`is=`) of the scope form whose
+ * `attributeChangedCallback` moves the page to an `#id` of it as the runtime marks the button busy,
+ * just before the read would be fetched. Says how often Week was fetched and where the page is once
+ * its submit has ended; null where the browser has no customized built-in elements (WebKit).
+ * @param {import("@playwright/test").Page} page
+ */
+async function busyMoves(page) {
+  await page.goto(`${base}/smoke/address`);
+  const defined = await page.evaluate(() => {
+    let starts = 0;
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && url.search === "?scope=week" && new Headers(init?.headers).get("corten") === "action") starts += 1;
+      return fetch_.call(this, input, init);
+    };
+    const form = document.getElementById("smoke-address-form");
+    Object.assign(window, { __weekStarts: () => starts, __form: form });
+    class BusyMoves extends HTMLButtonElement {
+      static observedAttributes = ["aria-busy"];
+      /** @param {string} _name @param {string | null} _old @param {string | null} now */
+      attributeChangedCallback(_name, _old, now) {
+        if (now === "true" && !location.hash) location.hash = "smoke-address";
+      }
+    }
+    try {
+      customElements.define("smoke-busy-moves", BusyMoves, { extends: "button" });
+    } catch {
+      return false;
+    }
+    const button = document.createElement("button", { is: "smoke-busy-moves" });
+    if (!(button instanceof BusyMoves)) return false;
+    button.name = "scope";
+    button.value = "week";
+    button.textContent = "Week, moving";
+    form?.append(button);
+    return true;
+  });
+  if (!defined) return null;
+  await page.getByRole("button", { name: "Week, moving", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const done = await page.waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  const end = await page.evaluate(() => ({
+    starts: /** @type {any} */ (window).__weekStarts(),
+    at: location.search + location.hash,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+  }));
+  return { done, ...end };
+}
+
+/**
+ * Submits 41 forms of ids of their own, unmarked and marked, holding one's answer, and asks the
+ * browser's heap (Chromium's DevTools protocol, `Runtime.queryObjects`) which of the page's maps
+ * hold their ids as keys: the held one's while its read is on its way, and none once every press
+ * has settled. Null in a browser without that protocol.
+ * @param {import("@playwright/test").Browser} browser
+ */
+async function pressesKept(browser) {
+  if (browser.browserType().name() !== "chromium") return null;
+  const home = `${base}/smoke/address`;
+  const page = await browser.newPage();
+  await page.goto(home);
+  const cdp = await page.context().newCDPSession(page);
+  const prefix = "smoke-press-kept-";
+  /** The ids pressed here that any map of the page holds as a key, sorted. */
+  const kept = async () => {
+    const group = "smoke-press-kept";
+    const { result: proto } = await cdp.send("Runtime.evaluate", { expression: "Map.prototype", objectGroup: group });
+    const { objects } = await cdp.send("Runtime.queryObjects", { prototypeObjectId: /** @type {string} */ (proto.objectId), objectGroup: group });
+    const { result } = await cdp.send("Runtime.callFunctionOn", {
+      objectId: /** @type {string} */ (objects.objectId),
+      functionDeclaration: "function (prefix) { return this.flatMap((m) => Array.from(m.keys()).filter((k) => typeof k === 'string' && k.startsWith(prefix))).sort(); }",
+      arguments: [{ value: prefix }],
+      returnByValue: true,
+    });
+    await cdp.send("Runtime.releaseObjectGroup", { objectGroup: group });
+    return /** @type {string[]} */ (result.value);
+  };
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  const heldUrl = `${home}?scope=held`;
+  await page.route(heldUrl, async (route) => {
+    await held;
+    await route.continue().catch(() => {});
+  });
+  const heldSent = page.waitForRequest((r) => r.url() === heldUrl, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(
+    ({ prefix, action }) => {
+      const add = (/** @type {string} */ id, /** @type {string} */ scope, /** @type {boolean} */ marked) => {
+        const form = document.createElement("form");
+        form.id = id;
+        form.action = action;
+        form.dataset.patch = "";
+        if (marked) form.dataset.address = "";
+        const field = document.createElement("input");
+        field.type = "hidden";
+        field.name = "scope";
+        field.value = scope;
+        form.append(field);
+        document.body.append(form);
+        return form;
+      };
+      const forms = Array.from({ length: 40 }, (_, i) => add(`${prefix}${i}`, "all", i % 4 === 0));
+      forms.push(add(`${prefix}held`, "held", false));
+      Object.assign(window, { __kept: forms });
+      for (const form of forms) form.requestSubmit();
+    },
+    { prefix, action: home },
+  );
+  const sent = await heldSent;
+  const drawn = await page
+    .waitForFunction(() => /** @type {HTMLFormElement[]} */ (/** @type {any} */ (window).__kept).slice(0, -1).every((f) => !f.hasAttribute("aria-busy")), undefined, { timeout: 10000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const during = await kept();
+  release();
+  const done = await page
+    .waitForFunction(() => !(/** @type {HTMLFormElement[]} */ (/** @type {any} */ (window).__kept).some((f) => f.hasAttribute("aria-busy"))), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const after = await kept();
+  await page.unroute(heldUrl);
+  await cdp.detach();
+  await page.close();
+  return { drawn: sent && drawn, during, done, after };
 }
 
 /**

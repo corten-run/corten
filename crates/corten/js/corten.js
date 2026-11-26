@@ -1100,8 +1100,9 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
-  // Whether it drew something (an element in, or one out that is gone, as a removal of one the page
-  // no longer has leaves it), and whether it skipped an element that found no place.
+  // Whether it drew something (an element in, or one out that is gone, as a removal by an id the
+  // page no longer has leaves it; a removal with no id names nothing), and whether it skipped an
+  // element that found no place.
   let placed = false;
   let skipped = false;
   // Whether it removes a nav link, which can leave another of its nav current.
@@ -1124,7 +1125,7 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
           elementOwn.remove.call(target);
           if (up) focusNear(up);
         }
-        placed = true;
+        placed ||= !!id;
       } else if (!target) {
         skipped = true;
         console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
@@ -3277,19 +3278,24 @@ const submits = new Map();
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
 const sentFrom = new WeakSet();
 
-/** How many times a form of each id was pressed ({@link pressed}). @type {Map<string | null, number>} */
+/**
+ * The latest press of a form of each id ({@link pressed}), kept only until it settles: its submit
+ * has ended, or it is let go unsent ({@link settled}). An older press of the id is never the one
+ * kept, so a newer press drops it whether or not that one has settled.
+ * @type {Map<string, Press>}
+ */
 const presses = new Map();
 
 /**
- * A press of a form: its id and count ({@link presses}), and for a `data-address` form with an id
- * the entry it was made on ({@link entry}), null while a visit of the runtime's was on its way, and
- * that entry exactly ({@link exact}). A marked form without an id cannot tell its
- * latest press from an older one, and is pressed as an unmarked form is: its answer leaves the address.
- * @typedef {{ id: string | null, n: number, at?: number | null, seen?: unknown[] }} Press
+ * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
+ * it was made on ({@link entry}), null while a visit of the runtime's was on its way, and that
+ * entry exactly ({@link exact}). A marked form without an id cannot tell its latest press from an
+ * older one, and is pressed as an unmarked form is: its answer leaves the address.
+ * @typedef {{ id: string | null, at?: number | null, seen?: unknown[] }} Press
  */
 
 /**
- * Counts a press of `form` by its id, which the form a patch draws in its place keeps, as the
+ * Takes a press of `form` by its id, which the form a patch draws in its place keeps, as the
  * runtime takes the submit: after the page's own `submit` listeners, before its `formdata` ones.
  * Whatever it sends, a press fences only a read ({@link standing}), and keeps where it was made for when
  * it is sent again as one (an answer drew its form with another method).
@@ -3298,11 +3304,18 @@ const presses = new Map();
  */
 function pressed(form) {
   const id = idOf(form);
-  const n = (presses.get(id) ?? 0) + 1;
-  presses.set(id, n);
   const marked = id && hasAttr(form, "data-address");
-  return { id, n, at: marked ? (reading.size ? null : entry()) : undefined, seen: marked ? exact() : undefined };
+  const press = { id, at: marked ? (reading.size ? null : entry()) : undefined, seen: marked ? exact() : undefined };
+  if (id) presses.set(id, press);
+  return press;
 }
+
+/**
+ * Lets `press` go once nothing is left to send or draw for it: the latest press of its id is no
+ * longer kept, so ids pressed once do not pile up for the page's life ({@link presses}).
+ * @param {Press | null | undefined} press
+ */
+const settled = (press) => void (press?.id && presses.get(press.id) === press && presses.delete(press.id));
 
 /**
  * Whether a read of `press` is still to be sent or drawn: until it draws, only while it is the
@@ -3313,7 +3326,7 @@ function pressed(form) {
  * cancel: never one pressed while a visit is on its way, for the page it leaves.
  * @param {Press} press @param {boolean} [drawing]
  */
-const standing = (press, drawing) => (drawing || !press.id || presses.get(press.id) === press.n) && (press.at === undefined || (!reading.size && press.at === entry()));
+const standing = (press, drawing) => (drawing || !press.id || presses.get(press.id) === press) && (press.at === undefined || (!reading.size && press.at === entry()));
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
 const DRAWS_WHOLE = "corten-draws=whole";
@@ -3386,8 +3399,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // The one place a read is let go before it is sent, whether new or sent again after a write:
   // what runs of the page from here to the fetch is the runtime's, so a read that could not draw
   // (a `formdata` listener pressed the form again or moved the page, or a visit is on its way) is
-  // not sent.
-  if (read && !standing(read)) return;
+  // not sent. Checked once more as the fetch starts, after the busy marks a page's element hears.
+  if (read && !standing(read)) return void settled(read);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
   const entries = sentEntries(data);
@@ -3469,6 +3482,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     // Left while the module loaded (a navigation; a newer submit of a write waits for this one):
     // nothing is sent.
     signal.throwIfAborted();
+    // Nor a read that can no longer draw: marking the form and its button busy runs the page's
+    // code (a customized button's `attributeChangedCallback`), which may have pressed the form
+    // again or moved the page. Nothing runs of the page from here to the fetch.
+    if (!here()) return;
     // Out: one a navigation cuts off from here, or that fails on its way, may be applied all the same.
     pending.went = true;
     const res = upload
@@ -3638,12 +3655,15 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     // redirect sends the browser to marked again (theirs, cleared when they end).
     const current = submits.get(form)?.controller === controller;
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    settled(press);
+    settled(pending.here);
     if (current) {
       submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.
       const { next, nextWithin, nextPress } = pending;
-      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin, nextPress));
-    }
+      if (next !== undefined && !signal.aborted) setTimeout(() => (left === leftAt ? sendAgain(form, next, nextWithin, nextPress) : settled(nextPress)));
+      else settled(nextPress);
+    } else settled(pending.nextPress);
   }
 }
 
@@ -3706,7 +3726,7 @@ function sayFailed(form, detail, turn) {
  */
 function sendAgain(form, submitter, within, press) {
   const now = inPlaceOf(form);
-  if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
+  if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return void settled(press);
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
   const by =
     !submitter || all.includes(submitter)
@@ -3716,12 +3736,13 @@ function sendAgain(form, submitter, within, press) {
             localNameOf(el) === localNameOf(submitter) &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  if (by === undefined) return;
+  if (by === undefined) return void settled(press);
   const sends = sendsAs(now, by);
   // Fenced as what the form sends now: a press the answer drew its form to send as a write (with
   // `method="post"`) is one, which no newer press drops; one it drew to send as a read is a read,
   // on the entry it was pressed on, so one that cannot draw does not read the form again.
   if (sends.method !== "get" || (press && standing(press))) send(now, by, sends, within, press ?? null);
+  else settled(press);
 }
 
 /**

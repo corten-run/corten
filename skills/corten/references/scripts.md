@@ -193,8 +193,8 @@ division: end statements with `;` and keep a division on the line it continues.
    post, which nothing drops, and a post that waited goes as a GET, fenced like any, if it draws
    the form with `method="get"`, moving the address only if it was pressed marked. Give the form a
    `#[derive(Id)]` id (`html!` refuses the mark without one, and a press of a marked form with
-   none leaves the address): presses are counted by it, so a press of the form a patch drew drops
-   the older one's reads.
+   none leaves the address): presses are told apart by it, so a press of the form a patch drew
+   drops the older one's reads.
 
 ## Text a script computes
 
