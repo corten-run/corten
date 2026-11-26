@@ -1915,7 +1915,11 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each local inspection has a fixed 15-minute deadline including snapshot setup.
+Local inspection has a 15-minute deadline including snapshot setup. With a saved
+DELETE intent and a previously verified, monitored result, a fresh collect may
+use up to 25 minutes for replay only after a same-account exact 404. It checks
+absence again before recording cleanup and never sends another DELETE. This
+does not change any deadline before deletion.
 On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
 entries took 62 seconds. A complete replay also checks the journal, group results,
 and final tree. This is a limit on reading evidence, not on a workload, a provider

@@ -804,7 +804,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyArchive = () => {
     assert.equal(fileHash(archive), state.archiveSha256, "archive changed; preserve host");
   };
-  async function validateEvidence() {
+  async function validateEvidence(confirmedAbsent = false) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
     try {
@@ -829,7 +829,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect };
     } catch { throw collectRefusal("collect-native-replay-start"); }
     report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-      ...replay, interrupted, preserveLock: () => { preserveOperationLock = true; },
+      ...replay, interrupted, confirmedAbsent, preserveLock: () => { preserveOperationLock = true; },
     });
     try {
       check();
@@ -1604,7 +1604,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }
         if (state.deletionIntentAt) {
-          verifyArchive(); await validateEvidence();
+          // A prior verified, monitored collection may have timed out after DELETE.
+          // No longer replay budget until this exact host is proved absent.
+          const recoverAbsent = !options.r21MeasuredCheckout && state.status === "collected"
+            && state.validation?.status === "verified" && state.control?.monitor?.phase === "closed";
+          if (recoverAbsent) await confirmDeleted();
+          verifyArchive(); await validateEvidence(recoverAbsent);
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
