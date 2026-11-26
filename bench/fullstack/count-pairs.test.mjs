@@ -2,9 +2,12 @@
 // reading that holds or clears a change only where its A/A resolves the default band, and the
 // runner, with a stand-in for Docker and count.mjs: its ledger, its locks and its failure paths.
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
 import { BAND, compare, complete, COUNTS, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
@@ -741,11 +744,18 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and an
   const root = mkdtempSync(join(tmpdir(), "count-mjs-"));
   const server = createServer((_, res) => res.end("{}")).listen(18410);
   try {
-    // The count's kit as count-pairs.mjs binds it, copied, so its results go under the copy.
+    // The count's kit as count-pairs.mjs binds it, each file copied as kitOf names it missing, so its
+    // results go under the copy; the fixture, fetched and not in Git, stands in empty.
     const kit = join(root, "kit", "fullstack");
-    for (const name of Object.keys(countPairs.kitOf(here))) {
-      mkdirSync(dirname(join(kit, name)), { recursive: true });
-      copyFileSync(join(here, name), join(kit, name));
+    mkdirSync(join(kit, "fixtures"), { recursive: true });
+    writeFileSync(join(kit, "fixtures", "items.json"), "[]\n");
+    for (let copied = 0; ; copied++) {
+      try { countPairs.kitOf(kit); break; } catch (e) {
+        const name = /^cannot establish what the count runs: (.+) is missing$/.exec(/** @type {Error} */ (e).message)?.[1];
+        if (!name || copied > 100) throw e;
+        mkdirSync(dirname(join(kit, name)), { recursive: true });
+        copyFileSync(join(here, name), join(kit, name));
+      }
     }
     const bin = join(root, "bin");
     mkdirSync(bin);
