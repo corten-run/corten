@@ -142,8 +142,10 @@ test("an opted-in json-api launch posts one c-16/sfo2 create with the layout's p
   assert.ok(f.catalogs().length >= 1 && h.calls.indexOf(f.catalogs()[0]) < h.calls.indexOf(create));
   const saved = h.saved();
   assert.deepEqual(saved.host, c16); assert.equal(contract.savedLoadLayout(saved), layout); assert.deepEqual(saved.fleet, f.fleet);
+  assert.equal(saved.skipHostChromium, true);
   const job = readFileSync(join(h.local, "job.sh"), "utf8");
   assert.equal(job, remoteFiles(saved)["job.sh"]);
+  assert.ok(!job.includes("bootstrap_stage=browser-install\n"));
   assert.ok(job.includes(`--group 'json-api' --load-layout '${layout}'\n`)); assert.match(job, /test "\$\(nproc\)" -ge 16\n/);
 });
 

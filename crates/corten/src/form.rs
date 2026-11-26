@@ -530,18 +530,55 @@ async fn fields(req: Request) -> Result<Bytes, BodyRejection> {
 
 /// Why [`Form`] or [`crate::Params`] refused a request: plain text, so a browser gets the app's
 /// error page (the text under it in dev mode) and a JSON client the JSON error.
+///
+/// One the extractor made is Corten's refusal, never shared wherever it is answered (see
+/// [`crate::cache`]), passed on with `?` included. A handler that makes one of its own, with
+/// [`FormRejection::new`], answers with it as with any answer of its own. Only the extractor can
+/// make an `Invalid` that is Corten's, so an app cannot claim the mark for its own failure:
+///
+/// ```compile_fail
+/// use corten::{form::FormRejection, http::StatusCode};
+///
+/// let mine = FormRejection::Invalid(StatusCode::BAD_REQUEST, "no".into(), true);
+/// ```
 #[derive(Debug)]
 pub enum FormRejection {
     /// The body could not be read, or a `POST` was not `application/x-www-form-urlencoded`.
     Body(BodyRejection),
     /// The fields did not fit the type: a value of the wrong kind, a missing field, a field sent
-    /// twice.
-    Invalid(StatusCode, String),
+    /// twice. Its status and text, and whether the extractor made it (`true`) or the app, with
+    /// [`FormRejection::new`] (`false`). Outside Corten it is matched by field, with `..`:
+    /// `FormRejection::Invalid { 0: status, 1: text, .. }`.
+    #[non_exhaustive]
+    Invalid(StatusCode, String, bool),
 }
 
 impl FormRejection {
+    /// A rejection of the handler's own, at `status` with `text`: the handler's answer, which
+    /// keeps the rules any answer of its own has (a middleware's caching headers included), as
+    /// `Error::new` does, not Corten's refusal.
+    ///
+    /// ```
+    /// use corten::{form::FormRejection, http::StatusCode};
+    ///
+    /// let mine = FormRejection::new(StatusCode::UNPROCESSABLE_ENTITY, "pick a size");
+    /// assert!(matches!(mine, FormRejection::Invalid { 0: StatusCode::UNPROCESSABLE_ENTITY, 2: false, .. }));
+    /// ```
+    pub fn new(status: StatusCode, text: impl Into<String>) -> Self {
+        FormRejection::Invalid(status, text.into(), false)
+    }
+
     pub(crate) fn invalid(status: StatusCode, what: &str, error: FormError) -> Self {
-        FormRejection::Invalid(status, format!("{what}: {error}"))
+        FormRejection::Invalid(status, format!("{what}: {error}"), true)
+    }
+
+    /// Whether Corten made it: one of the extractor's, not one the app made with
+    /// [`FormRejection::new`].
+    pub(crate) fn corten_s(&self) -> bool {
+        match self {
+            FormRejection::Body(_) => true,
+            FormRejection::Invalid(_, _, corten) => *corten,
+        }
     }
 }
 
@@ -549,19 +586,27 @@ impl fmt::Display for FormRejection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FormRejection::Body(rejection) => fmt::Display::fmt(rejection, f),
-            FormRejection::Invalid(_, text) => f.write_str(text),
+            FormRejection::Invalid(_, text, _) => f.write_str(text),
         }
     }
 }
 
 impl std::error::Error for FormRejection {}
 
+/// The extractor's refusal of the request's form, never shared wherever it is answered
+/// ([`crate::cache::Unshared`]); one the handler made ([`FormRejection::new`]) is its answer.
 impl IntoResponse for FormRejection {
     fn into_response(self) -> Response {
         match self {
             FormRejection::Body(rejection) => rejection.into_response(),
-            FormRejection::Invalid(status, text) => {
-                (status, [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], text).into_response()
+            FormRejection::Invalid(status, text, corten) => {
+                let res = (status, [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], text)
+                    .into_response();
+                if corten {
+                    crate::cache::unshared(res)
+                } else {
+                    res
+                }
             }
         }
     }

@@ -628,32 +628,70 @@ function externalFailureFixture(p) {
     assert.equal(await fleetMain([...args(r, g), "--detach", "--print-approval"], p.deps), 3);
     return [...args(r, g), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
   };
-  async function seed(group = "json-api", round = "r20") {
+  async function seed(group = "json-api", round = "r20", posted = false) {
     assert.equal(await prepare(round, group), 3);
-    assert.equal(await fleetMain(await approve(round, group), { ...p.deps, main: async () => 2 }), 2);
+    assert.equal(await fleetMain(await approve(round, group), { ...p.deps, main: async () => {
+      if (!posted) return 2;
+      throw Object.assign(new Error("provider read refused"), { controlUncertain: true, controllerStage: "provider-settlement",
+        providerDiagnostic: { code: "create-action-request" } });
+    } }), 2);
     const old = path.join(root, group), stateRoot = path.join(old, group), local = path.join(stateRoot, `groups-${round}`);
     fs.mkdirSync(local, { recursive: true });
     const fleet = readFleet(old, round), manifest = fleet.manifest, token = manifest.jobs[0].token;
     const at = "2026-11-23T00:00:00.000Z", monitorId = "a".repeat(32), monitorBinding = { round, commit, token, helperSha256: guardianSha256 };
     const app = { ...registration, id: monitorId, binding: monitorBinding }, closedAtMs = Date.parse(at);
-    const state = { ...reservation({ round, commit, group, token, fleet: manifest }, at), status: "running", createIntentAt: at,
-      id: "701", ip: "192.0.2.1", provider: manifest.provider, fullGroupQualified: false,
+    const initial = { ...reservation({ round, commit, group, token, fleet: manifest }, at),
+      createIntentAt: at, provider: manifest.provider, fullGroupQualified: false };
+    const monitor = { schema: "benchmark-supervised-control/v1", id: monitorId };
+    const state = posted ? { ...initial, skipHostChromium: true, status: "creating", createPending: { dropletId: "701", actionId: "801" },
+      control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
+        monitor: { ...monitor, phase: "pending" } } } : { ...initial, status: "running",
+      id: "701", ip: "192.0.2.1",
       control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"],
-        monitor: { schema: "benchmark-supervised-control/v1", id: monitorId, phase: "invalid", registrationSha256: digest(JSON.stringify(app)) } } };
-    state.control.ledger.push({ request: controlRequest(state, "ssh", [`systemctl start ${state.unit}`], 60000, "bootstrap", []), localTerminal: true, code: 0 });
-    for (const [name, value] of Object.entries({ "state.json": state, "monitor-registration.json": app,
-      "monitor-invalid.json": { id: monitorId, binding: monitorBinding, publicationRevoked: true },
-      "monitor-local-closed.json": { id: monitorId, binding: monitorBinding, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs } }))
-      fs.writeFileSync(path.join(local, name), JSON.stringify(value));
-    fs.writeFileSync(path.join(local, "monitor-journal.jsonl"), JSON.stringify({ schema: "benchmark-control-frame/v1", id: monitorId,
-      kind: "registered", sequence: 1, payload: app }) + "\n");
+        monitor: { ...monitor, phase: "invalid", registrationSha256: digest(JSON.stringify(app)) } } };
+    if (!posted) {
+      state.control.ledger.push({ request: controlRequest(state, "ssh", [`systemctl start ${state.unit}`], 60000, "bootstrap", []), localTerminal: true, code: 0 });
+      for (const [name, value] of Object.entries({ "monitor-registration.json": app,
+        "monitor-invalid.json": { id: monitorId, binding: monitorBinding, publicationRevoked: true },
+        "monitor-local-closed.json": { id: monitorId, binding: monitorBinding, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs } }))
+        fs.writeFileSync(path.join(local, name), JSON.stringify(value));
+      fs.writeFileSync(path.join(local, "monitor-journal.jsonl"), JSON.stringify({ schema: "benchmark-control-frame/v1", id: monitorId,
+        kind: "registered", sequence: 1, payload: app }) + "\n");
+    }
+    fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
     const owner = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
     assert.equal(owner.status, 0);
     const pid = owner.pid;
     fs.writeFileSync(path.join(old, ".fleet-operation.lock"), JSON.stringify({ pid, approvalSha256: readLaunchIntent(fleet).approvalSha256 }));
     fs.writeFileSync(path.join(stateRoot, ".groups-launch.lock"), JSON.stringify({ pid, round }));
     fs.writeFileSync(path.join(local, "operation.lock"), JSON.stringify({ pid, at }));
+    if (posted) {
+      const outer = path.join(root, continuationLock);
+      assert.ok(fs.existsSync(outer), "the original outer lock is retained");
+      await assert.rejects(prepare("r21", "hardening"), /EEXIST/);
+      fs.unlinkSync(outer); // Synthetic operator, after independent process-tree review.
+      await assert.rejects(prepare("r21", "hardening"), /unresolved custody|ESRCH/);
+    }
     const binding = externalFailedHostBinding(fleet);
+    if (posted) {
+      assert.equal(binding.id, state.createPending.dropletId);
+      assert.equal(binding.actionId, state.createPending.actionId);
+      assert.throws(() => unacknowledgedCreateBinding(fleet), /without a posted ID/);
+      const statePath = path.join(local, "state.json");
+      const { monitor, ...unmonitoredControl } = state.control;
+      fs.writeFileSync(statePath, JSON.stringify({ ...state, control: unmonitoredControl }));
+      assert.throws(() => externalFailedHostBinding(fleet), /pending unregistered monitor/);
+      fs.writeFileSync(statePath, JSON.stringify(state));
+      const artifact = path.join(local, "monitor-registration.json");
+      fs.writeFileSync(artifact, "{}");
+      assert.throws(() => externalFailedHostBinding(fleet), /child files differ/);
+      fs.unlinkSync(artifact);
+      const detach = path.join(old, "receipts", fs.readdirSync(path.join(old, "receipts"))[0]);
+      const original = fs.readFileSync(detach);
+      fs.writeFileSync(detach, JSON.stringify({ ...JSON.parse(original), providerDiagnostic: { code: "create-request" } }));
+      assert.throws(() => externalFailedHostBinding(fleet), /lost create-action read/);
+      fs.writeFileSync(detach, original);
+    }
     fs.writeFileSync(path.join(old, "receipts", "external-failed-host.json"), JSON.stringify({ schema: "benchmark-external-failed-host/v1",
       binding, operatorProofSha256: "c".repeat(64) }));
     return { old, local, state };
@@ -661,16 +699,17 @@ function externalFailureFixture(p) {
   return { prepare, approve, seed };
 }
 
+for (const posted of [false, true])
 for (const scenario of ["absent", "renamed old ID", "old tag on a different ID", "incomplete census", "late recovery"]) {
-  test(`external failed attempt before create: ${scenario}`, { timeout: 60000 }, async (t) => {
+  test(`external failed ${posted ? "posted create" : "attempt"} before create: ${scenario}`, { timeout: 60000 }, async (t) => {
     const target = "hardening", next = "r21", p = fixture(t, "ssh-late", target), root = p.h.base;
     p.deps.plan = (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] });
     fs.writeFileSync(path.join(root, "index.json"), "[]");
-    const { prepare, approve, seed } = externalFailureFixture(p), { old, local, state } = await seed();
+    const { prepare, approve, seed } = externalFailureFixture(p), { old, local, state } = await seed("json-api", "r20", posted);
     const custody = treeHash(old);
     assert.equal(await prepare(next, target), 3);
     const approved = await approve(next, target), recovery = path.join(local, "stream-recovery.lock");
-    if (scenario === "renamed old ID") fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(state.id), name: "renamed", tags: [] }]));
+    if (scenario === "renamed old ID") fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(state.id ?? state.createPending.dropletId), name: "renamed", tags: [] }]));
     if (scenario === "old tag on a different ID") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 702, name: "unrelated", tags: [state.tag] }]));
     if (scenario === "incomplete census") fs.writeFileSync(p.hosts + ".census-first", JSON.stringify({ droplets: [], meta: { total: 1 } }));
     if (scenario === "late recovery") {

@@ -6,13 +6,14 @@ import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdt
   renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
-  treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+  pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
+import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { collectRefusal, inspectCampaign } from "./cloud-validation.mjs";
+import { captureValidation, validationTask } from "./cloud-validation-snapshot.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
@@ -88,6 +89,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const recoveryLock = "stream-recovery.lock", recheckLock = createRecheckLock, groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
   const groupedHandoff = recoveryApproval?.policy === handoffRetirementPolicy;
   const groupedExitOne = recoveryApproval?.policy === failedExitOnePolicy, pinnedRetirement = groupedHandoff || groupedExitOne;
+  const absenceOnly = recoveryApproval?.policy === absentCollectionPolicy;
+  assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
   let exitOneFenceFinishedAtMs;
@@ -493,7 +496,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.ok(Array.isArray(rows) && rows.length === 1 && String(rows[0]?.id) === state.id, "exact host identity differs");
     return rows[0];
   };
-  const confirmDeleted = async () => {
+  const confirmDeleted = async (poll = true) => {
     assert.ok(state.deletionIntentAt, "deletion intent required before absence confirmation");
     let previous = now(); const deadline = previous + 120000;
     const uncertain = "deletion not confirmed; outcome uncertain; no automatic repeated deletion; preserve intent without another DELETE";
@@ -507,6 +510,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     for (let attempt = 0; attempt < 121; attempt++) {
       remaining();
       if (await exactHost(remaining) === undefined) return;
+      assert.ok(poll, "host still present; absence not confirmed");
       await sleep(Math.min(1000, remaining()));
     }
     assert.fail(uncertain);
@@ -770,7 +774,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     const lockBytes = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
-    if (pinnedRetirement) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
+    if (pinnedRetirement || absenceOnly) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
     else durable(lock, lockBytes);
     preserveOperationLock = false;
     try {
@@ -804,7 +808,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyArchive = () => {
     assert.equal(fileHash(archive), state.archiveSha256, "archive changed; preserve host");
   };
-  async function validateEvidence() {
+  const recordVerifiedAbsence = (report, sealedMonitor, original) =>
+    withVerifiedArchive(archive, state.archiveSha256, (archiveUnchanged) => {
+      const treeUnchanged = pinEvidenceTree(join(local, state.evidence), state.evidenceSha256, "evidence changed after replay");
+      treeUnchanged();
+      const { terminal } = sealedMonitor(local, state);
+      assert.ok(terminal.campaign === report.campaign, "monitor campaign changed after replay");
+      assert.ok(terminal.sealSha256 === report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
+      original(); archiveUnchanged();
+      state.destroyedAt = new Date().toISOString(); save(); return 0;
+    });
+  async function validateEvidence(confirmedAbsent = false, start) {
     state.fullGroupQualified = false;
     let extracted, exitCode;
     try {
@@ -826,10 +840,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } catch { throw collectRefusal("collect-native-report-refused"); }
     let replay;
     try {
-      replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect };
+      replay = options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect, start };
     } catch { throw collectRefusal("collect-native-replay-start"); }
     report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-      ...replay, interrupted, preserveLock: () => { preserveOperationLock = true; },
+      ...replay, interrupted, confirmedAbsent, preserveLock: () => { preserveOperationLock = true; },
     });
     try {
       check();
@@ -849,6 +863,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       throw Object.assign(error, { controllerStage: "collect-native-evidence-refused" });
     }
     Object.assign(state, outcome, { exitCode, validation: { status: report.status, campaign: report.campaign, collectionIntegrity: report.collectionIntegrity } });
+    return report;
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
   const setupExit = () => {
@@ -1319,6 +1334,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           ...(fleet ? { group: options.group, fleet } : {}),
           ...(remainingPlacement ? { remainingPlacement } : {}) }),
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false, benchPackage: true, gitSource: true, trixieUpstream: true,
+          ...(fleet && canSkipHostChromium(options.group) ? { skipHostChromium: true } : {}),
           ...(fleet ? { quietBootstrap: "prelogin" } : {}),
           control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
             ...(fleet?.single?.offlineHandoff ? {} :
@@ -1468,6 +1484,30 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
+      if (absenceOnly) return locked(async () => {
+        const original = () => {
+          assertHandoffLock();
+          assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked absence reservation changed");
+          assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
+        };
+        original();
+        assert.ok(absentCollectionCandidate(options, state), "verified absence reconciliation required");
+        assert.equal(state.commit, recoveryApproval.measuredCommit);
+        assert.equal(state.id, recoveryApproval.hostId);
+        const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+        sealedMonitor(local, state);
+        await confirmDeleted(false);
+        verifyArchive();
+        const beforeReplay = JSON.stringify(state);
+        const report = await validateEvidence(true, (input) => {
+          const root = realpathSync(options.absentMeasuredCheckout);
+          assert.equal(root, recoveryApproval.measuredRoot, "measured checkout changed");
+          return validationTask(input, { snapshot: captureValidation(input.commit, { root }) });
+        });
+        assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
+        await confirmDeleted(false);
+        return recordVerifiedAbsence(report, sealedMonitor, original);
+      });
       if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
         if (requireUnusedBootstrapCustody())
           assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "bootstrap uploads require the measured checkout");
@@ -1604,6 +1644,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }
         if (state.deletionIntentAt) {
+          // A prior verified, monitored collection may have timed out after DELETE.
+          // No longer replay budget until this exact host is proved absent.
+          if (absentCollectionCandidate(options, state)) {
+            const before = regular(statePath), beforeReplay = JSON.stringify(state);
+            const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+            await confirmDeleted();
+            verifyArchive(); const report = await validateEvidence(true);
+            assert.ok(JSON.stringify(state) === beforeReplay, "replay disagrees with saved verification");
+            await confirmDeleted();
+            return recordVerifiedAbsence(report, sealedMonitor, () => {
+              assert.ok(regular(statePath).equals(before), "locked absence reservation changed");
+            });
+          }
           verifyArchive(); await validateEvidence();
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
