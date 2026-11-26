@@ -2279,6 +2279,13 @@ fn reg_name(name: &[u8]) -> bool {
 /// look that found another byte, as the bytes before it are a name's as written and none is `%`.
 #[inline(never)]
 fn spelled(name: &[u8]) -> bool {
+    spelled_by(name, encoded)
+}
+
+/// [`spelled`], with the reader of percent-encoded bytes given ([`encoded`]; a test sees the
+/// bytes it is given, which are only those from the look that found another byte).
+#[inline(always)]
+fn spelled_by(name: &[u8], encoded: impl FnOnce(&[u8]) -> bool) -> bool {
     let from = match plain(name, unlike_a_name) {
         Ok(()) => return true,
         Err(from) => from,
@@ -3167,6 +3174,34 @@ mod tests {
         assert_eq!(looks(&[b'a'; 16]), (Err(0), 0));
         assert_eq!(looks(b""), (Err(0), 0));
         assert!(!reg_name(b""));
+    }
+
+    /// The percent-encoded bytes of a long name are read from the look that found the `%`, not
+    /// from the name's start: for 4,093 `a` and `%4a`, [`encoded`] is given its last 16 bytes
+    /// alone. The `unstaged-any-encoded` cost case does not by itself catch a reader given the
+    /// whole name, as the merge base it is counted against reads the whole name twice; this does.
+    #[test]
+    fn a_long_names_encoded_bytes_are_read_from_the_look_that_found_them() {
+        // Where in `name` the bytes given to the reader start and end.
+        let given = |name: &[u8]| {
+            let mut given = None;
+            let whole = spelled_by(name, |unread| {
+                let start = unread.as_ptr() as usize - name.as_ptr() as usize;
+                given = Some(start..start + unread.len());
+                encoded(unread)
+            });
+            (whole, given)
+        };
+        let mut name = vec![b'a'; 4093];
+        name.extend_from_slice(b"%4a");
+        assert_eq!(given(&name), (true, Some(4080..4096)));
+        name[4095] = b'g';
+        assert_eq!(given(&name), (false, Some(4080..4096)));
+        // A name the table holds as written is not given to it at all.
+        name[4093..].copy_from_slice(b"__a");
+        assert_eq!(given(&name), (true, None));
+        // A short name, which no look reads, is given whole.
+        assert_eq!(given(b"a%4a"), (true, Some(0..4)));
     }
 
     /// What a request asks for where no connection brought it (a test's, as these are): its

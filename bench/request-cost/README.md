@@ -59,7 +59,11 @@ than on the first: the cases of `HOSTS=*` count those reads, with `Host` first a
 names longer than `localhost`: one of the letters, digits, `-` and `.` most names are made of, and
 one whose last byte is none of those, which is read to its end before that byte is found, and one
 whose last three bytes are a percent-encoded byte, which is read from the look that found the `%`
-and not again from the name's start. Every answer is checked
+and not again from the name's start. That case counts the read but does not by itself catch a
+reader given the name from its start again, as the merge base it is counted against reads the
+whole name twice; a unit test in `crates/corten/src/security.rs`
+(`a_long_names_encoded_bytes_are_read_from_the_look_that_found_them`) does, by seeing the bytes
+that reader is given. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16

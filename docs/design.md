@@ -2823,9 +2823,13 @@ rules something out.
     no case with a name longer than `localhost`. The three cases that came after it,
     `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`) and
     `unstaged-any-encoded` (4,093 `a` and `%4a`, where a table that read the percent-encoded
-    byte from the name's start would read 4,080 bytes more), and the verdict for what was merged
-    are the hosted job's table on the head of
-    [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134).
+    byte from the name's start would read 4,080 bytes more), and the count of the head of
+    [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134)
+    against its merge base, are that pull request's hosted job's table. The encoded case counts
+    the read but does not by itself catch a reader given the name from its start again, as the
+    merge base it is counted against reads the whole name twice; the unit test
+    `a_long_names_encoded_bytes_are_read_from_the_look_that_found_them` in `security.rs` does,
+    by seeing the bytes that reader is given.
     Measured over a socket on a bench app the repository does not hold, at `b52f57475`, so of
     its reader with neither the stop nor the read on, against main before #2037 and against its
     head,

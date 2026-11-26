@@ -66,6 +66,7 @@ export const cases = {
   "unstaged-any-long": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", LONG), body: "3" },
   // 4,093 `a` and `%4a`: the percent-encoded byte is read from the look that found the `%`, the
   // last 16 bytes, and a reader that read it from the name's start would read 4,080 bytes more.
+  // This counts that read; a unit test in `security.rs`, not this case, catches the longer one.
   "unstaged-any-encoded": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", ENCODED), body: "3" },
 };
 
