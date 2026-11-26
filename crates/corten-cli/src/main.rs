@@ -527,6 +527,8 @@ mod tests {
         assert!(!asks_help("dev", &args(&["--prot", "4000", "-h"])));
         assert!(!asks_help("dev", &args(&["--port", "http", "-h"])));
         assert!(!asks_help("dev", &args(&["--port", "4000", "--port=5000", "-h"])));
+        // A second `--port` stops the scan only with a value: help in its place is still help.
+        assert!(asks_help("dev", &args(&["--port", "4000", "--port", "--help"])));
         // `--` ends no command's options, so it ends no scan for help either.
         assert!(asks_help("new", &args(&["app", "--", "--help"])));
         // An option names a value only for the command that has it, and a `--` it takes is a value.

@@ -53,7 +53,8 @@ is checked; otherwise `--name` or `--corten-path` given twice is refused.
 `corten build` and `corten dev` are the exceptions: they read their arguments as they run with them,
 and read `--port` the same way. Help counts in place of a value too (`--port --help`, and for
 `corten build` a Cargo argument's, as in `--bin --help`); an argument the command refuses (`--`, a
-misspelled flag, a value that reads as a flag, a `--port` that is no port number or is given twice)
+misspelled flag, a value that reads as a flag, a `--port` that is no port number, a second `--port`
+with a value)
 stops the reading there, and that argument is refused even with a `--help` after it; and for
 `corten build`, everything after `--profile-from`, a `-h` included, is the command's.
 

@@ -15,13 +15,20 @@ fn dev_gives_the_app_the_port_its_flag_names_over_port() {
         // An app of its own for each run, so no run copies over a binary another started.
         seen.push(port_given(&base, &app(&base, at), args, &base.join(format!("port-{at}"))));
     }
-    // Every app has exited and been reaped, so nothing holds the directory. A failed removal is
-    // reported after the assertions, so it does not hide what the runs found.
-    let removed = std::fs::remove_dir_all(&base);
+    // A port is read only once `corten dev` has said its app exited, so with every port read
+    // nothing is left running in the directory and it is removed. Otherwise a child may still be
+    // at work there, and the directory is kept and named. A failed removal is reported after the
+    // assertions, so it does not hide what the runs found.
+    let removed = seen.iter().all(|(port, _)| port.is_some()).then(|| std::fs::remove_dir_all(&base));
     for ((args, expected), (port, said)) in cases.iter().zip(&seen) {
-        assert_eq!(port.as_deref(), Some(*expected), "corten dev {args:?} with PORT=4500 said:\n{said}");
+        assert_eq!(
+            port.as_deref(),
+            Some(*expected),
+            "corten dev {args:?} with PORT=4500 said:\n{said}\n(kept {})",
+            base.display()
+        );
     }
-    removed.expect("removing the test's directory");
+    removed.expect("every run read its port").expect("removing the test's directory");
 }
 
 /// An argument `corten dev` does not take is refused before Cargo runs, so a misspelled flag
@@ -36,6 +43,7 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
         .current_dir(app(&base, 0))
         .env("PATH", base.join("bin"))
         .env("DEV_CARGO_RAN", &ran)
+        .env_remove("DEV_PORT_OUT")
         .stdout(Stdio::null())
         .stderr(std::fs::File::create(&said).unwrap())
         .spawn()
@@ -55,11 +63,13 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
     };
     let cargo_ran = ran.exists();
     let stderr = std::fs::read_to_string(&said).unwrap();
-    let removed = std::fs::remove_dir_all(&base);
-    assert!(status.is_some_and(|status| !status.success()), "{status:?}: {stderr}");
+    // With `corten dev` exited and Cargo never run, nothing else was started in the directory.
+    // Otherwise the stand-in or the app may still be at work there, so the directory is kept.
+    let removed = (status.is_some() && !cargo_ran).then(|| std::fs::remove_dir_all(&base));
+    assert!(status.is_some_and(|status| !status.success()), "{status:?}: {stderr}\n(kept {})", base.display());
     assert!(stderr.contains(r#"corten dev takes --port <port> (or --port=<port>); not "--prot""#), "{stderr}");
-    assert!(!cargo_ran, "Cargo ran for a refused argument");
-    removed.expect("removing the test's directory");
+    assert!(!cargo_ran, "Cargo ran for a refused argument (kept {})", base.display());
+    removed.expect("corten dev exited without running Cargo").expect("removing the test's directory");
 }
 
 /// A directory holding `bin/cargo`, the stand-in for Cargo and the app (`fixtures/dev-cargo.rs`).
@@ -111,6 +121,8 @@ fn port_given(base: &Path, root: &Path, args: &[&str], out: &Path) -> (Option<St
         .env("PATH", base.join("bin"))
         .env("PORT", "4500")
         .env("DEV_PORT_OUT", out)
+        // Only the refusal test asks the stand-in to mark that it ran, inside its own directory.
+        .env_remove("DEV_CARGO_RAN")
         .stdout(Stdio::null())
         .stderr(std::fs::File::create(&said).unwrap())
         .spawn()
