@@ -530,11 +530,13 @@ establish a general ranking.
       **and** cycles per request under equivalent load on a quiet Linux bench host.
       For changes exercised by the catalog item page or item JSON, use
       [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
-      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
-      Use a fresh round name each time and tag each build in turn with the image name the script
-      expects. Otherwise, measure the affected route with an equivalent under-load test; an
-      unaffected route does not count. Alternate the two release builds, verify the response bytes
-      and headers before measuring, and report any failed requests.
+      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`); how
+      the two targets are read under a plan that reads the change across placements on a probe
+      is said with the default band, below. Use a fresh round name each time and tag each build
+      in turn with the image name the script expects. Otherwise, measure the affected route with
+      an equivalent under-load test; an unaffected route does not count. Alternate the two
+      release builds, verify the response bytes and headers before measuring, and report any
+      failed requests.
 
       Compare the change in **user plus kernel cycles per request within each pair** against
       the smallest worthwhile reduction, declared before running. A run's plan, with everything
@@ -561,8 +563,9 @@ establish a general ranking.
       its result, and a plan that made +1% decisive before this exception existed stays bound by
       it. This single-build reading and the CPU-win rule above do not decide a touched workload
       whose single-build bound's distance from its threshold is inside its recorded placement
-      spread or, where none applies, the default band, or one read across placements; both are
-      decided as described below.
+      spread or, where none applies, the default band, or one read across placements (a
+      threshold one build read outside stays as that build read it); both are decided as
+      described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -671,7 +674,38 @@ establish a general ranking.
       the reading by the rules above, binding by policy, not because placement is shown unable to
       move it. Each threshold a plan declared for a workload, its margin and a reduction, is
       tested on its own distance: one outside stays as one build read it, whatever a placement
-      run then reads, and that run reads only those left inside.
+      run then reads, and that run reads only those left inside, but for the case that follows.
+      One case is read otherwise, the catalog's `page` and `json`, since no tool reads the image
+      `count.mjs` starts across placements
+      ([design Choice 72](docs/design.md#choice-placement-runs)). Where a plan reads one or more
+      workloads across placements on a probe, each on the path the change touches (an unaffected
+      route does not count, as above), all the workloads it reads so are what item 2 asks of the
+      change's cycles, each held as the plan declares it and as this item says: no margin, A/A
+      or placement is loosened. The plan also names before the run, for each of `page` and
+      `json` the change exercises, which of those workloads runs the changed code that target's
+      request runs, with the reason, which the pull request's review accepts. A target the plan
+      names no such workload for, as where its probe has no request that runs that code, is not
+      under this case until a plan of the pull request names one; a workload named for a target
+      is not replaced after it is read. Until one is named the target is held as any other
+      workload is, and inside does not pass. For this case a workload on that path may be read
+      across placements whatever a single build of it read. Where one build read it outside its
+      spread or the band, that reading still binds, as above: the reading across placements then
+      changes nothing for the workload, and brings the target it is named for, which is
+      otherwise held as any other workload is, under the case only if its A/A resolves and its
+      bound is under +1%.
+      `page` and `json`, whichever the change exercises, are still counted, once
+      for that plan, with `count.mjs`: one build of each side, declared in the plan with its
+      pairs and its checks before the plan's first turn and before the count is taken, and each
+      bound reported with where its distance from +1% lands against the default band as `main`
+      prints it when the plan is declared; a count an earlier plan of the pull request declared
+      and took is this plan's too and is not taken again. Outside the band binds for the margin,
+      as above: a distance above it is a miss, and one below it meets the margin. Inside is
+      reported as "inside the default band: not decided" and, for these two workloads under such
+      a plan, does not keep the pull request from passing. No win is claimed from either count.
+      A count is not taken again for its result, and one that fails (a failed request, a counter
+      under 100%, too few pairs) returns to the maintainer and does not pass until the
+      maintainer decides; the author runs nothing again. A plan declared before this case was on
+      `main` is read by the rule as it then stood (the Choice names four exceptions).
       A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements

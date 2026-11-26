@@ -1244,6 +1244,7 @@ fn names(line: &[u8], key: &[u8]) -> bool {
 /// Whether a `Content-Type` is a document a browser may run scripts in: HTML, or any XML (XHTML,
 /// SVG, `text/xml`, a `+xml` type), which runs an XHTML `<script>` in it; the media type is
 /// compared without case (RFC 9110 8.3.1).
+#[inline]
 fn html(kind: &[u8]) -> bool {
     // What Corten's own pages send, compared first.
     if kind == b"text/html; charset=utf-8" {
@@ -1455,6 +1456,67 @@ impl Applied {
         }
     }
 
+    /// The lines [`Applied::headers`] and [`crate::cache::settle`] give an answer that brings none
+    /// of them and asks for nothing of its own (no nonce, no style block), made once for a scope:
+    /// `csp` is the scope's and `page` whether its answers can be pages (not an API's). Those two
+    /// write it, so it holds what they would insert, whatever the policy.
+    pub(crate) fn lines(&self, csp: &Csp, page: bool) -> HeaderMap {
+        let mut res = Response::new(crate::body::Body::empty());
+        let slot = page.then(NonceSlot::default);
+        self.headers(&mut res, slot.as_ref(), csp, false);
+        let seen = crate::cache::Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false };
+        crate::cache::settle(&mut res, seen, "");
+        res.into_parts().0.headers
+    }
+
+    /// Adds each of its scope's `lines` ([`Applied::lines`]) to `res`, in one pass, in place of
+    /// [`Applied::headers`], [`Applied::document`] and [`crate::cache::settle`], when those would
+    /// leave the same lines in the same order: an answer with no header, or its `Content-Type`
+    /// alone, that is not a document or a worker's script those give lines of its own, on a
+    /// request that took no nonce and drew no style block. `nonce` and `csp` are what
+    /// [`Applied::headers`] is given. Returns whether it did; `res` is untouched when not.
+    #[inline]
+    pub(crate) fn ready(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp) -> bool {
+        // A page brings more than its type: it is told apart here, without a call.
+        res.headers().len() <= 1 && self.give(res, lines, nonce, csp)
+    }
+
+    /// [`Applied::ready`], for an answer with one header at most.
+    #[inline(never)]
+    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp) -> bool {
+        let kind = match res.headers().iter().next() {
+            None => None,
+            Some((name, kind)) if name == header::CONTENT_TYPE => Some(kind),
+            Some(_) => return false,
+        };
+        if let Some(slot) = nonce {
+            if slot.taken().is_some() || res.extensions().get::<StyleBlock>().is_some() {
+                return false;
+            }
+            // What `document` adds to: a document, and a worker's script.
+            if self.adds_to_documents(csp)
+                && (kind.is_some_and(|kind| html(kind.as_bytes()))
+                    || res.extensions().get::<crate::pwa::WorkerScript>().is_some())
+            {
+                return false;
+            }
+        }
+        let headers = res.headers_mut();
+        // Room for them and one more (`Vary`), as `headers` reserves: the map grows at most once.
+        headers.reserve(lines.len() + 1);
+        for (name, value) in lines {
+            headers.append(name, value.clone());
+        }
+        true
+    }
+
+    /// Whether [`Applied::document`] has a line to add under `csp`: a feature to deny, or where
+    /// reports go. Read by it and by [`Applied::ready`], which leaves it the answers it adds to.
+    #[inline]
+    fn adds_to_documents(&self, csp: &Csp) -> bool {
+        csp.permissions.is_some() || self.reporting.is_some()
+    }
+
     /// `Permissions-Policy` ([`Feature`]) on a document, an HTML or XML answer that is not one the
     /// runtime swaps in (`corten-page`, `corten-patch`, to its own request): those are drawn into a
     /// page that keeps the policy it loaded with, and a stylesheet, a script or JSON has no features
@@ -1466,7 +1528,7 @@ impl Applied {
     /// `swap`: the request was the runtime's (a navigation or a patch), so its answer may be one
     /// it draws into the page; any other request's answer loads as what it is, whatever it says.
     pub(crate) fn document(&self, res: &mut Response, csp: &Csp, swap: bool) {
-        if csp.permissions.is_none() && self.reporting.is_none() {
+        if !self.adds_to_documents(csp) {
             return;
         }
         let headers = res.headers();

@@ -48,7 +48,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `workloads[].K` | `"pilot"`, the smallest K the sizing check passes from this plan's pilot, or a number from 5 to 254. |
 | `workloads[].sizedFrom` | With a number for K, and only then: which eligible A/A the number was sized from, in words a reader can follow to it (where it is kept, its run, its comparison). The declaration and the report print it. |
 | `workloads[].seed` | The seed of the order its placements run in. |
-| `workloads[].reads` | The thresholds this run reads across placements: `["margin"]`, `["reduction"]` or both. One a single build already read outside its band is left out and stays as that build read it. |
+| `workloads[].reads` | The thresholds this run reads across placements: `["margin"]`, `["reduction"]` or both. One a single build already read outside its band is left out and stays as that build read it, but for the margin of a workload read for the catalog's `page` or `json`: see [what it does not do](#what-it-does-not-do), item 14. |
 | `workloads[].reduction` | The smallest worthwhile reduction as a fraction (`0.02`), or `null` when the plan declares no benefit side. |
 | `workloads[].recordsSpread` | Whether the plan declares, before the run, that its A/A records a placement spread. |
 | `workloads[].expect` | Optional: a file holding the exact difference between base's and head's answers that the change makes by design (the `diff` of their masked headers, and a line for bodies that differ). Without it the two must answer the same. |
@@ -220,6 +220,14 @@ side's aligned sections, its list and the second pads' lines.
     question for the rule, which the kit does not answer.
 13. `report.mjs` takes each recorded turn's counters and `wrk` result from the counts `turns.sh`
     wrote after checking them; it does not read the raw turn logs again.
+14. It neither declares nor takes the counts of the catalog's `page` and `json` that item 2 asks
+    of a plan that reads a probe across placements. The plan file has no field for them, so they
+    go in the posted plan, before the plan's first turn and before either count is taken. Nor
+    does it check the workload such a plan names for each target: a workload's `declared` can
+    carry the match and its reason, which the report prints as written. A workload read for
+    that case after one build read its margin outside names the margin in `reads`; the report's
+    pass or miss for it then says only whether the target comes under the case, and the single
+    build's reading stands.
 
 ## What is this host's alone
 
