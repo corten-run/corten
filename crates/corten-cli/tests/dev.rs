@@ -60,19 +60,24 @@ fn dev_refuses_an_argument_it_does_not_take_before_it_builds() {
             Ok(Some(status)) => break (Some(status), Ok(())),
             Ok(None) if start.elapsed() <= Duration::from_secs(30) => std::thread::sleep(Duration::from_millis(20)),
             Ok(None) => break (None, stop(&mut dev)),
-            Err(error) => break (None, stop(&mut dev).map_err(|stopped| format!("reading its exit: {error}; {stopped}"))),
+            // Not knowing whether it exited is a failure whatever the stop then says.
+            Err(error) => break (None, Err(format!("reading its exit: {error}; then stopped: {:?}", stop(&mut dev)))),
         }
     };
     let cargo_ran = ran.exists();
     let stderr = std::fs::read_to_string(&said).unwrap_or_default();
-    // With `corten dev` seen to exit and Cargo never run, nothing else was started in the
-    // directory. Otherwise the stand-in or the app may still be at work there, so it is kept.
-    let removed = (settled.is_ok() && !cargo_ran).then(|| std::fs::remove_dir_all(&base));
+    // Only a refusal seen whole, `corten dev` exiting by itself with the refusal and no mark of
+    // Cargo, proves nothing else was started in the directory. A run that had to be stopped took
+    // the argument, and its Cargo may be at work there without having marked it yet, so the
+    // directory is kept.
+    let refused = stderr.contains(r#"corten dev takes --port <port> (or --port=<port>); not "--prot""#);
+    let whole = status.is_some_and(|status| !status.success()) && refused && !cargo_ran;
+    let removed = whole.then(|| std::fs::remove_dir_all(&base));
     assert!(settled.is_ok(), "corten dev --prot 4000: {settled:?} (kept {})", base.display());
     assert!(status.is_some_and(|status| !status.success()), "{status:?}: {stderr}\n(kept {})", base.display());
-    assert!(stderr.contains(r#"corten dev takes --port <port> (or --port=<port>); not "--prot""#), "{stderr}");
+    assert!(refused, "{stderr}\n(kept {})", base.display());
     assert!(!cargo_ran, "Cargo ran for a refused argument (kept {})", base.display());
-    removed.expect("corten dev was seen to exit without running Cargo").expect("removing the test's directory");
+    removed.expect("corten dev refused the argument without running Cargo").expect("removing the test's directory");
 }
 
 /// A directory holding `bin/cargo`, the stand-in for Cargo and the app (`fixtures/dev-cargo.rs`).
@@ -149,19 +154,29 @@ fn port_given(
         .spawn()
         .unwrap();
     let start = Instant::now();
+    let mut waited = None;
     let port = loop {
         let port = std::fs::read_to_string(out).ok().filter(|port| !port.is_empty());
         let reaped = std::fs::read_to_string(&said).is_ok_and(|said| said.contains("corten: the app exited"));
         if port.is_some() && reaped {
             break port;
         }
-        // An exit, or an exit that could not be read, ends the wait; [`stop`] then says which.
-        if start.elapsed() > Duration::from_secs(30) || !matches!(dev.try_wait(), Ok(None)) {
-            break None;
+        // An exit, or an exit that could not be read, ends the wait.
+        match dev.try_wait() {
+            Ok(None) if start.elapsed() <= Duration::from_secs(30) => {}
+            Ok(_) => break None,
+            Err(error) => {
+                waited = Some(error);
+                break None;
+            }
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let stopped = stop(&mut dev);
+    // Not knowing whether it exited is a failure whatever the stop then says.
+    let stopped = match waited {
+        Some(error) => Err(format!("reading its exit: {error}; then stopped: {:?}", stop(&mut dev))),
+        None => stop(&mut dev),
+    };
     (port, std::fs::read_to_string(&said).unwrap_or_default(), stopped)
 }
 
