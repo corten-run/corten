@@ -294,9 +294,8 @@ pin_project_lite::pin_project! {
 impl<F: Future<Output = Response>> Future for Keyed<F> {
     type Output = Response;
 
-    // Always: a call of its own moved the answer it returns three times more (memcpy, about 87
-    // instructions a request) and cost 66 instructions more of its own (callgrind, the settle
-    // test's public page).
+    // Always: with `#[inline]` alone the settle test's `Public` page counted 40 instructions more
+    // a request, and its pages that draw a key 35 and 36 (callgrind).
     #[inline(always)]
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
         let polled = self.project().answer.poll(cx);
