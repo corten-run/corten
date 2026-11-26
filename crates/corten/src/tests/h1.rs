@@ -1762,6 +1762,13 @@ async fn an_answer_whose_body_fails_after_some_of_it_went_is_cut_short() {
 /// requests that came with its request reach the client whole, and then the connection is closed.
 /// (Corten's connection writes the answers to requests that arrived together into one buffer,
 /// and that buffer is sent, not dropped, when a body's panic ends the connection.)
+///
+/// A panic where a body is asked for a piece (`poll_frame`), that is: where a stream runs, and
+/// the only place this test has one. A body type of an app's own that panics where it is asked
+/// its length or whether it has ended (`size_hint`, `is_end_stream`), or as it is dropped, ends
+/// the connection's task on both connections, and on Corten's the answers before it that had not
+/// been sent go with it: those calls are not guarded (`crate::h1`, and the guide's list of
+/// differences).
 #[tokio::test]
 async fn a_body_that_panics_takes_no_answer_before_it() {
     let panics = || async {
@@ -2266,8 +2273,7 @@ async fn a_connection_over_a_wrapped_io_is_handed_to_hyper_as_a_plain_one_is() {
     for own in BOTH {
         let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
         let addr = listeners[0].local_addr().unwrap();
-        let step =
-            |tcp: TcpStream| std::future::ready(Ok::<_, std::convert::Infallible>((super::server::Held::unseen(tcp), ())));
+        let step = |tcp: TcpStream| std::future::ready(Ok::<_, std::convert::Infallible>((super::server::Held::unseen(tcp), ())));
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(crate::app::run(listeners, step, App::new(routes()).own_http1(own), async {
             let _ = stopped.await;

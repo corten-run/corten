@@ -47,11 +47,29 @@
 //! so an answer hyper would not have begun can be cut short here when its body gives more than
 //! this connection holds and then fails without ever having waited.
 //!
+//! A body's panic is caught where the body is asked for a piece (`poll_frame`), which is where a
+//! stream, or a body of the app's own, runs its code. One that panics where it is asked how long
+//! it is or whether it has ended (`size_hint`, `is_end_stream`), or as it is dropped, ends the
+//! connection's task, as it ends hyper's, and the answers before it that had not been sent go
+//! with it here. Those two questions are answered by code of the app's only for a body type of
+//! its own (an `http_body::Body` given to `Body::new`).
+//!
+//! **A client that closes its side** while a request of its is being answered has left, and the
+//! request with it, as with hyper, which reads to find that out each time its task is woken with
+//! an answer unfinished and nothing of the client's unread. Here it is looked for when a head
+//! has been read with nothing behind it (before the handler is asked), while the handler or the
+//! body waits, and where a write waits for the client to read, an answer being unfinished until
+//! all of it has gone. The answers before that one are the client's and are sent; of that one
+//! nothing more is written.
+//!
 //! **What a connection that waits for a request holds.** Its two buffers, each as large as its
 //! client made it and no larger than a bound: the read buffer begins at [`FIRST`] bytes and
 //! grows when a read fills it, and one whose allocation may be more than [`KEPT_READ`] is freed
 //! when the connection waits with nothing unread; the buffer of answers begins at [`OUT_FIRST`]
 //! and one of more than [`OUT_KEPT`] is freed when the connection waits with nothing unsent.
+//! Beside them, the places of the last head's lines (32 bytes a line, and room for more than
+//! [`LINES_KEPT`] lines is freed there too) and the header map of the last answer, emptied, with
+//! the room that answer's headers made it take.
 //!
 //! **What it does not do**, each of which hyper does: read a request's body, or answer a request
 //! that may switch protocols (both hyper's, with the rest of the connection); send an answer's
@@ -108,7 +126,6 @@ pub(crate) const OUT_FIRST: usize = 1024;
 pub(crate) const OUT_KEPT: usize = FLUSH_AT;
 /// How many header lines a connection that waits for a request keeps room to note the places of
 /// (32 bytes a line): more room, which a request with more lines made it take, is freed there.
-#[cfg(test)]
 pub(crate) const LINES_KEPT: usize = 64;
 /// The largest body piece copied into the buffer of answers; a larger one is written from where
 /// it is, with the buffer in one vectored write where the IO has one.
@@ -239,14 +256,18 @@ impl Inbox {
         let roomy = self.buf.capacity() > 4 * self.room.max(self.buf.len());
         if roomy || self.buf.capacity() - self.buf.len() < self.room / 2 {
             // Room for what a read is offered in all, with what is unread at its front (part of
-            // a head), and half of that at least behind it: taken back in the allocation where
-            // it has that much and nothing else holds a part of it, and otherwise in a new one
-            // of just that size. (`BytesMut::reserve` would make it larger: twice the
-            // allocation, or the room asked for behind everything taken of it so far.) And for
-            // no more than the limit leaves: a head that does not end is read in a buffer that
-            // grows to the app's limit for a head and not past it.
+            // a head), and behind that half a read's worth at least and half as much again as is
+            // unread: taken back in the allocation where it has that much and nothing else holds
+            // a part of it, and otherwise in a new one of just that size. So the room made
+            // grows with what is held, and a head that comes in small reads is moved to a new
+            // allocation only when it has grown by half since the last: each byte of it is
+            // copied three times at the most, however many reads bring it. (`BytesMut::reserve`
+            // would make the allocation larger: twice what it was, or the room asked for behind
+            // everything taken of it so far.) And for no more than the limit leaves: a head
+            // that does not end is read in a buffer that grows to the app's limit for a head
+            // and not past it.
             let most = limit.saturating_sub(self.buf.len()).max(1);
-            let more = self.room.saturating_sub(self.buf.len()).max(self.room / 2).min(most);
+            let more = self.room.saturating_sub(self.buf.len()).max(self.room / 2 + self.buf.len() / 2).min(most);
             if roomy || !self.buf.try_reclaim(more) {
                 let mut fresh = BytesMut::with_capacity(self.buf.len() + more);
                 fresh.extend_from_slice(&self.buf);
@@ -342,8 +363,15 @@ struct Conn<I> {
     after: &'static [u8],
     /// How many bytes have gone to the IO in all, to tell whether any of an answer has.
     gone: u64,
+    /// Where the last answer written begins in all that goes to the IO ([`Conn::mark`]).
+    begun: u64,
     /// Bytes have gone to the IO, or an answer has ended, since its last flush completed.
     unflushed: bool,
+    /// The last send waited for the IO to take more ([`Conn::poll_send`]).
+    stalled: bool,
+    /// The client has closed its side, with a request of its being answered or an answer to it
+    /// waiting to be sent ([`Conn::poll_left`], [`Conn::poll_head`]).
+    left: bool,
     /// The task has waited since the date was last brought up to date.
     waited: bool,
     vectored: bool,
@@ -365,7 +393,10 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             large: None,
             after: b"",
             gone: 0,
+            begun: 0,
             unflushed: false,
+            stalled: false,
+            left: false,
             waited: true,
             vectored,
         }
@@ -417,8 +448,16 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     }
 
     /// Writes everything written so far to the IO and flushes it. Pending: the IO has no room,
-    /// and wakes the task when it has.
+    /// and wakes the task when it has; `stalled` says so until a send has not had to wait.
+    #[inline]
     fn poll_send(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let sent = self.poll_out(cx);
+        self.stalled = sent.is_pending();
+        sent
+    }
+
+    /// [`Conn::poll_send`], but for `stalled`.
+    fn poll_out(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         #[cfg(test)]
         OUT.set((OUT.get().0.max(self.out.len()), OUT.get().1.max(self.out.capacity())));
         loop {
@@ -479,15 +518,32 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// Waits for more of a head: what has been written goes out first. `Ok(0)` when the client
     /// has closed its side, or the server is shutting down and the connection is between requests
     /// (`first`: no request has been read yet, so the one arriving is read and answered).
+    ///
+    /// Where the send before this one waited, the read comes first, and a client found to have
+    /// closed its side with nothing of its unread has left (`left`) and is written no more: hyper
+    /// reads before it writes each time its task is woken, takes an answer for unfinished until
+    /// all of it is flushed, and gives up a client that closes its side before then.
     fn poll_head(&mut self, cx: &mut Context<'_>, closing: &AtomicBool, first: bool) -> Poll<io::Result<usize>> {
-        if let Poll::Ready(Err(error)) = self.poll_send(cx) {
-            return Poll::Ready(Err(error));
+        let waited = self.stalled;
+        if !waited {
+            if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+                return Poll::Ready(Err(error));
+            }
         }
         if closing.load(Relaxed) && (!first || self.inbox.is_empty()) {
             return Poll::Ready(Ok(0));
         }
         // What is unread is part of a head, shorter than the limit (`parse`).
         let read = self.inbox.poll_fill(&mut self.io, cx, self.limit);
+        if self.stalled && self.inbox.is_empty() && matches!(read, Poll::Ready(Ok(0))) {
+            self.left = true;
+            return read;
+        }
+        if waited {
+            if let Poll::Ready(Err(error)) = self.poll_send(cx) {
+                return Poll::Ready(Err(error));
+            }
+        }
         if read.is_pending() {
             // What comes after a wait did not come with what was read before it (`parse`).
             self.together = false;
@@ -496,11 +552,14 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         read
     }
 
-    /// The connection waits for a request: a buffer that holds nothing and has more room than a
-    /// waiting connection keeps is freed ([`KEPT_READ`], [`OUT_KEPT`]). (While part of a head
-    /// waits for the rest, or an answer for its client to take it, that buffer stays.)
+    /// The connection waits for a request: what holds nothing and has more room than a waiting
+    /// connection keeps is freed ([`KEPT_READ`], [`OUT_KEPT`], [`LINES_KEPT`]). (While part of a
+    /// head waits for the rest, or an answer for its client to take it, that buffer stays.)
     fn rest(&mut self) {
         self.inbox.settle();
+        if self.indices.capacity() > LINES_KEPT {
+            self.indices = Vec::new();
+        }
         let sent = self.out.is_empty() && self.large.is_none();
         if sent && self.out.capacity() > OUT_KEPT {
             self.out = Vec::new();
@@ -520,15 +579,18 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         }
     }
 
-    /// Whether the client has closed its side: `Err` when it has, or the IO has failed. A client
-    /// that closes its side while a request of its is being answered has left, and the request
-    /// with it, as with hyper. Looked for only while nothing it sent waits to be read: at most
-    /// one read is taken ahead (a pipelined request), and no more until the connection has used
-    /// it.
+    /// Whether the client has closed its side: `Err` when it has (and `left` says so from then
+    /// on), or the IO has failed. A client that closes its side while a request of its is being
+    /// answered has left, and the request with it, as with hyper. Looked for only while nothing
+    /// it sent waits to be read: at most one read is taken ahead (a pipelined request), and no
+    /// more until the connection has used it.
     fn poll_left(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
         if self.inbox.is_empty() {
             match self.inbox.poll_look(&mut self.io, cx) {
-                Poll::Ready(Ok(0)) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Poll::Ready(Ok(0)) => {
+                    self.left = true;
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
                 Poll::Ready(Err(error)) => return Err(error),
                 Poll::Ready(Ok(_)) | Poll::Pending => {}
             }
@@ -537,14 +599,54 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     }
 
     /// What the connection does while an answer's body waits: `Err` when the client is gone, and
-    /// the request with it.
+    /// the request with it. The client's end is looked for before anything more is written, as
+    /// hyper reads before it writes.
     fn poll_meanwhile(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
+        self.poll_left(cx)?;
         // Everything written so far goes out: the answers before this one, the pieces of a
         // stream.
         if let Poll::Ready(Err(error)) = self.poll_send(cx) {
             return Err(error);
         }
-        self.poll_left(cx)
+        Ok(())
+    }
+
+    /// Sends everything written so far, for a caller that waits until it has gone
+    /// ([`Conn::poll_send`]), and looks for the client's end while it waits: `Err` when the
+    /// client has closed its side, as when the IO fails. hyper looks each time its task is woken
+    /// while a request is being answered, which an answer is until all of it is flushed, and
+    /// before it writes any more; so here, once a send has waited, and from then on before the
+    /// next. A send that does not wait looks for nothing: it is as it was.
+    fn poll_deliver(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let waited = self.stalled;
+        if waited {
+            self.poll_left(cx)?;
+        }
+        let sent = self.poll_send(cx);
+        if sent.is_pending() && !waited {
+            self.poll_left(cx)?;
+        }
+        sent
+    }
+
+    /// [`Conn::poll_deliver`] to its end: `false` when what is written cannot be sent, and the
+    /// connection is over. If that is because the client has left, the answers before the last
+    /// are its all the same: where none of the last has gone they are sent, without it, and the
+    /// connection closed. Where some of it has gone, the ones before it have, and it is cut short
+    /// there, as hyper drops what it has not written of an answer it gives up.
+    async fn deliver(&mut self) -> bool {
+        let sent = poll_fn(|cx| {
+            let sent = self.poll_deliver(cx);
+            self.waited |= sent.is_pending();
+            sent
+        });
+        if sent.await.is_ok() {
+            return true;
+        }
+        if self.left && self.unwrite() {
+            self.close().await;
+        }
+        false
     }
 
     /// The handler's answer. The client's end is looked for first, each time, and so before the
@@ -552,6 +654,12 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// client had closed its side by then is not answered by either, however quick its handler.
     /// (A request read with others behind it is not looked for: its client's end is behind
     /// them.) The answers before it are the client's all the same, and go out first.
+    ///
+    /// What a look finds is what the IO knows by then. Over a socket just accepted that can be
+    /// less than has arrived: tokio takes an accepted socket for readable before its first event
+    /// has come, so the first read can take a request with nothing yet said of the client's end
+    /// behind it, and then the request is answered, by hyper's connection as by this one, which
+    /// each learn of the end when their task next waits.
     fn poll_answer<F>(&mut self, cx: &mut Context<'_>, answering: Pin<&mut F>) -> Poll<io::Result<http::Response<Answered>>>
     where
         F: Future<Output = Result<http::Response<Answered>, Infallible>>,
@@ -641,7 +749,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                         }
                     }
                 }
-                ready!(self.poll_send(cx))?;
+                ready!(self.poll_deliver(cx))?;
             }
             let next = match ahead.take() {
                 Some(next) => next,
@@ -703,13 +811,13 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         self.gone + (self.out.len() - self.sent) as u64
     }
 
-    /// Forgets an answer written from `mark` on, if none of it has gone to the IO: `false` if
-    /// some has.
-    fn unwrite(&mut self, mark: u64) -> bool {
-        if self.gone > mark {
+    /// Forgets the last answer written (from `begun` on), if none of it has gone to the IO:
+    /// `false` if some has.
+    fn unwrite(&mut self) -> bool {
+        if self.gone > self.begun {
             return false;
         }
-        self.out.truncate(self.sent + (mark - self.gone) as usize);
+        self.out.truncate(self.sent + (self.begun - self.gone) as usize);
         self.large = None;
         self.after = b"";
         true
@@ -811,9 +919,14 @@ where
             });
             match read.await {
                 Ok(count) if count > 0 => {}
-                // The client is done, the header timeout has passed, or the server is shutting down.
+                // The client is done, the header timeout has passed, or the server is shutting
+                // down. A client that closed its side while the last answer waited for it to
+                // read has left (`poll_head`): the answers before that one are sent if none of
+                // it has gone, and otherwise it is cut short where it is.
                 _ => {
-                    conn.close().await;
+                    if !conn.left || conn.unwrite() {
+                        conn.close().await;
+                    }
                     return false;
                 }
             }
@@ -843,7 +956,7 @@ where
             asked.keep_alive = false;
         }
         // The answer's head, written without a wait: its parts are not held across one.
-        let (mut body, mark, written) = {
+        let (mut body, written) = {
             let (mut parts, body) = answer.into_parts();
             let known = {
                 use http_body::Body;
@@ -859,12 +972,12 @@ where
                 turn = 0;
             }
             conn.lend();
-            let mark = conn.mark();
+            conn.begun = conn.mark();
             let written = head::write(&mut conn.out, parts.status, parts.version, &mut parts.headers, known, asked);
             if written.is_ok() {
                 conn.cached = Some(std::mem::take(&mut parts.headers));
             }
-            (body, mark, written.ok())
+            (body, written.ok())
         };
         let Some((mut coding, mut last)) = written else {
             conn.close().await;
@@ -879,10 +992,11 @@ where
             });
             match wrote.await {
                 Ok(goes_on) => last |= !goes_on,
-                // The answer cannot be finished. If none of it has gone, the client gets the
-                // answers before it and no part of this one, as with hyper; otherwise what it
-                // has is cut short.
-                Err(_) if conn.unwrite(mark) => {
+                // The answer cannot be finished: its body failed, or its client left while it
+                // waited for the body or for the client to read. If none of it has gone, the
+                // client gets the answers before it and no part of this one, as with hyper;
+                // otherwise what it has is cut short.
+                Err(_) if conn.unwrite() => {
                     conn.close().await;
                     return false;
                 }
@@ -896,21 +1010,16 @@ where
         conn.unflushed = true;
         // A piece too large to copy goes out before anything is written behind it, and so does a
         // full buffer: a client that sends requests and reads no answers is not answered further.
-        if conn.large.is_some() || conn.out.len() - conn.sent >= FLUSH_AT {
-            let sent = poll_fn(|cx| {
-                let sent = conn.poll_send(cx);
-                conn.waited |= sent.is_pending();
-                sent
-            });
-            if sent.await.is_err() {
-                return false;
-            }
+        // A client that closes its side while the answer waits for it to read is given up there
+        // (`deliver`), in each of the three waits below.
+        if (conn.large.is_some() || conn.out.len() - conn.sent >= FLUSH_AT) && !conn.deliver().await {
+            return false;
         }
         turn += 1;
         if turn == TURN && !last {
             // A client that keeps sending requests does not keep the thread: what is written goes
             // out, and other tasks run.
-            if conn.send().await.is_err() {
+            if !conn.deliver().await {
                 return false;
             }
             tokio::task::yield_now().await;
@@ -920,7 +1029,9 @@ where
         // one that began before its head was written does (above): no request behind it is
         // begun, whether it has been read or not, as hyper begins none once it is told.
         if last || closing.load(Relaxed) {
-            conn.close().await;
+            if conn.deliver().await {
+                conn.close().await;
+            }
             return false;
         }
     }

@@ -5,8 +5,9 @@
 //! `http` types by the same constructors (`proto/h1/role.rs`, `Server::parse`, in hyper 1.12). So
 //! what is refused is what hyper refuses, at the same byte: a folded header line, whitespace
 //! before a header's colon, a bare CR, NUL and other control bytes, a method that is not a token,
-//! a version that is not `HTTP/1.0` or `HTTP/1.1`, more than 100 headers; and what is accepted is
-//! what it accepts (empty lines before the request line, a bare LF for a line end).
+//! a version that is not `HTTP/1.0` or `HTTP/1.1`, more than 100 headers, a target or a header
+//! name longer than `http` has a type for; and what is accepted is what it accepts (empty lines
+//! before the request line, a bare LF for a line end).
 //!
 //! What a head says about a body is not read here at all. A head with a `Content-Length`, a
 //! `Transfer-Encoding`, an `Expect` or an `Upgrade` line, whatever the line says, and any
@@ -35,6 +36,9 @@ use http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Versi
 const MAX_HEADERS: usize = 100;
 /// The longest request target, as hyper's (`MAX_URI_LEN`): what `http::Uri` can hold.
 const MAX_URI: usize = (u16::MAX - 1) as usize;
+/// The longest header name, as hyper's (`record_header_indices` refuses one of 64 KiB): what
+/// `http::HeaderName` can hold.
+const MAX_NAME: usize = u16::MAX as usize;
 /// What a client opens an HTTP/2 connection with: refused without an answer, as hyper does.
 const H2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -153,6 +157,11 @@ pub(crate) fn scan(bytes: &[u8], limit: usize, indices: &mut Vec<Indices>) -> Re
     let mut hyper = method == Method::CONNECT;
     indices.clear();
     for header in req.headers.iter() {
+        // As hyper, where it notes each line's place (`record_header_indices`): a name `http`
+        // has no `HeaderName` for is a head too long, whatever the app's limit.
+        if header.name.len() > MAX_NAME {
+            return Err(Refusal::TooLarge);
+        }
         hyper |= hypers(header.name.as_bytes()) || (!http11 && keeps(header.name.as_bytes(), header.value));
         let (name, value) = (place(header.name.as_bytes())?, place(header.value)?);
         indices.push((name.0, name.1, value.0, value.1));

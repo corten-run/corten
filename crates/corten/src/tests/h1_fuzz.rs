@@ -43,7 +43,8 @@
 //!    than the limit, and other bytes in reads of other sizes, so the same stream can be cut
 //!    differently for it. The class is of that head and not of the stream: the bytes sent from
 //!    where the first request neither server answered begins are as many as the limit
-//!    ([`unanswered_from`]), whatever was sent and answered before them.
+//!    ([`unanswered_from`]), whatever was sent and answered before them, and no head ends in
+//!    the first that many of them ([`head_ends`]), whatever was sent behind it.
 //!
 //! The servers of a run are on one thread, the run's own, over pipes in memory, with tokio's time
 //! paused: a client that waits for the server to go quiet waits until every task is idle, not for
@@ -381,13 +382,24 @@ fn unanswered_from(sent: &[u8], answered: usize) -> Option<usize> {
     Some(at)
 }
 
+/// Whether a head ends in `bytes`: an empty line behind its first line, with a CRLF or a bare LF
+/// for a line end, as the parser both servers use takes one. The empty lines before a request
+/// line end no head.
+fn head_ends(mut bytes: &[u8]) -> bool {
+    while let Some(rest) = bytes.strip_prefix(b"\r\n").or_else(|| bytes.strip_prefix(b"\n")) {
+        bytes = rest;
+    }
+    bytes.windows(2).any(|pair| pair == b"\n\n") || bytes.windows(3).any(|three| three == b"\n\r\n")
+}
+
 /// Whether the head the servers refused reaches `limit`: the bytes sent from where the first
-/// request they did not answer begins are that many. `sent`: the stream, with the last request
-/// if it was sent.
+/// request they did not answer begins are that many, and no head ends in the first that many of
+/// them (a head that ends there is whole and shorter than the limit, whatever was sent behind
+/// it). `sent`: the stream, with the last request if it was sent.
 fn refused_head_reaches(sent: &[u8], hyper: &Outcome, limit: usize) -> bool {
     // The refusal is the last of the answers, and the ones before it are of whole requests.
     let answered = (answers(&hyper.before.0).len() + answers(&hyper.after.0).len()).saturating_sub(1);
-    unanswered_from(sent, answered).is_some_and(|from| sent.len() - from >= limit)
+    unanswered_from(sent, answered).is_some_and(|from| sent.len() - from >= limit && !head_ends(&sent[from..from + limit]))
 }
 
 /// `reaches_limit`: the head the servers refused is as long as the app's limit on a head, or
@@ -1298,9 +1310,8 @@ async fn an_answer_that_waits_for_its_client_is_cut_when_the_client_closes_its_s
     const READ: usize = 2_000;
     static PIECE: [u8; 20 * 1024] = [b'p'; 20 * 1024];
     let app = || {
-        let pieces = |count: usize| {
-            futures_util::stream::iter((0..count).map(|_| Ok::<_, std::io::Error>(Bytes::from_static(&PIECE))))
-        };
+        let pieces =
+            |count: usize| futures_util::stream::iter((0..count).map(|_| Ok::<_, std::io::Error>(Bytes::from_static(&PIECE))));
         // Its second piece comes long after a client of this test has closed its side.
         let drip = move || async move {
             let later = async {
@@ -1318,11 +1329,13 @@ async fn an_answer_that_waits_for_its_client_is_cut_when_the_client_closes_its_s
     };
     let (hyper, own) = (serve_app(app(), false, 32 * 1024), serve_app(app(), true, 32 * 1024));
     // What a client receives that reads `READ` bytes and then, if it does not stay, closes its
-    // side, at once or a moment later, and reads to the end.
-    let receive = |connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, path: &str, stays: bool, later: bool| {
+    // side, at once or a moment later, and reads to the end. `asks`: its request asks for the
+    // connection to be closed behind the answer, which a client that stays always does.
+    type Connect = tokio::sync::mpsc::UnboundedSender<DuplexStream>;
+    let receive = |connect: &Connect, path: &str, stays: bool, asks: bool, later: bool| {
         let (mut client, server) = tokio::io::duplex(PIPE);
         connect.send(server).expect("the server is listening");
-        let close = if stays { "connection: close\r\n" } else { "" };
+        let close = if stays || asks { "connection: close\r\n" } else { "" };
         let request = format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n{close}\r\n");
         async move {
             client.write_all(request.as_bytes()).await.unwrap();
@@ -1341,11 +1354,13 @@ async fn an_answer_that_waits_for_its_client_is_cut_when_the_client_closes_its_s
     };
     let paths = [("/whole", 1 << 20), ("/stream", 52 * PIECE.len()), ("/drip", 2 * PIECE.len()), ("/short", 10 * 1024)];
     for (path, least) in paths {
-        let (theirs, ours) = (receive(&hyper, path, true, false).await, receive(&own, path, true, false).await);
+        let (theirs, ours) = (receive(&hyper, path, true, true, false).await, receive(&own, path, true, true, false).await);
         assert!(theirs > least && ours == theirs, "{path}, a client that stays: {ours} bytes and hyper's {theirs}");
-        for later in [false, true] {
-            let (theirs, ours) = (receive(&hyper, path, false, later).await, receive(&own, path, false, later).await);
-            let name = format!("{path}, the client's end {}", if later { "a moment later" } else { "at once" });
+        for (asks, later) in [(false, false), (false, true), (true, false), (true, true)] {
+            let theirs = receive(&hyper, path, false, asks, later).await;
+            let ours = receive(&own, path, false, asks, later).await;
+            let when = if later { "a moment later" } else { "at once" };
+            let name = format!("{path}, the client's end {when}, asks to close: {asks}");
             assert_eq!(ours, theirs, "{name}: bytes sent before the answer was cut");
             assert!((PIPE..=PIPE + READ).contains(&ours), "{name}: {ours} bytes");
         }
@@ -1361,6 +1376,13 @@ async fn an_answer_that_waits_for_its_client_is_cut_when_the_client_closes_its_s
 /// meets this only where a handler's wait ends as its client closes (eight streams of its long
 /// run did, while Corten's connection looked only after a wait); here the client's end is in the
 /// pipe with the request before the server is given the connection.
+///
+/// That is the rule where a read says all that has arrived, as a pipe's does. A socket just
+/// accepted can say less: tokio takes it for readable before its first event has come, so the
+/// first read can take the requests with nothing yet known of the client's end behind them, and
+/// then the last request is answered as well, by both connections alike, which learn of the end
+/// when their task next waits. On a connection the server already holds, a socket says what a
+/// pipe does (`tests::h1::answers_made_are_sent_before_the_connection_closes` has both).
 #[tokio::test(start_paused = true)]
 async fn a_request_that_comes_with_its_clients_end_is_answered_by_neither() {
     let get = |path: &str| format!("GET {path} HTTP/1.1\r\nhost: localhost\r\n\r\n");
