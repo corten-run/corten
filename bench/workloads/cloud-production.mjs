@@ -261,7 +261,12 @@ export function productionDispatch({ processRun, provider, interrupted, historic
       }
     }
     let result, failure;
-    try { result = args[0] === "doctl" ? await provider()(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
+    // An in-process provider engine awaits once more before its request, so it receives the
+    // same guard and calls it after that await. The private provider worker is another
+    // process: a function cannot cross its IPC, so there the fence above is the last one.
+    const send = (argv, ...rest) => guardDispatch === undefined ? provider()(argv, ...rest)
+      : provider()(argv, rest[0], rest[1], rest[2], rest[3], guardDispatch);
+    try { result = args[0] === "doctl" ? await send(...args.slice(1, 6)) : await processRun(...args); } catch (error) { failure = error; }
     if (creating && result === unsentCreate) return result;
     // Hand custody back before cancellation: take the stream handle, record
     // the acknowledged command exit, or clear a positively unsent DELETE.

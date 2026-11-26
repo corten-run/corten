@@ -1454,12 +1454,26 @@ The v1, unused and pinned unused receipts keep their exclusive direct writes.
 
 The bytes this process wrote, not the file, are the authority for the DELETE.
 After publication the receipt is read back and must match that digest before
-the intent is saved, and again after the DELETE's account preflight, before the
-controller hands the DELETE to its transport. The production transport awaits a
-cancellation checkpoint before dispatch, so the same check also runs in the
-dispatch guard it calls after that checkpoint, immediately before the request
-goes to the provider worker; there it runs before a pinned retirement's own
-guard and refuses by throwing, never by reporting the request unsent. A receipt edited before the intent refuses with
+the intent is saved. After the intent, every retirement kind (unused, pinned
+unused and failed-setup v1, v2 and v3) checks, as this process left them, the
+receipt, the saved reservation (`state.json`, byte for byte, so including its
+retirement digest), for a v2 or v3 receipt the archived control custody its proof
+was built from (the inventory and bytes of the evidence's `control/` folder,
+including every watcher failure) and this process's own `operation.lock` (the
+file it created, by identity and bytes). The check runs after the DELETE's account
+preflight, before the controller hands the DELETE to its transport, and again in
+the dispatch guard the transport calls after its last local await before the
+request: the production transport's cancellation checkpoint, and, for an
+in-process provider engine, the engine's own checkpoint before its REST request.
+There it runs before a pinned retirement's own guard and refuses by throwing,
+never by reporting the request unsent. The production provider worker is a
+separate process and a function cannot cross its IPC, so in production the last
+fence is the controller's, immediately before the action is sent to the worker; the
+worker's own checkpoint and the IPC transit are not covered, and nothing covers
+the interval between the request leaving and the provider acting on it. A change
+there refuses with `saved retirement reservation changed; preserve host`,
+`archived control custody changed; preserve host` or `operation.lock changed;
+preserve custody` and sends no DELETE. A receipt edited before the intent refuses with
 `published retirement receipt differs from the bytes written; preserve host`,
 saving no intent; its recorded digest stays, so a later collect refuses it as an
 interrupted receipt that differs from its recorded digest. Edited after the
@@ -2175,7 +2189,11 @@ grouped attempts. `groups-rN/` is the exclusive durable reservation; even failed
 preflight consumes it. An unresolved reservation blocks another round in that root.
 The root launch lock and round operation lock are exclusive files with process
 identity, synced before work. No PID liveness guess, stale-lock removal or takeover
-is automatic. A killed process may leave both locks. Inspect the exact process and
+is automatic. A controller removes a lock it took only while that path is still
+the file it created, with its bytes: if the lock was replaced during the
+operation, teardown keeps the replacement and refuses with `<lock> was replaced
+during this operation; the replacement is kept; preserve custody`, with any
+earlier refusal as its cause. A killed process may leave both locks. Inspect the exact process and
 all state/evidence before any operator recovery; never relaunch the reserved round.
 
 State writes use exclusive temporary files, file fsync, atomic rename and directory

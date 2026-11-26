@@ -9,7 +9,7 @@ import { basename, join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
-import { accountId, archive, campaign, commit, context, harness, metadata, subject, syntheticDelivery, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { accountId, archive, campaign, commit, context, harness, metadata, subject, syntheticDelivery, syntheticInspection, syntheticPlacement, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerFailure, controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest, treeHash } from "./cloud-local.mjs";
@@ -17,6 +17,7 @@ import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 import setupDrainSource from "./cloud-setup-drain-source.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { productionDispatch } from "./cloud-production.mjs";
+import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { recheckSetupRetirement, verifyFleet } from "./fleet-verify.mjs";
 import { continuationAdmission } from "./group-continuation.mjs";
 import { SetupWatcherProofMissing, verifyFailedSetupRetirement } from "./cloud-retirement.mjs";
@@ -487,7 +488,8 @@ const receiptName = /^failed-setup-host\.json(?:\.stage)?$/, historyName = /^fai
 // exit archive holds a real watch-failure and no receipt for it.
 for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refused", "invalid-proof", "delete-expired", "delete-in-time", "receipt-expired", "receipt-expired-kept", "receipt-expired-rebound", "receipt-expired-edited", "receipt-expired-unrecorded",
   "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished",
-  "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn"]) test({
+  "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn",
+  "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "receipt-edited-at-engine", "engine-unchanged"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -509,6 +511,11 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-at-dispatch": "a receipt edited during the production dispatch checkpoint refuses at the dispatch guard and sends no DELETE",
   "dispatch-unchanged": "an unchanged receipt passes the production dispatch guard and sends exactly one DELETE",
   "pending-save-torn": "a torn save of the receipt digest leaves its own stage, and the next collect retires on a fresh proof",
+  "state-edited-at-dispatch": "a saved retirement digest edited during the production dispatch checkpoint refuses and sends no DELETE",
+  "custody-edited-at-dispatch": "an archived watcher record edited during the production dispatch checkpoint refuses and sends no DELETE",
+  "lock-replaced-at-dispatch": "an operation lock replaced during the production dispatch checkpoint refuses, sends no DELETE and keeps the replacement",
+  "receipt-edited-at-engine": "a receipt edited at the in-process provider engine's checkpoint refuses there and sends no DELETE",
+  "engine-unchanged": "an unchanged receipt passes the provider engine's guard and sends exactly one DELETE",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -634,6 +641,65 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(saved.retirement.evidenceSha256, digest(edited)); assert.notEqual(digest(readFileSync(receipt)), digest(edited));
     await assert.rejects(h.task({ run: production }).collect(), /retirement evidence changed/);
     assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (["state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch"].includes(mode)) {
+    // Each edit lands inside the production dispatch checkpoint, after the controller's last
+    // check before run(), on something other than the receipt the DELETE relies on.
+    const statePath = join(h.local, "state.json"), replacement = `${JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z" })}\n`;
+    let deleting = false, changed;
+    const change = () => {
+      const s = h.saved();
+      if (mode === "state-edited-at-dispatch") {
+        changed = readFileSync(statePath); s.retirement.evidenceSha256 = "0".repeat(64);
+        writeFileSync(statePath, `${JSON.stringify(s, null, 2)}\n`);
+      } else if (mode === "custody-edited-at-dispatch") {
+        const record = join(h.local, s.evidence, "control", `watch-failure-${failed.id}.json`);
+        changed = readFileSync(record); writeFileSync(record, Buffer.concat([changed, Buffer.from(" ")]));
+      } else {
+        changed = readFileSync(lock); unlinkSync(lock); writeFileSync(lock, replacement);
+      }
+    };
+    const dispatch = productionDispatch({ processRun: run, provider: () => (...args) => run("doctl", ...args),
+      interrupted: () => { if (deleting && !changed) change(); return false; } });
+    const production = (...args) => { if (args[0] === "doctl" && args[1][2] === "delete") deleting = true; return dispatch(...args); };
+    await assert.rejects(h.task({ run: production }).collect(), {
+      "state-edited-at-dispatch": /saved retirement reservation changed; preserve host/,
+      "custody-edited-at-dispatch": /archived control custody changed; preserve host/,
+      "lock-replaced-at-dispatch": /operation\.lock was replaced during this operation; the replacement is kept; preserve custody/,
+    }[mode]);
+    assert.ok(changed); assert.ok(deleting); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(h.saved().destroyedAt, undefined);
+    if (mode === "lock-replaced-at-dispatch") {
+      // Teardown leaves the replacement for its owner, and nothing runs past it.
+      assert.equal(readFileSync(lock, "utf8"), replacement);
+      await assert.rejects(h.task({ run: production }).collect());
+      assert.equal(readFileSync(lock, "utf8"), replacement);
+    } else assert.equal(existsSync(lock), false);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (mode === "receipt-edited-at-engine" || mode === "engine-unchanged") {
+    // Provider commands go through a real in-process engine, whose own checkpoint runs after
+    // the production dispatch guard. The edit lands at the engine's checkpoint for the DELETE.
+    let engineDeleting = false;
+    const engine = createProviderEngine({ repo: h.repo, spawn: () => ({ status: 0, stdout: Buffer.from("SYNTHETIC_ONLY_CREDENTIAL_A\n") }),
+      request: syntheticProviderRequest(h), sleep: async () => {},
+      interrupted: () => { if (engineDeleting && !edited && mode === "receipt-edited-at-engine") editReceipt(); return false; } });
+    const provider = (argv, ...rest) => { engineDeleting = argv[2] === "delete"; return engine(argv, ...rest); };
+    const production = productionDispatch({ processRun: run, provider: () => provider, interrupted: () => false });
+    if (mode === "engine-unchanged") {
+      assert.equal(await h.task({ run: production }).collect(), 1);
+      const s = h.saved();
+      assert.equal(edited, undefined); assert.equal(queries, 1);
+      assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+      assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+      return;
+    }
+    await assert.rejects(h.task({ run: production }).collect(), /published retirement receipt differs from the bytes written; preserve host/);
+    const saved = h.saved();
+    assert.ok(edited); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
     return;
   }
   if (mode === "pending-save-torn") {

@@ -35,7 +35,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 
-function acquireHandoffLock(path, bytes) {
+function acquireHandoffLock(path, bytes, message = "handoff operation lock changed; preserve custody") {
   const fd = openSync(path, "wx", 0o600);
   let owned;
   try {
@@ -47,7 +47,7 @@ function acquireHandoffLock(path, bytes) {
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
     return current?.isFile() && ["dev", "ino", "birthtimeNs", "ctimeNs", "nlink"].every(key => current[key] === owned[key]);
   };
-  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "handoff operation lock changed; preserve custody");
+  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), message);
 }
 
 const sameStateFile = (a, b) => ["dev", "ino", "birthtimeNs"].every(key => a[key] === b[key]);
@@ -93,6 +93,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
+  // This process's own operation.lock while it holds one: the file it created, unchanged.
+  let assertOperationLock;
   let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -801,9 +803,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     const lockBytes = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
-    if (pinnedRetirement || absenceOnly) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
-    else durable(lock, lockBytes);
+    // Every lock keeps the identity of the file this process created, so neither a dispatch
+    // guard nor teardown can mistake a replacement for it.
+    const handoff = pinnedRetirement || absenceOnly;
+    physical(local);
+    const ownLock = acquireHandoffLock(lock, Buffer.from(lockBytes), handoff ? undefined : `${name} changed; preserve custody`);
+    if (handoff) assertHandoffLock = ownLock;
+    const outerOperationLock = assertOperationLock;
+    if (name === "operation.lock") assertOperationLock = ownLock;
     preserveOperationLock = false;
+    let failure;
     try {
       assertHandoffLock?.();
       state = read(); check();
@@ -814,6 +823,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (recovery) assert.equal(state.control?.monitor?.phase, "invalid", "only irrevocably failed monitoring can recover");
       return await fn();
     }
+    catch (error) { failure = error; throw error; }
     finally {
       try { await settle(); }
       catch (error) {
@@ -823,10 +833,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           diagnostic ? { providerDiagnostic: diagnostic } : {});
       }
       finally {
+        if (name === "operation.lock") assertOperationLock = outerOperationLock;
         if (!preserveOperationLock) {
           if (afterSettle) afterSettle();
           else if (expectedHandoffState !== undefined) assertHandoffState();
           else assertHandoffLock?.();
+          // Never remove a lock this process no longer owns: a replacement stays for its owner.
+          try { ownLock(); }
+          catch (cause) {
+            preserveOperationLock = true;
+            // Report the replacement; an earlier refusal stays as the cause.
+            throw new Error(`${name} was replaced during this operation; the replacement is kept; preserve custody`, { cause: failure ?? cause });
+          }
           unlinkSync(lock); syncDirectory(local);
         }
       }
@@ -1028,7 +1046,31 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     delete state.pendingRetirement;
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs, undefined, undefined, requirePublished);
+    // Everything the DELETE relies on, as this process left it: the receipt, the saved
+    // reservation that names its digest, the archived control custody the proof was built
+    // from (including any watcher failure) and this process's own operation lock. The
+    // transport calls this again after its last local await before the request.
+    const savedState = Buffer.from(stateBytes(state));
+    const custody = recorded ? evidence.observation.control.custody : undefined;
+    const ownLock = assertOperationLock;
+    assert.ok(ownLock, "retirement requires this process's operation lock");
+    const requireRetirementCustody = () => {
+      requirePublished();
+      assert.ok(regular(statePath, 1024 * 1024).equals(savedState), "saved retirement reservation changed; preserve host");
+      if (custody) {
+        try {
+          const directory = join(local, state.evidence, "control"); physical(directory);
+          assert.deepEqual(readdirSync(directory).sort(), custody.map((entry) => entry.name).sort());
+          for (const entry of custody) {
+            const bytes = regular(join(directory, entry.name), 8 * 1024 * 1024);
+            assert.ok(bytes.length === entry.bytes && digest(bytes) === entry.sha256);
+          }
+        } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
+      }
+      ownLock();
+    };
+    requireRetirementCustody();
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);
     await confirmDeleted();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };
