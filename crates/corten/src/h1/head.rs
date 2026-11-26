@@ -611,6 +611,23 @@ mod tests {
         assert_eq!(text(4_102_444_800), "Fri, 01 Jan 2100 00:00:00 GMT");
     }
 
+    /// The same text as `httpdate` writes, the crate hyper writes its `Date` with: for a time of
+    /// each day from 1970 to 2200, at a different second of each, and for every second of the
+    /// four days around a leap day and of the two around a year's end.
+    #[test]
+    fn a_date_is_written_as_hypers_formatter_writes_it() {
+        let days = (0..7_260_000_000u64).step_by(86_413);
+        let leap = 1_709_078_400..1_709_078_400 + 4 * 86_400;
+        let years_end = 1_798_675_200..1_798_675_200 + 2 * 86_400;
+        let mut compared = 0;
+        for seconds in days.chain(leap).chain(years_end) {
+            let theirs = httpdate::fmt_http_date(UNIX_EPOCH + Duration::from_secs(seconds));
+            assert_eq!(imf_fixdate(seconds).as_slice(), theirs.as_bytes(), "{seconds} seconds since 1970");
+            compared += 1;
+        }
+        assert!(compared > 600_000, "{compared} times compared");
+    }
+
     #[test]
     fn a_chunks_size_is_upper_case_hexadecimal() {
         let size = |length| {

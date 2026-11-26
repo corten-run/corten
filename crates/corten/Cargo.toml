@@ -119,3 +119,6 @@ tower = { version = "0.5", features = ["util"] }
 serde = { version = "1", features = ["derive", "rc"] }
 # The tests compare src/log.rs's lines, colors included, with this crate's.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
+# The tests compare the `Date` Corten's own HTTP/1.1 connection writes (src/h1/head.rs) with this
+# crate's, which hyper writes its own with and has in its tree at this version.
+httpdate = "1"
