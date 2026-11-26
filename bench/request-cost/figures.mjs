@@ -79,3 +79,15 @@ export function held({ connections, before, after, closed, accepted }) {
   if (accepted !== connections) throw new Error(`not a measurement: the probe held ${accepted} more open files for ${connections} connections`);
   return Math.round((after - before) / connections);
 }
+
+/**
+ * The smallest difference in bytes a connection an idle reading can show: resident memory moves a
+ * page at a time, so one page over the connections, rounded up to the whole byte the reading is
+ * printed in. Two readings that differ by no more than this may differ by one page and nothing
+ * else.
+ * @param {{ connections: number, page: number }} run
+ */
+export function resolution({ connections, page }) {
+  if (!Number.isInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
+  return Math.ceil(page / connections);
+}

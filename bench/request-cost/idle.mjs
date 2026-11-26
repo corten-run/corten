@@ -7,7 +7,8 @@
 // Starts the probe (not under callgrind), opens the connections one after another, sends one
 // request of the case on each (or `--requests` of them, each after the answer before it) and
 // reads its answer (`--silent`: sends nothing), waits a second with nothing sent, and divides
-// the growth of the process's resident memory (VmRSS) by the connections. The kernel's socket
+// the growth of the process's resident memory (VmRSS) by the connections. It prints what the
+// figure is read to: one page (`getconf PAGESIZE`) over the connections, rounded up. The kernel's socket
 // buffers are not the process's and are not counted. A run prints no figure when an answer was
 // not the case's or did not come in 30 seconds, when the probe had closed a connection, or when
 // its open files did not grow by the number of connections.
@@ -18,7 +19,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { held, resident } from "./figures.mjs";
+import { spawnSync } from "node:child_process";
+import { held, resident, resolution } from "./figures.mjs";
 import { Connection, send, start } from "./probe.mjs";
 import { cases, named } from "./requests.mjs";
 
@@ -48,6 +50,12 @@ const port = whole("port", values.port);
 if (addresses > 254) throw new Error("--addresses takes at most 254");
 const [name] = /** @type {[string]} */ (named(values.case));
 const { configuration } = /** @type {typeof cases[string]} */ (cases[name]);
+
+// Resident memory moves a page at a time, so a reading resolves one page over the connections.
+const pageSize = spawnSync("getconf", ["PAGESIZE"], { encoding: "utf8" });
+const page = Number(pageSize.stdout?.trim());
+if (pageSize.status !== 0 || !Number.isInteger(page) || page <= 0) throw new Error("getconf PAGESIZE did not give the page size");
+const step = resolution({ connections, page });
 
 const probe = await start(binary, configuration, { cpu: values.cpu, port });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
@@ -85,7 +93,7 @@ try {
     throw new Error(`${/** @type {Error} */ (error).message} (they took ${took} to open)`);
   }
   const what = values.silent ? "sent nothing" : `answered ${requests} ${name}`;
-  console.log(`${bytes} bytes a connection (${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
+  console.log(`${bytes} bytes a connection, read to ${step} (one ${page}-byte page over ${connections} that ${what}, opened in ${took}; ${before} before, ${after} after)`);
 } finally {
   await probe.stop();
 }

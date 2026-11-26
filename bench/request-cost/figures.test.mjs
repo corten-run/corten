@@ -1,7 +1,7 @@
 // node --test bench/request-cost/figures.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { COUNTED, TICK, WARM, alone, each, held, median, resident, sent, ticks } from "./figures.mjs";
+import { COUNTED, TICK, WARM, alone, each, held, median, resident, resolution, sent, ticks } from "./figures.mjs";
 
 test("a connection answers 240 requests before the 1,000 that are counted", () => {
   assert.deepEqual([WARM, COUNTED], [240, 1000]);
@@ -65,4 +65,14 @@ test("an idle reading is the growth over the connections, and only of a run that
   assert.throws(() => held({ ...run, closed: 1 }), /had closed 1 of the 5000 connections/);
   assert.throws(() => held({ ...run, accepted: 1014 }), /held 1014 more open files for 5000 connections/);
   assert.throws(() => held({ ...run, accepted: 5001 }), /held 5001 more open files/);
+});
+
+test("an idle reading is read to one page over its connections, rounded up to a whole byte", () => {
+  assert.equal(resolution({ connections: 5000, page: 4096 }), 1);
+  assert.equal(resolution({ connections: 4096, page: 4096 }), 1);
+  assert.equal(resolution({ connections: 4095, page: 4096 }), 2);
+  assert.equal(resolution({ connections: 40, page: 4096 }), 103);
+  assert.equal(resolution({ connections: 5000, page: 65536 }), 14);
+  assert.throws(() => resolution({ connections: 5000, page: 0 }), /not one/);
+  assert.throws(() => resolution({ connections: 5000, page: NaN }), /not one/);
 });

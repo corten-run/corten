@@ -113,7 +113,8 @@ node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
    many they were (`243 in 1`). [How a number is read](#how-a-number-is-read) says what each
    is for.
 3. `--allocations` prints allocations and frees a request, and the calls they are made of.
-4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`). One client
+4. `idle.mjs` prints bytes a connection for 5,000 connections (`--connections`), and what that
+   figure is read to (Idle memory, below). One client
    address has ports for about 28,000: for more, `--addresses` spreads them over that many
    loopback addresses, and both processes must be allowed that many open files (`ulimit -n`).
 
@@ -202,7 +203,10 @@ allocates for each request, so it is not a profile of them.
 client then opens the connections one after another, sends what the case says on each and reads
 the answers, and waits a second. The growth of the process's `VmRSS` over those connections,
 divided by their number, is the figure. The kernel's socket buffers are not the process's and
-are not in it.
+are not in it. Resident memory moves a page at a time, so the figure is read to one page
+(`getconf PAGESIZE`, 4,096 bytes on x86-64 Linux) over the connections, rounded up to a whole
+byte, which the run prints beside it: 1 byte for 5,000 connections. Two readings within that of
+each other may differ by one page and nothing else.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as

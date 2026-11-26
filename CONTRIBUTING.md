@@ -557,7 +557,8 @@ establish a general ranking.
       case's instructions a request rise by more than +0.5% of base's (the budget, by the
       medians the kit prints), no case's allocations a request rise, and idle memory does not
       rise: each idle reading is taken three times on each build, and head's median is not
-      above base's by more than base's three span. The description gives every figure of every
+      above base's by more than the larger of base's three span and what the reading is read to
+      (one page over the connections, which `idle.mjs` prints beside each figure). The description gives every figure of every
       run for both builds, and says why the change is none of the kinds above, which the review
       accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
       it may be taken again, and the description gives the refusal and the kit's reason for

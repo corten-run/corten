@@ -175,7 +175,7 @@ test("count.mjs --allocations prints calls a request, and no figure for a dump w
 test("idle.mjs prints a figure when the probe's open files grew by the connections, counted from after the warm ones closed", { skip }, async () => {
   const run = await running("idle.mjs", ["--connections", "40"]);
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^-?\d+ bytes a connection \(40 that answered 1 pipeline, opened in \d+\.\d s; \d+ before, \d+ after\)$/m);
+  assert.match(run.stdout, /^-?\d+ bytes a connection, read to \d+ \(one \d+-byte page over 40 that answered 1 pipeline, opened in \d+\.\d s; \d+ before, \d+ after\)$/m);
 });
 
 test("idle.mjs prints no figure when a connection's answer is not the case's", { skip }, async () => {
