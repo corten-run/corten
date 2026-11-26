@@ -422,7 +422,10 @@ uses the pre-phase census cutoff instead.
 Both uptime and the monotonic apparatus samples must support the wait. Cancellation
 keeps the first-after inventory and skips the second census. Exact cgroup, parent
 PID/start identity and matching executable path, device and inode are required, not
-just the worker name. Saved replay uses the measured checkout and requires cleanup
+just the worker name. On hosts where
+[systemd-udevd links to udevadm](https://github.com/systemd/systemd-stable/blob/v255.4/src/udev/meson.build),
+procfs may report `/usr/bin/udevadm` for the daemon and its workers. That path
+alone establishes neither role nor cleanup. Saved replay uses the measured checkout and requires cleanup
 proof before accepting JSON audit readiness. A surviving or replacement worker,
 uncertain timing or ownership, a new login or benchmark process, or a changed Docker
 baseline still stops sequencing. This does not alter a measured window, prove the

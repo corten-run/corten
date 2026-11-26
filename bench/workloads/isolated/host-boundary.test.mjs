@@ -83,9 +83,9 @@ test("kernel exemptions do not relax boot, host, container or network boundaries
     assert.throws(() => verifyHostBoundary(before, { ...after(kernel()), ...change }));
 });
 
-function udevBoundaries() {
+function udevBoundaries(executable = "/usr/lib/systemd/systemd-udevd") {
   const cgroup = "0::/system.slice/systemd-udevd.service/udev\n";
-  const udevExecutable = { path: "/usr/lib/systemd/systemd-udevd", device: "2049", inode: "10" };
+  const udevExecutable = { path: executable, device: "2049", inode: "10" };
   const daemon = { pid: 846, startTicks: "812", stat: stat(846, "812", "4194560", "systemd-udevd", "1", "S"), cgroup, udevExecutable };
   const worker = { pid: 62274, startTicks: "209603", stat: stat(62274, "209603", "4194624", "(udev-worker)", "846", "S"), cgroup, udevExecutable };
   const apparatusPids = [...registration.members, registration.listener].map((p) => ({
@@ -258,6 +258,28 @@ test("udev collector retains executable evidence only bound to the same PID and 
     assert.deepEqual(observeHost(undefined, true).processes[1], {
       pid: worker.pid, startTicks: worker.startTicks, cgroup: worker.cgroup, stat: worker.stat,
     });
+  } finally { procFiles = null; }
+});
+
+test("udevadm-backed daemon and workers can settle only with matching executable evidence", () => {
+  const { baseline, first, settled, terminal } = udevBoundaries("/usr/bin/udevadm");
+  const [daemon, worker] = first.processes;
+  procFiles = new Map([daemon, worker].flatMap((p) => [
+    [`/proc/${p.pid}/stat`, p.stat], [`/proc/${p.pid}/cgroup`, p.cgroup],
+    [`/proc/${p.pid}/exe`, { executable: p.udevExecutable.path, metadata: { dev: 2049n, ino: 10n } }],
+  ]));
+  try {
+    const captured = observeHost(undefined, true).processes;
+    assert.deepEqual(captured, [daemon, worker]);
+    const saved = { ...first, processes: [...captured, ...first.processes.slice(2)] };
+    assert.throws(() => verifyHostBoundary(baseline, saved), /new persistent host processes remain: 1/);
+    assert.deepEqual(verifySettledHostBoundary(baseline, saved, settled, terminal).settledUdevWorkers,
+      [{ pid: worker.pid, startTicks: worker.startTicks }]);
+    for (const [executable, ino] of [["/tmp/udevadm", 10n], ["/usr/bin/udevadm", 11n]]) {
+      procFiles.set(`/proc/${worker.pid}/exe`, { executable, metadata: { dev: 2049n, ino } });
+      const replay = { ...first, processes: [...observeHost(undefined, true).processes, ...first.processes.slice(2)] };
+      assert.equal(udevSettleCandidates(baseline, replay, terminal), null);
+    }
   } finally { procFiles = null; }
 });
 
