@@ -558,7 +558,10 @@ establish a general ranking.
       medians the kit prints), no case's allocations a request rise, and idle memory does not
       rise: each idle reading is taken three times on each build, all six with the same
       connections, case, requests and page size (each run prints them) and the same `--addresses`
-      (which it does not print, so the description names it), and the median of head's three growths of
+      (which it does not print, so the description names it), over at least as many connections as
+      the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
+      pages, over `--addresses 3`), so one page is at most a byte a connection, since a reading over
+      fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
       resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
       than the larger of base's three span and one page (the size it prints, the step resident
       memory is reported in); the figures a connection are rounded and do not decide it. The

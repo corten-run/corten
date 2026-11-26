@@ -11333,7 +11333,9 @@ rules something out.
     of head's growths of resident memory, in bytes, is above base's by more than the larger of
     base's three span and one page. Resident memory is reported a page at a time, so base's
     three can agree exactly and one page is the least step a run can show; one page is the
-    least allowed, the step of the reading, not a measured bound on its accuracy. The figures a
+    least allowed, the step of the reading, not a measured bound on its accuracy, and only over at
+    least as many connections as a page has bytes, so it is at most a byte a connection; a reading
+    over fewer decides nothing. The figures a
     connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
     head read 1 byte a connection above base's three equal figures, which one page or two can
@@ -11415,7 +11417,9 @@ rules something out.
     binary and never to be compared with another's; the kit's probe builds against the last
     release's tag often enough for a release's count to be taken, which was not tried; and the
     trend is made before counted costs add up past what a release can carry, no such run
-    having been made); measured (the kit's repeats as its page records them, 30 counts of one
+    having been made; and a rise of one page over base's three when they agree, at most a byte a
+    connection at the gate's settings, is too small a regression to refuse a change for, which
+    no reading has tested); measured (the kit's repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
     and 22 counts of four cases on a slower, loaded machine, none taken again here; the
@@ -11438,6 +11442,8 @@ rules something out.
     record them, whose count is the baseline, the changes before it not having been counted,
     or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
+    a rise of one page at the gate's settings is shown to repeat for a change, so the page let
+    pass hides a real regression;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the

@@ -209,7 +209,9 @@ over 5,000 with 4,096-byte pages (13 with 65,536-byte ones), is the least they c
 its accuracy. The run prints the growth in bytes and the page
 size beside the figure, and CONTRIBUTING's gate compares the growths, not the figures, which are
 rounded: two pages more can round to one byte a connection more. [`idleRise`](figures.mjs) is
-that comparison.
+that comparison, and it refuses readings over fewer connections than a page has bytes, where one
+page is more than a byte a connection: over 40, one 4,096-byte page is 102 bytes a connection, a
+step the gate would let pass unseen.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as

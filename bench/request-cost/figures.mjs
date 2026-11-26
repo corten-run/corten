@@ -86,12 +86,17 @@ export function held({ connections, before, after, closed, accepted }) {
  * which are rounded. Head rises when the median of its three growths is above base's by more than
  * the larger of base's three span and one page: resident memory moves a page at a time, so a
  * difference of one page is the least a reading can show, and the span is what base's own
- * readings moved by. One page is the least allowed, not the most.
- * @param {{ base: number[], head: number[], page: number }} readings three growths in bytes each,
- *   and the page size in bytes (`getconf PAGESIZE`)
+ * readings moved by. One page is the least allowed, not the most, and it is allowed only over at
+ * least as many connections as a page has bytes, so it is at most a byte a connection: over
+ * fewer, a page is a coarser step than the gate lets pass, and the readings decide nothing.
+ * @param {{ base: number[], head: number[], page: number, connections: number }} readings three
+ *   growths in bytes each, the page size in bytes (`getconf PAGESIZE`) and the connections all six
+ *   runs opened
  */
-export function idleRise({ base, head, page }) {
+export function idleRise({ base, head, page, connections }) {
   if (!Number.isSafeInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
+  if (!Number.isSafeInteger(connections) || connections <= 0) throw new Error(`${connections} connections are not a count of them`);
+  if (connections < page) throw new Error(`not a gate reading: one ${page}-byte page over ${connections} connections is more than a byte a connection; open at least ${page}`);
   for (const [side, growths] of /** @type {const} */ ([["base", base], ["head", head]])) {
     if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
     for (const growth of growths) if (!Number.isInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
