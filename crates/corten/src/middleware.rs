@@ -294,8 +294,9 @@ fn filled(
 pin_project_lite::pin_project! {
     /// The route's answer (its page filled), which marks the request's signal as the stages hold
     /// it when the answer drew a form's new submit key (`crate::cache::Unrepeatable`, put on by the
-    /// render that drew it or the watch around a `Public` handler). The route marks the signal its
-    /// request carries, and a middleware may have given it one it made, with no signal or another
+    /// render that drew it or the watch around a `Public` handler, which marks only the answer). A
+    /// render marks the signal its request carries too, and a middleware may have given it one it
+    /// made, with no signal or another
     /// one: the stages read theirs before they settle the answer, so a middleware that then makes a
     /// new response of this one, without its extensions, takes the mark away no more than one that
     /// passed the request on as it was. The usual answer has no extensions, so the look is a null

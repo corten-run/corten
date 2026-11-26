@@ -2820,23 +2820,23 @@ pin_project_lite::pin_project! {
     /// ([`crate::cache::Unrepeatable`]), so no cache gives it to another visitor and the app does
     /// not keep it. A page's render marks a key it drew itself; this sees the rest. The answer is
     /// marked where it is polled to, and the watch is held beside the handler's work, so neither
-    /// is moved again. The request's signal is marked too ([`crate::Signal::mark_key_drawn`]), so
-    /// a middleware that makes a new response of this one does not take the mark away.
+    /// is moved again. The answer alone is marked: it comes back to the stages past the route's
+    /// side of the chain (`middleware::handle`), which marks the signal they hold
+    /// ([`crate::Signal::mark_key_drawn`]) before any middleware sees the answer, so a middleware
+    /// that makes a new response of this one does not take the mark away.
     pub(crate) struct Made<F, O> {
         #[pin]
         made: F,
         watch: crate::form::KeyWatch,
-        // The request's signal, for a watched answer only.
-        signal: Option<crate::Signal>,
         answer: PhantomData<fn() -> O>,
     }
 }
 
 impl<F: Future<Output = Response>, O: Answer> Made<F, O> {
-    /// `made` as the route's answer: `signal` is the request's, taken only where it is watched.
+    /// `made` as the route's answer.
     #[inline]
-    fn new(made: F, signal: Option<crate::Signal>) -> Self {
-        Made { made, watch: Default::default(), signal, answer: PhantomData }
+    fn new(made: F) -> Self {
+        Made { made, watch: Default::default(), answer: PhantomData }
     }
 }
 
@@ -2851,22 +2851,11 @@ impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O> {
         if let std::task::Poll::Ready(res) = &mut polled {
             mark::<O>(res);
             if watched && this.watch.drew() {
-                drew_key(res, this.signal.as_ref());
+                crate::cache::unrepeatable(res);
             }
         }
         polled
     }
-}
-
-/// Marks an answer whose handler drew a form's new submit key as the request's alone, and its
-/// request.
-#[cold]
-#[inline(never)]
-fn drew_key(res: &mut Response, signal: Option<&crate::Signal>) {
-    if let Some(signal) = signal {
-        signal.mark_key_drawn();
-    }
-    crate::cache::unrepeatable(res);
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
@@ -2905,14 +2894,11 @@ where
         if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
             here.arrive(&mut req, O::PAGE, self.shared);
         }
-        // An answer that may be `Public` (known from its type) is watched for a submit key, which marks
-        // the request's signal: taken here, where the request still holds it.
-        let signal = if <O as IntoResponse>::may_share().0 { req.extensions().get::<crate::Signal>().cloned() } else { None };
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not
         // known, its live part's fragments too.
         #[cfg(feature = "zones")]
         if self.shared {
-            if let Some(signal) = signal.as_ref().or_else(|| req.extensions().get::<crate::Signal>()) {
+            if let Some(signal) = req.extensions().get::<crate::Signal>() {
                 signal.mark_for_everyone();
             }
         }
@@ -2929,10 +2915,10 @@ where
             // Boxed, so every other request's future stays the size it was.
             futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
                 crate::layout::at_late_route(&req),
-                Made::<_, O>::new(self.handler.call(req, state), signal),
+                Made::<_, O>::new(self.handler.call(req, state)),
             )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
         } else {
-            futures_util::future::Either::Left(Made::<_, O>::new(self.handler.call(req, state), signal))
+            futures_util::future::Either::Left(Made::<_, O>::new(self.handler.call(req, state)))
         }
     }
 }

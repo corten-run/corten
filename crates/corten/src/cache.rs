@@ -773,9 +773,9 @@ pub(crate) fn unrepeatable(res: &mut Response) {
 /// around the handler of a route whose answer may be `Public` sets it on any answer whose handler
 /// drew one, rendered to a string included (`answer::Made`; an unstaged route's `route::Watched`,
 /// whose mark another Corten app that relays the answer inline reads, as it reads [`Personal`]).
-/// Each marks the request's signal too
-/// ([`crate::Signal::mark_key_drawn`]), and the route's answer marks the signal the stages hold
-/// as it comes back past the app's middleware (`middleware::handle`), which they read before
+/// A render also marks the request's signal ([`crate::Signal::mark_key_drawn`]); the watch marks
+/// the answer alone. The route's answer, with the mark, marks the signal the stages hold as it
+/// comes back past the app's middleware (`middleware::handle`), which they read before
 /// [`settle`]: so a middleware that rebuilds the response, and the request it gives `next` too,
 /// does not take the mark away.
 #[derive(Clone, Copy)]
