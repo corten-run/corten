@@ -674,11 +674,13 @@ the check heard the browser's event (the request sent, and finished), not by whe
 read or an answer heard after its five seconds fails it however soon the check then sees it; only
 then do its 2.2 s with no further read start, so a read still on its way cannot pass for one that
 failed. Every same-origin part read of `/alerts` the check hears from the press on, whatever its
-query (`?shown=2&saved=..` too), other than that one fails it. Its route and its listeners are removed however it ends, each removal tried even if one
-before it fails. The slow part's reads
+query (`?shown=2&saved=..` too), other than that one fails it. Its route and its listeners are
+removed however it ends, each removal tried even if one before it fails. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
-the same, as its request listener is removed. The first check of a held slow part looks at it only
+the same, as its request listener is removed. Each answer the slow part's routes give (a request let
+through, a read aborted or held and let go, the empty patch below) is bounded to five seconds, and
+the empty patch is not sent once its case has ended; a patch not sent fails its check. The first check of a held slow part looks at it only
 once its load's read has reached the route, waiting up to five seconds for it: Firefox marks the
 part busy as its fetch starts, which can be before the route sees it. The link a failed slow part
 shows is pressed in the page too; the page it opens must commit within five seconds counted from

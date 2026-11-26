@@ -1,4 +1,4 @@
-import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, opened, closeContext } from "./helpers.mjs";
+import { base, engine, skip, check, cleanUp, steps, pollFor, within, readWithin, actWithin, cameWithin, opened, closeContext, exchange } from "./helpers.mjs";
 
 export async function partReads(page, browser, swaps, noSwaps) {
   // A slow part (the picks): drawn waiting, and read from the page's own route as a patch once the
@@ -50,6 +50,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
     let fresh = null;
     /** The fresh page's part reads, each answered with an empty patch, as the route starts to answer it. @type {import("@playwright/test").Request[]} */
     const emptied = [];
+    /** Why the empty patch route did not answer a read as it meant (see `exchange`), for its check. @type {string[]} */
+    const emptyFaults = [];
     /** Lets go of each read the route holds: its request is aborted and its handler returns. @type {(() => Promise<void>)[]} */
     const holds = [];
     /** The documents the page loads, counted while a client navigation should load none. */
@@ -92,12 +94,16 @@ export async function partReads(page, browser, swaps, noSwaps) {
       await within(
         5000,
         "the held part's route was not set within 5 s",
+        // Each answer the route gives (a request let through, a read aborted) is bounded to 5 s, a
+        // held read's included once it is let go, so one that never settles does not keep the route's
+        // callback past its case; a held read's abort that does not settle in time fails the case's
+        // teardown, as its release does.
         held.route(`${base}/`, (route) => {
-          if (route.request().headers().corten !== "action") return route.continue();
+          if (route.request().headers().corten !== "action") return within(5000, "", route.continue()).catch(() => {});
           reads++;
-          if (answer === "closing") return route.abort().catch(() => {});
-          if (answer === "hold") return new Promise((resolve) => holds.push(() => route.abort().catch(() => {}).finally(resolve)));
-          return route.abort("internetdisconnected");
+          if (answer === "closing") return within(5000, "", route.abort()).catch(() => {});
+          if (answer === "hold") return new Promise((resolve) => holds.push(() => within(5000, "a held part read's abort did not settle within 5 s", route.abort().catch(() => {})).finally(resolve)));
+          return within(5000, "", route.abort("internetdisconnected")).catch(() => {});
         }),
       );
       /** The slow part's state in `on`, with its count of part reads. @param {import("@playwright/test").Page} [on] */
@@ -154,11 +160,16 @@ export async function partReads(page, browser, swaps, noSwaps) {
       await within(
         5000,
         "the empty patch case's route was not set within 5 s",
-        emptyPage.route(`${base}/`, (route) => {
-          if (route.request().headers().corten !== "action") return route.continue();
-          if (answer === "closing") return route.abort().catch(() => {});
+        // Its empty patch is sent within 5 s, and not once the case has ended (`exchange`): the read
+        // is then aborted. The check rests on the browser's own response to the load's read.
+        emptyPage.route(`${base}/`, async (route) => {
+          if (route.request().headers().corten !== "action") return within(5000, "", route.continue()).catch(() => {});
+          if (answer === "closing") return within(5000, "", route.abort()).catch(() => {});
           emptied.push(route.request());
-          return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" });
+          const ex = exchange(route, `the empty patch for part read ${emptied.length}`, () => answer === "closing", () => route.abort());
+          await ex
+            .send(5000, "its fulfill", () => route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: "" }))
+            .catch(() => emptyFaults.push(ex.fault));
         }),
       );
       // The 5 s from just before the load, for the answer's body: a result that comes after them,
@@ -188,8 +199,8 @@ export async function partReads(page, browser, swaps, noSwaps) {
       const kept = await placeholder(emptyPage);
       check(
         "a read whose patch leaves the part as it was marks it failed, as it did not bring it",
-        emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && emptyAnswer.body === "finished" && kept.busy === null && kept.failed === "" && !kept.line && kept.link,
-        JSON.stringify({ emptyAnswer, ...kept }),
+        emptyAnswer !== null && emptyAnswer.status === 200 && emptyAnswer.patch === "1" && emptyAnswer.body === "finished" && kept.busy === null && kept.failed === "" && !kept.line && kept.link && emptyFaults.length === 0,
+        JSON.stringify({ emptyAnswer, ...kept, ...(emptyFaults.length ? { emptyFaults } : {}) }),
       );
       // Closed once its check is done, bounded as a context's closing is: its live streams stay open
       // while it does, and WebKit on Windows has only so many connections to the server across
