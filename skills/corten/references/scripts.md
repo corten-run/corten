@@ -164,10 +164,18 @@ division: end statements with `;` and keep a division on the line it continues.
    `data-address`, its route answering with `req.patch_or(part, page)`: as the patch is drawn,
    the address it asked for replaces the current history entry's (no entry is added, so Back
    goes to the page before the screen). An answer that comes after the user left the page (a
-   link, Back or Forward, to another `#id` too) does not draw; an empty or incomplete patch or a
-   drawn 5xx leaves the address, and a page answer drawn in place moves it as a patch does. Where
-   the runtime cannot tell the screen is still the press's page and entry it leaves the address,
-   and it never reloads to repair one: a replace the browser refuses, or a `navigate` listener
+   link, Back or Forward, to another `#id` too) does not draw, and one pressed while a visit of
+   the runtime's is on its way (a link or Back it fetches, one a `navigate` listener begins too)
+   is not sent; an empty or incomplete patch or a drawn 5xx leaves the address, and a page answer
+   drawn in place moves it as a patch does. Where the runtime cannot tell the screen is still the
+   press's page and entry, with nothing it did not start under way, it leaves the address: so an
+   answer drawn while a navigation the page's own `navigate` listener took is on its way
+   (`navigation.transition`, a `data-reload` link held before or after it commits) leaves it, and
+   that navigation finishes. The browser shows no navigation for a load of another document on its
+   way (the replace lets it go on) or one begun in `navigatesuccess` as another ends (the replace
+   cancels it), and none without the Navigation API; the runtime does not track navigations for
+   them. A `corten-location` or changed layout is followed as for any `data-patch` form, mark or
+   not. It never reloads to repair the address: a replace the browser refuses, or a `navigate` listener
    cancels, leaves the answer drawn under the entry's address, so a listener that cancels it sets
    the address it means itself (or begins its own navigation). Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
@@ -182,8 +190,9 @@ division: end statements with `;` and keep a division on the line it continues.
    drawing keeps its address); if that answer draws the form with `method="post"`, it goes as a
    post, which nothing drops, and a post that waited goes as a GET, fenced like any, if it draws
    the form with `method="get"`, moving the address only if it was pressed marked. Give the form a
-   `#[derive(Id)]` id: presses are counted by it, so a press of the form a patch drew drops the
-   older one's reads.
+   `#[derive(Id)]` id (`html!` refuses the mark without one, and a press of a marked form with
+   none leaves the address): presses are counted by it, so a press of the form a patch drew drops
+   the older one's reads.
 
 ## Text a script computes
 

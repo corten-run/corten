@@ -2242,14 +2242,24 @@ longer has counts as done. A 4xx patch that draws (a 422) moves it, and so does 
 (`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and one
-pressed while a navigation is on its way (by a script's `navigate` listener too) is not sent; a navigation
-a script cancels leaves nothing, so an answer drawn as one is cancelled still moves the address.
+pressed while a visit of the runtime's is on its way (a link or Back the runtime fetches, one a
+script's `navigate` listener begins included) is not sent; a navigation a script cancels leaves
+nothing, so an answer drawn as one is cancelled still moves the address. A navigation a script's
+own `navigate` listener took (a link marked `data-reload`, held before or after its address
+changes) is one the browser shows on its way (`navigation.transition`): an answer that draws
+meanwhile leaves the address, which the replace would cancel that navigation for, and the
+navigation finishes. The browser shows no such navigation for a load of another document on its
+way, which the replace lets go on and take the screen's place, nor for one a script begins in a
+`navigatesuccess` listener as another ends, which the replace cancels; without the Navigation API
+it shows none at all. The runtime does not track navigations to see those. Corten's redirect
+(`corten-location`) and a layout that changed (a reload) are followed as for any `data-patch`
+form, marked or not, and take the place of a navigation on its way as they do without the mark.
 A press a script makes as it hears the page move (in a `currententrychange` or `popstate`
 listener) is on the entry the page moved to, and draws there.
 One that comes while the page reads itself again (`ReadAgain`), or after another form's answer was
 drawn in place, draws as usual, and the read starts again later at the new address. Where the
 runtime cannot tell that the screen is still the page and entry the press was made on, with no
-newer press of the form between, it leaves the address as it was, as the form without the mark
+newer press of the form between and nothing it did not start under way, it leaves the address as it was, as the form without the mark
 does; it never reads the page again to repair it. So a replace the browser refuses, with an
 exception (WebKit past its limit of history updates) or without a word (Chromium past its limit),
 leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
@@ -2272,7 +2282,9 @@ drawn with its address; once an answer is drawing, a press its draw makes (an el
 while its GET is on its way, before its answer has come, takes that GET over, whose answer then
 draws even if the page moved to another `#id` meanwhile (once the answer has come, or a
 navigation aborted the GET, the press sends its own). Give the form a
-`#[derive(Id)]` id, as below. Two marked forms are not ordered against each other: their answers are drawn
+`#[derive(Id)]` id, as below: `html!` refuses the mark on a form without one, and the runtime
+leaves the address for a press of a marked form that has none (a spread that writes none), whose
+presses it cannot tell apart. Two marked forms are not ordered against each other: their answers are drawn
 as they come.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
@@ -2319,7 +2331,7 @@ looks at as a press is made, as its answer draws and at each `popstate`: a scrip
 when the runtime next looks, so an answer pressed before it draws nothing, while one the script
 puts back before then (which fires no `popstate`) is not seen, and nor is Back or Forward between
 two entries of one address. `html!` refuses `data-address` on anything but a `<form>`, on a form
-without `data-patch`, and on one whose `method` is `post` or `dialog`; a `formmethod="post"`
+without `data-patch` or without an `id`, and on one whose `method` is `post` or `dialog`; a `formmethod="post"`
 button in a marked form posts as it would in any other, and leaves the address. A filter whose
 every change should be an entry of its own, which Back steps through, is a navigation for now
 ([#2104 A GET data-patch form marked data-address cannot add a history entry that Back answers from the patch it holds](https://github.com/corten-run/corten/issues/2104)).

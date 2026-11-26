@@ -2736,19 +2736,24 @@ impl Req {
     /// asked for (a filter or scope that draws only its part): once the patch is drawn, the runtime
     /// puts that address in place of the history entry's, as the browser shows the form's address
     /// without JavaScript, but adding no entry, so a reload or a link to it reads the page at that
-    /// address (`docs/guide/requests-and-forms.md`, Filters and lists that grow).
+    /// address (`docs/guide/requests-and-forms.md`, Filters and lists that grow). The form has an
+    /// `id`, which the form its patch draws in its place keeps: by it the runtime tells the latest
+    /// press of the form from an older one, whose answer then draws nothing.
     ///
     /// ```
     /// use corten::prelude::*;
     ///
+    /// #[derive(Id)]
+    /// struct ScopeFormId;
+    ///
     /// fn scope() -> impl Render {
-    ///     html! { <form method="get" data-patch data-address><button>"Apply"</button></form> }
+    ///     html! { <form id={ScopeFormId} method="get" data-patch data-address><button>"Apply"</button></form> }
     /// }
     /// # fn main() {
     /// assert!(scope().to_html().contains("data-patch data-address"));
     /// // A spread after the method: the browser keeps the first `method`, this one.
     /// let extra: [(&str, &str); 1] = [("class", "scope")];
-    /// let spread = html! { <form method="get" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// let spread = html! { <form id={ScopeFormId} method="get" data-patch data-address {..extra}><button>"Apply"</button></form> };
     /// assert!(spread.to_html().contains(r#"data-address class="scope""#));
     /// # }
     /// ```
@@ -2770,8 +2775,24 @@ impl Req {
     /// ```compile_fail
     /// use corten::prelude::*;
     ///
+    /// #[derive(Id)]
+    /// struct ScopeFormId;
+    ///
     /// fn scope() -> impl Render {
-    ///     html! { <form method="get" data-address><button>"Apply"</button></form> }
+    ///     html! { <form id={ScopeFormId} method="get" data-address><button>"Apply"</button></form> }
+    /// }
+    /// # fn main() {}
+    /// ```
+    ///
+    /// on a form without an `id` (or with an empty one), whose presses the runtime cannot tell apart,
+    /// so it would leave the address for each (one a spread may write is known only when the form is
+    /// pressed, and the runtime leaves the address for a press of a form without one),
+    ///
+    /// ```compile_fail
+    /// use corten::prelude::*;
+    ///
+    /// fn scope() -> impl Render {
+    ///     html! { <form method="get" data-patch data-address><button>"Apply"</button></form> }
     /// }
     /// # fn main() {}
     /// ```
@@ -2783,8 +2804,11 @@ impl Req {
     /// ```compile_fail
     /// use corten::prelude::*;
     ///
+    /// #[derive(Id)]
+    /// struct ScopeFormId;
+    ///
     /// fn scope() -> impl Render {
-    ///     html! { <form method="post" data-patch data-address><button>"Apply"</button></form> }
+    ///     html! { <form id={ScopeFormId} method="post" data-patch data-address><button>"Apply"</button></form> }
     /// }
     /// # fn main() {}
     /// ```
@@ -2794,8 +2818,11 @@ impl Req {
     /// ```compile_fail
     /// use corten::prelude::*;
     ///
+    /// #[derive(Id)]
+    /// struct ScopeFormId;
+    ///
     /// fn scope() -> impl Render {
-    ///     html! { <form method="dialog" data-patch data-address><button>"Close"</button></form> }
+    ///     html! { <form id={ScopeFormId} method="dialog" data-patch data-address><button>"Close"</button></form> }
     /// }
     /// # fn main() {}
     /// ```
@@ -2805,9 +2832,12 @@ impl Req {
     /// ```compile_fail
     /// use corten::prelude::*;
     ///
+    /// #[derive(Id)]
+    /// struct ScopeFormId;
+    ///
     /// # fn main() {
     /// let extra: [(&str, &str); 1] = [("class", "scope")];
-    /// let _ = html! { <form method="post" data-patch data-address {..extra}><button>"Apply"</button></form> };
+    /// let _ = html! { <form id={ScopeFormId} method="post" data-patch data-address {..extra}><button>"Apply"</button></form> };
     /// # }
     /// ```
     pub fn patch_or<For, Kind: crate::answer::PatchingKind, F, Fut>(

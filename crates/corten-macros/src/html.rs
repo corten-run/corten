@@ -856,10 +856,12 @@ fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
 /// Why `data-address` would never change the address: the runtime puts the address a `data-patch`
 /// form asked for by GET in the entry's place once its answer is drawn, so the mark goes on a
 /// `<form>` with `data-patch` whose `method` sends it as a GET (none, `get`, or one the browser
-/// reads as GET). A spread may write either attribute, so a form with one may lack `data-patch`
-/// here, and a `method` after a spread may not be the one the browser keeps (the first); one before
-/// every spread is. A `method` written as an expression is known only when the form is sent. Those
-/// are left to the runtime, which changes the address only for a GET.
+/// reads as GET), and with an `id`, by which the runtime tells the latest press of the form from an
+/// older one (the form a patch draws in its place keeps it). A spread may write any of these, so a
+/// form with one may lack `data-patch` or an `id` here, and a `method` after a spread may not be
+/// the one the browser keeps (the first); one before every spread is. A `method` written as an
+/// expression is known only when the form is sent, as is the value of an `id` written as one.
+/// Those are left to the runtime, which changes the address only for a GET from a form with an id.
 fn address_unsent(is_form: bool, attrs: &[Attr]) -> Option<&'static str> {
     attr_named(attrs, "data-address")?;
     if !is_form {
@@ -871,6 +873,11 @@ fn address_unsent(is_form: bool, attrs: &[Attr]) -> Option<&'static str> {
     if spread.is_none() && attr_named(attrs, "data-patch").is_none() {
         return Some(
             "data-address: a form without data-patch is sent by the browser, which changes the address itself: add data-patch, or remove data-address",
+        );
+    }
+    if spread.is_none() && matches!(attr_named(attrs, "id"), None | Some(Some(""))) {
+        return Some(
+            "data-address: the runtime tells the latest press of a marked form from an older one by the form's id, which the form a patch draws in its place keeps, and without one leaves the address as it is: give the form an id={..}",
         );
     }
     let not_get = |m: &str| m.eq_ignore_ascii_case("post") || m.eq_ignore_ascii_case("dialog");
@@ -3419,21 +3426,28 @@ mod tests {
         let why = |is_form, attrs: Vec<Attr>| {
             address_unsent(is_form, &attrs).map(|w| w.split(':').nth(1).unwrap_or_default().trim().to_owned())
         };
-        assert_eq!(why(true, vec![bare("data-patch"), bare("data-address")]), None);
-        assert_eq!(why(true, vec![method("GET"), bare("data-patch"), bare("data-address")]), None);
+        let id = || Attr::Static("id".into(), "scope".into());
+        assert_eq!(why(true, vec![id(), bare("data-patch"), bare("data-address")]), None);
+        assert_eq!(why(true, vec![method("GET"), id(), bare("data-patch"), bare("data-address")]), None);
         assert_eq!(why(true, vec![method("get")]), None, "no mark, nothing to say");
         assert!(why(false, vec![bare("data-patch"), bare("data-address")]).is_some_and(|w| w.starts_with("only a <form")));
-        assert!(why(true, vec![method("get"), bare("data-address")]).is_some_and(|w| w.starts_with("a form without data-patch")));
+        assert!(why(true, vec![method("get"), id(), bare("data-address")])
+            .is_some_and(|w| w.starts_with("a form without data-patch")));
         for posting in ["post", "POST", "dialog"] {
-            let refused = why(true, vec![method(posting), bare("data-patch"), bare("data-address")]);
+            let refused = why(true, vec![method(posting), id(), bare("data-patch"), bare("data-address")]);
             assert!(refused.is_some_and(|w| w.starts_with("only a GET form")), "{posting}");
         }
-        // A spread may write data-patch, and a method after it may not be the one the browser
-        // keeps (the first); one before it is.
+        // A form without an id, or with an empty one, cannot tell its latest press from an older one.
+        for mut attrs in [vec![], vec![bare("id")], vec![Attr::Static("id".into(), String::new())]] {
+            attrs.extend([method("get"), bare("data-patch"), bare("data-address")]);
+            assert!(why(true, attrs).is_some_and(|w| w.starts_with("the runtime tells the latest press")));
+        }
+        // A spread may write data-patch or the id, and a method after it may not be the one the
+        // browser keeps (the first); one before it is.
         let spread = || Attr::Spread(TokenStream::new());
         assert_eq!(why(true, vec![bare("data-address"), spread()]), None);
         assert_eq!(why(true, vec![bare("data-patch"), bare("data-address"), spread(), method("post")]), None);
-        let first = why(true, vec![method("post"), bare("data-patch"), bare("data-address"), spread()]);
+        let first = why(true, vec![method("post"), id(), bare("data-patch"), bare("data-address"), spread()]);
         assert!(first.is_some_and(|w| w.starts_with("only a GET form")));
     }
 

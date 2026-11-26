@@ -2386,6 +2386,12 @@ let fetching = null;
 const reading = new Set();
 /** What waits for that, each run in a task of its own once no navigation is on its way. @type {(() => void)[]} */
 const afterReads = [];
+/**
+ * The transition of the page's last read of itself again (`ReadAgain`), the one navigation of the
+ * runtime's own that a marked answer's replace may cancel, as it reads again later ({@link send}).
+ * @type {NavigationTransition | null | undefined}
+ */
+let readAgainTransition;
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let hoverTimer;
@@ -2417,6 +2423,7 @@ async function visit(url, signal, redirected, again, place, source, whole, throu
   // Another page on this entry, even one that keeps its key (a redirect's): a marked answer pressed
   // before it, as a `navigate` listener heard it too, is for the page it leaves ({@link entry}).
   if (!again) moves += 1;
+  else readAgainTransition = navigation?.transition;
   const key = pageKey(url);
   // A read again fetches the page on screen, which no prefetch takes.
   const going = again ? null : { key };
@@ -3260,8 +3267,10 @@ const sentFrom = new WeakSet();
 const presses = new Map();
 
 /**
- * A press of a form: its id and count ({@link presses}), and for a `data-address` form's the entry
- * it was made on ({@link entry}), null while a visit of the runtime's was on its way.
+ * A press of a form: its id and count ({@link presses}), and for a `data-address` form with an id
+ * the entry it was made on ({@link entry}), null while a visit of the runtime's was on its way. A
+ * marked form without an id cannot tell its latest press from an older one, and is pressed as an
+ * unmarked form is: its answer leaves the address.
  * @typedef {{ id: string | null, n: number, at?: number | null }} Press
  */
 
@@ -3277,7 +3286,7 @@ function pressed(form) {
   const id = idOf(form);
   const n = (presses.get(id) ?? 0) + 1;
   presses.set(id, n);
-  return { id, n, at: hasAttr(form, "data-address") ? (reading.size ? null : entry()) : undefined };
+  return { id, n, at: id && hasAttr(form, "data-address") ? (reading.size ? null : entry()) : undefined };
 }
 
 /**
@@ -3517,8 +3526,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               const path = location.pathname;
               // Not if what it drew began a visit or moved to another entry (a script that navigates
               // as it connects): the replace would cancel that navigation, or write over that entry.
-              // A press it made does not stop it, as it has drawn.
-              if (!here(true) || to === location.href) return;
+              // A press it made does not stop it, as it has drawn. Nor while the browser says a
+              // navigation the runtime did not begin is on its way (`transition`: one a page's
+              // `navigate` listener took, its address changed or not), which the replace would
+              // cancel too; the page reading itself again is the runtime's, and reads again later.
+              const transition = navigation?.transition;
+              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition)) return;
               try {
                 history.replaceState(history.state, "", to);
               } catch {

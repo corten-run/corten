@@ -509,6 +509,7 @@ export async function dataAddress(browser) {
     await plain.evaluate((action) => {
       const form = document.createElement("form");
       form.action = action;
+      form.id = "smoke-address-other-form";
       form.dataset.patch = "";
       form.dataset.address = "";
       const field = document.createElement("input");
@@ -1390,11 +1391,20 @@ async function markedPatchVisits(browser, errors) {
   );
 
   // A `submit` listener of the page that, as Week is pressed, draws the form again and presses Day
-  // on the one it drew: the runtime takes Day's submit first, as it hears it first, and Week's after
-  // it, so Week is the later press. Its answer is the one drawn, and its address is the entry's:
-  // what the screen shows and the address agree.
+  // on the one it drew: the runtime takes Day's submit first, as it hears it first, and sends it,
+  // and Week's after it, so Week is the later press. Its answer is the one drawn, and its address is
+  // the entry's: what the screen shows and the address agree.
   await page.goto(home);
   await page.evaluate(() => {
+    /** @type {string[]} */
+    const asked = [];
+    Object.assign(window, { __asked: asked });
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+      if (url.pathname === "/smoke/address" && new Headers(init?.headers).get("corten") === "action") asked.push(url.searchParams.get("scope") ?? "");
+      return fetch_.call(this, input, init);
+    };
     const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
     form.addEventListener(
       "submit",
@@ -1411,11 +1421,127 @@ async function markedPatchVisits(browser, errors) {
     () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
   );
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300))));
-  const listened = await state();
+  const listened = { asked: await page.evaluate(() => /** @type {string[]} */ (/** @type {any} */ (window).__asked).join()), ...(await state()) };
   check(
-    "a marked GET pressed by a submit listener as the form is pressed is taken first, and the press taken last draws and puts its address in the entry",
-    listenedDrawn && listened.at === "?scope=week" && listened.shown === "week",
+    "a marked GET pressed by a submit listener as the form is pressed is taken and sent first, and the press taken last draws and puts its address in the entry",
+    listenedDrawn && listened.asked === "day,week" && listened.at === "?scope=week" && listened.shown === "week",
     JSON.stringify({ listenedDrawn, listened }),
+  );
+
+  // A marked form without an id cannot tell its latest press from an older one: its answer is drawn
+  // and leaves the address, as an unmarked form's does. So is each of two presses made as one (a
+  // `formdata` listener that draws the form again, without an id, and presses it), whichever comes
+  // last.
+  await page.goto(home);
+  await page.evaluate(() => {
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    form.removeAttribute("id");
+    Object.assign(window, { __form: form });
+  });
+  await press("Week");
+  const idlessDrawn = await wait(() => document.querySelector("#smoke-address output")?.textContent === "week" && !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+  const idless = await state();
+  await page.goto(home);
+  const twoAnswered = Promise.all(
+    ["day", "week"].map((scope) => page.waitForResponse((r) => r.url() === `${home}?scope=${scope}` && r.request().headers()["corten"] === "action", { timeout: 5000 })),
+  ).then(() => true, () => false);
+  await page.evaluate(() => {
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    form.removeAttribute("id");
+    form.addEventListener(
+      "formdata",
+      () => {
+        const again = /** @type {HTMLFormElement} */ (form.cloneNode(true));
+        form.replaceWith(again);
+        again.requestSubmit(/** @type {HTMLButtonElement} */ (again.querySelector('button[value="day"]')));
+      },
+      { once: true },
+    );
+  });
+  await press("Week");
+  const twoSent = await twoAnswered;
+  const twoDrawn = await wait(() => ["day", "week"].includes(document.querySelector("#smoke-address output")?.textContent ?? "") && !document.querySelector("main [aria-busy]"));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300))));
+  const twoPresses = await state();
+  check(
+    "a marked form without an id draws its answer and leaves the address, and so does each of two presses of it made as one",
+    idlessDrawn && idless.at === "" && idless.shown === "week" && twoSent && twoDrawn && twoPresses.at === "" && ["day", "week"].includes(twoPresses.shown ?? ""),
+    JSON.stringify({ idlessDrawn, idless, twoSent, twoDrawn, twoPresses }),
+  );
+
+  // A navigation of the page's own already on its way as a marked answer draws: a link marked
+  // `data-reload`, which the runtime leaves to the page, whose `navigate` listener takes it and holds
+  // it before its address changes (`precommitHandler`). The browser shows it as on its way
+  // (`navigation.transition`), so the answer is drawn under the address as it is, which the replace
+  // would have cancelled that navigation for, and the navigation finishes.
+  if (!(await page.evaluate(() => "NavigationPrecommitController" in window))) skip("a marked patch leaves the address while a navigation of the page's own is on its way", "no precommitHandler");
+  else {
+    await page.goto(home);
+    const ownMarked = await hold(week, "action");
+    await trackForm();
+    await press("Week");
+    const ownSent = await ownMarked.sent;
+    const ownStarted = await page.evaluate(async (href) => {
+      /** @type {(value?: unknown) => void} */
+      let release = () => {};
+      const held = new Promise((resolve) => (release = resolve));
+      Object.assign(window, { __releaseOwn: release, __own: "not begun" });
+      const nav = /** @type {any} */ (window).navigation;
+      nav.addEventListener(
+        "navigate",
+        (/** @type {any} */ event) => {
+          if (event.destination.url !== href) return;
+          Object.assign(window, { __own: "on its way" });
+          event.signal.addEventListener("abort", () => Object.assign(window, { __own: "AbortError" }));
+          event.intercept({ precommitHandler: () => held, handler: () => void Object.assign(window, { __own: "finished" }) });
+        },
+        { once: true },
+      );
+      const link = document.createElement("a");
+      link.href = href;
+      link.dataset.reload = "";
+      document.body.append(link);
+      link.click();
+      // WebKit follows the link in a later task.
+      for (let tries = 0; tries < 100 && /** @type {any} */ (window).__own === "not begun"; tries++) await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve));
+      return !!nav.transition;
+    }, elsewhere);
+    ownMarked.release();
+    const ownDrawn = await wait(() => document.querySelector("#smoke-address output")?.textContent === "week" && !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")));
+    await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+    const ownDuring = await page.evaluate(() => ({ path: location.pathname + location.search, own: /** @type {any} */ (window).__own, shown: document.querySelector("#smoke-address output")?.textContent }));
+    await page.evaluate(() => /** @type {any} */ (window).__releaseOwn());
+    const ownEnded = await wait(() => /** @type {any} */ (window).__own !== "on its way");
+    const ownAfter = await page.evaluate(() => ({ path: location.pathname + location.search, own: /** @type {any} */ (window).__own }));
+    await ownMarked.clear();
+    check(
+      "a marked patch drawn while a navigation the page's navigate listener holds is on its way leaves the address, and the navigation finishes",
+      ownSent && ownStarted && ownDrawn && ownDuring.path === "/smoke/address" && ownDuring.own === "on its way" && ownDuring.shown === "week" && ownEnded &&
+        ownAfter.own === "finished" && ownAfter.path === "/smoke/address-elsewhere",
+      JSON.stringify({ ownSent, ownStarted, ownDrawn, ownDuring, ownEnded, ownAfter }),
+    );
+  }
+
+  // A load of another document on its way (a link marked `data-reload`, held by the server) as a
+  // marked answer comes: the platform shows no navigation on its way for it. A patch's replace
+  // lets it go on and take the screen's place; Corten's redirect (`corten-location`) and a layout
+  // that changed (a reload) are the runtime's for any `data-patch` form, and end as they do for the
+  // same press without the mark.
+  /** @type {Record<string, unknown>} */
+  const loads = {};
+  for (const kind of /** @type {const} */ (["patch", "location", "shell"])) {
+    const marked = await heldLoad(page, kind, true);
+    const unmarked = await heldLoad(page, kind, false);
+    loads[kind] = { marked, unmarked };
+  }
+  const endsAlike = (/** @type {any} */ a, /** @type {any} */ b) => a.sent && a.loading && b.sent && b.loading && a.final === b.final && a.aborted === b.aborted;
+  const patched = /** @type {any} */ (loads.patch).marked;
+  check(
+    "a load of another document on its way as a marked answer comes goes on through its patch's replace, and its redirect and reload end as the same press's without the mark",
+    Object.values(loads).every((/** @type {any} */ l) => endsAlike(l.marked, l.unmarked)) && !patched.aborted && patched.final === "/smoke/address-elsewhere?held=1",
+    JSON.stringify(loads),
   );
 
   // Week's patch draws an element whose `connectedCallback` presses Day, which the server answers
@@ -1728,6 +1854,65 @@ async function postThenRead(page, move, unmarked = false) {
     shown: document.querySelector("#smoke-address output")?.textContent,
   }));
   return { saveSent, moved, drawn, ...end };
+}
+
+/**
+ * Presses Week, marked or not, and while its answer is held follows a link marked `data-reload` to
+ * another document, whose load the route holds too; then lets Week's answer come as `kind` says (its
+ * patch, Corten's redirect to Month, or its patch with a layout that changed), and the load after it.
+ * Says whether each was sent, whether the load was aborted, and where the page ended.
+ * @param {import("@playwright/test").Page} page @param {"patch" | "location" | "shell"} kind @param {boolean} marked
+ */
+async function heldLoad(page, kind, marked) {
+  const home = `${base}/smoke/address`;
+  const week = `${home}?scope=week`;
+  const other = `${base}/smoke/address-elsewhere?held=1`;
+  await page.goto(home);
+  /** @type {() => void} */
+  let releaseWeek = () => {};
+  const weekHeld = new Promise((resolve) => (releaseWeek = () => resolve(undefined)));
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    await weekHeld;
+    if (kind === "location") return route.fulfill({ headers: { "corten-location": "/smoke/address?scope=month" }, body: "" });
+    // Uncompressed: Firefox's route.fetch reads a compressed body it was not sent as empty.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const { "content-length": _length, "content-encoding": _encoding, ...headers } = res.headers();
+    if (kind === "shell") headers["corten-shell"] = "changed";
+    return route.fulfill({ status: res.status(), headers, body: await res.text() });
+  });
+  /** @type {() => void} */
+  let releaseOther = () => {};
+  const otherHeld = new Promise((resolve) => (releaseOther = () => resolve(undefined)));
+  let aborted = false;
+  await page.route(other, async (route) => {
+    await otherHeld;
+    await route.continue().catch(() => (aborted = true));
+  });
+  const failed = (/** @type {import("@playwright/test").Request} */ r) => void (r.url() === other && (aborted = true));
+  page.on("requestfailed", failed);
+  if (!marked) await page.evaluate(() => document.getElementById("smoke-address-form")?.removeAttribute("data-address"));
+  const weekSent = page.waitForRequest((r) => r.url() === week, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click());
+  const sent = await weekSent;
+  const otherSent = page.waitForRequest((r) => r.url() === other, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate((href) => {
+    const link = document.createElement("a");
+    link.href = href;
+    link.dataset.reload = "";
+    document.body.append(link);
+    link.click();
+  }, other);
+  const loading = await otherSent;
+  releaseWeek();
+  await page.waitForTimeout(1000);
+  releaseOther();
+  await page.waitForTimeout(1500);
+  page.off("requestfailed", failed);
+  await page.unroute(week);
+  await page.unroute(other);
+  const final = new URL(page.url());
+  return { sent, loading, aborted, final: final.pathname + final.search };
 }
 
 /**

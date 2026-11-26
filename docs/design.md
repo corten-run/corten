@@ -11482,10 +11482,33 @@ rules something out.
     below).
 
     The guarantee is narrow on purpose: the address moves only when the runtime can tell, in the
-    task the answer draws, that the screen is still the entry and page the press was made on and
-    that no newer press of the form and no visit of its own came between; where it cannot tell, it
-    leaves the address as it was, which is what the same form without the mark does, and never
-    repairs what a page's script or the browser did to the entry.
+    task the answer draws, that nothing it did not start is under way: the screen is still the
+    entry and page the press was made on, no newer press of the form and no visit of its own came
+    between, and the browser shows no navigation on its way (`navigation.transition`) but the
+    page reading itself again, the runtime's own. Where it cannot tell, it leaves the address as it
+    was, which is what the same form without the mark does, and never repairs what a page's script
+    or the browser did to the entry.
+
+    A navigation a page's own `navigate` listener took (a link marked `data-reload`, which the
+    runtime leaves to the page, or any the runtime does not fetch), held before its address changes
+    (`precommitHandler`) or after, is on its way until it ends, and the browser shows it as
+    `navigation.transition` in all three engines; the replace would cancel it, in all three. As
+    the answer draws, before it replaces, the runtime reads `transition`, and while it shows a
+    navigation that is not the page reading itself again it leaves the address, the answer drawn
+    under it, and the navigation finishes. One held after its address changed has moved the entry
+    already, so the answer draws nothing. Where the platform cannot tell, the runtime does not
+    track navigations to find out, and the limit stands. A load of another document on its way
+    shows no `transition`: the replace goes ahead, and in all three engines lets that load go on
+    and take the screen's place. A navigation a page begins in a `navigatesuccess` listener, as
+    another ends, shows none either (all three engines leave `transition` empty while it waits
+    for its page), so the replace cancels it. Without the Navigation API there is nothing to read,
+    and the replace goes ahead; a page then has no navigation of its own on its way but a load of
+    another document, which goes on. Corten's redirect (`corten-location`) and a layout that
+    changed (a reload) are the runtime's for any `data-patch` form, the mark adding nothing to
+    them: each begins a navigation or a reload of the runtime's own, which takes the place of one
+    on its way as it does for the same press without the mark (a reload ends a load of another
+    document on its way in Chromium, and Firefox and WebKit let that load go on; the redirect lets
+    it go on in all three).
 
     A marked answer draws only on the history entry it was pressed on, and the page on it. The
     runtime knows the entry on screen by its Navigation API key (another after a link, a move to an
@@ -11503,9 +11526,10 @@ rules something out.
     draw, and again in the same task once it has drawn, before it replaces the address, it goes on
     only while the count is the one it was pressed with and no visit of the runtime's is on
     its way, whose navigation the replace would cancel; one pressed while a visit is on its way is
-    for the page that visit leaves, and never draws. Nothing else counts. A load of another
-    document, a reload included, goes on through the replace and takes the screen's place, so an
-    answer that draws as one is on its way changes nothing it leaves. A navigation a listener
+    for the page that visit leaves, is never sent, and never draws. Before it replaces it also
+    reads `navigation.transition`, as above. Nothing else counts. A load of another document, a
+    reload included, goes on through the replace and takes the screen's place, so an answer that
+    draws as one is on its way changes nothing it leaves. A navigation a listener
     cancels began no visit and moved no entry, so an answer drawn as it was cancelled (one its own
     draw began, in a `connectedCallback`) still puts its address in. A page drawn in place on the
     entry (another form's answer), a script's `replaceState` and the page reading itself again
@@ -11538,7 +11562,11 @@ rules something out.
     full, as for any form, and that load is of the entry's address. The rest is the runtime's
     ordinary `data-patch` form: Corten's redirect (`corten-location`) is followed as a
     navigation, its submits are ordered as any form's are, and each press of a form counts against
-    its id, which the form a patch draws in its place keeps (a patch requires one), as the runtime
+    its id, which the form a patch draws in its place keeps (a patch requires one). A marked form
+    needs one: `html!` refuses the mark on a form without an `id` (or with an empty one), unless
+    a spread, which may write one, is on it, and the runtime takes a press of a marked form that
+    has none as a press of an unmarked one, whose answer leaves the address, as it cannot tell
+    that press from an older one. Presses count as the runtime
     takes the submit: after the page's own `submit` listeners, which may cancel it, and before its
     `formdata` listeners. Presses count in the order the runtime takes them, which is the order they
     were made except for one a page's `submit` listener makes as it hears another: that one is
@@ -11688,21 +11716,32 @@ rules something out.
       did for any read with the same request: a press made as a later listener cancelled that
       navigation found the aborted read by its request and sent nothing. A read on its way is
       taken over only while it can still answer.
-    - Telling a navigation on its way by `navigation.transition`, which an earlier build tried
-      first: a `navigatesuccess` listener that begins a navigation as one ends leaves it empty while
-      the new navigation is on its way, in all three engines (the smoke's chained case caught it),
-      so a marked answer drew and aborted that navigation.
+    - Telling a visit of the runtime's own on its way by `navigation.transition`, which an earlier
+      build tried first: a `navigatesuccess` listener that begins a navigation as one ends leaves it
+      empty while the new navigation is on its way, in all three engines (the smoke's chained case
+      caught it), so a marked answer drew and aborted that navigation. The runtime's visits are
+      the set it keeps; `transition` is read only for a navigation the page's script owns, where it
+      is the platform's own signal and the runtime has no other short of tracking navigations.
+    - Recording each `navigate` event the runtime hears and does not take, so that a load of
+      another document on its way, or a navigation a page begins in `navigatesuccess`, would keep
+      the address too: a record of navigations heard, of the kind this Choice cut from the refusal
+      and the visits, kept for a load the replace lets go on anyway and an ordering a page's script
+      chooses, in the runtime every page loads (README Value 6).
+    - Letting a marked form without an id move the address, its presses not ordered, as the build
+      before this one did: a form without one that a `formdata` listener drew again and pressed
+      sent both presses, and the older answer, coming last, took the address.
 
-    What it costs: the runtime every page loads is 1,213 bytes larger raw (46,502 to 47,715), 513
-    with gzip (16,718 to 17,231) and 444 with brotli (15,106 to 15,550), paid once a release by
-    every user (68, 13 and 18 smaller than the build before this one, which read the page again
-    on a refusal and kept the `navigate` event of the replace). A `data-patch` submit
+    What it costs: the runtime every page loads is 1,265 bytes larger raw (46,502 to 47,767), 533
+    with gzip (16,718 to 17,251) and 468 with brotli (15,106 to 15,574), paid once a release by
+    every user (52, 20 and 24 larger than the build before this one, which did not read
+    `navigation.transition` or take a marked form without an id as unmarked). A `data-patch` submit
     reads one attribute and its form's id, and adds one to that id's count in a map that keeps a
     number for each id pressed; a press keeps the count it was made at, and a read compares it
     where it could draw or be sent again. Only a marked form's press looks at its entry (one key,
     or the address, compared with the last seen) and keeps it; a marked read compares it where it
     could draw, reads the size of the set of visits on their way the runtime keeps already, and
-    builds an address and reads it back. A patch tracks whether it placed every
+    builds an address, reads `navigation.transition` and compares it with the page's last read of
+    itself again (kept as that read begins), and reads the address back. A patch tracks whether it placed every
     element as it walks them, without a separate scan; each `currententrychange` (`popstate`
     without the Navigation API) compares the key (the address) with the last seen, and a visit the
     runtime begins adds one to a counter.
@@ -11727,7 +11766,13 @@ rules something out.
     dispatches is not trusted, measured once
     in each engine, a `navigate` a listener cancels runs none of the handlers it was
     intercepted with, and the entry changes only when a navigation whose address waits for its page
-    commits; `new FormData` fires `formdata` before it returns, and a custom element a patch puts
+    commits; `navigation.transition` shows a navigation a page's `navigate` listener intercepted,
+    held before its address changes (`precommitHandler`) or after, until it ends, `replaceState`
+    aborts it, a load of another document on its way shows none and goes on through
+    `replaceState` and through a navigation the runtime begins for a `corten-location`, which a
+    reload ends in Chromium and not in Firefox or WebKit, and a navigation begun in
+    `navigatesuccess` as another ends shows none while it waits for its page, measured once in
+    each engine; `new FormData` fires `formdata` before it returns, and a custom element a patch puts
     in runs its `connectedCallback` before the insertion returns; in Chromium, Firefox and WebKit;
     the smoke's checks in all three; WebKit's throw past its limit of history updates, and
     Chromium's refusal without a word, which returns before the `navigate` event in
@@ -11753,10 +11798,16 @@ rules something out.
     script's flood of history updates; or `replaceState` stops keeping the
     entry's key or stops aborting a navigation under way in one of the engines, or a move to an
     `#id` or a traversal between `#id` entries stops firing `popstate` before the script that made
-    it goes on in one, or the key stops changing before `currententrychange` fires in one.
+    it goes on in one, or the key stops changing before `currententrychange` fires in one; or the platform
+    shows a load of another document on its way, or `navigation.transition` comes to show a
+    navigation begun in `navigatesuccess`, in one, when the address could be left for those too.
 
     Last checked: 2026-11-26, the runtime's size with this change against main `28d5743f6`, whose
     runtime is unchanged since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-26, `navigation.transition` for a navigation a listener holds before and after its
+    address changes and for one begun in `navigatesuccess`, and a load of another document through
+    `replaceState`, a redirect and a reload, in Playwright 1.65.1's Chromium 159, Firefox 159 and
+    WebKit 27.2;
     2026-11-25 and 2026-11-26, `popstate` and the key on a move to an `#id`, `currententrychange`
     before `popstate`, the order of `window`'s `popstate` listeners and the signal of a
     cancelled replace, and the watchlist smoke on the same
