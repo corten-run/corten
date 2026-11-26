@@ -434,10 +434,15 @@ async fn absolute_target_names_the_origin_of_a_write() {
     {
         let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
         let router = App::new(Routes::from(routes)).policy(policy).router();
+        // The in-process router did not read an HTTP/1.1 message from a connection. No Host
+        // line is required here, but the authority is still available to the origin check.
+        let no_line = Request::post("http://localhost/").header("origin", "http://localhost").body(Body::empty()).unwrap();
+        assert_eq!(router.clone().oneshot(no_line).await.unwrap().status(), StatusCode::NO_CONTENT);
         let path = Request::post("/").header("host", "proxy.example").body(Body::empty()).unwrap();
         assert_eq!(router.clone().oneshot(path).await.unwrap().status(), path_status);
         for (target, origin, site, expected) in [
             ("http://localhost/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("http://localhost/", "http://proxy.example", None, StatusCode::FORBIDDEN),
             ("http://localhost:8000/", "http://localhost:8000", None, StatusCode::NO_CONTENT),
             ("http://localhost:8000/", "http://localhost", None, StatusCode::FORBIDDEN),
             ("http://localhost:80/", "http://localhost", None, StatusCode::NO_CONTENT),
@@ -452,6 +457,16 @@ async fn absolute_target_names_the_origin_of_a_write() {
             let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
             assert_eq!(res.status(), expected, "{target} {origin} {site:?}");
         }
+    }
+}
+
+#[test]
+fn an_https_only_policy_checks_the_origin_against_the_supplied_target() {
+    let policy = crate::security::Policy::new().hsts();
+    let uri = http::Uri::from_static("https://shop.example/");
+    for (origin, allowed) in [("https://shop.example", true), ("http://shop.example", false)] {
+        let req = Request::post(uri.clone()).header("origin", origin).header("host", "proxy.example").body(()).unwrap();
+        assert_eq!(policy.same_origin(req.method(), req.uri(), req.headers()), allowed, "{origin}");
     }
 }
 

@@ -9064,7 +9064,8 @@ rules something out.
     `Location` of a write that did not fail: RFC 9111 sections 4.2.1, 5.1 and 4.4; a recipient
     counts an answer's lifetime less its `Age`, section 4.2.3; the store answers only origin-form
     requests, whose target is a path and query and whose host comes from `Host`; for invalidation
-    a write with an absolute-form target takes its authority from that target, RFC 9112 section 3.2.2); reasoned (the inputs a kept page's handler may take read, of a whole
+    a write with an absolute-form target takes its authority from that target, RFC 9112
+    section 3.2.2); reasoned (the inputs a kept page's handler may take read, of a whole
     document's `GET` without credentials, its URL, its `Host` and, for its language,
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
@@ -9137,7 +9138,9 @@ rules something out.
     against the sentence that a placement run declared after a single-build miss does not
     clear it.
 
-    Last checked: 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
+    Last checked: 2026-11-26 with http 1.5.0 for a write with an absolute-form target: the router test
+    `an_absolute_form_write_drops_the_page_named_by_a_matching_location` checks which `Location`
+    invalidates the kept page; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
     6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
     `evidence/0c0c599c`, and for its instructions, `149e0f5b4` against `a03547c3c` under

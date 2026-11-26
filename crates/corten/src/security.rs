@@ -366,7 +366,7 @@ impl Policy {
         self
     }
 
-    /// Answers whatever `Host` a request names, for an app whose names are not known in advance
+    /// Answers whatever host a request asks for, for an app whose names are not known in advance
     /// (one served under each customer's own domain) and that checks them itself. See
     /// [`Policy::host`] for what this gives up. A request HTTP does not allow is still a `400`.
     pub fn any_host(mut self) -> Self {
@@ -1711,7 +1711,7 @@ fn origin_of_host(origin: &str, https_only: bool, host: Option<RequestHost<'_>>)
     }
 }
 
-/// `origin` (an `Origin` header) when it is a page's on `host` (a `Host` header): its scheme,
+/// `origin` (an `Origin` header) when it is a page's on the requested authority `host`: its scheme,
 /// `http` or `https`, and its `host[:port]`. The name and port must be `host`'s, a port left out
 /// being the scheme's default (`https://app.example` is on `app.example:443`). `None` for another
 /// scheme (an app's own, `capacitor://localhost`, is no page on this host) or an origin with a
@@ -1901,8 +1901,8 @@ impl Asked {
     }
 }
 
-/// Where the authority came from. Keep the line as bytes until it has passed its grammar check;
-/// a line that is not text must not be mistaken for an absent one.
+/// The authority in its borrowed form. Host admission checks the original bytes of a line;
+/// origin comparisons use text, and a write can keep the authority for its answer.
 #[derive(Clone, Copy)]
 pub(crate) enum RequestHost<'a> {
     Target(&'a http::uri::Authority),
@@ -3619,7 +3619,7 @@ mod tests {
         assert!(from(&ipv6, "http://[::1]:3000"));
     }
 
-    /// A write with no `Sec-Fetch-Site` is held to its whole origin against `Host`: under hsts
+    /// A write with no `Sec-Fetch-Site` is checked against the requested authority: under hsts
     /// a plain-http page on the app's host is another origin (#1212), and a default port is the
     /// same whether it is written or not.
     #[test]

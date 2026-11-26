@@ -677,7 +677,7 @@ impl Written {
 /// or, where it found no counts by path, with the others like it.
 pub(crate) struct Writing<'a> {
     answers: &'a Answers,
-    /// The path's count and the request's `Host`; none for a write that found no counts to
+    /// The path's count and the requested authority; none for a write that found no counts to
     /// count in, which is counted with the others like it ([`Store::early`]).
     counted: Option<(usize, Option<HeaderValue>)>,
     answered: bool,

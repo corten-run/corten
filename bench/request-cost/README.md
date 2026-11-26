@@ -182,9 +182,9 @@ The count is not corrected for it. The line is rendered while these requests are
 part of what serving them cost; how many seconds a window crosses is not its length but where it
 began in a second; and the 600 is this commit's, which a commit to compare could change. So
 `count.mjs` prints the seconds, and two counts are compared as they are when their seconds are
-alike. On the 16-CPU host these were read on, a window lasts 0.7 to 1.9 seconds for the nine
-cases and 0.7 to 0.8 at a depth of 16, and one binary's counts agree closely there: 30 counts
-of each of the 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and
+alike. On the 16-CPU host these were read on, a window lasted 0.7 to 1.9 seconds for the nine
+cases in that run and 0.7 to 0.8 at a depth of 16. One binary's counts agreed closely: 30 counts
+of each of that run's 13 rows spanned at most 1 instruction, and 30 of `get`, `post`, `text` and
 `page` with two busy loops on the probe's own CPU spanned at most 1 and read at most 1 more
 (rustc 1.100.0, valgrind 3.24.0). That is that host's, not the method's. On a slower, loaded
 machine, where windows last longer and vary more, the second review of the pull request that

@@ -255,8 +255,9 @@ come on top.
 ## Host names
 
 A request for a path takes its host and port from `Host`. When the request-target names its
-own authority (host and optional port), that authority takes precedence over `Host`
-([RFC 9112 section 3.2.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2.2)). A different
+own authority (host and optional port), that authority takes precedence over `Host`.
+[RFC 9112 section 3.2.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2.2) requires this
+for absolute-form targets; Corten also uses the authority of an authority-form target. A different
 but valid `Host` does not change the requested host or by itself cause a refusal. The header
 still has to pass the checks below.
 
