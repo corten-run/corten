@@ -9,6 +9,21 @@ import { base, shadowing, skip, check, within, readWithin, steps, pollFor, clean
 const AGAIN_SECONDS = 1;
 
 /**
+ * The seconds the leave-before-read case's page waits before its part's first read: the wait its
+ * navigation's stand-in answer asks for (`seeds` in `pageRefresh`), longer than the part's own so
+ * that a loaded browser still leaves before the read is due, which the case confirms by the page's
+ * own clock.
+ */
+const LEAVE_SECONDS = 4;
+
+/**
+ * How long before the read is due the page must have left for an attempt of that case to count.
+ * The runtime starts the read's timer as it draws the part's tag, in the same task, and the case
+ * notes the draw in a mutation callback just after that task: this covers the rest of the task.
+ */
+const LEAVE_MARGIN_MS = 500;
+
+/**
  * Why `answer`, the answer to a part read of `address` (its URL), is not a patch that asks to be
  * read again from that same address after `AGAIN_SECONDS` with `status` drawn, or null when it is.
  * `page` parses it as the runtime parses a patch (`parse` in corten.js: a template's `innerHTML`)
@@ -187,6 +202,55 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         answers[at] = { url: address, asks: answer.includes("data-corten-read-again"), standIn };
         await route.fulfill({ status: res.status(), headers, body: marked });
       };
+      // The runtime's navigations below reach a page still saving (#2035): each one's fetch of the
+      // page is answered as the server answers it while the write lands, whatever the store has by
+      // then: its status line saying `Saving...`, its head's tag asking to be read again, and its
+      // part's tag asking again from the page's own address after the seconds `seeds` gives it. The
+      // write lands 1.5 s after it is sent, and a loaded browser's navigation can reach the server
+      // after that, when the right answer is `Saved.` with no part to read, so a case waiting for
+      // `Saving...` would fail on timing alone. The server's own answer is fetched and changed only
+      // there (its status line and read-again tags), and only for the navigation's fetch: every part
+      // read after it is the server's, or a case's own route's.
+      /** The pages whose navigation is answered so, by address (path and query), each with its part's wait in seconds. @type {Map<string, number>} */
+      const seeds = new Map();
+      /** What each of those navigations was answered with, by address, for a check's detail. @type {Map<string, string>} */
+      const seeded = new Map();
+      const seedReads = (/** @type {URL} */ u) => seeds.has(u.pathname + u.search);
+      const seedNavigation = async (/** @type {import("@playwright/test").Route} */ route) => {
+        const request = route.request();
+        const asked = new URL(request.url());
+        const address = asked.pathname + asked.search;
+        const seconds = seeds.get(address);
+        const mode = request.headers()["corten"];
+        // The runtime's navigation alone (`corten: nav`, or `page` for a whole read), once a page.
+        if (seconds === undefined || seeded.has(address) || request.method() !== "GET" || (mode !== "nav" && mode !== "page")) return route.fallback();
+        seeded.set(address, "its fetch did not settle");
+        try {
+          // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+          const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const body = await res.text();
+          const shows = body.includes(savedLine) ? "Saved." : body.includes(savingLine) ? "Saving..." : null;
+          if (!res.ok() || shows === null) {
+            seeded.set(address, `the server's own answer (status ${res.status()}${shows === null ? ", no status line" : ""})`);
+            await route.fulfill({ status: res.status(), headers, body });
+            return;
+          }
+          const tags = /<noscript data-corten-read-again[^>]*>[\s\S]*?<\/noscript>|<template data-corten-read-again[^>]*><\/template>/g;
+          const head = `<noscript data-corten-read-again="${seconds}" data-corten-head><meta http-equiv="refresh" content="${seconds}"></noscript>`;
+          const tag = `<template data-corten-read-again="${seconds}" data-from="${address}"></template>`;
+          const bare = body.replace(tags, "").replace(savedLine, savingLine);
+          const headed = bare.includes("</title>") ? bare.replace("</title>", `</title>${head}`) : `${head}${bare}`;
+          const answer = headed.includes("</main>") ? headed.replace("</main>", `${tag}</main>`) : `${headed}${tag}`;
+          seeded.set(address, `the stand-in, the server's saying ${shows}`);
+          await route.fulfill({ status: res.status(), headers, body: answer });
+        } catch (error) {
+          seeded.set(address, `failed: ${String(/** @type {Error} */ (error)?.message ?? error).split("\n")[0]}`);
+          await route.abort().catch(() => {});
+        }
+      };
       /** The init script below being added, removed with the route and listener. @type {Promise<import("@playwright/test").Disposable> | undefined} */
       let script;
       /**
@@ -350,23 +414,33 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           await within(5000, "the part route was not removed within 5 s", page.unroute(partReads, partRead));
         }
         if (swaps) {
+          // Inside the guard, which removes it (bounded): Playwright registers the handler before it
+          // awaits the browser's setup.
+          await within(5000, "the navigations' stand-in route was not set within 5 s", page.route(seedReads, seedNavigation));
           const from = parts().length;
           const wholeFrom = whole().length;
-          /** `go`, within 5 s: the write it waits for lands 1.5 s after it is sent. @param {string} to */
-          const goTo = (to) => within(5000, "the runtime's navigation to a page still saving was not seen within 5 s", go(to));
-          await goTo(await readWithin("the pending write's page", pending()));
+          /**
+           * `go` to `to` within 5 s, its navigation answered as still saving, with its part read
+           * again after `seconds` (`seeds`). @param {string} to @param {number} [seconds]
+           */
+          const goTo = (to, seconds = AGAIN_SECONDS) => {
+            seeds.set(new URL(to).pathname + new URL(to).search, seconds);
+            return within(5000, "the runtime's navigation to a page still saving was not seen within 5 s", go(to));
+          };
+          const reachedUrl = await readWithin("the pending write's page", pending());
+          await goTo(reachedUrl);
           await savedSoon();
           const reached = await readWithin("the status line after the navigation's wait for Saved.", saved());
           check(
             "a page's part reached by the runtime's navigation is read again, not the page",
             reached === "Saved." && parts().length > from && whole().length - wholeFrom === 1,
-            `${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's)`,
+            `${reached} after ${parts().length - from} part reads, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(new URL(reachedUrl).pathname + new URL(reachedUrl).search) ?? "nothing seen"})`,
           );
           // Away while the part still owes a read: the runtime's navigation reaches a page still
           // saving, whose part reads are each held unanswered from then on, so the part cannot draw
-          // its last answer (`Saved.`) and stop on its own before the page leaves. The write is sent
-          // only once the route is set (which can take up to 5 s), so the 1.5 s before it lands run
-          // from just before the navigation, not from before the route. Once the route holds a read
+          // its last answer (`Saved.`) and stop on its own before the page leaves. The navigation's
+          // answer is the stand-in's (`seeds`), still saving whenever it reaches the server, and the
+          // route holds every part read after it. Once the route holds a read
           // with the page still saying `Saving...` (within 5 s), the page leaves by a link; then each
           // held read is answered as one that asks again (the server's answer while the write lands),
           // and no part read may come in the `quietFor` after that (the part's `AGAIN_SECONDS` and 1.2 s
@@ -552,14 +626,132 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               () => within(5000, "the leaving case's part route was not removed within 5 s", page.unroute(awayReads, holdPart)),
             );
           }
+          // Away before the read: the runtime's navigation reaches a page still saving whose part is
+          // to be read `LEAVE_SECONDS` after its tag is drawn (the stand-in's answer, `seeds`), and
+          // the page leaves by its header's link, pressed in the page, before that read is due. No
+          // part read of that page may be sent, then or later: leaving cancels a read the page has
+          // only scheduled, as well as the answer of one on its way (the check above). The page's
+          // own clock (`performance.now()`) gives the order: a mutation observer notes the moment the
+          // part's tag is drawn and the moment it leaves the page (the next page's `<main>` taking
+          // its place). The runtime starts the read's timer as it draws the tag, in the same task, so
+          // an attempt counts only if the page left `LEAVE_MARGIN_MS` before the read was due by that
+          // note; a loaded browser that leaves later is tried again, three attempts in all, each with
+          // a write of its own. Then the check waits for a timer the page sets as the tag leaves,
+          // `LEAVE_SECONDS` and 1.2 s long: started after the part's and no shorter, it runs only
+          // after the part's has (HTML's timer order). It waits for that within its length and 5 s
+          // more, then 1.5 s for a read sent by then to reach the log. Without an attempt that
+          // counts, or with the page's timer not run, the check fails, saying which.
+          {
+            /** One attempt: its page's address, where the log stood as it began, and how it went. @typedef {{ address: string, logFrom: number, said: string }} Leave */
+            /** @type {Leave[]} */
+            const attempts = [];
+            /** The attempt that counted. @type {Leave | undefined} */
+            let counted;
+            /** When the page's timer ran, by its clock, or null if it did not in time. @type {number | null} */
+            let past = null;
+            /** How long the page's timer is: the part's wait and 1.2 s. */
+            const pastBy = LEAVE_SECONDS * 1000 + 1200;
+            /** The part reads of an attempt's page sent since it began. @param {Leave} attempt */
+            const sentTo = (attempt) => log.slice(attempt.logFrom).filter((e) => e.kind === "part" && address(e) === attempt.address);
+            try {
+              for (let tries = 0; tries < 3 && !counted; tries++) {
+                const to = await readWithin("the pending write's page", pending());
+                /** @type {Leave} */
+                const attempt = { address: new URL(to).pathname + new URL(to).search, logFrom: log.length, said: "" };
+                attempts.push(attempt);
+                await readWithin(
+                  "the page's note of its part's tag",
+                  page.evaluate(
+                    ({ address, pastBy }) => {
+                      const w = /** @type {any} */ (window);
+                      w.__smokeLeave?.observer?.disconnect();
+                      /** @type {{ drawn: number | null, left: number | null, past: number | null, observer: MutationObserver | null }} */
+                      const note = { drawn: null, left: null, past: null, observer: null };
+                      /** The part's tag of the page at `address`, once drawn. @type {Element | null} */
+                      let tag = null;
+                      const ours = (/** @type {Element} */ t) => {
+                        const from = t.getAttribute("data-from");
+                        if (from === null) return false;
+                        const u = new URL(from, document.baseURI);
+                        return u.pathname + u.search === address;
+                      };
+                      const observer = new MutationObserver(() => {
+                        if (!tag) {
+                          tag = Array.from(document.querySelectorAll("main template[data-corten-read-again][data-from]")).find(ours) ?? null;
+                          if (tag) note.drawn = performance.now();
+                        }
+                        if (tag && !tag.isConnected) {
+                          note.left = performance.now();
+                          observer.disconnect();
+                          setTimeout(() => (note.past = performance.now()), pastBy);
+                        }
+                      });
+                      note.observer = observer;
+                      observer.observe(document, { childList: true, subtree: true });
+                      w.__smokeLeave = note;
+                    },
+                    { address: attempt.address, pastBy },
+                  ),
+                );
+                await goTo(to, LEAVE_SECONDS);
+                await within(
+                  5000,
+                  "the page's link to the news page was not pressed within 5 s",
+                  page.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector('header a[href="/news"]')).click()),
+                );
+                await within(5000, "the news page was not drawn within 5 s of the press", page.waitForFunction(() => document.title === "News | Watchlist", null, { timeout: 5000 }));
+                const times = await readWithin(
+                  "when the page's part tag was drawn and left",
+                  page.evaluate(() => {
+                    const note = (/** @type {any} */ (window)).__smokeLeave;
+                    return { drawn: /** @type {number | null} */ (note.drawn), left: /** @type {number | null} */ (note.left) };
+                  }),
+                );
+                if (times.drawn === null || times.left === null) attempt.said = `its part's tag was ${times.drawn === null ? "not seen drawn" : "not seen leaving the page"}`;
+                else {
+                  const ahead = times.drawn + LEAVE_SECONDS * 1000 - times.left;
+                  attempt.said = `left ${Math.round(times.left - times.drawn)} ms after its part's tag was drawn, ${Math.round(ahead)} ms before its read was due`;
+                  if (ahead > LEAVE_MARGIN_MS) counted = attempt;
+                }
+              }
+              const leave = counted;
+              if (leave) {
+                past = await pollFor(pastBy + 5000, () => page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokeLeave.past) ?? false));
+                await pollFor(1500, async () => sentTo(leave).length > 0);
+              }
+              const sent = leave ? sentTo(leave) : [];
+              const tried = attempts.map((a) => `${a.address} ${a.said || "(not reached)"}`).join("; ");
+              check(
+                "navigating away before a page's part is read sends no read",
+                !!leave && past !== null && sent.length === 0,
+                leave
+                  ? `the page at ${leave.address} (its navigation answered with ${seeded.get(leave.address) ?? "nothing seen"}) ${leave.said}${past === null ? `; the page's timer ${pastBy} ms after its tag left did not run within 5 s more` : ""}; ${sent.length} part reads of it sent after${sent.length ? ` (${sent.map((e) => address(e)).join(", ")})` : ""}${attempts.length > 1 ? `; attempts: ${tried}` : ""}`
+                  : `no attempt left its page ${LEAVE_MARGIN_MS} ms before its part's read was due: ${tried}`,
+              );
+            } finally {
+              await cleanUp(() =>
+                within(
+                  5000,
+                  "the page's note of its part's tag was not stopped within 5 s",
+                  page.evaluate(() => (/** @type {any} */ (window)).__smokeLeave?.observer?.disconnect()),
+                ),
+              );
+            }
+          }
         } else {
-          for (const name of ["a page's part reached by the runtime's navigation is read again, not the page", "navigating away stops a page's part reads"]) skip(name, noSwaps);
+          for (const name of [
+            "a page's part reached by the runtime's navigation is read again, not the page",
+            "navigating away stops a page's part reads",
+            "navigating away before a page's part is read sends no read",
+          ])
+            skip(name, noSwaps);
         }
       } finally {
         /** Whether the init script's removal was confirmed. */
         let removed = false;
         await cleanUp(
           () => page.off("request", onPart),
+          () => within(5000, "the navigations' stand-in route was not removed within 5 s", page.unroute(seedReads, seedNavigation)),
           () =>
             within(
               5000,
