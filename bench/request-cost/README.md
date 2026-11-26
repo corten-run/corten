@@ -123,7 +123,10 @@ for two runs side by side on CPUs of their own. `--depth` takes at most 240. `--
 count, on `--allocations` or on `idle.mjs`, prints in place of the text a line of JSON a case
 with what was measured, unrounded: each window's instructions, seconds and other threads, the
 allocator's calls and the requests they are over, a run's bytes and connections. It is what
-[`compare.mjs`](compare.mjs) reads; the text is for people.
+[`compare.mjs`](compare.mjs) reads; the text is for people. A count of several cases prints
+each case's line as it is counted, so one that fails at a later case has printed the earlier
+ones: the hosted job counts one case an invocation. `idle.mjs` prints its line once the probe
+has stopped.
 
 ## How a number is read
 
@@ -284,31 +287,38 @@ A pull request that changes what a request is built from is counted against its 
 ([`.github/workflows/request-cost.yml`](../../.github/workflows/request-cost.yml)), so its
 author prepares no host. Its one job counts when the pull request changes `crates/corten`,
 `crates/corten-macros`, `crates/corten-feed`, `crates/corten-protocol`, the root `Cargo.toml`
-or `Cargo.lock`, this kit, the workflow, the script that scopes it, `.node-version` or
-`.gitattributes` (which says what the archive `build.sh` builds from holds), and otherwise
-says in its summary that it counted nothing, and passes (`scripts/benchmark-scope.mjs`, by the
-diff of the pull request's merge against the base). The probe is built from the first two
-crates alone; the feed's are there because a request for a feed runs them, though no case here
-does, so a change to them alone reads the same on both builds. The probe is a workspace of its
-own with its own release profile, so a profile, a `[patch]` or a cargo configuration changed
-at the root selects the job and is not what either probe is built with: such a change is
-measured, by the fourth kind of item 2.1's list.
+or `Cargo.lock`, this kit, the workflow, the script that scopes it, `.node-version` or a
+`.gitattributes` in any directory (which says what the archive `build.sh` builds from holds),
+and otherwise says in its summary that it counted nothing, and passes
+(`scripts/benchmark-scope.mjs`, by the diff of the pull request's merge against the base). A
+scope step that says neither fails the job. The probe is built from the first two crates
+alone; the feed's are there because a request for a feed runs them, though no case here does,
+so a change to them alone reads the same on both builds. The probe is a workspace of its own
+with its own release profile, so a profile or a `[patch]` changed in the root's `Cargo.toml`
+selects the job and is not what either probe is built with: such a change is measured, by the
+fourth kind of item 2.1's list. The root's `.cargo` configuration is in neither build and
+selects nothing.
 
-On one runner it does what [Running it](#running-it) says:
+On one runner it does what [Running it](#running-it) says, the first three by
+[`job.sh`](job.sh):
 
 1. Builds the probe against the merge base and then against the head, in one directory, with
    the kit of the pull request's merge, so the probe's source is the same for both. The head
    is counted against the commit where it left the base's branch, not as merged: what the
    base gained since is in neither build. A build that fails or does not end in 7 minutes
-   leaves what it said, and the table is written without that build's figures.
+   leaves what it said; that build is then not run at all, whatever it left, and the table is
+   written without its figures.
 2. Writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
    `--json`, on base and then on head, a case a run: the nine cases' instructions, three counts
    each, the four at a depth of 16, the nine cases' allocations, and the three idle readings
-   three times a build. A run ends in 120 seconds or is stopped, and none starts once 20
-   minutes have gone since the builds began, so that the table is written inside the job's 30.
-   A run the kit refuses, or that does not end, gave no figure and is taken again, once, with
-   why kept for each attempt; no run is taken again for its figure.
+   three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
+   minutes have gone since the job's first step, which leaves six of the job's 30 for the
+   table. The checkout, the toolchain and the two builds are not held to those 24: a job
+   they take past its 30 minutes ends there with no table. A run the kit refuses, or that
+   does not end, gave no figure and is taken again, once, with why kept for each attempt (the
+   kit's error, else the last thing the run said, else its exit status); no run is taken
+   again for its figure.
 4. Runs `compare.mjs` on the two builds' directories with the pull request's description, and
    writes what it prints to the job's summary: for each case base, head, the difference and
    the percent, every count of every run with its longest window and the most that other
@@ -321,10 +331,12 @@ case's instructions a request more than +0.5% over base's by the kit's medians, 
 allocations up (by the allocator's calls over the same requests, so 16,004 against 16,000 in
 1,000 requests is a rise, though both print as 16.00), and no idle reading whose median of
 three on head is above base's by more than base's three span. A figure is read only from the
-whole JSON of the run asked for: its case, depth, requests and 5,000 connections, three counts
-whose median is the one stated. Anything else is no figure, and a reading with none on either
-build, a case either build gave no whole answer to, and a base that did not build are each a
-case that cannot be counted. The job fails when the head does not build, whatever is declared.
+whole JSON of the run asked for: its case, depth, requests and 5,000 connections from one
+address, three counts whose median is the one stated. An answer is a capture that is one
+whole answer, by its `Content-Length`, with nothing after it, and the case's. Anything else
+is no figure or no answer, and a reading with no figure on either build, a case either build
+gave no answer to, and a base that did not build are each a case that cannot be counted. The
+job fails when the head does not build, whatever is declared.
 The description's line says what a miss does:
 
 | The description says | The rule holds | It does not |
@@ -336,9 +348,15 @@ The description's line says what a miss does:
 The line counts when a reader of the description sees it standing alone: `Request path: counted`
 or `Request path: measured` from the line's first character, with nothing after it but spaces
 or tabs. One in a fenced or indented code block, in an HTML comment, in a block quote or with
-other words on its line is not a declaration. Builds that answer differently are named above
-the table and fail nothing: a change may be meant to change an answer, and the review weighs a
-count of two different jobs.
+other words on its line is not a declaration. The job does not read Markdown whole. Where the
+two differ, a line a reader sees goes unread, and nothing hidden is read: a line after an
+example fenced inside a list item, or after `<!--` written as code, is not read. So write the
+line where it is read whatever is around it: on a line of its own with a blank line above and
+below, not in a list, a quote or a block, and before any text that shows `<!--` or a fence.
+An unread line is no declaration: the job then fails on a miss as it does with none, and its
+summary says it read none. Builds that answer differently are named above the table and fail
+nothing: a change may be meant to change an answer, and the review weighs a count of two
+different jobs.
 
 The description is the one the event carried when the run started. A line added afterwards is
 read by the next run a push starts, not by a rerun, and an edit starts no run, since it would
@@ -414,11 +432,11 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory above base's span and inside it, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty or cut short, which lines declare, and what each declaration does with the verdict |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory above base's span and inside it, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
+| `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
-`run.test.mjs` (but its refusals of an option) and `build.test.mjs` need Linux with `sh` and
-`git`, and are skipped elsewhere: on Windows 47 of the 64 tests run. The hosted check runs on
-Linux. What no test covers is checked by running the kit: the probe itself, callgrind's own
-dumps, and a real build. Nor does a test run the hosted job's own steps, its time limits, its
-second attempts and what it does with a build that fails: they were run with stand-ins when
-they were written, and a test of them would need a harness for the workflow's shell.
+`run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
+with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 47 of the 69 tests run.
+The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
+itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
+around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
