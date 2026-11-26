@@ -1,0 +1,9 @@
+comparison change-unstaged placement 32 workload unstaged
+A base-p16304 53960f6e596424d648f3d68564ae2e841da24fbbddef4cf1007831a66b1ec99e
+B head-p16304 d21082488207a6d1ceb991fea76e8bc55943743e2ff1f452a41d6165aec74eac
+kit cycles-deadline-2029-3
+run 227a1f7e-4f9e-4a2c-87cd-d24e819fb5b1
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 55
+started 2026-11-26T03:31:37Z
+ended 2026-11-26T03:32:39Z

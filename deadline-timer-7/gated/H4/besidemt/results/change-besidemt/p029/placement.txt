@@ -1,0 +1,9 @@
+comparison change-besidemt placement 29 workload besidemt
+A base-p16960 14ecc9ac891db028e9df5422f87f7b68c9bb2632569d2d35539ae12f98b2210e
+B head-p16960 76b04f79ccff456bb7d72685028108498e5940601598a28a179d6e8bd46201aa
+kit cycles-deadline-2029-3
+run 2f5414a8-49f0-4579-8580-10eee6d4b7dc
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 43
+started 2026-11-26T05:15:31Z
+ended 2026-11-26T05:16:37Z

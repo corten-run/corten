@@ -1,0 +1,9 @@
+comparison change-plain placement 25 workload plain
+A base-p11072 2df59ba39ab7ca3cf2b3dc572cd64a2675de758d8e25db7be5d9320440cd287d
+B head-p11072 80744b67ad783cccd84493782e4a11242f770bcba973530c11b775021f9ad9db
+kit cycles-deadline-2029-3
+run 88e0e5eb-88e7-4389-8eb7-75f370827311
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 34
+started 2026-11-26T03:08:42Z
+ended 2026-11-26T03:09:45Z

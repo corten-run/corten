@@ -1,0 +1,9 @@
+comparison change-beside placement 26 workload beside
+A base-p21776 d29be0793053d5484888eb9c9c347c3671e16ebe82901cc0ab8f52fbe7bb6149
+B head-p21776 a9460df9ccbfedb8c64b9a6f81f31b29315e457d519667c30545bdf2a67b346e
+kit cycles-deadline-2029-3
+run aed6115d-b612-4fac-8c06-92e10f8c1d9e
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 18
+started 2026-11-26T03:59:21Z
+ended 2026-11-26T04:00:27Z

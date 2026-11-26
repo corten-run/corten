@@ -1,0 +1,9 @@
+comparison change-unstaged placement 33 workload unstaged
+A base-p26944 46d897dd94a1a79672a153d01c39a7d27dae0e02e00805f238582af1028ce2fe
+B head-p26944 f53ac8bd17009e61853fe6f669e95abdedf1d8b99226eea7a7f6489898e68307
+kit cycles-deadline-2029-3
+run 227a1f7e-4f9e-4a2c-87cd-d24e819fb5b1
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 103
+started 2026-11-26T04:21:36Z
+ended 2026-11-26T04:22:38Z

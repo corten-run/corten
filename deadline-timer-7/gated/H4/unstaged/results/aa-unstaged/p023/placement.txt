@@ -1,0 +1,9 @@
+comparison aa-unstaged placement 23 workload unstaged
+A base-p26592 71c7c971385c6d6d30179b9306c16b9ccbad211cd17f81a7c50249a30a397741
+B base-p37584 b78ed743feb1eb5a1ef2b913474ed518796652e2680d87b0887f10158177f4c9
+kit cycles-deadline-2029-3
+run 227a1f7e-4f9e-4a2c-87cd-d24e819fb5b1
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 45
+started 2026-11-26T03:21:12Z
+ended 2026-11-26T03:22:14Z

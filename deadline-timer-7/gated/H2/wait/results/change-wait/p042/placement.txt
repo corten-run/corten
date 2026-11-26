@@ -1,0 +1,9 @@
+comparison change-wait placement 42 workload wait
+A base-p12560 eb872bd9f13d1f88480b1550c07bd14ce0eb2104eaba743b7e893cee193d4a26
+B head-p12560 15b2025fd22b1e4ea1127aedf8543f99fb794e12b015821b9c1534ea05978049
+kit cycles-deadline-2029-3
+run eecb7b87-9213-493b-a7cb-22d9a47f7536
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 27
+started 2026-11-26T03:02:14Z
+ended 2026-11-26T03:03:17Z

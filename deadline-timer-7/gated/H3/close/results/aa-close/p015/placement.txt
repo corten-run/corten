@@ -1,0 +1,9 @@
+comparison aa-close placement 15 workload close
+A base-p10720 ed2a28f81bf8c3828191acdb13b03d8aa0a852b868608afe1c296a30e872b2e4
+B base-p12528 a5c3ba4416515e58e7e79df256085aa89827658a794a4aa7c0f86dd25070f20e
+kit cycles-deadline-2029-3
+run fb9cf9e0-6983-44c5-91fe-a29c44c490b0
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 33
+started 2026-11-26T03:07:24Z
+ended 2026-11-26T03:08:26Z

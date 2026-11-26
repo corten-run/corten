@@ -1,0 +1,9 @@
+comparison change-close placement 4 workload close
+A base-p40624 0e585290eab343400bcf8efc801b4e8df31e76ba34df773f9ea9170e84120d65
+B head-p40624 922288bddcba2163d90162fca5ecd789f30e979274eda9df9e14fc3106c62cce
+kit cycles-deadline-2029-3
+run fb9cf9e0-6983-44c5-91fe-a29c44c490b0
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 51
+started 2026-11-26T03:26:06Z
+ended 2026-11-26T03:27:08Z

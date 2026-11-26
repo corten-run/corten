@@ -1,0 +1,9 @@
+comparison aa-wait placement 66 workload wait
+A base-p23312 9c8aedd33f12b27d956bb405327fb3372287d8f05a038825d4a32036197574a7
+B base-p512 6f203f393e2d95bdfddf86cb1e6b8f5d47aaa83be02077bfd506546c6a7677da
+kit cycles-deadline-2029-3
+run eecb7b87-9213-493b-a7cb-22d9a47f7536
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 81
+started 2026-11-26T03:58:16Z
+ended 2026-11-26T03:59:18Z

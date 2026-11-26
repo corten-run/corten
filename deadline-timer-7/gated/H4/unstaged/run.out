@@ -1,0 +1,123 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 69 and meet the rule: 138 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 69 distinct q - p mod 4096 (18, 17, 17, 17 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 53 and meet the rule: 106 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 53 distinct q - p mod 4096 (14, 13, 13, 13 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+== cycles-deadline-2029-3 gated unstaged run 227a1f7e-4f9e-4a2c-87cd-d24e819fb5b1 verify start 02:34:30
+verify: 159 placements answer as their unpadded binary
+== check start 02:35:10
+aa-unstaged: checked 1 requests: same
+change-unstaged: checked 1 requests: same
+== checks ok 02:35:24; 106 placements to run
+1 aa-unstaged p052 ok 02:36:26
+2 change-unstaged p052 ok 02:37:29
+3 change-unstaged p018 ok 02:38:31
+4 aa-unstaged p018 ok 02:39:34
+5 aa-unstaged p010 ok 02:40:36
+6 change-unstaged p010 ok 02:41:39
+7 change-unstaged p028 ok 02:42:41
+8 aa-unstaged p028 ok 02:43:44
+9 aa-unstaged p016 ok 02:44:46
+10 change-unstaged p016 ok 02:45:48
+11 change-unstaged p031 ok 02:46:51
+12 aa-unstaged p031 ok 02:47:53
+13 aa-unstaged p038 ok 02:48:56
+14 change-unstaged p038 ok 02:49:58
+15 change-unstaged p051 ok 02:51:01
+16 aa-unstaged p051 ok 02:52:03
+17 aa-unstaged p036 ok 02:53:05
+18 change-unstaged p036 ok 02:54:08
+19 change-unstaged p039 ok 02:55:11
+20 aa-unstaged p039 ok 02:56:13
+21 aa-unstaged p047 ok 02:57:15
+22 change-unstaged p047 ok 02:58:18
+23 change-unstaged p024 ok 02:59:20
+24 aa-unstaged p024 ok 03:00:22
+25 aa-unstaged p020 ok 03:01:25
+26 change-unstaged p020 ok 03:02:27
+27 change-unstaged p006 ok 03:03:29
+28 aa-unstaged p006 ok 03:04:32
+29 aa-unstaged p044 ok 03:05:34
+30 change-unstaged p044 ok 03:06:37
+31 change-unstaged p001 ok 03:07:39
+32 aa-unstaged p001 ok 03:08:41
+33 aa-unstaged p045 ok 03:09:44
+34 change-unstaged p045 ok 03:10:46
+35 change-unstaged p035 ok 03:11:49
+36 aa-unstaged p035 ok 03:12:51
+37 aa-unstaged p034 ok 03:13:54
+38 change-unstaged p034 ok 03:14:56
+39 change-unstaged p030 ok 03:15:59
+40 aa-unstaged p030 ok 03:17:02
+41 aa-unstaged p008 ok 03:18:04
+42 change-unstaged p008 ok 03:19:07
+43 change-unstaged p040 ok 03:20:09
+44 aa-unstaged p040 ok 03:21:12
+45 aa-unstaged p023 ok 03:22:14
+46 change-unstaged p023 ok 03:23:17
+47 change-unstaged p042 ok 03:24:19
+48 aa-unstaged p042 ok 03:25:22
+49 aa-unstaged p007 ok 03:26:24
+50 change-unstaged p007 ok 03:27:27
+51 change-unstaged p009 ok 03:28:29
+52 aa-unstaged p009 ok 03:29:32
+53 aa-unstaged p022 ok 03:30:34
+54 change-unstaged p022 ok 03:31:37
+55 change-unstaged p032 ok 03:32:39
+56 aa-unstaged p032 ok 03:33:41
+57 aa-unstaged p026 ok 03:34:44
+58 change-unstaged p026 ok 03:35:46
+59 change-unstaged p049 ok 03:36:49
+60 aa-unstaged p049 ok 03:37:52
+61 aa-unstaged p014 ok 03:38:54
+62 change-unstaged p014 ok 03:39:56
+63 change-unstaged p005 ok 03:40:59
+64 aa-unstaged p005 ok 03:42:01
+65 aa-unstaged p037 ok 03:43:04
+66 change-unstaged p037 ok 03:44:06
+67 change-unstaged p050 ok 03:45:09
+68 aa-unstaged p050 ok 03:46:12
+69 aa-unstaged p021 ok 03:47:14
+70 change-unstaged p021 ok 03:48:17
+71 change-unstaged p017 ok 03:49:20
+72 aa-unstaged p017 ok 03:50:22
+73 aa-unstaged p012 ok 03:51:25
+74 change-unstaged p012 ok 03:52:27
+75 change-unstaged p048 ok 03:53:30
+76 aa-unstaged p048 ok 03:54:33
+77 aa-unstaged p019 ok 03:55:35
+78 change-unstaged p019 ok 03:56:37
+79 change-unstaged p011 ok 03:57:40
+80 aa-unstaged p011 ok 03:58:42
+81 aa-unstaged p004 ok 03:59:45
+82 change-unstaged p004 ok 04:00:47
+83 change-unstaged p013 ok 04:01:49
+84 aa-unstaged p013 ok 04:02:52
+85 aa-unstaged p029 ok 04:03:54
+86 change-unstaged p029 ok 04:04:57
+87 change-unstaged p003 ok 04:06:00
+88 aa-unstaged p003 ok 04:07:02
+89 aa-unstaged p053 ok 04:08:04
+90 change-unstaged p053 ok 04:09:07
+91 change-unstaged p046 ok 04:10:09
+92 aa-unstaged p046 ok 04:11:12
+93 aa-unstaged p041 ok 04:12:14
+94 change-unstaged p041 ok 04:13:17
+95 change-unstaged p043 ok 04:14:19
+96 aa-unstaged p043 ok 04:15:21
+97 aa-unstaged p002 ok 04:16:24
+98 change-unstaged p002 ok 04:17:26
+99 change-unstaged p025 ok 04:18:29
+100 aa-unstaged p025 ok 04:19:31
+101 aa-unstaged p015 ok 04:20:33
+102 change-unstaged p015 ok 04:21:36
+103 change-unstaged p033 ok 04:22:38
+104 aa-unstaged p033 ok 04:23:41
+105 aa-unstaged p027 ok 04:24:43
+106 change-unstaged p027 ok 04:25:46
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

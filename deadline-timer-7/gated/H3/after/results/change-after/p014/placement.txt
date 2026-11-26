@@ -1,0 +1,9 @@
+comparison change-after placement 14 workload after
+A base-p36880 340afca86bd905a33c5b30f271782eaec0feb8ecbe8844ec8a4437b556f14cc2
+B head-p36880 7ddbf10adea294c43a4198b61db6b4c273f41c5c37af9888add2a88bdcebc9a4
+kit cycles-deadline-2029-3
+run cdd83ef9-7679-4ba3-bb70-118b81b8f2b3
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 23
+started 2026-11-26T04:02:38Z
+ended 2026-11-26T04:03:41Z

@@ -1,0 +1,79 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 69 and meet the rule: 138 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 69 distinct q - p mod 4096 (18, 17, 17, 17 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 53 and meet the rule: 106 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 53 distinct q - p mod 4096 (14, 13, 13, 13 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+== cycles-deadline-2029-3 gated after run cdd83ef9-7679-4ba3-bb70-118b81b8f2b3 verify start 03:38:38
+verify: 90 placements answer as their unpadded binary
+== state start 03:39:00
+state: 6 turns reach and keep the state
+== check start 03:39:34
+aa-after: checked 2 requests: same
+change-after: checked 2 requests: same
+== checks ok 03:39:48; 60 placements to run
+1 aa-after p003 ok 03:40:50
+2 change-after p003 ok 03:41:52
+3 change-after p013 ok 03:42:55
+4 aa-after p013 ok 03:43:57
+5 aa-after p006 ok 03:44:59
+6 change-after p006 ok 03:46:02
+7 change-after p019 ok 03:47:04
+8 aa-after p019 ok 03:48:06
+9 aa-after p016 ok 03:49:09
+10 change-after p016 ok 03:50:11
+11 change-after p020 ok 03:51:13
+12 aa-after p020 ok 03:52:15
+13 aa-after p007 ok 03:53:18
+14 change-after p007 ok 03:54:20
+15 change-after p030 ok 03:55:22
+16 aa-after p030 ok 03:56:25
+17 aa-after p002 ok 03:57:27
+18 change-after p002 ok 03:58:29
+19 change-after p028 ok 03:59:31
+20 aa-after p028 ok 04:00:34
+21 aa-after p015 ok 04:01:36
+22 change-after p015 ok 04:02:38
+23 change-after p014 ok 04:03:41
+24 aa-after p014 ok 04:04:43
+25 aa-after p017 ok 04:05:46
+26 change-after p017 ok 04:06:48
+27 change-after p026 ok 04:07:50
+28 aa-after p026 ok 04:08:53
+29 aa-after p024 ok 04:09:55
+30 change-after p024 ok 04:10:57
+31 change-after p001 ok 04:11:59
+32 aa-after p001 ok 04:13:02
+33 aa-after p025 ok 04:14:04
+34 change-after p025 ok 04:15:06
+35 change-after p023 ok 04:16:09
+36 aa-after p023 ok 04:17:11
+37 aa-after p018 ok 04:18:14
+38 change-after p018 ok 04:19:16
+39 change-after p027 ok 04:20:19
+40 aa-after p027 ok 04:21:21
+41 aa-after p022 ok 04:22:23
+42 change-after p022 ok 04:23:25
+43 change-after p012 ok 04:24:28
+44 aa-after p012 ok 04:25:30
+45 aa-after p009 ok 04:26:32
+46 change-after p009 ok 04:27:34
+47 change-after p029 ok 04:28:37
+48 aa-after p029 ok 04:29:39
+49 aa-after p008 ok 04:30:41
+50 change-after p008 ok 04:31:44
+51 change-after p004 ok 04:32:46
+52 aa-after p004 ok 04:33:48
+53 aa-after p011 ok 04:34:51
+54 change-after p011 ok 04:35:53
+55 change-after p010 ok 04:36:56
+56 aa-after p010 ok 04:37:58
+57 aa-after p021 ok 04:39:00
+58 change-after p021 ok 04:40:02
+59 change-after p005 ok 04:41:04
+60 aa-after p005 ok 04:42:07
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

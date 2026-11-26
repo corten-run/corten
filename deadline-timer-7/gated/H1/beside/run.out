@@ -1,0 +1,79 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 69 and meet the rule: 138 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 69 distinct q - p mod 4096 (18, 17, 17, 17 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 53 and meet the rule: 106 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 53 distinct q - p mod 4096 (14, 13, 13, 13 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+== cycles-deadline-2029-3 gated beside run aed6115d-b612-4fac-8c06-92e10f8c1d9e verify start 03:39:28
+verify: 90 placements answer as their unpadded binary
+== park start 03:39:53
+park: 6 turns in the state
+== check start 03:40:15
+aa-beside: checked 1 requests: same
+change-beside: checked 1 requests: same
+== checks ok 03:40:30; 60 placements to run
+1 aa-beside p005 ok 03:41:37
+2 change-beside p005 ok 03:42:43
+3 change-beside p022 ok 03:43:50
+4 aa-beside p022 ok 03:44:56
+5 aa-beside p004 ok 03:46:03
+6 change-beside p004 ok 03:47:10
+7 change-beside p017 ok 03:48:16
+8 aa-beside p017 ok 03:49:23
+9 aa-beside p012 ok 03:50:29
+10 change-beside p012 ok 03:51:36
+11 change-beside p027 ok 03:52:42
+12 aa-beside p027 ok 03:53:49
+13 aa-beside p013 ok 03:54:55
+14 change-beside p013 ok 03:56:02
+15 change-beside p030 ok 03:57:08
+16 aa-beside p030 ok 03:58:14
+17 aa-beside p026 ok 03:59:21
+18 change-beside p026 ok 04:00:27
+19 change-beside p008 ok 04:01:34
+20 aa-beside p008 ok 04:02:41
+21 aa-beside p028 ok 04:03:47
+22 change-beside p028 ok 04:04:53
+23 change-beside p015 ok 04:06:00
+24 aa-beside p015 ok 04:07:07
+25 aa-beside p025 ok 04:08:13
+26 change-beside p025 ok 04:09:19
+27 change-beside p010 ok 04:10:26
+28 aa-beside p010 ok 04:11:33
+29 aa-beside p009 ok 04:12:39
+30 change-beside p009 ok 04:13:46
+31 change-beside p023 ok 04:14:52
+32 aa-beside p023 ok 04:15:59
+33 aa-beside p014 ok 04:17:06
+34 change-beside p014 ok 04:18:12
+35 change-beside p011 ok 04:19:18
+36 aa-beside p011 ok 04:20:25
+37 aa-beside p007 ok 04:21:32
+38 change-beside p007 ok 04:22:38
+39 change-beside p020 ok 04:23:44
+40 aa-beside p020 ok 04:24:51
+41 aa-beside p016 ok 04:25:57
+42 change-beside p016 ok 04:27:04
+43 change-beside p003 ok 04:28:11
+44 aa-beside p003 ok 04:29:17
+45 aa-beside p021 ok 04:30:23
+46 change-beside p021 ok 04:31:30
+47 change-beside p018 ok 04:32:36
+48 aa-beside p018 ok 04:33:43
+49 aa-beside p002 ok 04:34:49
+50 change-beside p002 ok 04:35:56
+51 change-beside p001 ok 04:37:02
+52 aa-beside p001 ok 04:38:09
+53 aa-beside p029 ok 04:39:16
+54 change-beside p029 ok 04:40:22
+55 change-beside p024 ok 04:41:29
+56 aa-beside p024 ok 04:42:35
+57 aa-beside p006 ok 04:43:42
+58 change-beside p006 ok 04:44:48
+59 change-beside p019 ok 04:45:55
+60 aa-beside p019 ok 04:47:01
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

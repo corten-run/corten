@@ -1,0 +1,2 @@
+IDLE-READY 3 answers of 200 to GET /wait on one connection
+IDLE-HELD open for 3285 ms after its last answer, nothing received since

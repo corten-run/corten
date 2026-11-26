@@ -1,0 +1,9 @@
+comparison change-wait placement 65 workload wait
+A base-p8512 ef146c1180b9009f4559ad7c67abc6352d7f1aeba58fb413b20354abebd0c3f8
+B head-p8512 5073bd29464eaa9a8005ec25eb59ed438e796e3dcac9bd164db1c6e918687c48
+kit cycles-deadline-2029-3
+run eecb7b87-9213-493b-a7cb-22d9a47f7536
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 58
+started 2026-11-26T03:34:24Z
+ended 2026-11-26T03:35:26Z

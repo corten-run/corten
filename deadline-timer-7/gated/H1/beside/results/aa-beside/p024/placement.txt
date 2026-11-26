@@ -1,0 +1,9 @@
+comparison aa-beside placement 24 workload beside
+A base-p37296 2a27d2deb0e528d4c9c48ce0b630b4b6703f2f8f6af598047d7a303e6258adb4
+B base-p26896 ee873fec259700355d666097b72b08c5a7f3e7ac46a833d00a0762724f3cca31
+kit cycles-deadline-2029-3
+run aed6115d-b612-4fac-8c06-92e10f8c1d9e
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 56
+started 2026-11-26T04:41:29Z
+ended 2026-11-26T04:42:35Z

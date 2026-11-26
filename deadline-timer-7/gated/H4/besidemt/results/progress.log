@@ -1,0 +1,72 @@
+== cycles-deadline-2029-3 gated besidemt run 2f5414a8-49f0-4579-8580-10eee6d4b7dc verify start 04:28:09
+verify: 90 placements answer as their unpadded binary
+== park start 04:28:31
+park: 6 turns in the state
+== check start 04:28:52
+aa-besidemt: checked 1 requests: same
+change-besidemt: checked 1 requests: same
+== checks ok 04:29:07; 60 placements to run
+1 aa-besidemt p021 ok 04:30:13
+2 change-besidemt p021 ok 04:31:20
+3 change-besidemt p028 ok 04:32:26
+4 aa-besidemt p028 ok 04:33:32
+5 aa-besidemt p019 ok 04:34:38
+6 change-besidemt p019 ok 04:35:45
+7 change-besidemt p005 ok 04:36:51
+8 aa-besidemt p005 ok 04:37:57
+9 aa-besidemt p017 ok 04:39:04
+10 change-besidemt p017 ok 04:40:10
+11 change-besidemt p014 ok 04:41:16
+12 aa-besidemt p014 ok 04:42:22
+13 aa-besidemt p026 ok 04:43:28
+14 change-besidemt p026 ok 04:44:35
+15 change-besidemt p009 ok 04:45:41
+16 aa-besidemt p009 ok 04:46:47
+17 aa-besidemt p006 ok 04:47:53
+18 change-besidemt p006 ok 04:48:59
+19 change-besidemt p003 ok 04:50:06
+20 aa-besidemt p003 ok 04:51:12
+21 aa-besidemt p022 ok 04:52:18
+22 change-besidemt p022 ok 04:53:25
+23 change-besidemt p002 ok 04:54:31
+24 aa-besidemt p002 ok 04:55:37
+25 aa-besidemt p001 ok 04:56:43
+26 change-besidemt p001 ok 04:57:50
+27 change-besidemt p030 ok 04:58:56
+28 aa-besidemt p030 ok 05:00:02
+29 aa-besidemt p015 ok 05:01:08
+30 change-besidemt p015 ok 05:02:15
+31 change-besidemt p012 ok 05:03:21
+32 aa-besidemt p012 ok 05:04:27
+33 aa-besidemt p025 ok 05:05:33
+34 change-besidemt p025 ok 05:06:39
+35 change-besidemt p007 ok 05:07:46
+36 aa-besidemt p007 ok 05:08:52
+37 aa-besidemt p024 ok 05:09:58
+38 change-besidemt p024 ok 05:11:05
+39 change-besidemt p011 ok 05:12:11
+40 aa-besidemt p011 ok 05:13:18
+41 aa-besidemt p020 ok 05:14:24
+42 change-besidemt p020 ok 05:15:31
+43 change-besidemt p029 ok 05:16:37
+44 aa-besidemt p029 ok 05:17:44
+45 aa-besidemt p010 ok 05:18:50
+46 change-besidemt p010 ok 05:19:56
+47 change-besidemt p008 ok 05:21:02
+48 aa-besidemt p008 ok 05:22:09
+49 aa-besidemt p018 ok 05:23:15
+50 change-besidemt p018 ok 05:24:22
+51 change-besidemt p013 ok 05:25:28
+52 aa-besidemt p013 ok 05:26:35
+53 aa-besidemt p016 ok 05:27:41
+54 change-besidemt p016 ok 05:28:47
+55 change-besidemt p023 ok 05:29:54
+56 aa-besidemt p023 ok 05:31:00
+57 aa-besidemt p004 ok 05:32:06
+58 change-besidemt p004 ok 05:33:12
+59 change-besidemt p027 ok 05:34:19
+60 aa-besidemt p027 ok 05:35:25
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

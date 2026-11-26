@@ -1,0 +1,9 @@
+comparison change-unstaged placement 17 workload unstaged
+A base-p36160 580955934518bdbfcd6d80491537fb0cf008b52bb34758f01619fb4873fb8925
+B head-p36160 fd89f7782e96993725c22932cb142822ea165d3daa7770f4059da99740bcbdb7
+kit cycles-deadline-2029-3
+run 227a1f7e-4f9e-4a2c-87cd-d24e819fb5b1
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 71
+started 2026-11-26T03:48:17Z
+ended 2026-11-26T03:49:20Z

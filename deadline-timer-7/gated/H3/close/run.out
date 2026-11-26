@@ -1,0 +1,77 @@
+padlists: plain: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: wait: plan.env's sizes are pads.mjs's for K = 69 and meet the rule: 138 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 69 distinct q - p mod 4096 (18, 17, 17, 17 by quarter of a page)
+padlists: close: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: unstaged: plan.env's sizes are pads.mjs's for K = 53 and meet the rule: 106 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 53 distinct q - p mod 4096 (14, 13, 13, 13 by quarter of a page)
+padlists: after: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: beside: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+padlists: besidemt: plan.env's sizes are pads.mjs's for K = 30 and meet the rule: 60 distinct multiples of 16 from 320 to 40624 bytes, 16 line-phase combinations, 30 distinct q - p mod 4096 (8, 8, 7, 7 by quarter of a page)
+== cycles-deadline-2029-3 gated close run fb9cf9e0-6983-44c5-91fe-a29c44c490b0 verify start 02:33:33
+verify: 90 placements answer as their unpadded binary
+== check start 02:33:54
+aa-close: checked 1 requests: same
+change-close: checked 1 requests: same
+== checks ok 02:34:09; 60 placements to run
+1 aa-close p003 ok 02:35:11
+2 change-close p003 ok 02:36:13
+3 change-close p025 ok 02:37:16
+4 aa-close p025 ok 02:38:18
+5 aa-close p010 ok 02:39:20
+6 change-close p010 ok 02:40:23
+7 change-close p027 ok 02:41:25
+8 aa-close p027 ok 02:42:27
+9 aa-close p002 ok 02:43:30
+10 change-close p002 ok 02:44:32
+11 change-close p028 ok 02:45:34
+12 aa-close p028 ok 02:46:37
+13 aa-close p014 ok 02:47:39
+14 change-close p014 ok 02:48:41
+15 change-close p026 ok 02:49:44
+16 aa-close p026 ok 02:50:46
+17 aa-close p013 ok 02:51:48
+18 change-close p013 ok 02:52:51
+19 change-close p007 ok 02:53:53
+20 aa-close p007 ok 02:54:55
+21 aa-close p016 ok 02:55:58
+22 change-close p016 ok 02:57:00
+23 change-close p012 ok 02:58:03
+24 aa-close p012 ok 02:59:05
+25 aa-close p022 ok 03:00:07
+26 change-close p022 ok 03:01:09
+27 change-close p020 ok 03:02:12
+28 aa-close p020 ok 03:03:14
+29 aa-close p021 ok 03:04:17
+30 change-close p021 ok 03:05:19
+31 change-close p029 ok 03:06:21
+32 aa-close p029 ok 03:07:24
+33 aa-close p015 ok 03:08:26
+34 change-close p015 ok 03:09:28
+35 change-close p001 ok 03:10:31
+36 aa-close p001 ok 03:11:33
+37 aa-close p024 ok 03:12:35
+38 change-close p024 ok 03:13:38
+39 change-close p030 ok 03:14:40
+40 aa-close p030 ok 03:15:42
+41 aa-close p019 ok 03:16:45
+42 change-close p019 ok 03:17:47
+43 change-close p017 ok 03:18:49
+44 aa-close p017 ok 03:19:52
+45 aa-close p023 ok 03:20:54
+46 change-close p023 ok 03:21:56
+47 change-close p011 ok 03:22:59
+48 aa-close p011 ok 03:24:01
+49 aa-close p018 ok 03:25:03
+50 change-close p018 ok 03:26:06
+51 change-close p004 ok 03:27:08
+52 aa-close p004 ok 03:28:11
+53 aa-close p009 ok 03:29:13
+54 change-close p009 ok 03:30:15
+55 change-close p006 ok 03:31:17
+56 aa-close p006 ok 03:32:20
+57 aa-close p008 ok 03:33:22
+58 change-close p008 ok 03:34:24
+59 change-close p005 ok 03:35:27
+60 aa-close p005 ok 03:36:29
+failed (seq:comparison:placement), none run again, no bound for their comparison: none
+report: /m/dl/results/report.md, report.mjs exit 0 (0 every comparison complete, 1 one or more incomplete, 2 refused, other: crashed)
+RUN-ENDED complete: every comparison complete; results/report.md
+ALL-DONE

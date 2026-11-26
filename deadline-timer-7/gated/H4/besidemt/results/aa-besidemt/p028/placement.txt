@@ -1,0 +1,9 @@
+comparison aa-besidemt placement 28 workload besidemt
+A base-p6320 17c68fd81123bc29bd100427cb0c0a1a69cc6c89199d03532b7e7b620bcbaea0
+B base-p16928 a4cd862570cba60f4418f04af56416bb8b67099455293234bedbb44136c1d02a
+kit cycles-deadline-2029-3
+run 2f5414a8-49f0-4579-8580-10eee6d4b7dc
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 4
+started 2026-11-26T04:32:26Z
+ended 2026-11-26T04:33:32Z

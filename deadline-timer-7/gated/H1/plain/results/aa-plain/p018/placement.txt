@@ -1,0 +1,9 @@
+comparison aa-plain placement 18 workload plain
+A base-p5904 9945bcd20bfcbd62867f9d2e1c5c245ad8cd7675d9bb82356e17e68489983be6
+B base-p17280 718d9bdf63a7e62d7d5e2652819c0362068c5a9440f44acc6e8ad997abc5b996
+kit cycles-deadline-2029-3
+run 88e0e5eb-88e7-4389-8eb7-75f370827311
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 37
+started 2026-11-26T03:11:50Z
+ended 2026-11-26T03:12:52Z

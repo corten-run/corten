@@ -1,0 +1,9 @@
+comparison change-wait placement 1 workload wait
+A base-p320 2a5a0682995b1999359ecf30a004698df0723c18b9b48d05509e64119fc2e92f
+B head-p320 277b89580daee4b9dd86f1dd5884e5bfcbf8b7f21c0488ca9abe68b28d942863
+kit cycles-deadline-2029-3
+run eecb7b87-9213-493b-a7cb-22d9a47f7536
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 107
+started 2026-11-26T04:25:14Z
+ended 2026-11-26T04:26:17Z

@@ -1,0 +1,9 @@
+comparison aa-after placement 9 workload after
+A base-p20288 0578ed7b3482b81b94ba09c9baa8c9eef82985205ac51ead5c9b92d1b7452d11
+B base-p7008 67db7af0ceaee564519ea215845ccd3b6a41088e69ddd57217dfaaed2e19fdcd
+kit cycles-deadline-2029-3
+run cdd83ef9-7679-4ba3-bb70-118b81b8f2b3
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 45
+started 2026-11-26T04:25:30Z
+ended 2026-11-26T04:26:32Z

@@ -1,0 +1,9 @@
+comparison change-wait placement 4 workload wait
+A base-p40624 0e585290eab343400bcf8efc801b4e8df31e76ba34df773f9ea9170e84120d65
+B head-p40624 922288bddcba2163d90162fca5ecd789f30e979274eda9df9e14fc3106c62cce
+kit cycles-deadline-2029-3
+run eecb7b87-9213-493b-a7cb-22d9a47f7536
+plan 228ec99cbaa195396673e49f9d9b809845ac0c8c56f8fc3fe50b0ab60790ad7c
+seq 30
+started 2026-11-26T03:05:21Z
+ended 2026-11-26T03:06:23Z
