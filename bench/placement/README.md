@@ -218,13 +218,19 @@ one of the commands above with its output under `<run dir>/log`:
    input, on the driver's CPU), stopped through its input after the answers check, after each
    turn and however `turns.sh` ends, the placement's deadline TERM during the stop and a KILL of
    `turns.sh` included, waited for about 15 s at most, and followed by one connection to the
-   server's port that nothing may take. The
+   server's port that nothing may take. The deadline's `timeout` signals `turns.sh`'s whole
+   process group, so its TERM reaches the servers too, and `serve.mjs`, sent it as well, stops
+   each as it does when its input ends. The
    `curl`s in `verify.sh` and `turns.sh`, all to 127.0.0.1, run with `--disable`, so a `.curlrc`
    (a retry, a header) changes neither a request nor its bound, and with `--noproxy '*'`, so no
    `http_proxy` or `ALL_PROXY` of the environment's answers for the servers. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
    file by a hash of it), and no plan written before the run can say how. So the difference
-   found there is kept as the workload's `expect` for this run
+   found there is kept as the workload's `expect` for this run, but only as `turns.sh` reports
+   one after both servers are stopped and nothing takes a connection on either port (status 4
+   and its line `A and B answer differently, both servers stopped and their ports closed`): a
+   difference after which a stop fails, is unconfirmed or is cut by a signal ends `turns.sh` 1,
+   and leaves the workload not read. The difference is kept
    (`<run dir>/expect-<workload>.txt`), with the two bodies' digests
    (`<run dir>/bodies-<workload>.txt`), and the row says "answers differ as recorded". Nobody
    reviewed that difference: the run recorded it.
@@ -412,15 +418,19 @@ check, which is `turns.sh` with no pair turned, on servers of its own (the same 
 bodies of one length, a third body of that length under the difference the two made, a
 difference in a header alone and, under it, another body both sides share, a
 `diff.txt` that cannot be written, one put in place of the check's own that holds none of the difference `diff` and `cmp` reported (an empty file, or a link to `/dev/null`, which for the same answers is no regular file), one unlinked after `diff` wrote it, one linked to the expected difference before the check creates it or before the bodies line is added, which must leave that file as it was, and a `diff` that cannot compare, each of those five with a
-stand-in for a tool `turns.sh` runs, a side that never answers, and a proxy of the environment's that answers everything, which no request may reach), on a CPU the test may run
+stand-in for a tool `turns.sh` runs, a side that never answers, answers that differ after which a
+start command that forks its server leaves it listening, which must not read as a difference,
+and a proxy of the environment's that answers everything, which no request may reach), on a CPU the test may run
 on, and fails saying so when the kit's two ports are in use. It also runs `turns.sh` itself on two servers that
 ignore TERM: after answers that are the same, sent TERM while it stops them after answers that
-differ, and killed outright while they run, it must have both stopped within a bound and leave
-nothing on the kit's ports. `verify.test.mjs`, which `npm run
+differ (which then must say no difference), killed outright while they run, and under the
+check's own deadline, whose TERM reaches the whole process group, it must have both stopped
+within a bound, and leave nothing on the kit's ports, by the time it exits. `verify.test.mjs`, which `npm run
 check` runs too, runs the second, `verify.sh`, and with a plan of no placement, on
 a base that ignores TERM: after its two starts, ended by a failed request while the base
-runs, sent TERM while it stops the base and killed outright while the base runs, it must have
-the base stopped within a bound and leave nothing on its port; it must fail when a start command
+runs, sent TERM while it stops the base after a request that succeeded (which must then fail it)
+and killed outright while the base runs, it must have the base stopped within a bound and leave
+nothing on its port; it must fail when a start command
 forks the server and leaves it listening, give each readiness request to a base that never
 answers at most a second under a `.curlrc` that asks for retries, send no request to a proxy of
 the environment's, keep a caller's `NODE_OPTIONS` from `serve.mjs`, and, with a stand-in

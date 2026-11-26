@@ -42,8 +42,14 @@
 # and KILL 5 s later for one that ignores TERM); turns.sh waits about 15 s at most for a stop and
 # then fails, saying the cleanup is unconfirmed, and fails too if anything still accepts on the
 # server's port after it, and a turns.sh killed outright still has its servers stopped.
+# When A and B answer differently and no difference is expected, both servers are stopped first,
+# and only once both have ended and nothing takes a connection on either port does turns.sh say
+# "turns: <workload>: A and B answer differently, both servers stopped and their ports closed" and
+# exit 4. A stop that fails or is unconfirmed, or a signal during it, exits 1 without that line.
+# Any other failure exits 1, or with the status of the command that failed (set -e), so it is that
+# line and status 4 together that say the answers differ and the cleanup after them is confirmed.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,44p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,50p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
@@ -60,9 +66,12 @@ done
 # Each server is run by serve.mjs, which starts it as its own child, writes its process number to
 # serve-<A|B>.pid (that process is the one whose CPU is checked and that perf counts: the start
 # command is exec'd, so it is the server), and stops it when its standard input ends: TERM, KILL
-# if it is still running 5 s later, and its own exit within 5 s more. Only serve.mjs signals a
-# server, through the child's handle, which holds the process until serve.mjs reaps it, so no
-# signal goes by a process number that may since name another process; this shell sends none.
+# if it is still running 5 s later, and its own exit within 5 s more. Of the kit's own scripts,
+# only serve.mjs signals a server, through the child's handle, which holds the process until
+# serve.mjs reaps it, so no signal goes by a process number that may since name another process;
+# this shell sends none. The placement's deadline is another sender: timeout (run.sh, and the
+# trend's check) signals turns.sh's whole process group, so the servers get its TERM (and its
+# KILL 30 s on) as serve.mjs and this shell do, and serve.mjs then stops its server as above and exits 1.
 # A server's standard input is a FIFO whose one writer is this shell's descriptor 5 (A's) or 6
 # (B's), opened read and write so neither end waits for the other. serve.mjs and every curl, perf
 # and wrk get both closed, so closing one stops that server, and so does this shell's end, however
@@ -204,7 +213,15 @@ if [ -n "${EXPECT:-}" ]; then
     cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
     echo "answers: differ only as the plan's expected difference says" | tee "$ans/verdict.txt"
 else
-    [ $hst = 0 ] && [ $bst = 0 ] || { cat "$diffs" >&2; fail "A and B answer differently"; }
+    # A difference that is not expected is said only after a stop that is confirmed: both servers
+    # ended and their ports refuse a connection, so the line and status 4 cannot stand for answers
+    # compared on servers that were then left running.
+    if [ $hst != 0 ] || [ $bst != 0 ]; then
+        cat "$diffs" >&2
+        halt A B || fail "A and B's answers differ, and stopping their servers after the check failed or is unconfirmed: not read as a difference"
+        echo "turns: $workload: A and B answer differently, both servers stopped and their ports closed" >&2
+        exit 4
+    fi
     echo "answers: same" | tee "$ans/verdict.txt"
 fi
 

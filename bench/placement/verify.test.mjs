@@ -113,7 +113,9 @@ async function verify(t, name, path, { env = process.env, before = null, file = 
 /**
  * verify.sh on such a work directory, with signal sent to verify.sh itself (through its handle)
  * once the file of the work directory named by when holds count lines; killed at 60 s. env: the
- * environment verify.sh is run with.
+ * environment verify.sh is run with. Its end is verify.sh's own exit, not its output closing (a
+ * serve.mjs, which inherits that output, may hold it), and what still runs is asked at that moment:
+ * left, the fixtures still running, and busy, whether something still takes a connection on 18083.
  */
 async function interrupted(t, name, path, when, signal, { count = 1, env = process.env, ...options } = {}) {
   const { work, args } = prepare(t, name, path, options), began = Date.now();
@@ -121,16 +123,19 @@ async function interrupted(t, name, path, when, signal, { count = 1, env = proce
   let said = "";
   child.stdout.on("data", (d) => { said += d; });
   child.stderr.on("data", (d) => { said += d; });
-  const ended = new Promise((done) => child.on("close", (status, sig) => done({ status, signal: sig })));
+  const ended = new Promise((done) => child.on("exit", (status, sig) => done({ status, signal: sig })));
+  const closed = new Promise((done) => child.on("close", done));
   const limit = setTimeout(() => child.kill("SIGKILL"), 60000);
   while (lines(join(work, when)).length < count && child.exitCode === null && Date.now() - began < 30000) await sleep(20);
   const sent = lines(join(work, when)).length >= count && child.exitCode === null;
   if (sent) child.kill(signal);
   const sentTime = Date.now(), sentAt = (sentTime - began) / 1000;
   const end = await ended;
+  const seconds = (Date.now() - began) / 1000, left = await living(work), busy = taken();
   clearTimeout(limit);
-  const seconds = (Date.now() - began) / 1000;
-  return { ...end, sent, sentAt, sentTime, seconds, work, said };
+  // What verify.sh said, once its output has closed: at most as long as a serve.mjs it left holds it.
+  await Promise.race([closed, sleep(20000)]);
+  return { ...end, sent, sentAt, sentTime, seconds, left, busy, work, said };
 }
 
 test("a fixture server ends by itself within its bound, though it ignores TERM, so no test need signal one", POSIX, async (t) => {
@@ -218,15 +223,17 @@ test("verify.sh gives each readiness request at most a second, whatever retries 
   assert.ok(!taken(), "something still answers on 18083");
 });
 
-test("verify.sh, sent TERM while it stops a base that ignores TERM, finishes the stop before it ends, and nothing is left listening", LINUX, async (t) => {
-  // A failed request ends verify.sh while the base runs; the base's own record of TERM says the
-  // stop has begun, and TERM is then sent to verify.sh, which must not cut that stop short.
-  const r = await interrupted(t, "term-during-stop", "/drop", "terms", "SIGTERM");
+test("verify.sh, sent TERM while it stops a base that ignores TERM after a request that succeeded, finishes the stop before it ends, fails for the TERM, and nothing is left listening", LINUX, async (t) => {
+  // The first start's request succeeds and its stop begins, which the base's own record of TERM
+  // says; TERM is then sent to verify.sh, which must not cut that stop short, and then ends 1 for
+  // it rather than go on to the second start (which, with no TERM, it would, and pass).
+  const r = await interrupted(t, "term-during-stop", "/page", "terms", "SIGTERM");
   assert.ok(r.sent, `the stop never began, or verify.sh ended before TERM could be sent: ${r.said}`);
-  assert.notEqual(r.status, 0, r.said);
-  assert.equal(lines(join(r.work, "pids")).length, 1, r.said);
-  assert.deepEqual(await living(r.work), [], `the server verify.sh started is still running after verify.sh ended: ${r.said}`);
-  assert.ok(!taken(), "something still answers on 18083");
+  assert.deepEqual([r.status, r.signal], [1, null], r.said);
+  assert.equal(lines(join(r.work, "pids")).length, 1, `verify.sh went on to a second start: ${r.said}`);
+  assert.ok(existsSync(join(r.work, "verify", "start-1.raw-headers")) && !r.said.includes("placements answer as their unpadded binary"), r.said);
+  assert.deepEqual(r.left, [], `the server verify.sh started was still running when verify.sh exited: ${r.said}`);
+  assert.ok(!r.busy, `something still answered on 18083 when verify.sh exited: ${r.said}`);
   assert.ok(r.seconds < 30, `verify.sh took ${r.seconds} s to stop its server`);
 });
 
