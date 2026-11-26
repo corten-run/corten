@@ -833,7 +833,8 @@ pub use corten_macros::UrlValue;
 /// none of the app's stages ([`crate::middleware`]), so no same-origin check, no signal or
 /// deadline, no middleware (the app's, an area's or an API's), no error page, security headers,
 /// `Cache-Control`, tag or compression. The router runs what it keeps around its handler in their
-/// place: the host check every request meets (`421` for a name the app does not answer to), `X-Content-Type-Options:
+/// place: the host check every request meets (`421` for a name the app does not answer to, `400` for a
+/// request HTTP does not allow), `X-Content-Type-Options:
 /// nosniff` and `Content-Security-Policy: sandbox` on its answer, a panic answered `500`, and,
 /// under an API's prefix, the API's JSON for a failure. Its handler's answer is otherwise sent as
 /// it made it, a raw [`crate::response::Response`] too, and every route beside it keeps every
@@ -4555,7 +4556,8 @@ fn written_checked<R: Route + ?Sized>() {
 /// What a route that says `unstaged` goes through in place of the app's stages, which
 /// `App::router` gives it: the router's own `404` for a segment without the text it writes after
 /// a parameter, its `405`, and its handler's answer all meet it. The host check every request
-/// meets comes first (a name the app does not answer to gets a `421`, and nothing else runs). Every
+/// meets comes first (a name the app does not answer to gets a `421`, a request HTTP does not
+/// allow a `400`, and nothing else runs). Every
 /// answer then gets `X-Content-Type-Options: nosniff`, so a browser takes it only as the type it
 /// says (a page of the app's cannot load it as a script, since `script-src 'self'` trusts every
 /// URL of the app's), and a `Content-Security-Policy: sandbox` of its own beside any policy the
@@ -4580,8 +4582,7 @@ pub(crate) struct Lane {
 impl crate::router::Stages for Lane {
     #[inline]
     fn run(self: std::sync::Arc<Self>, req: crate::http::Request, route: &crate::router::Route) -> crate::router::Answering {
-        if !self.hosts.answers(&req) {
-            let mut res = crate::security::misdirected();
+        if let Some(mut res) = self.hosts.asked(&req).refusal() {
             res.headers_mut().insert(http::header::CACHE_CONTROL, crate::cache::PRIVATE);
             return Box::pin(std::future::ready(unstaged_headers(res)));
         }

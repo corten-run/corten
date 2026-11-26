@@ -968,7 +968,10 @@ impl<M: Middleware> App<M> {
     /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
-    /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON,
+    /// under `corten dev`, where the log says instead, once for each route and verdict, whether a
+    /// release build would keep a `Public` route's answer to a `GET` that shows nothing about who
+    /// asks while its store has room, and if not the first reason (a bound of 0 among them); an
+    /// app with no `Public` route of a kind it keeps (a page, or JSON,
     /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
@@ -1627,10 +1630,15 @@ impl<M: Middleware> App<M> {
         if let Some(unstaged) = unstaged {
             table = table.merge(unstaged);
         }
-        // Under `corten dev` every load is the handler's, so a change shows on the next one. An app
-        // with no route eligible to keep a page has none for a write to drop, so its writes are not
-        // counted.
-        shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        // An app with no route eligible to keep a page has none for a write to drop, so its writes
+        // are not counted. Under `corten dev` every load is the handler's, so a change shows on the
+        // next one: the store stands so the code that decides what it keeps runs as it does in a
+        // release build, but nothing is kept in it, and each `Public` route says in the log what
+        // a release build does with its answer (`crate::router::Telling`).
+        shared.kept = if !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        if dev {
+            table = table.telling();
+        }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);
@@ -2223,7 +2231,9 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        let mut req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        // An HTTP/1.1 message with no `Host` line, which only its reader knows of a request.
+        crate::security::mark_unnamed(&mut req);
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
@@ -2598,10 +2608,9 @@ impl<S: Steps> Layer<S> {
         let req = pending.get();
         let headers = req.headers();
         let mut origin = Origin::new(headers);
-        // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
-        // page, no caller lookup.
-        if !self.policy.answers(req.uri(), || origin.host()) {
-            let mut res = crate::security::misdirected();
+        // A request for another name (a DNS-rebound page), or one HTTP does not allow, runs
+        // nothing of the app's: no error page, no caller lookup.
+        if let Some(mut res) = self.policy.asked(req, &mut origin).refusal() {
             let vary = res.headers().contains_key(header::VARY);
             self.policy.headers(&mut res, None, &self.policy.csp, vary);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
