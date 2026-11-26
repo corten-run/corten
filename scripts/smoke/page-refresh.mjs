@@ -24,6 +24,13 @@ const LEAVE_SECONDS = 4;
 const LEAVE_MARGIN_MS = 500;
 
 /**
+ * Waits `ms` by a timer of the smoke's own. A driver command (`page.waitForTimeout`) has no bound
+ * on its answer: one whose answer never comes would keep a case from its cleanup.
+ * @param {number} ms
+ */
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
  * Why `answer`, the answer to a part read of `address` (its URL), is not a patch that asks to be
  * read again from that same address after `AGAIN_SECONDS` with `status` drawn, or null when it is.
  * `page` parses it as the runtime parses a patch (`parse` in corten.js: a template's `innerHTML`)
@@ -377,6 +384,30 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     };
     const savedSoon = () =>
       page.waitForFunction(() => document.getElementById("alert-status")?.textContent === "Saved.", null, { timeout: 6000 }).catch(() => {});
+    /**
+     * What `probe`, run in the page, returns once that is truthy, if the wait sees it within `ms` of
+     * this call by the smoke's own monotonic clock (`within`), else null. The driver's own timeout
+     * counts from when it receives the command, which a delayed dispatch moves later, so it only ends
+     * the wait: a value that comes back past the smoke's `ms` is no value. The value is the one the
+     * wait observed, read from its handle afterwards (bounded plumbing), not a later look at the page.
+     * @template A @param {number} ms @param {string} what @param {(arg: A) => unknown} probe @param {A} arg
+     * @returns {Promise<unknown>}
+     */
+    const seenWithin = async (ms, what, probe, arg) => {
+      const until = performance.now() + ms;
+      const waiting = page.waitForFunction(probe, arg, { timeout: ms });
+      const handle = await within(Math.max(0, until - performance.now()), `${what} was not seen within ${ms} ms`, waiting).catch(() => {
+        // A handle the wait brings after the smoke's `ms` is let go unread.
+        waiting.then((late) => late.dispose(), () => {}).catch(() => {});
+        return null;
+      });
+      if (handle === null) return null;
+      try {
+        return await readWithin(`what the wait saw (${what})`, handle.jsonValue());
+      } finally {
+        handle.dispose().catch(() => {});
+      }
+    };
     /** @type {string[]} */
     const reads = [];
     const onSaved = (/** @type {import("@playwright/test").Request} */ r) => r.url().includes("/alerts") && reads.push(r.url());
@@ -730,7 +761,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const drawn = first && first.time <= savedBy ? first : null;
           const last = drawn === null ? null : (answers[Number(drawn.read)] ?? null);
           const quiet = !!last && !last.asks;
-          if (quiet && drawn) await page.waitForTimeout(Math.max(0, drawn.time + 2200 - Date.now()));
+          if (quiet && drawn) await pause(Math.max(0, drawn.time + 2200 - Date.now()));
           const terminal = quiet && drawn ? log.findIndex((e) => e.request === answered[Number(drawn.read)]) : -1;
           const afterTerminal = terminal < 0 || !drawn ? [] : log.slice(terminal + 1);
           const later = afterTerminal.filter((e) => e.kind !== "prefetch").map((e) => named(e, /** @type {{ time: number }} */ (drawn).time));
@@ -805,24 +836,28 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           try {
             await within(5000, "the reached page's part route was not set within 5 s", page.route(reachReads, reachPart));
             const nav = await goTo(reachedUrl);
-            // `Saved.` drawn by an answer to the reached page's own part read, within 6 s.
-            const inTime = await page
-              .waitForFunction(
-                () => {
-                  const status = document.getElementById("alert-status");
-                  return status?.textContent === "Saved." && status.hasAttribute("data-smoke-reach");
-                },
-                null,
-                { timeout: 6000 },
-              )
-              .then(() => true, () => false);
-            const reached = await readWithin(
-              "the status line after the navigation's wait for Saved.",
-              page.evaluate(() => {
+            // `Saved.` drawn by an answer to the reached page's own part read, seen within 6 s of the
+            // start of the wait by the smoke's clock (`seenWithin`): the part read whose answer drew
+            // it is the one the wait saw marked, not one a later look at the page finds.
+            const seenRead = await seenWithin(
+              6000,
+              "Saved. drawn by an answer to the reached page's own part read",
+              () => {
                 const status = document.getElementById("alert-status");
-                return { text: status?.textContent ?? null, read: status?.getAttribute("data-smoke-reach") ?? null };
-              }),
+                return status?.textContent === "Saved." && status.getAttribute("data-smoke-reach");
+              },
+              null,
             );
+            const inTime = typeof seenRead === "string";
+            const reached = inTime
+              ? { text: "Saved.", read: seenRead }
+              : {
+                  text: await readWithin(
+                    "the status line after the navigation's wait for Saved.",
+                    page.evaluate(() => document.getElementById("alert-status")?.textContent ?? null),
+                  ),
+                  read: null,
+                };
             // The same document throughout: the record `go` put on its window is still there, which a
             // full load (a document read, then its part) would have lost.
             const kept = await readWithin(
@@ -835,7 +870,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             check(
               "a page's part reached by the runtime's navigation is read again, not the page",
               nav.saving && nav.sameDocument && kept && drewOwn && own.length > 0 && whole().length - wholeFrom === 1,
-              `${wentTo(nav)}, then ${reached.text}${inTime ? "" : " (not drawn by its own part read within 6 s)"}${reached.read === null ? " (not drawn by an answer to the reached page's own part read)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
+              `${wentTo(nav)}, then ${reached.text}${reached.read === null ? " (not drawn by an answer to the reached page's own part read within 6 s)" : ` drawn by its part read ${Number(reached.read) + 1}`} after ${own.length} part reads of ${reachedAt}${others.length ? ` and ${others.length} of other addresses (${others.map((e) => address(e)).join(", ")})` : ""}, ${whole().length - wholeFrom} page loads (the navigation's, answered with ${seeded.get(reachedAt) ?? "nothing seen"})${kept ? "" : ", in another document"}`,
             );
           } finally {
             reachOver = true;
@@ -1029,7 +1064,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             const released = await letGo();
             const delivered = released.filter((r) => r === null).length;
             const failed = released.flatMap((r, i) => (r === null ? [] : [`held read ${i + 1}: ${r}`]));
-            await page.waitForTimeout(quietFor);
+            await pause(quietFor);
             check(
               "navigating away stops a page's part reads",
               !!owes && owes.status === "Saving..." && delivered > 0 && failed.length === 0 && parts().length === left,
@@ -1202,10 +1237,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const asWhole = (body) => body.replace(/<template data-corten-read-again[^>]*><\/template>/g, "");
     /**
      * Each read of a page these cases read whole by the runtime (`corten: nav`, or `page` for a
-     * whole read; a prefetch aside), by address (path and query), in the order it reached the route,
-     * with whether it was `go`'s navigation's own fetch, so a check can count the reads after it, and
+     * whole read; a prefetch aside), and each load of the fragment case's receipt after its first
+     * (`placeLoads`, the page reading itself again in a browser without the Navigation API), by
+     * address (path and query), in the order it reached the route, with whether it was `go`'s
+     * navigation's own fetch, so a check can count the reads after it, whether it was a load, and
      * whether its answer said `Saved.` (null until it is in).
-     * @type {{ address: string, navigation: boolean, saved: boolean | null }[]}
+     * @type {{ address: string, navigation: boolean, load: boolean, saved: boolean | null }[]}
      */
     const wholeReads = [];
     /**
@@ -1225,6 +1262,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const read = drawn.poll === null ? undefined : wholeReads[Number(drawn.poll)];
       return navAt >= 0 && drawn.text === "Saved." && drawn.at === target && Number(drawn.poll) > navAt && read?.address === address && !read.navigation && read.saved === true;
     };
+    /**
+     * The fragment case's receipt, while it runs, and how many loads of it (navigation requests) the
+     * whole-read route has seen: the first is answered still saving (`stillSaving`), and each later
+     * one is a read of the page, as the runtime's own are (`wholeReads`).
+     * @type {{ address: string, count: number } | null}
+     */
+    let placeLoads = null;
+    /** What the fragment case's first load was answered with, once it came. @type {{ saving: boolean, what: string } | null} */
+    let loadAnswer = null;
     /** What each of `go`'s navigations here was answered with, by address, for a check's detail. @type {Map<string, string>} */
     const wholeSeeded = new Map();
     /** Why a navigation's answer here failed its check, by address: the server's `Saving...` whose head's read-again tag is missing or waits other than `AGAIN_SECONDS`. @type {Map<string, string>} */
@@ -1247,17 +1293,32 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const address = asked.pathname + asked.search;
       // The runtime's reads (`corten: nav`, or `page` for a whole read; a prefetch aside); `go`'s
       // navigation's own fetch is the one that takes its token, as it reaches the route.
-      const read = request.method() === "GET" && (mode === "nav" || mode === "page") && !isPrefetch(request);
+      // A load of the fragment case's receipt: its place among those loads (0 for its first), else -1.
+      const placeLoad = placeLoads !== null && address === placeLoads.address && request.isNavigationRequest() ? placeLoads.count++ : -1;
+      const read = (request.method() === "GET" && (mode === "nav" || mode === "page") && !isPrefetch(request)) || placeLoad > 0;
       const token = read ? claimNav(address) : undefined;
       const navigation = token !== undefined;
       const at = wholeReads.length;
-      if (read) wholeReads.push({ address, navigation, saved: null });
+      if (read) wholeReads.push({ address, navigation, load: placeLoad > 0, saved: null });
       const res = await route.fetch({ headers: { ...request.headers(), "accept-encoding": "identity" } });
       const headers = res.headers();
       delete headers["content-encoding"];
       delete headers["content-length"];
       const whole = asWhole(await res.text());
       if (read) wholeReads[at].saved = res.ok() && whole.includes(savedLine);
+      // The fragment case's first load of its receipt: answered still saving, as `stillSaving` writes
+      // the server's `Saved.` (one saying `Saving...` is passed on as written), so that case does not
+      // depend on the write landing after the load.
+      if (placeLoad === 0) {
+        const loadShows = !res.ok() ? null : whole.includes(savedLine) ? "Saved." : whole.includes(savingLine) ? "Saving..." : null;
+        loadAnswer =
+          loadShows === "Saved."
+            ? { saving: true, what: "the stand-in, the server's saying Saved." }
+            : loadShows === "Saving..."
+              ? { saving: true, what: "the server's own answer saying Saving..." }
+              : { saving: false, what: `the server's own answer (status ${res.status()}, no status line)` };
+        return route.fulfill({ status: res.status(), headers, body: loadShows === "Saved." ? stillSaving(whole) : whole });
+      }
       if (!navigation) {
         const followed = read && address === pollTarget;
         return route.fulfill({ status: res.status(), headers, body: followed ? whole.replace('<p id="alert-status"', `<p data-smoke-poll="${at}" id="alert-status"`) : whole });
@@ -1301,13 +1362,50 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       if (swaps) check("reading again keeps the document", await readWithin("the page's mark", page.evaluate(() => (/** @type {any} */ (window)).__marker === 5)));
       else skip("reading again keeps the document", noSwaps);
       const settled = reads.length;
-      await page.waitForTimeout(2200);
+      await pause(2200);
       check("it stops once the page no longer asks", reads.length === settled, `${reads.length - settled} more reads`);
-      // At a place on the page (a write redirected to `route.at(..)`): read again all the same.
-      await page.goto(`${await readWithin("the pending write's page", pending())}#alert-status`);
-      await savedSoon();
-      const atPlace = await readWithin("the status line after the wait for Saved.", saved());
-      check("a page at a place (#id) reads itself again too", atPlace === "Saved." && new URL(page.url()).hash === "#alert-status", `${atPlace} ${page.url()}`);
+      // At a place on the page (a write redirected to `route.at(..)`): read again all the same. The
+      // page's first load of its receipt is answered still saving (`placeLoads`) whatever the store
+      // says by then, so a write that landed before the load cannot pass the case; then `Saved.` must
+      // be drawn, seen within 6 s by the smoke's clock (`seenWithin`), by the answer to a later read
+      // of that receipt (the runtime's, or a load of it in a browser without the Navigation API;
+      // `pollTarget` marks those answers), with the page still at the place.
+      {
+        const target = await readWithin("the pending write's page", pending());
+        const address = new URL(target).pathname + new URL(target).search;
+        const readFrom = wholeReads.length;
+        loadAnswer = null;
+        placeLoads = { address, count: 0 };
+        pollTarget = address;
+        /** The place in `wholeReads` of the read whose answer drew `Saved.`, as the wait saw it. @type {unknown} */
+        let poll = null;
+        try {
+          await page.goto(`${target}#alert-status`);
+          poll = await seenWithin(
+            6000,
+            "Saved. drawn at the place by an answer to a later read of the receipt",
+            (address) => {
+              const status = document.getElementById("alert-status");
+              return location.pathname + location.search === address && location.hash === "#alert-status" && status?.textContent === "Saved." && status.getAttribute("data-smoke-poll");
+            },
+            address,
+          );
+        } finally {
+          placeLoads = null;
+          pollTarget = null;
+        }
+        const by = typeof poll === "string" ? wholeReads[Number(poll)] : undefined;
+        const ownRead = by !== undefined && Number(poll) >= readFrom && by.address === address && !by.navigation && by.saved === true;
+        const later = wholeReads.slice(readFrom).filter((r) => r.address === address).length;
+        const shown = ownRead
+          ? "Saved."
+          : await readWithin("the status line after the wait for Saved.", page.evaluate(() => document.getElementById("alert-status")?.textContent ?? null));
+        check(
+          "a page at a place (#id) reads itself again too",
+          !!loadAnswer?.saving && ownRead,
+          `${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${shown} at ${page.url()}, ${ownRead ? `drawn by read ${Number(poll) - readFrom + 1} of the case${by?.load ? " (a load)" : ""}` : "not drawn by an answer to a later read of the receipt within 6 s"}; ${later} reads of the receipt after its load`,
+        );
+      }
       // A query a script put in the address (corten-ui's rows::sort writes the order it shows) is
       // read again with the page, so the page read again draws what is on screen.
       {
@@ -1550,23 +1648,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         let nav;
         try {
           nav = await go(target);
-          await page
-            .waitForFunction(
-              (target) => {
-                const status = document.getElementById("alert-status");
-                return location.href === target && status?.textContent === "Saved." && status.hasAttribute("data-smoke-poll");
-              },
-              target,
-              { timeout: 6000 },
-            )
-            .catch(() => {});
-          drawn = await readWithin(
-            "the status line after the wait for Saved.",
-            page.evaluate(() => {
+          // The read whose answer drew `Saved.` is the one the wait saw marked, within 6 s of its
+          // start by the smoke's clock (`seenWithin`), not one a later look at the page finds.
+          const poll = await seenWithin(
+            6000,
+            "Saved. drawn by an answer to the page's own read",
+            (target) => {
               const status = document.getElementById("alert-status");
-              return { text: status?.textContent ?? null, poll: status?.getAttribute("data-smoke-poll") ?? null, at: location.href };
-            }),
+              return location.href === target && status?.textContent === "Saved." && status.getAttribute("data-smoke-poll");
+            },
+            target,
           );
+          drawn =
+            typeof poll === "string"
+              ? { text: "Saved.", poll, at: target }
+              : {
+                  ...(await readWithin(
+                    "the status line after the wait for Saved.",
+                    page.evaluate(() => ({ text: document.getElementById("alert-status")?.textContent ?? null, at: location.href })),
+                  )),
+                  poll: null,
+                };
         } finally {
           pollTarget = null;
         }
@@ -1576,7 +1678,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         );
         const navIndex = wholeReads.findIndex((r, i) => i >= readFrom && r.navigation && r.address === address);
         const ownPoll = pollDrewSaved(drawn, target, address, navIndex);
-        const drewBy = drawn.poll === null ? "no read of its own after the navigation's" : `read ${Number(drawn.poll) - readFrom + 1} of the case (${wholeReads[Number(drawn.poll)]?.address})`;
+        const drewBy = drawn.poll === null ? "no read of its own after the navigation's, within 6 s" : `read ${Number(drawn.poll) - readFrom + 1} of the case (${wholeReads[Number(drawn.poll)]?.address})`;
         check(
           "a page reached by the runtime's navigation reads itself again in place",
           nav.saving && nav.sameDocument && ownPoll && kept && !wholeFaults.has(address),
@@ -1605,7 +1707,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await page.click('header a[href="/news"]');
         await page.waitForFunction(() => document.title === "News | Watchlist");
         const left = reads.length;
-        await page.waitForTimeout(2200);
+        await pause(2200);
         if (armed) check("navigating away stops the reads", reads.length === left, `${reads.length - left} more reads`);
         else skip("navigating away stops the reads", "each write landed before its page came in");
       } else {
@@ -1730,13 +1832,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     const cleared = await page.evaluate(() => !document.querySelector("#alert-form [aria-invalid]") && !document.getElementById("alert-form-above-error"));
     check("a save after a refusal clears the field's error", cleared);
     const done = again.length;
-    await page.waitForTimeout(2200);
+    await pause(2200);
     check("it stops once the patch no longer asks", again.length === done, `${again.length - done} more reads`);
     await submit();
     await page.click('header a[href="/news"]');
     await page.waitForFunction(() => document.title === "News | Watchlist");
     const away = again.length;
-    await page.waitForTimeout(2200);
+    await pause(2200);
     check("navigating away stops a patch's reads", again.length === away, `${again.length - away} more reads`);
     // A read the server fails (its error page, not a patch) stops the reads without a console
     // error: the server logged the failure, and the part stays as it was.
@@ -1747,9 +1849,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     await page.goto(`${base}/alerts`);
     const readsBefore = again.length;
     await submit();
-    for (let i = 0; i < 40 && again.length === readsBefore; i++) await page.waitForTimeout(100);
+    for (let i = 0; i < 40 && again.length === readsBefore; i++) await pause(100);
     const failedAt = again.length;
-    await page.waitForTimeout(2200);
+    await pause(2200);
     // The browser itself reports the 502 as a failed resource; Corten adds nothing.
     const logged = errors.slice(errorsBefore).filter((e) => !e.includes("502"));
     check(

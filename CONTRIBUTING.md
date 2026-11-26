@@ -345,7 +345,9 @@ part read of the page it reaches, so the part cannot draw `Saved.` and stop by i
 requires a read held within five seconds while the page still says `Saving...`, then leaves by a
 link and answers each held read as one that asks again. It requires at least one such answer
 received, every held read let go that way within five seconds of its release, and no part read in
-the 2.2 s after (the fixture's one-second read-again delay and 1.2 s more). A held read counts as
+the 2.2 s after (the fixture's one-second read-again delay and 1.2 s more), waited by a timer of the
+smoke's own rather than a Playwright command, whose answer has no bound and could keep the case from
+its cleanup. A held read counts as
 answered only once the browser has finished loading that exact request (Playwright's
 `requestfinished` for it) with the answer its fulfill sent, told by a mark unique to that answer
 (its `smoke-held` header): a fulfill that resolves is not enough, since Playwright's Firefox
@@ -565,9 +567,12 @@ document it ran in, nor, by a switch the case sets in the page's session storage
 clears once the removal is confirmed, in a later one, and the route lets each read through once the
 case is over, so neither acts on later checks if its removal is not confirmed. The check that a
 page's part reached by the runtime's navigation is read again requires a part read of the reached
-page's own address, and the `Saved.` then shown drawn by an answer to one of those reads, which a
-route of its own marks as it answers them: a read of an earlier receipt's address draws the same
-`Saved.` in the same status line. That navigation, as each of the leaving cases' does, counts only
+page's own address, and `Saved.` drawn by an answer to one of those reads, which a route of its own
+marks as it answers them: a read of an earlier receipt's address draws the same `Saved.` in the
+same status line. The wait for it has six seconds by the smoke's own monotonic clock from its start,
+not Playwright's timeout, which counts from when the driver receives the command, so a delayed
+command cannot stretch them; the evidence is the marked answer the wait saw in that time, not a
+later look at the page. That navigation, as each of the leaving cases' does, counts only
 if it drew its own `Saving...` within five seconds of its start by the page's clock, noted the
 moment it was drawn; asking the page to navigate and reading that note are bounded to 15 seconds
 each, so a draw in time does not fail because the note came back late. Each of these navigations'
@@ -600,9 +605,13 @@ and fails the case. The check that a page reached by the runtime's
 navigation reads itself again in place then requires `Saved.` drawn, at the navigation's address, by
 the answer to one of the page's own reads of that address sent after the navigation's fetch, which
 the route marks as it answers them (a `Saved.` another receipt's read drew is not this page reading
-itself again), and the check that each read replaces the history entry counts only once that read's
-answer is drawn. Its route and request listener are removed however its cases end, each removal and
-each read of the page bounded. The slow part's reads
+itself again), seen within six seconds by the smoke's clock as above, and the check that each read
+replaces the history entry counts only once that read's answer is drawn. The check that a page at a
+place (`#alert-status`) reads itself again has the page's load of its receipt answered still saving
+whatever the store says by then, so a write that landed before the load cannot pass it, and
+requires `Saved.` drawn at the place by the answer to a later read of that receipt (the runtime's
+read, or a load of it in a browser without the Navigation API), within six seconds the same way. Its route and request listener are removed however its cases end, each removal
+and each read of the page bounded. The slow part's reads
 that a case holds unanswered are let go when it ends, once its route has stopped holding any, a wait
 bounded to five seconds, after which its route is removed (bounded the same) and its page closed all
 the same, as its request listener is removed. The first check of a held slow part looks at it only
@@ -612,7 +621,8 @@ shows is pressed in the page too; the page it opens must commit within five seco
 just before the press, a budget the press task shares, and have its part read in within five
 seconds of the check seeing that commit. A press that fails names its step: the press task finding
 no link, failing or not returning in time, or the commit not coming in time or its wait failing. A
-part not read in in time says whether an answer to the opened page's read came.
+part not read in in time says whether the navigation's own read of `/?picks=true` (the page's load,
+or the runtime's read of the page) was seen and answered; another request with that query is not it.
 The check that a read whose patch leaves the part as it was marks it failed requires that load's
 own read, answered by the route with its empty patch, and that answer's headers and its whole body
 received without error (the response finished, and the request did not fail) within five seconds

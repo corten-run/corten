@@ -55,9 +55,32 @@ export async function partReads(page, browser, swaps, noSwaps) {
     /** The documents the page loads, counted while a client navigation should load none. */
     let documents = 0;
     const onDocument = (/** @type {import("@playwright/test").Request} */ r) => r.resourceType() === "document" && documents++;
-    /** Whether an answer to a read of the address the failed part links to has come, for the check that follows it. */
+    /** The address the failed part links to: the page with the part read in. */
+    const linkTo = new URL("/?picks=true", base);
+    /**
+     * The read of that address the link's navigation makes, the first after the press: a load of the
+     * held page's own main frame, or the runtime's read of the page (`corten: nav` or `page`, not a
+     * prefetch). Another request of that address, or one of another address with the same query,
+     * is not it. @type {import("@playwright/test").Request | null}
+     */
+    let linkRead = null;
+    /** Whether the answer to that read has come, for the check that follows it. */
     let linkAnswered = false;
-    const onLinkAnswer = (/** @type {import("@playwright/test").Response} */ r) => new URL(r.url()).search === "?picks=true" && (linkAnswered = true);
+    const onLinkRead = (/** @type {import("@playwright/test").Request} */ r) => {
+      const at = new URL(r.url());
+      if (linkRead !== null || r.method() !== "GET" || at.origin !== linkTo.origin || at.pathname !== linkTo.pathname || at.search !== linkTo.search) return;
+      const headers = r.headers();
+      const prefetch = headers["purpose"] === "prefetch" || !!headers["sec-purpose"]?.includes("prefetch");
+      if (r.isNavigationRequest()) {
+        // A service worker's request has no frame.
+        let ownFrame = false;
+        try {
+          ownFrame = r.frame() === held.mainFrame();
+        } catch {}
+        if (ownFrame) linkRead = r;
+      } else if (!prefetch && (headers["corten"] === "nav" || headers["corten"] === "page")) linkRead = r;
+    };
+    const onLinkAnswer = (/** @type {import("@playwright/test").Response} */ r) => r.request() === linkRead && (linkAnswered = true);
     // The held reads are let go, the listener and route removed and the page closed however the case
     // ends. The route stops holding before the held reads are let go, so none it holds later is left
     // held. Letting go, setting the route, removing it and closing the page are each bounded, so one
@@ -189,6 +212,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         const until = performance.now() + 5000;
         const press = steps(5000, ranOut);
         let pressing = true;
+        held.on("request", onLinkRead);
         held.on("response", onLinkAnswer);
         try {
           const found = await press.step(() =>
@@ -223,12 +247,13 @@ export async function partReads(page, browser, swaps, noSwaps) {
       check(
         "the page it links to has the slow part read in, with JavaScript too",
         linkOpened && listed && new URL(held.url()).search === "?picks=true",
-        `${held.url()}${linkOpened ? (listed ? "" : `, its part not read in within 5 s of its commit (its page's read ${linkAnswered ? "answered" : "not answered"})`) : `, ${notOpened}`}`,
+        `${held.url()}${linkOpened ? (listed ? "" : `, its part not read in within 5 s of its commit (its navigation's read of ${linkTo.pathname}${linkTo.search} ${linkRead === null ? "not seen" : linkAnswered ? "answered" : "not answered"})`) : `, ${notOpened}`}`,
       );
     } finally {
       answer = "closing";
       await cleanUp(
         () => held.off("request", onDocument),
+        () => held.off("request", onLinkRead),
         () => held.off("response", onLinkAnswer),
         () => within(5000, "the held reads were not let go within 5 s", Promise.all(holds.splice(0).map((release) => release()))),
         () => within(5000, "the held part's route was not removed within 5 s", held.unrouteAll({ behavior: "ignoreErrors" })),
