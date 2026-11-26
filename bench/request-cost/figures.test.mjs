@@ -91,10 +91,17 @@ test("head's idle memory rises past base's by its growths in bytes, beyond base'
   assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1], page: 0, connections }), /not one/);
   assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1], page: 4096.5, connections }), /not one/);
   assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1], page: 9007199254740992, connections }), /not one/);
-  assert.throws(() => idleRise({ base: [1, 1], head: [1, 1, 1], page, connections }), /base has 2 idle readings, not three/);
-  assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1, 1], page, connections }), /head has 4 idle readings, not three/);
-  assert.throws(() => idleRise({ base: [1, 1, 1], head: [1, 1, 1.5], page, connections }), /head's growth of 1.5 bytes is not a whole number/);
-  assert.throws(() => idleRise({ base: [1.5, 1, 1], head: [1, 1, 1], page, connections }), /base's growth of 1.5 bytes is not a whole number/);
+  assert.throws(() => idleRise({ base: [page, page], head: [page, page, page], page, connections }), /base has 2 idle readings, not three/);
+  assert.throws(() => idleRise({ base: [page, page, page], head: [page, page, page, page], page, connections }), /head has 4 idle readings, not three/);
+  assert.throws(() => idleRise({ base: [page, page, page], head: [page, page, 1.5], page, connections }), /head's growth of 1.5 bytes is not a whole number/);
+  assert.throws(() => idleRise({ base: [1.5, page, page], head: [page, page, page], page, connections }), /base's growth of 1.5 bytes is not a whole number/);
+  assert.throws(() => idleRise({ base: [2 ** 53, page, page], head: [page, page, page], page, connections }), /not a whole number/);
+  // The figures a connection, rounded, are not growths: #2136's two-page rise given as its figures
+  // (12,562 and 12,563) is refused, not passed as a rise of one byte.
+  assert.throws(() => idleRise({ base: [12562, 12562, 12562], head: [12563, 12563, 12563], page, connections }), /base's growth of 12562 bytes is not whole 4096-byte pages: give each run's growth, not its figure a connection/);
+  assert.throws(() => idleRise({ base: [page, page, page], head: [page, page, page + 1], page, connections }), /head's growth of 4097 bytes is not whole 4096-byte pages/);
+  // A shrink is whole pages too.
+  assert.equal(idleRise({ base: [page, page, page], head: [-page, -page, -page], page, connections }).rose, false);
   // A page is allowed only where it is at most a byte a connection: a run over fewer connections than
   // a page has bytes decides nothing (#2149's review: one page over 40 is 102 bytes a connection).
   const one = { base: [grew(10), grew(10), grew(10)], head: [grew(11), grew(11), grew(11)], page };

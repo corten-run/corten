@@ -99,7 +99,12 @@ export function idleRise({ base, head, page, connections }) {
   if (connections < page) throw new Error(`not a gate reading: one ${page}-byte page over ${connections} connections is more than a byte a connection; open at least ${page}`);
   for (const [side, growths] of /** @type {const} */ ([["base", base], ["head", head]])) {
     if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
-    for (const growth of growths) if (!Number.isInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
+    for (const growth of growths) {
+      if (!Number.isSafeInteger(growth)) throw new Error(`${side}'s growth of ${growth} bytes is not a whole number`);
+      // Resident memory moves a page at a time, so a growth that is not whole pages is not one
+      // `idle.mjs` printed: a figure a connection, which is rounded, given in its place.
+      if (growth % page !== 0) throw new Error(`${side}'s growth of ${growth} bytes is not whole ${page}-byte pages: give each run's growth, not its figure a connection`);
+    }
   }
   const rise = median(head) - median(base);
   const allowed = Math.max(Math.max(...base) - Math.min(...base), page);
