@@ -475,8 +475,8 @@ anywhere in a page, the same draws read one by base's span alone in 5.9% of comp
 the four pages now allowed in 0.38% and 1.1% (each simulated, 1,000,000 jobs): most of the
 fall from 8.7% to 5.4% is the rounding, the one page took away about half a point more, and
 the four pages take away nearly all the rest at that spread. The spread is an assumption, 1.5
-bytes a connection fitted by eye to the spans of the job's first runs, and not a rate seen on
-runners: a wider one gives more. The figures for four pages were made on 2026-11-27 by the
+bytes a connection, which the comment that first gave the model fitted by eye to the spans
+the hosted job had then read, and not a rate seen on runners: a wider one gives more. The figures for four pages were made on 2026-11-27 by the
 method the description of
 [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
 gives for the others, which kept no script, so the model was written again from those words:
@@ -510,9 +510,9 @@ The hosted rows were read from those jobs' logs (valgrind 3.26.0, rustc 1.100.0)
 another host are the descriptions' and were not read from a log. Under one page the first two
 rows were at the limit, the third and fourth over it, and the fifth at the limit base's span
 set. In the nine hosted runs of those three pull requests that had run to their end when they
-were read (27 readings), base's own three spanned 0 to 40,960 bytes, and head's median was above base's
-by 4,096 in seven readings, by 8,192 in three and by 16,384 in one, whose base spanned 20,480;
-it was the same in twelve and below in four.
+were read (27 readings), base's own three spanned 0 to 40,960 bytes, and head's median was
+above base's by 4,096 in seven readings, by 8,192 in three and by 16,384 in one, whose base
+spanned 20,480; it was the same in twelve and below in four.
 
 What made the pages was established in none of them. The description of the second pull
 request reads its reading over 1,000, 2,500, 10,000 and 20,000 connections as well: one page

@@ -11657,24 +11657,25 @@ rules something out.
     the answer chosen was to change the rule and the kit: a rise passes up to the larger of
     base's span and 16,384 bytes over 5,000 connections. That is the maintainer changing the
     rule, not a check loosened for a result: that pull request is read under the rule on
-    `main` after its own review, and this Choice does not say how it reads. What the floor rests on is three sizes of reading, 4,096, 8,192 and 12,288 bytes of
-    head's median over base's, each over 5,000 connections from one address in 4,096-byte
-    pages, in three pull requests whose descriptions say that nothing they add is held for a
-    connection: 4,096 after one request with base's three equal, in the hosted job and, by its
-    description, on another host
+    `main` after its own review, and this Choice does not say how it reads. What the floor
+    rests on is three sizes of reading, 4,096, 8,192 and 12,288 bytes of head's median over
+    base's, each over 5,000 connections from one address in 4,096-byte pages, in three pull
+    requests whose descriptions say that nothing they add is held for a connection: 4,096
+    after one request with base's three equal, in the hosted job and, by its description, on
+    another host
     ([#2176 Read a route's query in one pass, decoding only what is escaped](https://github.com/corten-run/corten/pull/2176));
     8,192 after three of a browser's requests with base's three 4,096 apart, in two hosted
     jobs, and 12,288 on another host by its description, for the second job's two commits
-    (the pull request the question named); and 8,192 after one request where base's own three spanned 8,192, in a
-    hosted job, which passed by that span
+    (the pull request the question named); and 8,192 after one request where base's own
+    three spanned 8,192, in a hosted job, which passed by that span
     ([#2194 Tag an answer given its scope's lines in one pass without searching its lines](https://github.com/corten-run/corten/pull/2194)).
     [The kit's page](../bench/request-cost/README.md#the-idle-floor) has each run's growths.
     The cause was established in none of them. The description of the pull request the
-    question named takes its reading over 1,000 to 20,000 connections too, and the difference does not grow with the count where it
-    can be seen (one page at 1,000; at 2,500, 10,000 and 20,000 base's own runs are 21 to 513
-    pages apart, which hides it), which fits a page or two the process touches once, by where
-    the allocator puts things, and does not show it: no run says what the pages are, so memory
-    a connection holds is not ruled out. What is given up: at the gate's settings a cost under
+    question named takes its reading over 1,000 to 20,000 connections too, and the difference
+    does not grow with the count where it can be seen (one page at 1,000; at 2,500, 10,000 and
+    20,000 base's own runs are 21 to 513 pages apart, which hides it), which fits a page or
+    two the process touches once, by where the allocator puts things, and does not show it:
+    no run says what the pages are, so memory a connection holds is not ruled out. What is given up: at the gate's settings a cost under
     about 3.3 bytes a connection is no longer seen, where one page saw down to about 0.8, and
     since a reading is whole pages a cost of 4 bytes a connection can read as four pages or as
     five. What is kept: one 8-byte field a connection reads 40,000 bytes over 5,000 connections
