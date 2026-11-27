@@ -12464,11 +12464,16 @@ rules something out.
     such a navigation there too) or as that read runs (a page's own getter on `navigation`) is
     never sent, whatever the call ends in. A read that throws (such a getter) leaves no hold, and
     one whose read throws as the runtime checks its replace before the call leaves the address; an
-    answer that has drawn is never said to have failed, whatever a read after its draw throws. The
-    hold ends as the browser says that navigation ended (`navigatesuccess`, or `navigateerror`,
-    which an abort or another navigation taking its place fires at once), keeping neither it nor
-    the press whose answer it was: whether it still holds is the runtime's own record, which reads
-    nothing of the page, so a later press reads nothing of it again. So nothing is drawn under
+    answer that has drawn is never said to have failed, whatever a read after its draw throws. It
+    has drawn once the whole draw has returned: a patch that throws partway (an element in, then a
+    field it cannot carry the user's text into) has not, and says `corten:error` as any form's
+    answer does. The hold ends as that navigation's own `finished` promise settles, fulfilled or
+    rejected (it finished, was aborted, or another took its place): the navigation the runtime read
+    as the call returned, whose end no event the page dispatches (a `navigatesuccess` of its own)
+    can fake and no listener (one that stops the browser's event) can keep from the runtime. It
+    keeps neither that navigation nor the press whose answer it was: whether it still holds is the
+    runtime's own record, which reads nothing of the page, so a later press reads nothing of it
+    again. A navigation with no `finished` to follow is not held. So nothing is drawn under
     an address that may still change, and the screen keeps the answer whose address that is. The
     limit is when it ends: the runtime goes by the navigation's end, as it finishes, is aborted or
     gives way to another, not merely until its address commits (the
@@ -12479,6 +12484,17 @@ rules something out.
     the platform offers no way to do short of beginning another or `window.stop()`, nor put back
     the Navigation API state when it commits, which `replaceState` drops: the page's listener took
     the replace, and it commits, or not, as that listener decides.
+
+    A known limit: the runtime trusts the platform objects it reads once, `navigation.transition`
+    as the call returns and that transition's `finished`, and the page's own getters on them are
+    outside what it guards. A page that puts its own `navigation.transition` (or another getter of
+    the platform's the runtime reads) in place of the browser's can make the runtime hold the
+    wrong navigation, none, or one for good. The reason: a page's script can already navigate, replace the
+    entry and draw over the panel itself, so a getter of its own takes nothing from it the page
+    did not have; and reading each value from the prototype's own getter instead would cost every
+    page bytes and a lookup on each read, for a page working against itself. What it guards is the
+    page's ordinary use of the platform: listeners that hold, begin or end navigations, and
+    events they dispatch or stop, which cannot end the hold early or keep it on.
 
     The guarantee is narrow on purpose: the address moves only when the runtime can tell, in the
     task the answer draws, that nothing it did not start is under way: the screen is still the
@@ -12861,9 +12877,14 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,228 bytes larger raw (46,502 to 49,730), 1,309
-    with gzip (16,718 to 18,027) and 1,165 with brotli (15,106 to 16,271), paid once a release by
-    every user (152, 60 and 55 larger than the build before this one, which took a marked press it
+    What it costs: the runtime every page loads is 3,231 bytes larger raw (46,502 to 49,733), 1,319
+    with gzip (16,718 to 18,037) and 1,178 with brotli (15,106 to 16,284), paid once a release by
+    every user (3, 10 and 13 larger than the build before this one, which ended a held replace's
+    hold at any `navigatesuccess` or `navigateerror` heard on `navigation`, so one the page
+    dispatched ended it while the replace was still on its way and let a press through, and a
+    listener that stopped the browser's own kept it on for good; and counted an answer drawn as its
+    draw began, so a patch that threw partway said no `corten:error`; that build was
+    152, 60 and 55 larger than the one before it, which took a marked press it
     refused as the form's latest, so the 422 already drawn put focus on no field; marked a nav link
     current as the answer drew, not as a held replace's address went in, so the link to the address
     it left stayed current; and read `navigation.transition` again after an answer drew, to tell
@@ -12901,9 +12922,9 @@ rules something out.
     it holds one, sets it again after, copies `history.state` (`structuredClone`) once those
     checks pass and makes them again after the copy, and reads the address back, keeping a
     navigation the browser shows on its way after the call that it did not before, with the press
-    it answered (neither, when there is none): a marked press
-    compares it with `navigation.transition`, and so does a marked read, other than that press's,
-    where it could draw. A patch tracks whether it placed every
+    it answered, until a callback on that navigation's `finished` clears both (neither, when there
+    is none): a marked press reads only that record, and so does a marked read, other than that
+    press's, where it could draw. A patch tracks whether it placed every
     element as it walks them, without a separate scan;
     each `currententrychange` compares the key with the last seen and adds one to a count of
     changes, keeping its `navigationType`, or, for a change of the state alone, to a count of
@@ -13021,6 +13042,13 @@ rules something out.
 
     Last checked: 2026-11-27, the runtime's size with this change against main's runtime, unchanged
     since `ab1025517` (main at `2e42c00a1`), and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-27, a marked press made while a replace is held (`handler`) after the page dispatched a
+    `navigatesuccess` of its own, a marked press once a held replace has finished though a listener
+    that ran before the runtime's stopped its `navigatesuccess`, and a patch of a form without the
+    mark that throws as it draws, after an element it drew or at its first, in Playwright 1.65.1's
+    Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, of which the build before this
+    one fails each in all three: sending the first press, keeping the second back for good, and
+    saying no `corten:error` for either patch);
     2026-11-27, a marked press a getter of the page's on `navigation.transition` makes as the
     runtime reads it after its call, and one made while a navigation a `currententrychange`
     listener began as the runtime put the entry's state back is held (`precommitHandler`) and,

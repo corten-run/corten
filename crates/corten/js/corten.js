@@ -3383,15 +3383,15 @@ const presses = new Map();
  * The navigation a page's `navigate` listener holds the runtime's own replace in, before its address
  * goes in (`precommitHandler`) or after, or any other the browser shows on its way as that call
  * returns and did not before it (one a listener began in the replace's place, once its address
- * went in or as its state went back), cleared as the browser says that navigation ended
- * (`navigatesuccess`, `navigateerror`, which an abort or another navigation taking its place fires
- * at once); and `true` from just before the runtime's `replaceState` call, which runs the page's
+ * went in or as its state went back), cleared as that navigation's own `finished` settles (it
+ * finished, was aborted or another took its place), which no event the page dispatches or stops
+ * can stand in for; and `true` from just before the runtime's `replaceState` call, which runs the page's
  * listeners and their `precommitHandler` before it returns, until the entry's state is back and that
  * navigation has been read: while it holds ({@link holding}), a marked press
  * is for the page it may yet change, and is refused as one made while a visit is on its way
  * ({@link pressed}), never sent, and a marked answer already on its way draws nothing
  * ({@link standing}), so nothing is drawn under the address it may put in. The runtime's own record:
- * nothing of the page is read to tell whether it holds.
+ * nothing of the page is read to tell whether it holds, and the navigation it captured is read once.
  * @type {NavigationTransition | boolean | null | undefined}
  */
 let held;
@@ -3411,7 +3411,6 @@ let heldFor;
  * @param {Press} [press]
  */
 const holding = (press) => press !== heldFor && !!held;
-for (const end of ["navigatesuccess", "navigateerror"]) navigation?.addEventListener(end, () => held !== true && (held = heldFor = undefined));
 
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
@@ -3613,9 +3612,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
   const here = (/** @type {boolean} */ drawing = false) => !pending.here || standing(pending.here, drawing);
-  // Drawn once its draw passes this check (`drawIn`): from then on nothing read can say it failed.
+  // Drawn once its draw passed this check (`drawIn`) and then returned without throwing: from then
+  // on nothing read can say it failed. A draw that throws partway (a sibling in, then a field it
+  // cannot carry the user's text into) failed, and says so.
+  let passed = false;
   let drewIt = false;
-  const drawIn = () => (drewIt = here());
+  const drawIn = () => (passed = here());
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3853,14 +3855,27 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               now = null;
             }
             held = heldFor = undefined;
-            // Let go as it ends ({@link held}), so nothing of it is kept, nor read again for a press after it.
-            if (now && now !== transition) (held = now), (heldFor = pending.here);
+            // Let go as that navigation's own `finished` settles ({@link held}), so nothing of it is
+            // kept, nor read again for a press after it. A navigation without one cannot be followed
+            // to its end, and is not held.
+            if (now && now !== transition) {
+              const was = now;
+              const end = () => void (held === was && (held = heldFor = undefined));
+              held = was;
+              heldFor = pending.here;
+              try {
+                was.finished.then(end, end);
+              } catch {
+                end();
+              }
+            }
           }
         };
         draws.set(done, draw);
       }
       if (res.headers.has("corten-patch")) {
         await apply(body, signal, sent, res.ok, undefined, undefined, within, drawIn, done);
+        drewIt = passed;
         // In: what it drew is current until a page made before it is drawn over it.
         if (!signal.aborted) undrawn.delete(write);
       } else {
@@ -3870,7 +3885,9 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
         // `<main>` (a count the layout reads) is drawn as a browser without JavaScript draws it.
         // Its notice is said unless it was dropped (one loaded in full instead is said too).
         if (res.headers.has("corten-page")) {
-          if ((await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, drawIn, done)) || here()) announce(notice);
+          const swapped = await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, drawIn, done);
+          drewIt = passed;
+          if (swapped || here()) announce(notice);
         } else if (await swapDocument(body, signal, notice, false, false, true, { through, write }, undefined, here)) announce(notice);
       }
       // Dropped, the visit left while it waited for its modules or stylesheets, or left as it

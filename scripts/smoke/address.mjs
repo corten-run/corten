@@ -2527,6 +2527,44 @@ async function markedPatchVisits(browser, errors) {
       lateGetter.held && lateGetter.armed && lateGetter.drawn && lateGetter.at === "?scope=week" && lateGetter.ended && lateGetter.errors.length === 0,
       JSON.stringify(lateGetter),
     );
+  // Week's replace is held after its address goes in (a listener's `handler` that has not settled),
+  // and the page dispatches a `navigatesuccess` of its own on `navigation`, then presses Day. The
+  // hold ends only as the held navigation's own `finished` settles: Day is not sent (before, any
+  // `navigatesuccess` ended the hold, and Day was sent while Week's replace was still on its way).
+  const fakeEnd = await heldEnds(page, "synthetic");
+  if (!fakeEnd) skip("a marked press made after a page's own navigatesuccess, while a replace is held, is not sent", "no Navigation API");
+  else
+    check(
+      "a marked press made after a page's own navigatesuccess, while a replace is held, is not sent",
+      fakeEnd.held && fakeEnd.drawn && fakeEnd.during.at === "?scope=week" && fakeEnd.during.shown === "week" && fakeEnd.dayAsked === 0 && fakeEnd.ended &&
+        fakeEnd.after.at === "?scope=week" && fakeEnd.after.shown === "week",
+      JSON.stringify(fakeEnd),
+    );
+  // Week's replace is held as above, and a `navigatesuccess` listener the page put on before the
+  // runtime's (a script that runs before the runtime loads) stops the browser's own event for it.
+  // Once it finishes, Day is sent and drawn (before, the runtime never heard the navigation end, and
+  // kept every marked press back).
+  const stoppedEnd = await heldEnds(page, "stopped");
+  if (!stoppedEnd) skip("a marked press made once a held replace has finished is sent, though a listener stopped its navigatesuccess", "no Navigation API");
+  else
+    check(
+      "a marked press made once a held replace has finished is sent, though a listener stopped its navigatesuccess",
+      stoppedEnd.held && stoppedEnd.stopped && stoppedEnd.drawn && stoppedEnd.during.at === "?scope=week" && stoppedEnd.ended && stoppedEnd.dayAsked === 1 &&
+        stoppedEnd.after.at === "?scope=day" && stoppedEnd.after.shown === "day",
+      JSON.stringify(stoppedEnd),
+    );
+  // A form without the mark whose patch throws as it is drawn: a field the user typed in is answered
+  // with a file input of its id, which cannot take the text. The submit failed, and says so with
+  // `corten:error`, whether the field comes after an element it drew or first (before, an answer
+  // counted as drawn once its draw began, and nothing was said).
+  for (const first of [false, true]) {
+    const thrown = await throwingDraw(page, first);
+    check(
+      `a patch that throws as it draws ${first ? "its first element" : "after drawing an element"} says corten:error`,
+      thrown.errors.length === 1 && thrown.errors[0] === 0 && thrown.sibling === (first ? "old" : "new"),
+      JSON.stringify(thrown),
+    );
+  }
 
   // An answer whose address is already the entry's copies no `history.state`: the runtime looks for
   // what would leave the address before it copies the state (before, it copied the state, running
@@ -3491,6 +3529,128 @@ async function heldLateGetter(page) {
   const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
   const errors = await page.evaluate(() => /** @type {any} */ (window).__errors);
   return { ...state, drawn, ended, errors };
+}
+
+/**
+ * A `navigate` listener of the page holds the runtime's replace to Week's address once it is in, in
+ * its own `handler`. With `how` "synthetic", once Week has drawn the page dispatches a
+ * `navigatesuccess` of its own on `navigation` and presses Day while the replace is still held, then
+ * lets it go. With "stopped", on a page of its own, a `navigatesuccess` listener a script put on
+ * before the runtime loaded, so it runs before the runtime's, stops the browser's own event for the
+ * held navigation; once that navigation has finished, the page presses Day. Says whether the
+ * replace was held (and its event stopped), whether Week drew, where
+ * the page was and what it showed while held, how many reads of Day were sent, whether the held
+ * replace ended, and where the page is and what it shows then; null where the browser has no
+ * Navigation API.
+ * @param {import("@playwright/test").Page} shared @param {"synthetic" | "stopped"} how
+ */
+async function heldEnds(shared, how) {
+  const home = `${base}/smoke/address`;
+  const day = `${home}?scope=day`;
+  const browser = shared.context().browser();
+  const page = how === "stopped" && browser ? await browser.newPage() : shared;
+  if (how === "stopped")
+    await page.addInitScript(() => {
+      const w = /** @type {any} */ (window);
+      w.navigation?.addEventListener("navigatesuccess", (/** @type {Event} */ event) => {
+        if (!w.__held || w.__stopped) return;
+        w.__stopped = true;
+        event.stopImmediatePropagation();
+      });
+    });
+  try {
+    return await heldEndsOn(page, how, home, day);
+  } finally {
+    if (page !== shared) await page.close();
+  }
+}
+
+/** {@link heldEnds} on `page`. @param {import("@playwright/test").Page} page @param {"synthetic" | "stopped"} how @param {string} home @param {string} day */
+async function heldEndsOn(page, how, home, day) {
+  await page.goto(home);
+  if (!(await page.evaluate(() => "navigation" in window))) return null;
+  let dayAsked = 0;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") dayAsked += 1;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = resolve));
+    Object.assign(w, { __release: release, __held: false, __stopped: false });
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+      event.intercept({ handler: () => held });
+      w.__held = true;
+    });
+  });
+  const where = () => page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
+  const press = () => page.getByRole("button", { name: "Day", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const settle = () => page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await settle();
+  const during = await where();
+  if (how === "synthetic") {
+    await page.evaluate(() => /** @type {any} */ (window).navigation.dispatchEvent(new Event("navigatesuccess")));
+    await press();
+    await settle();
+  }
+  const held = await page.evaluate(() => /** @type {any} */ (window).__held);
+  await page.evaluate(() => /** @type {any} */ (window).__release());
+  const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await settle();
+  if (how === "stopped") {
+    await press();
+    await page
+      .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+      .catch(() => {});
+  }
+  await settle();
+  await page.unroute(day);
+  const stopped = await page.evaluate(() => /** @type {any} */ (window).__stopped);
+  return { held, stopped, drawn, during, dayAsked, ended, after: await where() };
+}
+
+/**
+ * Puts on the screen an element and a text field the user typed in, outside every form, and answers
+ * "Year, in place" (a `data-patch` form without the mark) with a patch of both: the element drawn
+ * anew, and the field as a file input of the same id, which cannot take the user's text, the field
+ * first or second. Says the `corten:error` statuses said and what the element shows.
+ * @param {import("@playwright/test").Page} page @param {boolean} first
+ */
+async function throwingDraw(page, first) {
+  const home = `${base}/smoke/address`;
+  const year = `${home}?scope=year`;
+  await page.goto(home);
+  const field = '<input id="smoke-throw-field" type="file">';
+  const sibling = '<p id="smoke-throw-sibling">new</p>';
+  await page.route(year, (route) =>
+    route.request().headers()["corten"] === "action"
+      ? route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html" }, body: first ? field + sibling : sibling + field })
+      : route.continue(),
+  );
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    w.__errors = [];
+    document.addEventListener("corten:error", (event) => w.__errors.push(/** @type {CustomEvent} */ (event).detail?.status ?? null));
+    const p = document.createElement("p");
+    p.id = "smoke-throw-sibling";
+    p.textContent = "old";
+    const input = document.createElement("input");
+    input.id = "smoke-throw-field";
+    document.querySelector("main")?.append(p, input);
+    input.value = "typed";
+  });
+  await page.getByRole("button", { name: "Year, in place", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await page.waitForFunction(() => /** @type {any} */ (window).__errors.length > 0, undefined, { timeout: 3000 }).catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  await page.unroute(year);
+  return page.evaluate(() => ({ errors: /** @type {any} */ (window).__errors, sibling: document.getElementById("smoke-throw-sibling")?.textContent ?? null }));
 }
 
 /**
