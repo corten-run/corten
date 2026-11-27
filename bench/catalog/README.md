@@ -637,8 +637,15 @@ fetched, and its SHA-256 ([Benchmark results](../../CONTRIBUTING.md#benchmark-re
 including a failed or check-only round. Failures and cleanup errors make the command fail;
 only containers and the network with this invocation's ownership label are removed. The
 runner does not create cloud machines or operate the fullstack/nightly state. The CI
-`Catalog Contract` workflow builds each framework and runs both sources, but does not publish
-performance numbers.
+`Catalog Contract` workflow builds each framework a change selects and runs both of its
+sources, but does not publish performance numbers. `scripts/benchmark-scope.mjs` selects them
+from the pull request's merge commit against its first parent, or a push to `main` against the
+commit before it: a change to one app's directory selects that app and the apps that share a
+driver it changed (`aspnet-aot` runs the JSON jobs instead), a framework change or one of the
+listed fleet-controller files selects Corten, and a change to the benchmark's other shared
+inputs or the workflow selects them all. A manual run, and a push whose earlier commit is
+unknown or not an ancestor, also select them all; a change to none of these builds none
+([Checks](../../CONTRIBUTING.md#checks)).
 
 The runner creates the shared upstream container with `--pull=missing`. Docker reuses
 the pinned Node image for the requested platform or downloads it within the ten-minute
