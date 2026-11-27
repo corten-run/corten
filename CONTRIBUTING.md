@@ -276,19 +276,16 @@ replace that error; after a successful navigation, failed cleanup fails the smok
 when Playwright's pinned WebKit includes the upstream fix.
 
 A watchlist case that marks a request for its own route to read names the header `smoke-*`
-(`smoke-note`, `smoke-start` and the rest). No mark reaches the server: `unmarks` in
-`scripts/smoke/helpers.mjs` gives each browser context a route of its own, after every route its
-cases and its pages set, that takes every `smoke-*` header off a request on its way out and leaves
-the method, body and other headers as they were, and a case's route that calls `continue` or
-`fetch` sends the request without them too. That route is set with the context's, or one of its
-pages', first route (the WebKit gate's one-shot route does not set it) and stays until the context
-closes, so a mark that outlives its case's route, or one on a request the route leaves out, is
-still taken off. The context's `unrouteAll` takes its other routes one at a time and never that
-one, waiting for the handlers still running or ignoring their errors as Playwright's own would, so
-a request sent meanwhile, or one a removed handler still holds, loses its marks too. A context with
-no route keeps the browser's HTTP cache; one with a route bypasses it from then on. The diagnostic
-replay of the requests still loading sends no `smoke-*` header either. The first area,
-`scripts/smoke/marks.mjs`, checks all of this against a recording server.
+(`smoke-note`, `smoke-start` and the rest). Marks are test-only request headers. They may reach
+the watchlist server, which ignores them: `the_smokes_request_marks_change_no_answer` in
+`examples/watchlist/src/smoke.rs` sends each kind of request the cases mark (the alerts page read
+whole at a receipt as a load, a navigation and in action mode, an alert written in action mode, the
+smoke's write and its page, a screen's data and its revalidation, and a stylesheet under
+`/assets/`) with and without every mark and one the smoke does not use (`smoke-canary`), and
+requires the same status, headers (`Vary` and `Cache-Control` among them) and body. So a case ties
+its claim to its own route's answer to its own request, not to a mark not reaching the server. The
+diagnostic replay of the requests still loading sends no `smoke-*` header, since a replay need not
+carry them.
 In Playwright 1.64.1, Firefox sometimes acknowledged a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
 form validation
@@ -683,7 +680,10 @@ the load cannot leave the page nothing to read again. An init script added befor
 notes in the page's session storage, the moment each is drawn, the first status line the page draws
 (which must be that load's own `Saving...`, not a later look once the load returns) and the first
 answer the page draws `Saved.` from: it requires that note, read once the wait for `Saved.` has seen
-it within six seconds of the load's start, to name an answer to a read after the case's load, not the load's own, and no read of the
+it within six seconds of the load's start, to name an answer to a read of the page after the case's
+load, not the load's own: the runtime's read of the receipt or a load of it, never a prefetch, whose
+answer the route marks too but which reads nothing again. All three of the case's checks require
+that answer. It also requires no read of the
 alerts page after that answer's own request in the log of the page's requests, as the log stands
 once 2.2 s have passed by the smoke's monotonic clock since the check read the note, so a read sent
 between the draw and the check's look counts against it. That the page read itself again in the
