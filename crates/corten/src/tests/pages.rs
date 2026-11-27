@@ -162,7 +162,7 @@ async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
     };
     // Reads no locale, so only `App::messages` makes it vary on the language.
     let page = |req: &Req| {
-        req.page::<ForOne>(html! {
+        let doc = html! {
             <html>
                 <head>
                     <title>"A"</title>
@@ -170,9 +170,8 @@ async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
                 </head>
                 <body><main>"a"</main></body>
             </html>
-        })
-            .unwrap()
-            .0
+        };
+        req.page::<ForOne>(doc).unwrap().0
     };
     let language = ["corten, accept, accept-language"];
     let fixed = ["corten, accept"];
