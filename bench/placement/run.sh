@@ -55,6 +55,8 @@ trap 'st=$?; finish $st "unexpected-exit: run.sh stopped with status $st before 
 trap 'finish 130 "killed: run.sh got INT"' INT
 trap 'finish 143 "killed: run.sh got TERM"' TERM
 [ $# -eq 1 ] && [ -f "$1/plan/resolved.sh" ] || finish 2 "refused: usage: run.sh <work dir>   (after plan.mjs and build.sh)"
+# Only the plan says whether the placements shuffle: a SHUFFLE the caller's environment holds is not read.
+SHUFFLE=0
 . "$1/plan/resolved.sh"
 B=$WORK/bin; PL=$WORK/plan
 [ -z "$(ls -A "$WORK/results" 2>/dev/null)" ] || finish 1 "refused: $WORK/results already holds a run's results, and a part is run once: no placement is rerun, replaced or dropped for its result. Keep them; only results whose progress.log has no 'turns start' line turned nothing"
@@ -94,7 +96,7 @@ for s in $SIDES; do
     cp "$B/record-$s.json" "$RES/"; cp "$WORK/maps/$s.map.gz" "$RES/maps/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
 done
 [ ! -f "$B/second-pads.txt" ] || { cp "$B/second-pads.txt" "$RES/"; cp "$WORK/maps/placements.sha256" "$RES/maps/"; }
-[ "${SHUFFLE:-0}" = 0 ] || for s in $SIDES; do gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; done
+[ "$SHUFFLE" = 0 ] || for s in $SIDES; do gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; done
 # The probe's source as build.sh built it, beside the request script and the expected answer in
 # plan/: the files the plan names by path, still what plan.mjs listed.
 sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$PL/inputs.sha256" | while IFS= read -r f; do mkdir -p "$RES/$(dirname "$f")"; cp "$WORK/$f" "$RES/$f"; done

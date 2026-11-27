@@ -848,7 +848,9 @@ establish a general ranking.
          by a key of the workload's seed, i and the function's name, one order for every binary
          at i and another at each i, and the run records that each placement has exactly that
          binary's functions and the pad, the pad first, in that order, in place of the move by
-         the pad and the neighbours.
+         the pad and the neighbours. A change whose base and head at one index lay the functions
+         both have in different orders, as a symbol one side alone has in an input section both
+         have can, has no reading across shuffled placements.
          The run also records, from the unpadded link's map, what the fifth point asks of every
          run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly
@@ -908,7 +910,8 @@ establish a general ranking.
          Each placement's measured binary is linked with its map, checked against the unpadded
          link's in place of "every function moved by exactly the pad's size": `.text` begins where
          it did and holds the first pad's section, of the plan's size, then the unpadded link's
-         input sections in its order, each with its size and alignment, then the second pad's
+         input sections in its order (in a shuffled placement, in the order its ordering file gives
+         them, any order to this check), each with its size and alignment, then the second pad's
          section, of one of the four sizes; in both links every input section begins at the first
          multiple of its alignment at or after the end of the one before it; every symbol of `.text`
          is in the same input section in both links, as far from its start; and `.data` is where the
@@ -922,10 +925,12 @@ establish a general ranking.
          Rust-mangled symbol (`_R...`, or the legacy `_ZN...17h<hash>E`), lies at or after the first
          section aligned beyond 16 bytes, or in another output section (Rust code under a name that
          is not mangled is not seen); or none of the four sizes puts a placement's `.data` where the
-         rule says. The pads do not vary where a function on a side's list lies in a 64-byte line
-         as they vary the code before it: from the first section aligned to 64 bytes on, a function
-         is in every placement where the side's unpadded link has it, and one listed
-         before that section, or on a side with none, is there or 32 bytes from there. That is a
+         rule says. In an unshuffled placement the pads do not vary where a function on a side's
+         list lies in a 64-byte line as they vary the code before it: from the first section
+         aligned to 64 bytes on, a function is in every placement where the side's unpadded link
+         has it, and one listed before that section, or on a side with none, is there or 32 bytes
+         from there. A shuffled placement lays each section where its ordering file puts it, so
+         there a function's place in a line is held only by its own section's alignment. That is a
          limit of the reading and refuses none: what one such place costs a request no reading says,
          and each side's list in the pull request shows which functions the limit covers.
 

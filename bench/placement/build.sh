@@ -43,15 +43,18 @@
 # the workload's seed and i. Such a link fails when LLD warns that a name in the file is no symbol
 # (relink.mjs --every-name), and 4 and 5's checks of the functions are layout.mjs --order with the
 # unpadded map, which asks for them in the file's order in place of each moved by the pad with
-# its neighbours (5's map check takes --shuffled, its sections in any order).
-# A refusal (3 or 5) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
+# its neighbours (5's map check takes --shuffled, its sections in any order). Each head placement
+# is then checked against base's at its index (layout.mjs --alike, bin/layout/head-p<n>-alike.txt):
+# the functions both have lie in one order in both, or head is refused (7).
+# A refusal (3, 5 or 7) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
-# 5 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
+# 5 and 7 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
 # build-<side>.log and build-<side>.env under the work directory, and ends with BUILD-DONE.
 set -eu
 [ $# -eq 1 ] && [ -f "$1/plan/resolved.sh" ] || { echo "usage: build.sh <work dir>   (after plan.mjs wrote <work dir>/plan/)" >&2; exit 2; }
+# Only the plan says whether the placements shuffle: a SHUFFLE the caller's environment holds is not read.
+SHUFFLE=0
 . "$1/plan/resolved.sh"
-SHUFFLE=${SHUFFLE:-0}
 B=$WORK/bin; M=$WORK/maps
 fail() { echo "build: $*" >&2; exit 1; }
 refused() { mkdir -p "$B"; echo "REFUSED: $*" | tee "$B/refused.txt" >&2; exit 3; }
@@ -160,6 +163,12 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
         echo "$pl: first pad $2 (mod 64: $(( $2 % 64 ))), second pad $pl_kept, .data at $pl_at; .data's offset in a 64-byte line with each size:$pl_tried" >>"$B/second-pads.txt"
         echo "$(sha256sum "$M/$pl.map" | cut -d' ' -f1)  $pl.map" >>"$M/placements.sha256"
         gzip -9 "$M/$pl.map"
+    fi
+    if [ "$SHUFFLE" = 1 ] && [ "$1" = head ]; then
+        if ! node "$KIT/layout.mjs" --alike "$B/base-p$2" "$B/$pl" "$2" >"$B/layout/$pl-alike.txt" 2>"$B/alike-$pl.txt"; then
+            grep -q '^JSON {"ok":false' "$B/layout/$pl-alike.txt" || fail "$pl could not be checked against base-p$2: $(cat "$B/alike-$pl.txt")"
+            refused "head has no reading against base across shuffled placements: base-p$2 and $pl, linked in one index's order, lay the functions both have in different orders ($(sed 's/^layout.mjs: //' "$B/alike-$pl.txt" | paste -sd';' -))"
+        fi
     fi
     sum "$pl" >/dev/null
 }

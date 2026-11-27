@@ -76,6 +76,12 @@ test("the example plan is usable, and each field that is not is named", () => {
   // shuffle is true or left out: no other value says whether the placements shuffle.
   for (const v of [false, 1, "yes", "true", null, {}]) bad((p) => { p.workloads[0].shuffle = v; }, "shuffle, true when every placement relinks the workload's functions");
   assert.deepEqual(problems(plan((p) => { p.workloads[0].shuffle = true; })), []);
+  // A shuffled workload's seed is one order.mjs reads as resolved.sh writes it: no seed past 2^53 - 1,
+  // which a number prints as 1e+21; a plan without the field takes it as before.
+  for (const seed of [1e21, 2 ** 53]) bad((p) => { p.workloads[0].shuffle = true; p.workloads[0].seed = seed; }, "seed, at most 9007199254740991 for a workload whose placements shuffle");
+  assert.deepEqual(problems(plan((p) => { p.workloads[0].seed = 1e21; })), []);
+  assert.deepEqual(problems(plan((p) => { p.workloads[0].shuffle = true; p.workloads[0].seed = Number.MAX_SAFE_INTEGER; })), []);
+  assert.equal(order(["a", "b"], Number.MAX_SAFE_INTEGER, 1).split("\n")[0], "corten_layout_pad");
 });
 
 test("a part's numbers come from the plan: K, the rank, the pad lists, the order", () => {
@@ -361,7 +367,7 @@ test("code aligned beyond 16 bytes: each side's sections and list, and every pla
 // check, with a second pad) a shuffled one naming the SHA-256 of the ordering file order.mjs
 // draws from that list, the seed and the binary's index.
 const FUNCTIONS = "_start\ncrc\n_ZN5probe4main17h0123456789abcdefE.llvm.123\n";
-const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
+const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, alike = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
   const second = align > 16;
   for (const side of r.sides) put(`functions-${side}.txt.gz`, gzipSync(FUNCTIONS));
   const used = new Set();
@@ -371,6 +377,7 @@ const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = 
     const sha = createHash("sha256").update(order(FUNCTIONS.trim().split("\n"), r.seed, index(i))).digest("hex");
     put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, ...layout })}\n`);
     if (second) put(join("layout", `${b}-map.txt`), `.text: 3 input sections\nJSON ${JSON.stringify({ ok: true, pad, second: 48, shuffled: true })}\n`);
+    if (b.startsWith("head-")) put(join("layout", `${b}-alike.txt`), `functions both placements have, each defined once in each: 3; in one order: 3\nJSON ${JSON.stringify({ ok: true, pad, shuffled: true, shared: 3, ...alike })}\n`);
   }
   touch(res, put, r);
 } });
@@ -395,6 +402,31 @@ test("a shuffled run says so in its header and reads only placements linked in t
   refused({ align: 32, touch: (res_, put) => put(join("layout", "base-p320-map.txt"), `JSON ${JSON.stringify({ ok: true, pad: 320, second: 48 })}\n`) }, "base-p320: no second pad's line with a passing map check");
   // resolved.json that drops the declaration.
   refused({ touch: (res_, put) => { const f = join("plan", "resolved.json"), j = JSON.parse(readFileSync(join(res_, f), "utf8")); delete j.shuffle; put(f, JSON.stringify(j)); } }, "resolved.json's shuffle is not what plan.mjs gives");
+  // A head placement without a passing check that it lays the functions it shares with base's at its index alike.
+  refused({ touch: (res_) => rmSync(join(res_, "layout", "head-p320-alike.txt")) }, "head-p320: no passing check that it lays the functions it has with base-p320 in one order with it");
+  refused({ alike: { ok: false } }, "no passing check that it lays the functions it has with base-p");
+  refused({ alike: { shuffled: undefined } }, "no passing check that it lays the functions it has with base-p");
+});
+
+test("build.sh and run.sh shuffle only when the plan says so, whatever SHUFFLE the caller's environment holds", { skip: process.platform !== "linux" && "runs the scripts' start under sh" }, () => {
+  // Each script up to the line after it reads the plan, then what it holds SHUFFLE to be.
+  const work = mkdtempSync(join(tmp, "shuffle-env-"));
+  mkdirSync(join(work, "plan"));
+  for (const [script, next] of [["build.sh", "B=$WORK/bin; M=$WORK/maps"], ["run.sh", "B=$WORK/bin; PL=$WORK/plan"]]) {
+    const text = readFileSync(join(here, script), "utf8"), cut = text.indexOf(`\n${next}\n`);
+    assert.ok(cut > 0, `${script} no longer has the line ${next}`);
+    const start = join(work, `start-${script}`);
+    writeFileSync(start, `${text.slice(0, cut)}\necho "SHUFFLE=\${SHUFFLE:-0}"\n`);
+    const held = (resolved, env) => {
+      writeFileSync(join(work, "plan", "resolved.sh"), resolved);
+      const r = spawnSync("sh", [start, work], { encoding: "utf8", env: { PATH: process.env.PATH, ...env } });
+      return /^SHUFFLE=(\S*)$/m.exec(r.stdout)?.[1];
+    };
+    assert.equal(held("DRY=0\n", { SHUFFLE: "1" }), "0", `${script} reads the caller's SHUFFLE`);
+    assert.equal(held("DRY=0\n", {}), "0", script);
+    assert.equal(held("DRY=0\nSHUFFLE='1'\n", {}), "1", script);
+    assert.equal(held("DRY=0\nSHUFFLE='1'\n", { SHUFFLE: "0" }), "1", script);
+  }
 });
 
 test("a run without the field reads as before and refuses a shuffled placement's check", () => {

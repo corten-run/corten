@@ -112,6 +112,8 @@ export function problems(plan) {
     if (w.start !== undefined && !startOk(w.start)) bad(`${at}: start`);
     if (w.expect !== undefined && !relative(w.expect)) bad(`${at}: expect, a path from the plan file`);
     if (w.shuffle !== undefined && w.shuffle !== true) bad(`${at}: shuffle, true when every placement relinks the workload's functions in an order drawn from its seed and the placement's index; left out when its placements move the image by their pads alone`);
+    // order.mjs takes the seed as the digits resolved.sh writes it in, which a seed past 2^53 - 1 is not (1e21 is written 1e+21).
+    else if (w.shuffle === true && int(w.seed, 0) && !Number.isSafeInteger(w.seed)) bad(`${at}: seed, at most ${Number.MAX_SAFE_INTEGER} for a workload whose placements shuffle, which order.mjs draws each ordering file from`);
   }
   return why;
 }

@@ -10271,9 +10271,13 @@ rules something out.
     side's unpadded `.text` in the order of a keyed hash of the workload's seed, i and each
     name, the same order for every binary at i, so base and head lay the functions they share
     alike and differ by the change's own, and another order at each i, so the placements sample
-    inner layouts as well as offsets. The run checks each placement holds the unpadded
-    functions and the pad, the pad first, in that order, in place of the shift and the
-    neighbours. That is not the pinned layout turned away below, which gates one layout; it
+    inner layouts as well as offsets. LLD places an input section by the first of its names the
+    file lists, so a symbol one side alone has in a section both have can give the functions in
+    it another place; the run refuses a change whose base and head at one index lay the
+    functions both have in different orders. The run checks each placement holds the unpadded
+    functions and the pad, the pad first, in that order, every definition of a name defined
+    more than once included, after the whole pad and inside `.text`, in place of the shift and
+    the neighbours. That is not the pinned layout turned away below, which gates one layout; it
     samples many. Its cost is that each placement is a link no app builds, which may cost every
     placement cycles a default order does not, both sides alike, as the first version's shuffle
     could; unlike that one it gives base and head one order. Whether shuffled placements spread
@@ -10987,7 +10991,8 @@ rules something out.
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a key of the
     seed, the index and a function's name orders the functions two sides share alike at one
-    index, so a shuffled placement's two sides differ by the change's own functions; a bound inside
+    index, so a shuffled placement's two sides differ by the change's own functions unless a
+    symbol one side alone has moves a section both have, which the run refuses; a bound inside
     the spread is one the build's own placement could account for, by the spread one run measured;
     with no spread of the setup's own, a bound inside the widest recorded is one placement has
     been seen to account for elsewhere, which is reason to read it across placements and no

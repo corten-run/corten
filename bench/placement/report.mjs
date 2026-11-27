@@ -19,7 +19,9 @@
 //   - for a workload the plan shuffles (README.md, workloads[].shuffle), a side without its list
 //     of functions (functions-<side>.txt.gz), or a binary whose layout check (and map check, with
 //     a second pad) is not a shuffled one for the ordering file order.mjs draws from that list,
-//     the seed and the binary's index; for one it does not, a layout or map check that is;
+//     the seed and the binary's index, or a head binary without a passing check that it lays the
+//     functions it shares with base's binary at its index in one order with it
+//     (layout/head-p<n>-alike.txt); for one it does not, a layout or map check that is;
 //   - placements not started one after another in the order run.
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
@@ -171,6 +173,7 @@ export function read(dir) {
     if (r.shuffle && sha === null) refused.push(`${b}: its side's list of functions makes no ordering file (functions-${side}.txt.gz)`);
     else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes and the ordering file drawn from its side's list of functions, seed ${r.seed} and its index (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
     if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check (second-pads.txt, layout/${b}-map.txt)`);
+    if (r.shuffle && side === "head" && !check(join("layout", `${b}-alike.txt`), { pad, shuffled: true })) refused.push(`${b}: no passing check that it lays the functions it has with base-p${pad} in one order with it (layout/${b}-alike.txt)`);
   }
   if (refused.length) return { refused };
 
