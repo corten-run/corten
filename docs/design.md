@@ -2798,8 +2798,11 @@ rules something out.
     `localhost:8080`, a look at each of its 14 bytes. With `Host` last of eight it counted 235
     more: main never looked for `Host` in such an app, and a later line is found by the server's
     read of the names in turn, for its mark, and then by the hashed search. So half a percent of
-    such a request (64 of an unstaged one's 12,709) is not reached by a reader that looks at
-    every byte, and one that looked at fewer would answer a `Host` that is none.
+    such a request (64 of an unstaged one's 12,709) was not reached by that reader, which looked
+    at every byte a byte at a time, and one that looked at fewer would answer a `Host` that is
+    none. Whether any reader of every byte can reach it is not shown: the reader below spent 59
+    on the name and port in its build against 56, which is how that build spends them, not a
+    least.
     Read again for
     [#2115 The Host check in #2037 costs an app that answers any host 111 to 312 instructions a request, and its cycles miss is not yet told apart from code arrangement](https://github.com/corten-run/corten/issues/2115):
     a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,

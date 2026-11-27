@@ -68,8 +68,9 @@ reader given the name from its start again, as the merge base it is counted agai
 whole name twice; a unit test in `crates/corten/src/security.rs`
 (`a_long_names_encoded_bytes_are_read_from_the_look_that_found_them`) does, by seeing the bytes
 that reader is given. An app that names its hosts matches `localhost` and its own names as they
-are written, and reads as a name only what is before a name it holds subdomains under:
-`unstaged-subdomain` counts that read, of `seller-desk` in `seller-desk.localhost`, 11 bytes,
+are written; a name it holds subdomains under is matched at the end, and what is before it is
+read as a name (a name it matches no way is read whole before its 421):
+`unstaged-subdomain` counts the subdomain's read, of `seller-desk` in `seller-desk.localhost`, 11 bytes,
 which are read in line. Every answer is checked
 against the table: a 200, the encoding or none, and the body, which for the page is the whole of
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)

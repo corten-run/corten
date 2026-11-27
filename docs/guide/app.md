@@ -346,7 +346,7 @@ customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them its
 is still read, for the `400` above. The check reads one header and compares it with a short
 list; what it does not find there as written (a subdomain's own part, another host's name, any
 name when the app answers to any) is also checked, and is taken only when every byte of it
-passes; a name is refused at its first byte that does not.
+passes; a name with a byte that does not is refused.
 
 ## The client's address
 
