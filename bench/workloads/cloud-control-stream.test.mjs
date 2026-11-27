@@ -182,11 +182,12 @@ test("paused audit material and approved delivery use the same existing stream, 
   f.close(255); await result.monitor.done;
 });
 
-for (const mode of ["changed delivery", "missing approval"]) {
+for (const mode of ["changed delivery", "changed approval", "missing approval"]) {
   test(`the live monitor never begins sending an audit with ${mode}`, async (t) => {
     t.mock.timers.enable({ apis: ["setInterval"] });
     const { f, result, queued, delivery } = await queuedAudit(t);
     if (mode === "changed delivery") writeFileSync(queued, JSON.stringify({ ...delivery, review: { ...delivery.review, reviewer: "changed review" } }));
+    else if (mode === "changed approval") writeFileSync(queued + ".approved-sha256", "0".repeat(64) + "\n");
     else rmSync(queued + ".approved-sha256");
     t.mock.timers.tick(25);
     assert.ok(!f.input.some(({ kind }) => kind.startsWith("delivery-")));

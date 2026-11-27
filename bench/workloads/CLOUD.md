@@ -3022,10 +3022,12 @@ audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROO
 Delivery still rechecks live ownership, waiting group/inbox, nonce-bound state and
 exact canonical subject, records its single durable attempt and cannot overwrite
 an inbox. The local publisher records the approved SHA-256 before exposing the
-queued delivery. The live sender checks that digest and consumes its one-shot
-approval file before sending the verified bytes, leaving the same files for
-replay of a sealed audit. A missing or different digest stops publication;
-preserve the queue and monitor records instead of recreating the approval file by hand. The
+queued delivery. The live sender checks that digest and consumes the one-shot
+marker before sending the checked bytes, leaving the same files for replay of
+a sealed audit. This catches a missing marker or a mismatch between the marker
+and the queue. It does not authenticate either file against someone who can
+rewrite both in the private same-user state directory. On a mismatch, preserve
+the queue and monitor records instead of recreating the marker by hand. The
 live process, not the exported JSON, accepts the full native receipt
 and advances. A delivery result of 3 is not qualification; a failed/uncertain
 attempt is not automatic retry authority. Observe normally, then use the existing
