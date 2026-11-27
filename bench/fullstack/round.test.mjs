@@ -2212,9 +2212,12 @@ test("a bounded run never signals a group whose leader was reaped, and gives up 
 /**
  * Whether process `pid` is gone: no such process, or one that has exited but that its parent has
  * not reaped yet (a zombie, as in a container whose init does not reap) or is reaping now. Linux's
- * /proc says which, and elsewhere ps's process state. The process can be reaped between the signal check and the
- * read, so a stat file that is no longer there (ENOENT, or ESRCH from a read of one just gone),
- * and a ps that finds no such process, read as gone; any other failure is thrown.
+ * /proc says which, and elsewhere ps's process state. On Linux that is the state of the process's
+ * main thread, so a process whose main thread exited while others run reads as gone; the processes
+ * this is asked about are single-threaded children or Node processes, which keep theirs. The
+ * process can be reaped between the signal check and the read, so a stat file that is no longer
+ * there (ENOENT, or ESRCH from a read of one just gone), and a ps that finds no such process, read
+ * as gone; any other failure is thrown.
  * @param {number} pid
  * @param {{ signal?: (pid: number, signal: 0) => unknown, read?: (path: string) => string, ps?: (pid: number) => { status: number | null, stdout?: string | null, stderr?: string | null, error?: Error }, platform?: string }} [steps]
  */
@@ -2287,8 +2290,12 @@ test("on POSIX a bounded run kills the probe's whole group at its bound, and doe
   assert.equal(killed.signal, "SIGKILL");
   const descendant = Number(killed.stdout.trim());
   assert.ok(descendant > 0, killed.stdout);
-  // Gone, or a zombie its new parent has not reaped yet.
-  assert.ok(processGone(descendant), `the leader's child ${descendant} still runs`);
+  // Gone, or a zombie its new parent has not reaped yet. The run settles when the last copy of its
+  // output closes, which a dying process does before it becomes a zombie, so the child is given 2 s
+  // to get there: far less than the minute it would sleep if the group kill had missed it.
+  const until = Date.now() + 2000;
+  while (!processGone(descendant) && Date.now() < until) await new Promise((done) => setTimeout(done, 10));
+  assert.ok(processGone(descendant), `the leader's child ${descendant} still runs 2 s after the run settled`);
   // A leader that exits 0 at once while a self-bounded child holds its stdout: given up a grace after
   // the exit, not when the child ends, and the group is not signalled after the leader was reaped.
   const started = Date.now();
