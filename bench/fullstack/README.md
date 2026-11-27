@@ -1409,7 +1409,7 @@ three runs:
    is left as it is, so a start stopped part way through cannot hide it from the next.
    `droplet.mjs` on a droplet a round of that name ran on (`--host`, with or without `--from`)
    checks the same before it removes anything that round left (its progress file, or all of
-   `/bench`). It fails unless systemd confirms, each query succeeding, that the round's unit is
+   `/bench`). It refuses (exit 4) unless systemd confirms, each query succeeding, that its unit is
    either unknown to it or was disabled and stopped (both succeeding), that it cannot start at
    boot (`is-enabled` disabled, static or masked, and no wants or requires link to it left), that
    it is inactive (or failed) with no job queued for it, both read from one `systemctl show` (its
@@ -1419,8 +1419,11 @@ three runs:
    nothing is left anywhere in its control group (cgroup v2 `cgroup.events` reads `populated 0`,
    which counts child groups too, or the group is absent). A second such snapshot, taken after
    the control group, the boot's ID and the progress file are read, must be the same as the first
-   (state, queued job, invocation and the time its state last changed), or a start completed
-   meanwhile. A unit not confirmed stopped so is refused, as the clear's refusal is below: the
+   (state, queued job, invocation and the time its state last changed); one that differs, as after
+   a start that completed meanwhile, refuses. Agreeing snapshots show the unit ended at both
+   moments, not that no run came and went between them: systemd unloads a stopped unit that is not
+   enabled, which then reads as one that never ran. The clear's second check re-reads the progress
+   file (below). A unit not confirmed stopped so is refused, as the clear's refusal is below: the
    launch downloads nothing and leaves the droplet, even one it created.
    It refuses the launch when the round's progress file shows a count step that started in this
    boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a

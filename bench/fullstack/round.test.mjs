@@ -328,12 +328,14 @@ test("a relaunch on a droplet reads the round's progress file there as run-all.m
 // would; a job is queued for it, its id the first word of the file FAKE_JOBS names, while that file
 // exists; a snapshot (show with several -p, unitSnapshot) leaves out its Job line with
 // FAKE_JOBS_FAIL; with FAKE_FLIP, a file counting the state reads, the unit reads as started (a
-// start that completed meanwhile) from read FAKE_FLIP_AT on, the second unless set), each call
-// recorded in FAKE_SYSTEMCTL_LOG.
+// start that completed meanwhile) from read FAKE_FLIP_AT on, the second unless set); while the file
+// FAKE_START_IN_DOWNLOAD names exists (the droplet's ssh stand-in makes it at a download), the unit
+// reads as another run of it, active; each call recorded in FAKE_SYSTEMCTL_LOG.
 const fakeSystemctl = [
   "#!/bin/sh",
   'printf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"',
   'started=; if [ -n "$FAKE_STARTED" ] && [ -e "$FAKE_STARTED" ]; then started=1; fi',
+  'if [ -n "$FAKE_START_IN_DOWNLOAD" ] && [ -e "$FAKE_START_IN_DOWNLOAD" ]; then started=1; FAKE_STARTED_STATE=active; fi',
   'flip() { [ -n "$FAKE_FLIP" ] || return 0; n=$(($(cat "$FAKE_FLIP" 2>/dev/null || echo 0) + 1)); echo "$n" > "$FAKE_FLIP"; [ "$n" -lt "${FAKE_FLIP_AT:-2}" ] || { started=1; FAKE_STARTED_STATE=active; }; }',
   'state() { if [ -n "$started" ]; then echo "${FAKE_STARTED_STATE-active}"; else echo "${FAKE_STATE-inactive}"; fi; }',
   'case "$1" in',
@@ -705,6 +707,9 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       // FAKE_DROP_WATCH: the watch's look at the round (its script reads /proc/uptime) gets no
       // answer, as from a droplet that stopped answering; other calls go through.
       'case "$last" in */proc/uptime*) if [ -n "$FAKE_DROP_WATCH" ]; then echo "ssh: connect to host 203.0.113.9 port 22: Connection timed out" >&2; exit 255; fi ;; esac',
+      // FAKE_START_IN_DOWNLOAD: a download's archive step makes that file, as a start of the unit
+      // that ran while the results were packed (the systemctl stand-in then reads it active).
+      'case "$last" in *"tar -czf /tmp/results.tgz"*) if [ -n "$FAKE_START_IN_DOWNLOAD" ]; then : > "$FAKE_START_IN_DOWNLOAD"; fi ;; esac',
       // FAKE_DROP: a step whose script holds that text runs there, and then every reply is lost.
       'if [ -n "$FAKE_DROP" ]; then case "$last" in *"$FAKE_DROP"*) bash -c "$script" >/dev/null 2>&1; echo "Connection to 203.0.113.9 closed by remote host." >&2; exit 255 ;; esac; fi',
       'exec bash -c "$script"',
@@ -771,7 +776,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       }
       rmSync(join(root, "hook"), { force: true });
       if (hook) writeFileSync(join(root, "hook"), hook);
-      for (const file of ["log", "systemctl", "started", "jobs", "flips"]) rmSync(join(root, file), { force: true });
+      for (const file of ["log", "systemctl", "started", "jobs", "flips", "download-start"]) rmSync(join(root, file), { force: true });
       rmSync(join(fullstack, "results"), { recursive: true, force: true });
       const argv = [...(fast ? ["--import", fastTimers] : []), join(fullstack, "droplet.mjs"), "r1", ...(collect ? ["--collect"] : [...(create ? ["--ssh-key", "1"] : ["--host", "203.0.113.9"]), ...extra, ...(detach ? ["--detach"] : [])])];
       return { argv, options: { cwd: tree, encoding: /** @type {const} */ ("utf8"), env: { ...env, ...(create ? { FAKE_DOCTL_CREATE: "1" } : {}), ...(collect ? { FAKE_DOCTL_LIST: "4242 corten-bench-r1 203.0.113.9" } : {}), ...fake } } };
@@ -1158,6 +1163,16 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.notEqual(lostEnded.status, 0, lostEnded.stdout);
     assert.match(lostEnded.stdout, /downloading what it has/, `${lostEnded.stdout}${lostEnded.stderr}`);
     assert.ok(lostEnded.downloaded && lostEnded.deleted, lostEnded.calls.join("\n---\n").slice(0, 2000));
+    // The same, but a start of the unit runs during the download, after the snapshots that let it
+    // begin: the results come down, but the unit no longer reads ended after the download, so the
+    // droplet is left (the check after the download), with how to delete it.
+    const lostLate = launch({ progress: unfinished(other), extra: ["--stall", "0.00001"], fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_DROP_WATCH: "1", FAKE_DOCTL_ACCOUNT: "1", FAKE_START_IN_DOWNLOAD: join(root, "download-start") }, create: true, detach: false, fast: true });
+    assert.notEqual(lostLate.status, 0, lostLate.stdout);
+    assert.match(lostLate.stdout, /downloading what it has/, `${lostLate.stdout}${lostLate.stderr}`);
+    assert.ok(lostLate.downloaded, lostLate.calls.join("\n---\n").slice(0, 2000));
+    assert.ok(!lostLate.deleted, "a unit that started during the download after the watch gave up had its droplet deleted");
+    assert.match(lostLate.stdout, /corten-bench-r1 on the droplet at 203\.0\.113\.9 could not be confirmed ended after the download/);
+    assert.match(lostLate.stdout, /delete it with doctl compute droplet delete 4242 --force/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

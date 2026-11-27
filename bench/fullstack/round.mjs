@@ -331,9 +331,12 @@ const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * GetAll of the unit's properties, which systemd answers in one reply, so its state and its queued
  * job cannot come from different moments): its state, a job queued for it (Job, empty when none;
  * a start waiting its turn leaves the unit inactive until the job runs), which run of it this is
- * (InvocationID, new at each start) and when its state last changed. Two separate queries can
- * tear: a start that completes between a state read and a job-queue read reads as inactive with
- * nothing queued while the unit is active.
+ * (InvocationID) and when its state last changed. Those two tell runs apart only while systemd
+ * keeps the unit loaded: once a unit that is not enabled stops, systemd unloads it, and it then
+ * reads `InvocationID=` and `StateChangeTimestampMonotonic=0`, as a unit that never ran (systemd
+ * 255). So two snapshots that agree show the unit ended at both moments, not that no run came and
+ * went between them. Two separate queries can tear: a start that completes between a state read
+ * and a job-queue read reads as inactive with nothing queued while the unit is active.
  */
 export const unitProperties = ["ActiveState", "SubState", "Job", "InvocationID", "StateChangeTimestampMonotonic"];
 
@@ -369,10 +372,14 @@ export const parseSnapshot = (line) => {
 
 /**
  * Whether a unit has ended, from two snapshots taken before and after whatever else was read
- * (the round's log, its results, its control group): both readable, the same (no start, stop or
- * job between them), inactive or failed, and no job queued. Nothing is collected, cleared or
- * destroyed on less: a single snapshot, or a state and a queue read apart, may be a moment a start
- * was completing.
+ * (the round's log, its results, its control group): both readable, the same, inactive or failed,
+ * and no job queued, so the unit was ended when each was taken. That does not show that no run
+ * came and went between them (a stopped unit that is not enabled is unloaded and reads as one that
+ * never ran; unitProperties). What is relied on is the unit ended at the moment it matters:
+ * droplet.mjs destroys a droplet only on snapshots taken after its download, and the clear re-reads
+ * the progress file and the unit (clearAfterCustody). Nothing is collected, cleared or destroyed on
+ * less: a single snapshot, or a state and a queue read apart, may be a moment a start was
+ * completing.
  * @param {string} before
  * @param {string} after
  */
@@ -401,8 +408,10 @@ export const snapshotsEnded = (before, after) => {
  *   readable cgroup v2 hierarchy (`cgroup.procs` lists only the group's own processes, not those
  *   of a child group a process moved itself into);
  * - a second snapshot, taken after the control group, the boot's ID and the progress file are
- *   read, is the same as the first (snapshotsEnded), so nothing read between them is from a run
- *   of the unit that started meanwhile.
+ *   read, is the same as the first (snapshotsEnded), so the unit was ended when each was taken: a
+ *   start that completed after the first reads as changed. A run that started and ended between
+ *   them may not (unitProperties); the clear's second check re-reads the progress file and refuses
+ *   if it changed (clearAfterCustody).
  * A unit that cannot be confirmed so may be running, so this refuses rather than fails: the
  * launch then leaves the droplet as it is. Only a boot ID or progress file that cannot be read
  * fails (exit 1). Then it prints this boot's ID and the full-stack round's progress file, base64
@@ -469,8 +478,9 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
     `else`,
     `  report=absent`,
     `fi`,
-    // The same snapshot after everything else read here, or what was read may be from a run of
-    // the unit that started meanwhile (a start that completed after the first snapshot).
+    // The same snapshot after everything else read here: the unit was ended at both, and a start
+    // that completed after the first reads as changed (one that came and went between them may
+    // not; the clear re-reads the progress file).
     `after=$(snap) || refuse "its state and job could not be read again"`,
     `[ "$after" = "$before" ] || refuse "it changed while its custody was read (from $before to $after), so it may have started"`,
     `printf '%s\\n%s\\n' "$boot" "$report"`,
