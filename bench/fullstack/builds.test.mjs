@@ -590,8 +590,8 @@ const otherSpringBuilds = [
   // The defaults and legacy Live rounds build every image in one remote setup step of 90 minutes, a
   // limit all those images share, not Spring's own: this checks only that it is passed on and that
   // Spring's Maven runs alone fit inside it.
-  { runner: "bench/fullstack/droplet.mjs", call: '].join(" && ")), 90), lockLost);', builds: 0, seconds: 90 * 60,
-    forward: "`flock -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,", shorter: ["), 90), lockLost);", "), 15), lockLost);"] },
+  { runner: "bench/fullstack/droplet.mjs", call: '].join(" && ")), 90), lockLost));', builds: 0, seconds: 90 * 60,
+    forward: "`flock -E ${flockBusy} -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,", shorter: ["), 90), lockLost));", "), 15), lockLost));"] },
 ];
 
 /** Whether a runner builds images in its known calls only, with its deadline written and passed on as expected. */
