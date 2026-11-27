@@ -45,9 +45,11 @@ function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
 }
-function readGroup(path, keys = fields) {
+function readGroup(path, keys = fields, directories) {
   const actual = join(root, path);
-  assert.ok(!lstatSync(actual).isSymbolicLink());
+  const directory = lstatSync(actual);
+  assert.ok(!directory.isSymbolicLink());
+  directories?.push([actual, directory.dev, directory.ino]);
   return { path, files: Object.fromEntries(keys.map((key) => {
     try { return [key, readFileSync(join(actual, key), "utf8")]; }
     catch (error) { if (error.code === "ENOENT") return [key, null]; throw error; }
@@ -90,9 +92,9 @@ export function requireNativeContainerCpuSet(info, cpuset) {
   assert.equal(readFileSync(membership, "utf8"), cgroup, "native container left its cgroup");
 }
 export { requireNativeCommandCpuSet as requireBrowserCommandCpuSet, requireNativeContainerCpuSet as requireBrowserContainerCpuSet };
-function parents(path) {
+function parents(path, directories) {
   const values = [];
-  for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
+  for (;;) { values.push(readGroup(path, fields, directories)); if (path === "/") return values; path = posix.dirname(path); }
 }
 function effectiveControls(files) {
   const cpu = files["cpu.max"], cpus = files[cpusetField], memory = files["memory.max"];
@@ -109,10 +111,16 @@ function executableHash(at, executables) {
   if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
   return hash;
 }
-function scopeGroups(path, keys = fields) {
+const openingScopeMisses = new WeakSet();
+function scopeGroups(path, keys = fields, firstOpening = false) {
   const groups = [];
   function walk(current) {
-    const group = observing("cgroup-read", () => readGroup(current, keys)); groups.push(group);
+    try { groups.push(observing("cgroup-read", () => readGroup(current, keys))); }
+    catch (error) {
+      if (firstOpening && current === path && error?.code === "ENOENT" && error.path === join(root, path))
+        openingScopeMisses.add(error);
+      throw error;
+    }
     for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
       observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
       if (entry.isDirectory()) walk(posix.join(current, entry.name));
@@ -146,8 +154,8 @@ function forkAnchor(previous, stat, closingStat, identity, cgroup, ref) {
   const anchor = processIdentity(parent.stat);
   return BigInt(anchor.startTicks) <= BigInt(identity.startTicks) ? { identity: anchor, ref } : null;
 }
-function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor) {
-  const groups = scopeGroups(path), processes = [];
+function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor, firstOpening) {
+  const groups = scopeGroups(path, fields, firstOpening), processes = [];
   const before = observing("snapshot-membership", () => membership(groups));
   for (const group of groups) {
     const current = group.path;
@@ -211,7 +219,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
     attempts++;
     try {
       const attempt = () => {
-        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor);
+        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor, attempts === 1);
         if (successor) observing("executable-recheck-successor", () => {
           assert.ok(observed.processes.some((p) => p.executableRef === successor.ref && sameProcess(p, successor.identity, successor.cgroup)));
           if (successor.parent) assert.ok(observed.processes.some((p) =>
@@ -383,6 +391,18 @@ function confirmDockerExit(inspect, running, startedAt, began) {
     if (woke < exitRecheckTargetMs || woke >= exitRecheckDeadlineMs) return;
   }
 }
+function vanishedDockerScope(scope, directories, began) {
+  const withinBudget = () => performance.now() - began < exitRecheckDeadlineMs;
+  const sameAncestors = () => directories.every(([path, dev, ino]) => {
+    if (!withinBudget()) return false;
+    const directory = lstatSync(path, { throwIfNoEntry: false });
+    return directory?.isDirectory() && directory.dev === dev && directory.ino === ino;
+  });
+  try {
+    return sameAncestors() && withinBudget() && lstatSync(scope, { throwIfNoEntry: false }) === undefined
+      && sameAncestors() && withinBudget();
+  } catch { return false; } // Retain the original census fault.
+}
 function startupRecheck(record, bound, attempts) {
   try {
     const { state } = record.container;
@@ -429,7 +449,23 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
     participantGroup(path, id);
     stage = "kernel-census";
-    const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    const directories = exitRecheckBegan === undefined ? undefined : [];
+    const ancestors = parents(posix.dirname(path), directories);
+    let observed;
+    try { observed = snapshot(path, executables, pending); }
+    catch (error) {
+      const scope = join(root, path);
+      // Only the first opening scope miss can be confirmed as a stop. A
+      // closing or retried miss cannot erase an inconsistent census.
+      if (openingScopeMisses.has(error)
+        && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+        && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        if (stopped && vanishedDockerScope(scope, directories, exitRecheckBegan))
+          throw new ClosingDockerExit({ ...stopped, endedAt: Date.now() });
+      }
+      throw error;
+    }
     // The entry PID can exit after the opening stat. Empty PID walks alone
     // cannot settle the exit, nor can an empty retry after a failed census.
     if (observed.processes.length === 0 && !retriedEmptyCensuses.has(observed)

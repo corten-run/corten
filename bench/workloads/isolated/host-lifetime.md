@@ -111,6 +111,16 @@ inspect must start before 75 ms too. Missing or contradictory population evidenc
 a census containing another process but not the entry PID, and an empty retry
 after a failed census all leave a gap.
 
+If the first census attempt's opening directory lookup reports `ENOENT`
+for the container's exact cgroup after the opening PID and membership
+reads, the same exact-ID check can confirm its stopped generation. A miss
+on a closing lookup or after retrying a failed census cannot confirm the
+stop. A second directory lookup must show the
+scope is still absent before the existing 75 ms bound. Its ancestor
+directories must still match the opening device and inode on both sides
+of the lookup. A missing ancestor or nested cgroup, a failed lookup, or
+a scope that still exists leaves the original gap.
+
 The closing Docker inspect can itself prove the same stopped transition after
 the kernel checks. The collector then discards the incomplete kernel census and
 its new executable pins, recording only the stopped row. There is no additional
