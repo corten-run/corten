@@ -20,10 +20,12 @@ corten::assets::embed! {
 #[derive(Id)]
 pub struct MoveStatusId;
 
-/// What the last move did.
+/// What the last move did, or why it moved nothing. The page draws it inside a live region
+/// (`role="status"`) that a patch leaves in place, so the line a patch puts into it is read: a
+/// region that arrives with its text already in it may not be.
 #[component]
 pub fn MoveStatus(text: impl Render) -> impl Patch {
-    html! { <p id={MoveStatusId} role="status">{text}</p> }
+    html! { <p id={MoveStatusId}>{text}</p> }
 }
 
 /// The document around every page: `title`, the page's own `head` tags and the page itself.
@@ -116,7 +118,8 @@ pub fn page<'a>(
                     <button>"Move five market lows"</button>
                 </form>
             </header>
-            <MoveStatus text="" />
+            // The patch replaces the line inside this, so what it says is announced.
+            <div role="status"><MoveStatus text="" /></div>
             <ListingTable seller={seller} lines={lines} total={total} t={t} />
         </Layout>
     }

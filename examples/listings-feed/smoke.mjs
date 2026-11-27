@@ -95,10 +95,15 @@ try {
   };
   const before = await committed();
   const changesBefore = Number((await outputs()).changes);
+  // The status line's live region is on the page before the answer, and the patch puts the line
+  // inside it, so a screen reader reads it.
+  const region = await page.$("[role=status]");
   await page.click("form button");
   await page.waitForFunction(() => (document.querySelector("[role=status]")?.textContent ?? "") !== "");
   const after = await caughtUp();
   check("the form's write commits once and its answer patches the status line", after === before + 1, `${before} -> ${after}`);
+  const kept = await region?.evaluate((el) => el.isConnected && el === document.querySelector("[role=status]") && el.textContent !== "");
+  check("the answer lands inside the live region that was there before it", kept === true, await page.evaluate(() => document.querySelector("[role=status]")?.outerHTML ?? "none"));
   const wrong = await matches();
   check("each shown row is redrawn from the change the feed brings", wrong.length === 0, wrong.length ? wrong.slice(0, 5).join(", ") : `${Number((await outputs()).changes) - changesBefore} change(s)`);
 

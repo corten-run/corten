@@ -212,7 +212,8 @@ async fn moved(req: &Req, seller: &str, written: Result<Written, corten_cluster:
 const KEY_REUSED: &str = "Nothing moved: this form's key was already used for another write.";
 
 /// A submit whose key another seller's write already used (a form copied from that seller's
-/// page, say): a 422 that says so. With JavaScript the status line says it, and the runtime gives
+/// page, say): a 422 that says so. With JavaScript the status line says it, in the live region
+/// the page keeps for it (no field takes focus, so that is how it is read), and the runtime gives
 /// the form a new key, so sending it again moves the lows; without, a page whose link opens the
 /// seller's page with a fresh form. A data client gets the Problem Details document with it.
 async fn key_reused(req: &Req, seller: &str) -> HtmlResult {
@@ -432,8 +433,9 @@ mod tests {
 
     /// A market write whose key another seller's write used is refused as the client's mistake,
     /// a 422 in every answer: the page without JavaScript says what happened and links back to a
-    /// fresh form, the patch says so in the status line, and JSON says so in its `detail`. None
-    /// names a seller but this one. Postgres out of reach is still a 503 with the error page.
+    /// fresh form, the patch says so in the status line (the line alone, which goes inside the
+    /// page's live region), and JSON says so in its `detail`. None names a seller but this one.
+    /// Postgres out of reach is still a 503 with the error page.
     #[tokio::test]
     async fn a_key_another_seller_used_is_a_422_that_says_so_and_an_outage_a_503() {
         use corten::http::{Method, StatusCode};
@@ -452,7 +454,10 @@ mod tests {
         let patch = app.post(&refused::Move { seller: "s1" }).mode(Mode::Action).await;
         assert_eq!(patch.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let html = patch.text();
-        assert!(html.contains(r#"role="status""#) && html.contains(reused), "{html}");
+        // A live region of its own would arrive with its text and replace the page's, which a
+        // screen reader may not read.
+        assert!(html.starts_with(r#"<p id="move-status">Nothing moved: "#) && html.contains(reused), "{html}");
+        assert!(!html.contains("role="), "{html}");
         assert!(html.contains("Send it again; it has a new key now."), "{html}");
 
         let data = app.post(&refused::Move { seller: "s1" }).mode(Mode::Data).await;
