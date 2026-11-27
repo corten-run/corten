@@ -141,11 +141,11 @@ async fn each_reader_of_the_language_at_the_error_page_gets_the_requests() {
 #[tokio::test]
 async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
     use crate::i18n::Messages as _;
-    use crate::page::Shared;
+    use crate::page::{default_error_page, error_page_fn, Shared};
     use std::sync::Arc;
     crate::i18n::messages! { struct VaryMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
     let req = |locales: bool, mode: Option<&'static str>| {
-        let mut shared = Shared::new(None, None, String::new());
+        let mut shared = Shared::new(error_page_fn(default_error_page, ()), None, String::new());
         if locales {
             shared.locales = Some(VaryMsg::LOCALES);
         }
@@ -212,13 +212,13 @@ async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
 
 /// Corten's own error page reads nothing of the language a request asked for in an app without
 /// messages or layout reads, which is why its request keeps no `Accept-Language` there
-/// (`Shared::error_page_reads_language`): drawn with each of these lines and with none, its answer
-/// is the same, headers and body. Given the app's locales it reads the line, and the same
-/// comparison tells the answers apart, so a reader added to that page would fail this test.
+/// (`Shared::error_page_language`): drawn with each of these lines and with none, its answer is
+/// the same, headers and body. Given the app's locales it reads the line, and the same comparison
+/// tells the answers apart, so a reader added to that page would fail this test.
 #[tokio::test]
 async fn corten_s_error_page_reads_no_language_without_messages_or_layout_reads() {
     use crate::i18n::Messages as _;
-    use crate::page::{own_error_page, Shared};
+    use crate::page::{default_error_page, error_page_fn, Shared};
     use std::sync::Arc;
     crate::i18n::messages! { struct ErrorMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
     let draw = |shared: &Arc<Shared>, asked: Option<&'static str>| {
@@ -230,22 +230,21 @@ async fn corten_s_error_page_reads_no_language_without_messages_or_layout_reads(
                 parts.headers.insert(http::header::ACCEPT_LANGUAGE, http::HeaderValue::from_static(asked));
             }
             parts.extensions.insert(crate::Signal::for_app(shared.clone(), 0));
-            let res = own_error_page(Failure::NotFound, parts).await;
+            let res = (shared.error_page)(Failure::NotFound, parts).await;
             let headers = res.headers().clone();
             (headers, res.into_body().collect().await.unwrap().to_bytes())
         }
     };
     let lines = ["fr", "fr-CA, en;q=0.5", "de", "*", "en"];
-    let shared = Arc::new(Shared::new(None, None, String::new()));
-    assert!(!shared.error_page_reads_language());
+    let shared = Arc::new(Shared::new(error_page_fn(default_error_page, ()), None, String::new()));
+    assert!(shared.locales.is_none() && shared.layout_reads.is_empty());
     let none = draw(&shared, None).await;
     assert!(String::from_utf8_lossy(&none.1).contains("<h1>"), "the default error page");
     for asked in lines {
         assert_eq!(draw(&shared, Some(asked)).await, none, "{asked}");
     }
-    let mut with_locales = Shared::new(None, None, String::new());
+    let mut with_locales = Shared::new(error_page_fn(default_error_page, ()), None, String::new());
     with_locales.locales = Some(ErrorMsg::LOCALES);
-    assert!(with_locales.error_page_reads_language());
     let with_locales = Arc::new(with_locales);
     assert_ne!(draw(&with_locales, Some("fr")).await, draw(&with_locales, None).await, "a reader is seen");
 }

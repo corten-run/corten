@@ -13,7 +13,7 @@ use crate::{
     handler::Request,
     listener::Listener,
     middleware::Middleware,
-    page::{self, error_page_fn, Asked, ErrorPageFn, Failure, RequestPage, Shared},
+    page::{self, default_error_page, error_page_fn, Asked, ErrorPageFn, Failure, RequestPage, Shared},
     pwa::Pwa,
     response::Response,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
@@ -1546,7 +1546,9 @@ impl<M: Middleware> App<M> {
         if self.error_page.is_none() && assets.as_ref().is_some_and(|assets| assets.styled()) {
             no_error_page();
         }
-        let mut shared = Shared::new(self.error_page, assets, head);
+        let own_error_page = self.error_page.is_none();
+        let error_page = self.error_page.unwrap_or_else(|| error_page_fn(default_error_page, ()));
+        let mut shared = Shared::new(error_page, assets, head);
         shared.finishing = self.finishing.clone();
         shared.offline = offline;
         shared.locales = self.locales;
@@ -1557,6 +1559,7 @@ impl<M: Middleware> App<M> {
         }
         shared.dev = dev;
         shared.layout_reads = self.layout_reads.into();
+        shared.error_page_language = !own_error_page || shared.locales.is_some() || !shared.layout_reads.is_empty();
         // The same path routed in two places (the app's routes and an area's) is one route to the router,
         // with the methods of both.
         let mut pages: Vec<(&'static str, bool)> = Vec::new();
