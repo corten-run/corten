@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # The toolchain alone, which bench/fullstack/build.mjs builds the app with.
-FROM debian:trixie-20261104 AS tools
+FROM debian:trixie-20261123@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2 AS tools
 # Drogon's build dependencies, as its install guide lists them for Debian.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates g++ cmake make git \
@@ -23,7 +23,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(n
     && mkdir -p /out && cp build/server /out/server && cp -r static /out/static \
     && chmod 644 /out/static/*
 
-FROM debian:trixie-20261104-slim
+FROM debian:trixie-20261123-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libjsoncpp26 libssl3t64 libuuid1 zlib1g libicu76 \
     && rm -rf /var/lib/apt/lists/*
