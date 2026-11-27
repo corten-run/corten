@@ -1295,10 +1295,13 @@ impl<M: Middleware> App<M> {
     /// on for more trailers; a body is read from the socket only as the app asks for it, where
     /// hyper reads one piece ahead; behind a long body its handler left unread, a
     /// connection may be kept where hyper would have closed it, or closed where it would
-    /// have been kept; a body type of the app's own that panics where it is asked its length or
-    /// whether it has ended, or as it is dropped, takes with its connection the answers before
-    /// it that had not been sent; an answer cut short because its client closed its side while
-    /// none of it waited is cut after more of it, or less, than hyper sends; and a client that
+    /// have been kept; a body its handler holds unread while the rest of it arrives in several
+    /// writes keeps its connection where hyper closes it, and is not answered for a client that
+    /// has left by then where hyper answers; a body type of the app's own that panics where it
+    /// is asked its length or whether it has ended, or as it is dropped, takes with its
+    /// connection the answers before it that had not been sent; an answer cut short because its
+    /// client closed its side while none of it waited, or over a socket that takes little, is
+    /// cut after more of it, or less, than hyper sends; and a client that
     /// pipelines requests and reads no answer holds more of the server's memory than it does
     /// with hyper, which is why this is off unless an app asks
     /// (`docs/design.md#choice-own-http1`, with what was measured and what would make it the

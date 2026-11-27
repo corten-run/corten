@@ -1428,9 +1428,8 @@ where
                 asked = Asked { head: parts.method == Method::HEAD, http11: parts.version == Version::HTTP_11, keep_alive };
                 // A body is unfinished here only if this request's head framed one (`parse`):
                 // the body of the request before has ended by now (below). The service is
-                // called in two places so that a request with no body is made and handed to it
-                // as it was before bodies were read, with no copy of it made for a body to be
-                // put into.
+                // called in two places so that a request with no body is not made first and
+                // copied again for a body to be put into it.
                 if conn.feed.is_some() {
                     service.call(conn.request(parts))
                 } else {

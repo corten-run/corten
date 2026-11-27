@@ -354,18 +354,37 @@ answers any other ([below](#host-names)). What differs:
     to send. Corten's connection reads when the handler asks. A handler sees the same bytes
     either way, in pieces that end where each connection's reads did, which no reader should
     count on with either.
+11. A body its handler holds and does not read while the rest of it arrives. By the time the
+    handler drops it hyper has read one piece of it ahead and Corten's connection none (item
+    10), so the two know different things then. Where the rest came in more than one write,
+    hyper finds a piece that is not the body's end and closes the connection behind the
+    answer; Corten's connection finds all of it and keeps the connection. And where the client
+    has closed its side by then, hyper, which has not read the body's end and so has not
+    looked for its client's, sends the answer, and Corten's connection sends none to a client
+    that has left. With either, a body is read to the end its framing gives it or its
+    connection is closed.
+12. Where an answer is cut for a client that has left, over a socket that takes little. An
+    answer made from its request's body that waits behind another answer: hyper may have sent
+    part of its head when it finds the client gone, and Corten's connection sends none of it.
+    And behind a request that asked to switch protocols, which hyper answers with the switch
+    on or off, hyper may cut its refusal of the next head short, and at another byte where
+    requests with bodies were answered before it, since Corten's connection had sent those
+    answers sooner. What one sends is the beginning of what the other sends.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
-connection, at `568aa8d1a`): the shortest request the counting kit sends, to a route that says
-`unstaged` and answers two bytes, goes from 10,587 to 9,335, a staged API route's `GET` from
-18,354 to 17,096, and a 12 KB page from 33,220 to 32,186, each with three allocations fewer. A
+connection, at `3bf27fe3c`): the shortest request the counting kit sends, to a route that says
+`unstaged` and answers two bytes, goes from 10,587 to 9,436, a staged API route's `GET` from
+18,354 to 17,195, and a 12 KB page from 33,220 to 32,284, each with three allocations fewer. A
 request with the header lines a browser sends costs as many instructions as it did, to a
-third of a percent either way (the same `GET` 23,894 and 23,811, a compressed page 211,835
-and 211,950), with the three allocations fewer; a request with a body costs what it did. A
+third of a percent either way (the same `GET` 23,894 and 23,805, a compressed page 211,834
+and 211,941), with the three allocations fewer. A `POST` with a body of two bytes goes from
+22,839 to 20,853 and from 19 allocations to 17, and the same body sent as one chunk from
+26,427 to 22,994. A
 request whose head is longer than 2,560 bytes costs more than it did: one with a `Host` name
-of 4,096 bytes goes from 22,503 to 24,313, since Corten's connection reads less at first than
+of 4,096 bytes goes from 22,503 to 24,413, since Corten's connection reads less at first than
 hyper does and takes such a head in two reads. A
-connection waiting for a request holds 7,424 bytes where hyper's holds 8,471. No time has been
+connection waiting for a request holds 7,424 bytes where hyper's holds 8,471, after a request
+with a body as after one without. No time has been
 measured yet, so this is less work for a short request and not yet a claim that it is faster.
 
 ## Access logs
