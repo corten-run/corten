@@ -121,7 +121,7 @@ test("mixed-load.js sends and counts the kinds and classes this module reads", (
   assert.ok(script.includes(`const classes = ${JSON.stringify(classes).replaceAll(",", ", ")};`), "mixed-load.js's classes");
 });
 
-// A server that waits some other way, or forever, fails at the timeout, which ends it and its requests.
+// A server that never answers fails at the timeout, which ends it and its requests.
 test("the item API answers a late item as the item, after SLOW_MS, and an unknown one at once", { timeout: 10_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "mixed-api-"));
   /** @type {import("node:child_process").ChildProcess | undefined} */
@@ -129,16 +129,23 @@ test("the item API answers a late item as the item, after SLOW_MS, and an unknow
   try {
     const items = join(dir, "items.json");
     writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" } }));
-    // Each timer the server sets is written to its output and held until the test writes
-    // "release" to its input, so which answer waits, and for what, is read from the server, and
-    // no answer is held to a time a busy machine can cross.
+    // The server runs with a preload that holds each timer it sets until the test writes "release"
+    // to its input, and writes to its output each timer it sets or clears and each answer it ends,
+    // with whether it ended inside a released timer's callback. Which answer waits, and on what,
+    // is read from the server, and no answer is held to a time a busy machine can cross.
     const timers = join(dir, "timers.mjs");
     writeFileSync(
       timers,
       [
-        "const held = [];",
-        "globalThis.setTimeout = (f, ms, ...a) => { held.push(() => f(...a)); process.stdout.write(`timer ${ms}\\n`); return held.length; };",
-        'process.stdin.setEncoding("utf8").on("data", (line) => { if (line.includes("release")) for (const f of held.splice(0)) f(); });',
+        'import { ServerResponse } from "node:http";',
+        "const held = new Map();",
+        "let last = 0;",
+        "let inTimer = false;",
+        "globalThis.setTimeout = (f, ms, ...a) => { const id = ++last; held.set(id, () => f(...a)); process.stdout.write(`timer ${ms}\\n`); return id; };",
+        "globalThis.clearTimeout = (id) => { held.delete(id); process.stdout.write(`cleared ${id}\\n`); };",
+        "const end = ServerResponse.prototype.end;",
+        'ServerResponse.prototype.end = function (...a) { process.stdout.write(`answered ${this.statusCode} ${this.req?.url} ${inTimer ? "in its timer" : "at once"}\\n`); return end.apply(this, a); };',
+        'process.stdin.setEncoding("utf8").on("data", (line) => { if (!line.includes("release")) return; const due = [...held.values()]; held.clear(); for (const f of due) { inTimer = true; try { f(); } finally { inTimer = false; } } });',
         "",
       ].join("\n"),
     );
@@ -149,56 +156,74 @@ test("the item API answers a late item as the item, after SLOW_MS, and an unknow
         probe.close(() => done(port));
       });
     });
-    const child = spawn(process.execPath, ["--import", pathToFileURL(timers).href, fileURLToPath(new URL("./item-api/server.mjs", import.meta.url)), items, String(port), "1"], { env: { ...process.env, SLOW_MS: "300" }, stdio: ["pipe", "pipe", "inherit"], signal: t.signal });
+    const child = spawn(process.execPath, ["--import", pathToFileURL(timers).href, fileURLToPath(new URL("./item-api/server.mjs", import.meta.url)), items, String(port), "1"], { env: { ...process.env, SLOW_MS: "300" }, stdio: ["pipe", "pipe", "inherit"], signal: t.signal, killSignal: "SIGKILL" });
     server = child;
     let output = "";
-    // It says how many items it serves once it listens; a server that ends first fails the test.
-    await new Promise((ready, failed) => {
-      child.stdout.setEncoding("utf8").on("data", (chunk) => {
-        output += chunk;
-        if (/items on/.test(output)) ready(undefined);
+    let ended = false;
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (output += chunk));
+    child.stdout.once("close", () => (ended = true));
+    /** The server's next output, or a failure once its output has ended. */
+    const more = () =>
+      new Promise((heard, gone) => {
+        if (ended) return gone(new Error("the item API ended"));
+        const data = () => {
+          child.stdout.off("close", close);
+          heard(undefined);
+        };
+        const close = () => {
+          child.stdout.off("data", data);
+          gone(new Error("the item API ended"));
+        };
+        child.stdout.once("data", data);
+        child.stdout.once("close", close);
       });
-      child.once("error", failed);
-      child.once("exit", (code, signal) => failed(new Error(`the item API ended before it listened (${code ?? signal})`)));
-    });
-    /** The waits the server has set, in the order it set them. */
-    const waits = () => [...output.matchAll(/^timer (.*)$/gm)].map((m) => m[1]);
-    const at = async (/** @type {string} */ id) => {
-      const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`, { signal: t.signal });
-      return { status: r.status, body: await r.text() };
-    };
-    let lateDone = false;
-    const late = at("item_slow_3").finally(() => (lateDone = true));
-    while (waits().length === 0 && !lateDone) await Promise.race([new Promise((more) => child.stdout.once("data", more)), late]);
-    assert.deepEqual(waits(), ["300"], "the late item waits SLOW_MS, once");
-    // While the late item's wait is held, the item and an unknown one are answered, and set none:
-    // one that set a timer would be held too, so it fails as soon as the server says it set one.
-    const atOnce = async (/** @type {string} */ id) => {
-      const answer = at(id);
-      while (true) {
-        const next = await Promise.race([answer, new Promise((more) => child.stdout.once("data", () => more(undefined)))]);
-        assert.deepEqual(waits(), ["300"], `${id} is answered without waiting`);
-        if (next) return next;
+    // It says how many items it serves once it listens; a server that ends first fails the test.
+    while (!/items on/.test(output)) await more();
+    /** What the server has said since it listened, a record a line, each line once it is whole. */
+    const said = () =>
+      output
+        .slice(0, output.lastIndexOf("\n") + 1)
+        .split("\n")
+        .filter((line) => line !== "" && !/items on/.test(line));
+    /** Waits until the server has said `records`, failing at the first record it says otherwise. */
+    const heard = async (/** @type {string[]} */ records) => {
+      for (;;) {
+        const now = said();
+        assert.deepEqual(now, records.slice(0, now.length), "what the item API did");
+        if (now.length === records.length) return;
+        await more();
       }
     };
-    const now = await atOnce("item_3");
+    const url = (/** @type {string} */ id) => `/api/discovery/items/${id}`;
+    const at = (/** @type {string} */ id) => {
+      const answer = fetch(`http://127.0.0.1:${port}${url(id)}`, { signal: t.signal }).then(async (r) => ({ status: r.status, body: await r.text() }));
+      answer.catch(() => {});
+      return answer;
+    };
+    // The late item sets one timer of SLOW_MS and is not answered while it is held.
+    const late = at("item_slow_3");
+    const records = ["timer 300"];
+    await heard(records);
+    // While it is held, the item and an unknown one are answered at once, with no timer set.
+    const item = at("item_3");
+    records.push(`answered 200 ${url("item_3")} at once`);
+    await heard(records);
+    const now = await item;
     assert.equal(now.status, 200);
     assert.equal(now.body, JSON.stringify({ id: "item_3" }), "the item as the file has it");
-    const unknown = await atOnce("item_slow_9");
-    assert.equal(unknown.status, 404);
-    assert.equal(lateDone, false, "the late item is answered only once its wait ends");
+    const unknown = at("item_slow_9");
+    records.push(`answered 404 ${url("item_slow_9")} at once`);
+    await heard(records);
+    assert.equal((await unknown).status, 404);
+    // Releasing its timer is what answers the late item, as the item.
     child.stdin.write("release\n");
-    // Its release answers it, with no other wait set on the way.
-    while (true) {
-      const next = await Promise.race([late, new Promise((more) => child.stdout.once("data", () => more(undefined)))]);
-      assert.deepEqual(waits(), ["300"], "the late item is answered when its one wait ends");
-      if (next) break;
-    }
+    records.push(`answered 200 ${url("item_slow_3")} in its timer`);
+    await heard(records);
     const answered = await late;
     assert.equal(answered.status, 200);
     assert.equal(answered.body, now.body, "the late item is the item");
   } finally {
-    server?.kill();
+    server?.kill("SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
 });
