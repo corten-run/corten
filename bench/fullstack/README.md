@@ -1405,6 +1405,12 @@ three runs:
    round there, recorded failed), and a progress file whose last line was cut short is read as a
    count step that had not ended. That is checked before a start writes anything, and the cut file
    is left as it is, so a start stopped part way through cannot hide it from the next.
+   `droplet.mjs` on a droplet a round of that name ran on (`--host`, with or without `--from`)
+   checks the same before it removes anything that round left (its progress file, or all of
+   `/bench`): it disables and stops the round's unit, fails unless the unit is then inactive with
+   nothing left in its control group, and refuses the launch when the round's progress file shows
+   a count step that started in this boot and did not end, or ends in a cut line. Such a round
+   goes on from a new droplet, or, for a count step that started in this boot, after a reboot.
    A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,

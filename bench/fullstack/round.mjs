@@ -323,6 +323,49 @@ export function countRestartError(progress, bootId) {
 const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
+ * The script droplet.mjs runs on a droplet before it starts a round there, before it removes
+ * anything an earlier round of that name left (its progress file, or all of /bench). It disables
+ * and stops the round's unit, so a reboot cannot start the old round again while the new one is
+ * set up, and fails unless the unit is then inactive (or failed) with no process left in its
+ * control group: a stop that did not take leaves the old round running. Then it prints this boot's
+ * ID and the full-stack round's progress file, base64 ("present <base64>", or "absent"), which
+ * relaunchError reads.
+ * @param {string} unitName the round's unit, without ".service"
+ * @param {string} progressFile the full-stack round's progress file on the droplet
+ */
+export const relaunchCustody = (unitName, progressFile) => {
+  const service = quote(`${unitName}.service`);
+  return [
+    `systemctl disable --quiet ${service} >/dev/null 2>&1 || true`,
+    `systemctl stop ${service} >/dev/null 2>&1 || true`,
+    `state=$(systemctl show -p ActiveState --value ${service})`,
+    `case "$state" in inactive|failed) ;; *) echo "unit ${unitName} is $state after its stop" >&2; exit 1 ;; esac`,
+    // A cgroup file's size reads 0, so its content is read.
+    `cg=$(systemctl show -p ControlGroup --value ${service})`,
+    `if [ -n "$cg" ] && [ -e "/sys/fs/cgroup$cg/cgroup.procs" ] && [ -n "$(cat "/sys/fs/cgroup$cg/cgroup.procs")" ]; then echo "unit ${unitName} still has processes after its stop" >&2; exit 1; fi`,
+    "cat /proc/sys/kernel/random/boot_id || exit 1",
+    `if [ -e ${quote(progressFile)} ]; then printf 'present '; base64 -w0 < ${quote(progressFile)} || exit 1; echo; else echo absent; fi`,
+  ].join("\n");
+};
+
+/**
+ * Why a round may not start again on a droplet it ran on, read from relaunchCustody's output, or
+ * null: countRestartError on the progress file as the droplet holds it, before anything clears it,
+ * so a count step that started in this boot and did not end (a perf it started may still run) is
+ * refused as run-all.mjs would refuse it. Output that does not read as relaunchCustody's is
+ * refused too: what the progress file holds is then not known.
+ * @param {string} output
+ */
+export function relaunchError(output) {
+  const read = /^([^\n]*)\n(?:absent|present ([A-Za-z0-9+/]*={0,2}))\n?$/.exec(output.replaceAll("\r\n", "\n"));
+  const bytes = read?.[2] === undefined ? Buffer.alloc(0) : Buffer.from(read[2], "base64");
+  if (!read || (read[2] !== undefined && bytes.toString("base64") !== read[2])) {
+    return "the droplet's boot ID and the round's progress file could not be read, so whether a perf or probe its count step started may still run is not known";
+  }
+  return countRestartError(bytes.toString("utf8"), read[1].trim() || null);
+}
+
+/**
  * Appends `line` and its newline to the progress file open on `fd` (read and append, "a+"), every
  * byte of it, or throws: `write` (writeSync) may write fewer bytes than it was given, and is called
  * again for the rest, and one that writes none, or throws, leaves the line cut short and this

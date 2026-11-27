@@ -3,7 +3,9 @@
 // hardware counters for `count.mjs`. Needs `doctl` (authenticated), `ssh`, `scp` and `tar`.
 // Usage (from the repository root or anywhere):
 //   node bench/fullstack/droplet.mjs <round> --ssh-key <DO key id> [--size c-8 (c-16 for --tier matched)] [--region sfo2]
-//   node bench/fullstack/droplet.mjs <round> --host <ip> [--keep]   (reuse a droplet)
+//   node bench/fullstack/droplet.mjs <round> --host <ip> [--keep]   (reuse a droplet; a round
+//     whose count step started in this boot and did not end is refused there, as run-all.mjs
+//     refuses it, before anything it left is cleared: start it on a new droplet, or reboot this one)
 //   --detach: start the round and leave: it runs on the droplet by itself; collect it later.
 //   --collect: look at the round once: download its results and destroy the droplet if it has
 //     ended (exit 0 when it finished, 1 when it stopped short), or show where it is (exit 3).
@@ -50,7 +52,7 @@ import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { browserSuite, fixtureError, hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
+import { browserSuite, fixtureError, hoursFor, quote, relaunchCustody, relaunchError, roundNameError, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -287,6 +289,17 @@ const launch = async () => {
       : []),
   ].join(" && "), 30));
 
+  // A round of this name already there (a reused droplet): its unit is disabled and stopped first,
+  // and must then be inactive with nothing left running, or the launch fails. Then, before anything
+  // that round left is removed (its progress file below, or all of /bench), its progress file is
+  // read as run-all.mjs reads it at a start: a count step that started in this boot and did not end
+  // may have left a perf in the kernel, which only a reboot ends, and removing that file would
+  // leave run-all.mjs nothing to refuse on (round.mjs, relaunchError). The full-stack round's file
+  // is read whatever the suite, as every suite's unit has this name and clears /bench.
+  const custody = await retry(3, () => remote(relaunchCustody(unitName, `/bench/bench/fullstack/results-${round}.progress`), 2, { quiet: true }));
+  const refused = relaunchError(String(custody.stdout ?? ""));
+  if (refused) throw new Error(`round ${round} may not start again on the droplet at ${host}: ${refused}. Start it on a new droplet, or, for a count step that started in this boot, reboot this one first (a new boot ID)`);
+
   console.log("uploading the working tree");
   const tarball = join(here, "results", ".upload.tgz");
   mkdirSync(dirname(tarball), { recursive: true });
@@ -301,8 +314,9 @@ const launch = async () => {
     if (earlier !== null) passes = earlier;
   }
   const env = envFor(passes);
-  // A round of this name already running there (a reused droplet) stops first.
-  await retry(3, () => remote(`systemctl stop ${unitName} 2>/dev/null; ${from ? "mkdir -p /bench" : "rm -rf /bench && mkdir -p /bench"}`, 2));
+  // Its unit stopped and its progress file read above: a new round starts a new progress file (one
+  // going on from a step keeps its earlier results and, below, its log).
+  await retry(3, () => remote(`${from ? "mkdir -p /bench" : "rm -rf /bench && mkdir -p /bench"} && rm -f ${suiteDir}/results-${round}.progress`, 2));
   await retry(3, () => scp(tarball, `root@${host}:/bench/src.tgz`));
   remove(tarball);
 
@@ -342,8 +356,7 @@ const launch = async () => {
     // The full comparison's calls have their own limits and its builds a budget (round.mjs: they
     // fit in hoursFor(passes) together); the unit's limit is a backstop. live and browser take about an hour.
     write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? hoursFor(passes) : suite === "harden" ? 5 : 3 })),
-    // A new round starts a new log and progress file; one going on from a step keeps the log.
-    `rm -f ${suiteDir}/results-${round}.progress`,
+    // A new round starts a new log; one going on from a step keeps it.
     from ? `touch ${log}` : `: > ${log}`,
     "systemctl daemon-reload",
     suite === "fullstack" ? `systemctl enable --quiet ${unitName}` : "true",
