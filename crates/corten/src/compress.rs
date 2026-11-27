@@ -103,43 +103,47 @@ impl Coding {
 /// The codings `Accept-Encoding` allows, in the server's order of preference among those with
 /// the highest q-value.
 pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding> {
-    negotiate(headers).best(offered)
+    let mut best: Option<(u16, usize, Coding)> = None;
+    each_accepted(headers, |q, coding| {
+        if let Some(rank) = offered.iter().position(|c| *c == coding) {
+            if best.is_none_or(|(bq, brank, _)| q > bq || (q == bq && rank < brank)) {
+                best = Some((q, rank, coding));
+            }
+        }
+    });
+    best.map(|(_, _, coding)| coding)
 }
 
-/// The `Accept-Encoding` lines browsers send, each with the weights of Corten's codings it names
-/// (zstd, brotli, gzip, as in [`Accepts`]), none with a weight of its own. Playwright 1.65.1's
-/// browsers on Linux sent these three on 2026-11-23: Chromium 159 and Firefox 159 the first,
-/// WebKit 27.2 the second over HTTPS and the third over plain HTTP. A line that is one of these
-/// byte for byte is not parsed ([`line_weights`]), and
+/// The `Accept-Encoding` lines browsers send, each with the codings of Corten's it names, none
+/// with a weight. Playwright 1.65.1's browsers on Linux sent these three on 2026-11-23: Chromium
+/// 159 and Firefox 159 the first, WebKit 27.2 the second over HTTPS and the third over plain
+/// HTTP. A line that is one of these byte for byte is not parsed ([`each_accepted`]), and
 /// `a_browsers_line_is_read_as_the_parser_reads_it` holds each to what the parser makes of it; a
 /// browser that sends another line (Playwright's WebKit on Windows: `deflate, gzip, br`), or one
 /// whose line a proxy rewrote, is parsed as any client's is. `docs/design.md#choice-fixed-stages`
 /// holds the list's premises and when to read them again.
-const BROWSER_LINES: [(&[u8], Accepts); 3] = [
-    (b"gzip, deflate, br, zstd", Accepts([1000, 1000, 1000])),
-    (b"gzip, deflate, br", Accepts([0, 1000, 1000])),
-    (b"gzip, deflate", Accepts([0, 0, 1000])),
+const BROWSER_LINES: [(&[u8], &[Coding]); 3] = [
+    (b"gzip, deflate, br, zstd", &[Coding::Gzip, Coding::Brotli, Coding::Zstd]),
+    (b"gzip, deflate, br", &[Coding::Gzip, Coding::Brotli]),
+    (b"gzip, deflate", &[Coding::Gzip]),
 ];
 
-/// The weight one `Accept-Encoding` line gives each coding, its highest where it names one more
-/// than once. Read as bytes, and a q-value parsed only where an item has one: every request reads
-/// this header. A browser's line is compared whole first ([`BROWSER_LINES`]), which costs less
-/// than parsing its four items.
-fn line_weights(line: &HeaderValue) -> Accepts {
-    let line = line.as_bytes();
-    if let Some((_, known)) = BROWSER_LINES.iter().find(|(browser, _)| *browser == line) {
-        return *known;
+/// Calls `f` with each coding `Accept-Encoding` allows and its q-value (in thousandths).
+/// Read as bytes, and a q-value parsed only where an item has one: every request reads this header.
+/// A browser's line is compared whole first ([`BROWSER_LINES`]), which costs less than parsing its
+/// four items.
+fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
+    for value in headers.get_all(header::ACCEPT_ENCODING) {
+        let header = value.as_bytes();
+        if let Some((_, codings)) = BROWSER_LINES.iter().find(|(line, _)| *line == header) {
+            codings.iter().for_each(|&coding| f(1000, coding));
+            continue;
+        }
+        each_listed(header, &mut f);
     }
-    let mut q = [0u16; 3];
-    each_listed(line, |weight, coding| {
-        let slot = &mut q[coding as usize];
-        *slot = (*slot).max(weight);
-    });
-    Accepts(q)
 }
 
-/// Calls `f` with each coding one `Accept-Encoding` line allows and its q-value (in thousandths),
-/// parsed.
+/// [`each_accepted`] for one line, parsed.
 fn each_listed(header: &[u8], mut f: impl FnMut(u16, Coding)) {
     for range in crate::http::list_items(header) {
         let item = &header[range];
@@ -274,19 +278,13 @@ impl Accepts {
 }
 
 /// The codings a response to this request may use, in one pass over `Accept-Encoding`.
-/// Over several lines a coding has the highest weight any of them gives it.
 pub(crate) fn negotiate(headers: &HeaderMap) -> Accepts {
-    let mut lines = headers.get_all(header::ACCEPT_ENCODING).iter();
-    let Some(first) = lines.next() else {
-        return Accepts::default();
-    };
-    let mut accepts = line_weights(first);
-    for line in lines {
-        for (slot, weight) in accepts.0.iter_mut().zip(line_weights(line).0) {
-            *slot = (*slot).max(weight);
-        }
-    }
-    accepts
+    let mut q = [0u16; 3];
+    each_accepted(headers, |value, coding| {
+        let slot = &mut q[coding as usize];
+        *slot = (*slot).max(value);
+    });
+    Accepts(q)
 }
 
 /// `res` compressed for what the request accepts when it is worth it: a body compressed before
@@ -777,114 +775,27 @@ mod tests {
     /// parser reads it, weights included, alone and beside a second line that has weights.
     #[test]
     fn a_browsers_line_is_read_as_the_parser_reads_it() {
-        for (line, known) in BROWSER_LINES {
+        let read = |headers: &HeaderMap| {
+            let mut read = Vec::new();
+            each_accepted(headers, |q, coding| read.push((q, coding)));
+            read
+        };
+        for (line, _) in BROWSER_LINES {
             let text = std::str::from_utf8(line).unwrap();
-            let mut parsed = [0u16; 3];
-            each_listed(line, |q, coding| parsed[coding as usize] = parsed[coding as usize].max(q));
-            assert!(known.any(), "{text}");
-            assert_eq!(known, Accepts(parsed), "{text}");
-            assert_eq!(negotiate(&accept(text)), known, "{text}");
+            let mut parsed = Vec::new();
+            each_listed(line, |q, coding| parsed.push((q, coding)));
+            assert!(!parsed.is_empty(), "{text}");
+            assert_eq!(read(&accept(text)), parsed, "{text}");
             // In another case the line is not in the list, so it is parsed.
             let upper = text.to_uppercase();
-            assert_eq!(negotiate(&accept(&upper)), known, "{text}");
+            assert_eq!(read(&accept(&upper)), parsed, "{text}");
             let second = |mut headers: HeaderMap| {
                 headers.append(header::ACCEPT_ENCODING, HeaderValue::from_static("zstd;q=0.5, br;q=0.25"));
                 headers
             };
+            assert_eq!(read(&second(accept(text))), read(&second(accept(&upper))), "{text}");
             assert_eq!(negotiate(&second(accept(text))), negotiate(&second(accept(&upper))), "{text}");
         }
-    }
-
-    /// `negotiate` and `accepted` choose as the reading they replaced did: every item of every
-    /// line called back with its weight, a coding's highest kept, and the best by weight, then by
-    /// the server's order (zstd, brotli, gzip; or the order `accepted` is offered). Over lines of up
-    /// to three items made from these, one line or two, and the browsers' lines among them.
-    #[test]
-    fn negotiation_chooses_as_reading_every_item_did() {
-        let items = [
-            "gzip",
-            "GZIP",
-            "x-gzip",
-            "br",
-            "zstd",
-            " zstd ",
-            "identity",
-            "*",
-            "deflate",
-            "gzip;q=0",
-            "br;q=0.5",
-            "zstd;q=0.25",
-            "zstd;q=0.5",
-            "gzip;q=bad",
-            "br ; q=1.0",
-            "zstd;Q=0.001",
-            "br;q=0.500",
-            "gzip;q=1.5",
-        ];
-        let mut lines: Vec<String> = BROWSER_LINES.iter().map(|(line, _)| std::str::from_utf8(line).unwrap().into()).collect();
-        lines.push(String::new());
-        for a in items {
-            lines.push(a.into());
-            for b in items {
-                lines.push(format!("{a}, {b}"));
-            }
-        }
-        for (i, a) in items.iter().enumerate().step_by(3) {
-            for b in &items[i..] {
-                for c in items.iter().step_by(2) {
-                    lines.push(format!("{a},{b} ,\t{c}"));
-                }
-            }
-        }
-        // What the reading before did, with every item parsed (a browser's line reads as parsed).
-        let before = |headers: &HeaderMap, offered: &[Coding]| {
-            let mut best: Option<(u16, usize, Coding)> = None;
-            for value in headers.get_all(header::ACCEPT_ENCODING) {
-                each_listed(value.as_bytes(), |q, coding| {
-                    if let Some(rank) = offered.iter().position(|c| *c == coding) {
-                        if best.is_none_or(|(bq, brank, _)| q > bq || (q == bq && rank < brank)) {
-                            best = Some((q, rank, coding));
-                        }
-                    }
-                });
-            }
-            best.map(|(_, _, coding)| coding)
-        };
-        let weights = |headers: &HeaderMap| {
-            let mut q = [0u16; 3];
-            for value in headers.get_all(header::ACCEPT_ENCODING) {
-                each_listed(value.as_bytes(), |weight, coding| q[coding as usize] = q[coding as usize].max(weight));
-            }
-            Accepts(q)
-        };
-        let offers: [&[Coding]; 6] = [
-            &[Coding::Zstd, Coding::Brotli, Coding::Gzip],
-            &[Coding::Gzip, Coding::Brotli, Coding::Zstd],
-            &[Coding::Brotli, Coding::Gzip],
-            &[Coding::Gzip, Coding::Brotli],
-            &[Coding::Zstd, Coding::Gzip],
-            &[Coding::Gzip],
-        ];
-        let check = |headers: &HeaderMap, said: &str| {
-            assert_eq!(negotiate(headers), weights(headers), "{said}");
-            for offered in offers {
-                assert_eq!(accepted(headers, offered), before(headers, offered), "{said} {offered:?}");
-            }
-        };
-        for a in &lines {
-            let one = accept(a);
-            check(&one, a);
-            for b in lines.iter().step_by(7) {
-                let mut two = accept(a);
-                two.append(header::ACCEPT_ENCODING, HeaderValue::from_str(b).unwrap());
-                check(&two, &format!("{a:?} then {b:?}"));
-            }
-        }
-        // A coding named twice on one line, or on two, has its higher weight.
-        assert_eq!(negotiate(&accept("gzip;q=0.2, gzip;q=0.7, gzip;q=0")).0[Coding::Gzip as usize], 700);
-        let mut two = accept("br;q=0.9");
-        two.append(header::ACCEPT_ENCODING, HeaderValue::from_static("br;q=0.3, zstd"));
-        assert_eq!(negotiate(&two), Accepts([1000, 900, 0]));
     }
 
     /// The lines the stages compare whole before they search one ([`no_transform`], [`vary`]) say

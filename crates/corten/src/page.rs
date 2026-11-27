@@ -4701,7 +4701,10 @@ mod carried_tests {
         assert!(decided.iter().all(|&n| n > 100), "{decided:?}");
         // No line, and one that is not text, are no JSON.
         assert_eq!(Mode::said(None, || None).0, (Mode::Document, false));
-        let not_text = HeaderValue::from_bytes(b"application/json\xff").unwrap();
-        assert_eq!(Mode::said(None, || Some(&not_text)), ((Mode::Document, false), ""));
+        // Even bytes after the item's media type invalidate the entire line.
+        for line in [&b"application/json\xff"[..], b"application/json; q=\xff", b"application/json, text/\xff"] {
+            let not_text = HeaderValue::from_bytes(line).unwrap();
+            assert_eq!(Mode::said(None, || Some(&not_text)), ((Mode::Document, false), ""));
+        }
     }
 }
