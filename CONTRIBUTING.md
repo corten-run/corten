@@ -37,11 +37,12 @@ bench/request-cost/  Instructions and allocations a request costs over a socket,
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
 protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), `http-body`
 (the body trait hyper and its clients share), `bytes` (bodies and multipart pieces),
-`matchit` (the router's path matching) and `percent-encoding` (its parameters), `tokio`
+`matchit` (the router's path matching) and `percent-encoding` (its parameters, and the escapes
+in a route's query), `tokio`
 (sockets, signals, timers), `futures-util`, `pin-project-lite` (bodies and streams without
 `unsafe`), `tower-layer` and `tower-service` (at the edges: `App::layer`, and `corten::Router` as a `Service`), `getrandom`
 (CSP nonces), `zmij` (float digits), `memchr` (searching a multipart body for its boundary),
-`form_urlencoded` (forms and query strings), `serde`, `tracing` and `corten-macros` (no
+`form_urlencoded` (forms and other query strings), `serde`, `tracing` and `corten-macros` (no
 dependencies). No web framework: [design Choice 25](docs/design.md#choice-axum-router).
 Optional: `serde`'s derive, `serde_json` and `serde_path_to_error` (`json`), `typeid` (`types`), `zstd`,
 `brotli`, `flate2` (`compress`), `jiff` (`zones`), `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
