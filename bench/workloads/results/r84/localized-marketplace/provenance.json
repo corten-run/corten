@@ -8,12 +8,14 @@
   "hardware": "Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz",
   "placement": { "size": "c-8", "region": "sfo3", "onlineCpus": "0-7" },
   "archiveSha256": "748eabc350e37fab5cc8501cd229f884821306984860d0732895f2996f85a408",
+  "custodyRef": "cbcustody-d281b2830af4482a824dcdacf2f65388",
+  "exportLocator": "https://github.com/corten-run/benchmark-evidence/releases/download/results-r84-localized-marketplace/r84-report-inputs-qualified.json",
+  "exportSha256": "1bbe9706b2b0eea9b5a7f54e5c9f63180842a69bdaf75bda15ae92ff231e23d3",
   "archiveBytes": 11766279,
   "archiveSummarySuffix": "/00-localized-marketplace-timing/native/summary.json",
   "summarySha256": "20fe8f13dfec90d2a46587c2d65bd13264d8494ccc6326ef496351944bc19c8d",
   "nativeReportSha256": "73d8ff4175b2962273d4c644b4a312ab36ac25e592b45e5d0eefacee341ad5cf",
   "publishedReportSha256": "f053c9d93b975d709e0212a1a547f4193e683c6495431927c4a4c00ba203b787",
   "result": "Verified complete attempt with recorded contender failures",
-  "connectionFloodResistance": "not measured",
-  "archiveLocator": null
+  "connectionFloodResistance": "not measured"
 }
