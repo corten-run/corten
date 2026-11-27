@@ -2241,7 +2241,8 @@ redirect the address can differ from the one the form reaches without JavaScript
 `#fragment`. Corten's own redirect (`corten-location`, [Redirects](#redirects)) names its
 fragment, and is followed as a navigation (below). No entry is added: Back goes to the page before the screen,
 not to the scope before this one, as after `history.replaceState`. The entry keeps its state: its
-`history.state`, and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
+`history.state` (copied before the runtime checks the entry, so a getter a script put on it runs
+then), and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
 puts back on the entry once the address is in. A state a script puts in the entry as the address
 goes in is newer, and is the one kept: one a `navigate` listener puts in before the replace commits
 is put in the entry the replace makes, and one a `currententrychange` listener puts in that entry,
@@ -2294,7 +2295,12 @@ never reads the page again to repair the address. So a replace the browser refus
 exception (WebKit past its limit of history updates) or without a word (Chromium past its limit),
 leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
 cancels: that script has taken the address over, so it puts the address it means in itself, or
-begins the navigation it means, which the runtime leaves to finish. A GET pressed
+begins the navigation it means, which the runtime leaves to finish. A listener that holds the
+replace before its address goes in (`precommitHandler`), or begins a navigation in its place,
+leaves a navigation on its way that may yet put the address in: until it ends, a press of a
+marked form is not sent, as one pressed while a visit is on its way, so nothing is drawn under
+that address. The runtime neither aborts that navigation nor puts the Navigation API state back
+when it commits. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page; if the Save's
 answer draws the form with `method="post"`, the GET is sent from it as a post, a write, which no
@@ -2314,7 +2320,8 @@ drawn with its address; once an answer is drawing, a press its draw makes (an el
 into, so that press's own answer, drawn, puts its address in over it; and pressing for the same scope again
 while its GET is on its way, before its answer has come, takes that GET over, whose answer then
 draws even if the page moved to another `#id` meanwhile (once the answer has come, or a
-navigation aborted the GET, the press sends its own). A form without the mark sends its GETs as
+navigation aborted the GET, the press sends its own, and so does a press of the marked form while
+a GET it sent unmarked, with no field, is on its way, whose address has no `?`). A form without the mark sends its GETs as
 before the mark: pressing for the same scope again
 while its GET is on its way sends nothing more, even once its answer is drawing or a navigation
 has aborted it (one a script then cancels included), a submit that
@@ -2370,10 +2377,16 @@ looks at as a press is made, as its answer draws and at each `popstate`: a scrip
 when the runtime next looks, so an answer pressed before it draws nothing, while one the script
 puts back before then (which fires no `popstate`) is not seen. Back or Forward is a move at its
 `popstate`, between two entries of one address too. `html!` refuses `data-address` on anything but a `<form>`, on a form
-without `data-patch` or without an `id`, and on one whose own `method` is `post` or
-`dialog`, even when a button's `formmethod="get"` would send it as a GET: a marked form is a GET
-form, and a `formmethod="post"` button in it posts as it would in any other, and leaves the
-address. A filter whose every change should be an entry of its own, which Back steps through, is a navigation for now
+without `data-patch` or without an `id` (or with an empty one), and on one whose own `method` is
+`post` or `dialog`, even when a button's `formmethod="get"` would send it as a GET: a marked form
+is a GET form, and a `formmethod="post"` button in it posts as it would in any other, and leaves
+the address. It proves that much only for what it can see: a spread on the form may write
+`data-patch`, the `id` or the `method`, and the browser keeps the first of an attribute, so with
+a spread only an empty `id` or a `post` or `dialog` `method` written before it is refused (one
+written after it compiles), and an `id={..}` or `method={..}` written as an expression is known
+only when the form is sent. The runtime checks the rest as the form is pressed: it moves the
+address only for a GET sent by a `data-patch` form marked `data-address` with an id that is not
+empty, and leaves it for any other submit, as for a form without the mark. A filter whose every change should be an entry of its own, which Back steps through, is a navigation for now
 ([#2104 A GET data-patch form marked data-address cannot add a history entry that Back answers from the patch it holds](https://github.com/corten-run/corten/issues/2104)).
 
 ## Redirects

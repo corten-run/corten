@@ -2315,7 +2315,194 @@ async function markedPatchVisits(browser, errors) {
       busyCleared.marked === true && busyCleared.pressed === true && busyCleared.starts === 0 && busyCleared.at === "" && busyCleared.shown === "all",
       JSON.stringify(busyCleared),
     );
+
+  // A page's `history.state` with an enumerable getter that pushes an entry of the page's the first
+  // time it is read once Week is pressed: the runtime copies the state (which runs the getter)
+  // before it checks the entry, so the push is seen, and Week's answer is drawn on the entry it was
+  // pressed on, no longer the screen's. Neither the pushed entry's address nor its state is written
+  // over (before, the browser ran the getter as it took the state for the runtime's replace, and
+  // the replace landed on the pushed entry).
+  const gotten = await pushedInStateRead(page);
+  check(
+    "a marked patch whose history.state getter pushes an entry as the runtime takes the state leaves that entry's address and state",
+    gotten.getter && gotten.pushed && gotten.drawn && gotten.at === "?pushed=1" && gotten.state === '{"pushed":true}' && gotten.ahead === 1 && gotten.before === "/smoke/address" &&
+      gotten.shown === "week",
+    JSON.stringify(gotten),
+  );
+
+  // A page's `navigate` listener that holds the runtime's own replace before its address goes in
+  // (`precommitHandler`): Week is drawn, its address on its way. Day pressed while it is held is
+  // for the address it will put in, and is taken as a press made while a visit is on its way: not
+  // sent, so nothing is drawn over Week's panel before Week's address goes in (before, Day drew,
+  // and the held replace then put Week's address over Day's panel).
+  const deferred = await heldReplace(page);
+  if (!deferred) skip("a marked GET pressed while a navigate listener holds the runtime's replace is not sent", "no precommitHandler");
+  else
+    check(
+      "a marked GET pressed while a navigate listener holds the runtime's replace is not sent, and the held replace puts in the address of the panel on screen",
+      deferred.held && deferred.drawn && deferred.during.at === "" && deferred.during.transition && deferred.daySent === false && deferred.ended &&
+        deferred.after.at === "?scope=week" && deferred.after.shown === "week",
+      JSON.stringify(deferred),
+    );
+
+  // A form without the mark whose submit sends no field, its read held, then marked and pressed
+  // again: the marked press asks for `?` with an empty query, the unmarked one for no query, so it
+  // is another request, sent and drawn, and its address goes in (before, the marked press took the
+  // unmarked read over, as the same request, and that read's address went in).
+  const overUnmarked = await markedOverUnmarked(page);
+  check(
+    "a marked press of a form whose unmarked read with no field is on its way sends its own request, with its empty query, and puts in that address",
+    overUnmarked.first && overUnmarked.drawn && overUnmarked.asked.join() === "/smoke/address,/smoke/address?" && overUnmarked.at === "/smoke/address?" && overUnmarked.shown === "all",
+    JSON.stringify(overUnmarked),
+  );
   await page.close();
+}
+
+/**
+ * Gives the entry a `history.state` object whose enumerable `draft` getter, the first time it is
+ * read once armed, pushes an entry of the page's (`?pushed=1`, state `{ pushed: true }`). Presses
+ * Week and says whether the getter was on the state and pushed, whether Week drew, and where the
+ * page is then: its address, its `history.state`, how far its entry is past the one Week was
+ * pressed on, that entry's address, and what it shows. The Navigation API only.
+ * @param {import("@playwright/test").Page} page
+ */
+async function pushedInStateRead(page) {
+  await page.goto(`${base}/smoke/address`);
+  const getter = await page.evaluate(() => {
+    history.replaceState({}, "");
+    Object.assign(window, { __armed: false, __pushed: false, __pressedOn: /** @type {any} */ (window).navigation.currentEntry });
+    Object.defineProperty(history.state, "draft", {
+      enumerable: true,
+      get() {
+        const w = /** @type {any} */ (window);
+        if (w.__armed) {
+          w.__armed = false;
+          history.pushState({ pushed: true }, "", "/smoke/address?pushed=1");
+          w.__pushed = true;
+        }
+        return "kept";
+      },
+    });
+    Object.assign(window, { __armed: true });
+    // The same object each time it is read, so the runtime's read of it has the getter.
+    return history.state === history.state && !!Object.getOwnPropertyDescriptor(history.state, "draft")?.get;
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  const end = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    w.__armed = false;
+    return {
+      pushed: w.__pushed,
+      at: location.search,
+      state: JSON.stringify(history.state),
+      ahead: w.navigation.currentEntry.index - w.__pressedOn.index,
+      before: w.__pressedOn.url.slice(location.origin.length),
+      shown: document.querySelector("#smoke-address output")?.textContent,
+    };
+  });
+  return { getter, drawn, ...end };
+}
+
+/**
+ * A `navigate` listener of the page holds the runtime's replace to Week's address before it goes
+ * in (`precommitHandler`). Presses Week, then Day while the replace is held, then lets it go.
+ * Says whether it was held, whether Week drew, where the page was while it was held, whether
+ * Day's read was sent, and where the page is once the held replace has ended; null where the
+ * browser has no `precommitHandler`.
+ * @param {import("@playwright/test").Page} page
+ */
+async function heldReplace(page) {
+  const home = `${base}/smoke/address`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  if (!(await page.evaluate(() => "NavigationPrecommitController" in window))) return null;
+  let daySent = false;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") daySent = true;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = resolve));
+    Object.assign(w, { __release: release, __held: false, __heldError: null });
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+      try {
+        event.intercept({ precommitHandler: () => held });
+        w.__held = true;
+      } catch (error) {
+        w.__heldError = String(error);
+      }
+    });
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  const during = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    return { held: w.__held, error: w.__heldError, at: location.search, transition: !!w.navigation.transition };
+  });
+  await page.getByRole("button", { name: "Day", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 500)));
+  await page.evaluate(() => /** @type {any} */ (window).__release());
+  const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.waitForFunction(() => !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(day);
+  const after = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { held: during.held, drawn, during, daySent, ended, after };
+}
+
+/**
+ * Takes `data-address` off the form and the name off its Day button, so its submit sends no field,
+ * from `?scope=week`; presses Day with its read held, marks the form again and presses Day once
+ * more, then lets the reads go. Says whether the first read was sent, which requests were made,
+ * whether an answer drew, and where the page is then.
+ * @param {import("@playwright/test").Page} page
+ */
+async function markedOverUnmarked(page) {
+  const home = `${base}/smoke/address`;
+  await page.goto(`${home}?scope=week`);
+  /** @type {string[]} */
+  const asked = [];
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  const bare = (/** @type {URL} */ url) => url.pathname === "/smoke/address" && url.search === "";
+  await page.route(bare, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    const url = route.request().url();
+    asked.push(url.slice(new URL(url).origin.length));
+    await held;
+    await route.continue().catch(() => {});
+  });
+  await page.evaluate(() => {
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-address-form"));
+    form.removeAttribute("data-address");
+    form.querySelector('button[value="day"]')?.removeAttribute("name");
+  });
+  const day = page.getByRole("button", { name: "Day", exact: true });
+  await day.evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  let first = false;
+  for (let i = 0; i < 50 && !(first = asked.length > 0); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  await page.evaluate(() => document.getElementById("smoke-address-form")?.setAttribute("data-address", ""));
+  await day.evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 500)));
+  release();
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "all" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(bare);
+  const end = await page.evaluate(() => ({ at: location.href.slice(location.origin.length), shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { first, asked, drawn, ...end };
 }
 
 /**

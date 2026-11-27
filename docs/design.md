@@ -11642,7 +11642,9 @@ rules something out.
     and an action that ends in a bare `#` keeps it, as `/scope?#`; the runtime's request for any
     marked form's answer has that query too, `?` and all, as the browser's own GET of the form
     does, where a form without the mark asks with no `?`, as before the mark), keeping the
-    entry's `history.state` and, where the
+    entry's `history.state` (a copy it takes as it reads the entry's state, before the checks
+    below, so a getter of the page's on that object runs then, and none as the browser takes the
+    state inside the call) and, where the
     Navigation API is, the entry's state there (`getState()`), which `replaceState` drops: the
     runtime reads it just before the replace and puts it back with `navigation.updateCurrentEntry`
     on the entry the replace made, which keeps its key and `id` and begins no navigation (not on
@@ -11689,12 +11691,22 @@ rules something out.
     after the call, and one not in the entry, for whichever reason, stays as it was, the answer
     drawn under it, as an unmarked form's answer is: the runtime does not guess which it was, and
     never reads the page again, so it never loads over a navigation it did not begin (Not chosen,
-    below).
+    below). A `navigate` listener can also hold the replace before its address goes in
+    (`precommitHandler`), or begin a navigation in its place: the address is not in as the call
+    returns, and the browser shows a navigation on its way (`navigation.transition`) that may yet
+    put it in, over whatever is drawn before then. Until that navigation ends, a press of a marked
+    form is taken as one made while a visit of the runtime's is on its way (below): never sent, so
+    nothing is drawn under an address that may still change, and the screen keeps the answer whose
+    address that is. The runtime does not abort the navigation, which the platform offers no way to
+    do short of beginning another or `window.stop()`, nor put back the Navigation API state when
+    it commits, which `replaceState` drops: the page's listener took the replace, and it commits,
+    or not, as that listener decides.
 
     The guarantee is narrow on purpose: the address moves only when the runtime can tell, in the
     task the answer draws, that nothing it did not start is under way: the screen is still the
     entry and page the press was made on, no newer press of the form and no visit of its own came
-    between, nothing replaced the entry since the press (a script's `replaceState`, a navigation
+    between, no replace of its own was held by a page's listener as the press was made, nothing
+    replaced the entry since the press (a script's `replaceState`, a navigation
     that replaced it, another marked answer's own replace, each of which keeps the entry's key)
     but the replace of the answer whose draw made the press,
     and the browser shows no navigation on its way (`navigation.transition`) but the
@@ -11872,7 +11884,9 @@ rules something out.
     over, the form could not be read for it, it was not sent, or its submit was abandoned, at once,
     whatever the submit still awaits), so the ids of forms pressed do
     not pile up for the page's life. A press that asks for what a read of the form on
-    its way asks for (the same method, address and values) takes that read over while no answer to
+    its way asks for (the same method, address and values; a marked press that sends no field asks
+    for its address with an empty query, `?` and all, where a press of the form without the mark
+    asks with none, so neither is the other's request) takes that read over while no answer to
     it has come, as the runtime sends the same request once for any form: its answer is drawn as
     this press's, on this press's entry. Once an answer has come it may be drawing (it waits for
     its modules and stylesheets) under its own press, which no press changes, so a press then sends
@@ -12053,14 +12067,26 @@ rules something out.
       Week's address, and the screen showed Day while a reload and a bookmark opened Week. The
       runtime makes that replace itself, in the task the press was made in, so it is the one
       replace it can tell is its own without tracking navigations.
+    - Ending a replace a page's `navigate` listener holds (`precommitHandler`) so it cannot commit
+      over a newer answer: the platform has no call that aborts a navigation on its way short of
+      beginning another, which a page's listener can hold or cancel in turn, or `window.stop()`,
+      which stops the page's other loads too. Nor drawing a newer answer under it and putting that
+      answer's address in once it commits, which needs a record of the navigation and its outcome,
+      the tracking this Choice has cut. While it is on its way, a marked press is not sent, as while
+      a visit is, and the screen keeps the answer whose address it may put in.
+    - Telling a marked read from an unmarked one on its way by the request URL each would send,
+      rather than by the mark: the key would then differ from main's for a form without the mark
+      (two actions whose own queries the GET drops would become one request), which that form must
+      keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 2,685 bytes larger raw (46,502 to 49,187), 1,088
-    with gzip (16,718 to 17,806) and 967 with brotli (15,106 to 16,073), paid once a release by
-    every user (98, 26 and 29 larger than the build before this one, which counted the entry's
-    state writes by the order the runtime heard them, so a state a `currententrychange` listener
-    told before the runtime's put in the entry a replace made was overwritten by the older one,
-    and read a `navigate` listener's state back after its checks, so a page's own `getState`
-    that pushed an entry as it was read had that state put in the pushed entry). A
+    What it costs: the runtime every page loads is 2,827 bytes larger raw (46,502 to 49,329), 1,148
+    with gzip (16,718 to 17,866) and 1,024 with brotli (15,106 to 16,130), paid once a release by
+    every user (142, 60 and 57 larger than the build before this one, which passed `history.state`
+    itself to `replaceState`, so a getter of the page's on it ran as the browser took it, after the
+    checks, and could push an entry the replace then landed on; let a marked press made while a
+    page's listener held the runtime's replace draw, so the held replace, once let go, put the older
+    answer's address over the newer answer's panel; and took a marked press that sends no field for
+    the unmarked read of the same values on its way, though the two ask for different addresses). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12071,7 +12097,9 @@ rules something out.
     address, reads `navigation.transition` and compares it with the page's last read of itself
     again (kept as that read begins), compares the entry's id, or its address and state, with the
     press's by `Object.is`, reads the entry's Navigation API state before the replace and, when
-    it holds one, sets it again after, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
+    it holds one, sets it again after, copies `history.state` (`structuredClone`) before its
+    checks, and reads the address back, keeping the navigation on its way when the address is not
+    in, which a marked press compares with `navigation.transition`. A patch tracks whether it placed every element as it walks them, without a separate scan;
     each `currententrychange` compares the key with the last seen and adds one to a count of
     changes, keeping its `navigationType`, or, for a change of the state alone, to a count of
     state writes kept by the entry on screen in a weak map; without the Navigation API each trusted
@@ -12141,7 +12169,12 @@ rules something out.
     which a reload ends, while Firefox and WebKit abort the page's fetches as a load a link begins
     starts (a submit's fails with a network error), and a navigation begun in
     `navigatesuccess` as another ends shows none while it waits for its page, measured once in
-    each engine; `new FormData` fires `formdata` before it returns, and a custom element a patch puts
+    each engine; a `navigate` listener can hold a `replaceState` before its address goes in
+    (`precommitHandler`), the call returning with the address unchanged and `transition` showing
+    it, which commits the address once let go, in the smoke's checks in Chromium and Firefox
+    (WebKit 27.2 has no `precommitHandler`); `replaceState` and `structuredClone` each run an
+    enumerable getter on the state object they are given, `replaceState` inside the call, in the
+    smoke's checks in each engine; `new FormData` fires `formdata` before it returns, and a custom element a patch puts
     in runs its `connectedCallback` before the insertion returns; in Chromium, Firefox and WebKit;
     the smoke's checks in all three; WebKit's throw past its limit of history updates, and
     Chromium's refusal without a word, which returns before the `navigate` event in
@@ -12174,10 +12207,18 @@ rules something out.
     `navigationType`, or Back between entries of one address stops firing `popstate`,
     or `replaceState` comes to keep the Navigation API state, in one; or the platform
     shows a load of another document on its way, or `navigation.transition` comes to show a
-    navigation begun in `navigatesuccess`, in one, when the address could be left for those too.
+    navigation begun in `navigatesuccess`, in one, when the address could be left for those too;
+    or the platform gains a call that aborts a navigation on its way without beginning another,
+    when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-26, the runtime's size with this change against main's runtime, unchanged
+    Last checked: 2026-11-27, the runtime's size with this change against main's runtime, unchanged
     since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-27, a `history.state` getter that pushes an entry as the runtime takes the state, a
+    `navigate` listener that holds a marked answer's replace with a newer press made meanwhile,
+    and a form without the mark whose read with no field is on its way marked and pressed again,
+    in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, which
+    the build before this one fails in all three, the held replace in Chromium and Firefox, WebKit
+    having no `precommitHandler`);
     2026-11-26, a press a `popstate` listener heard before the runtime's makes as Back goes between
     two entries of one address without the Navigation API, a state a `navigate` listener puts in
     the entry before a marked answer's replace commits, read back from the entry the replace made,

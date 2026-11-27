@@ -183,7 +183,8 @@ division: end statements with `;` and keep a division on the line it continues.
    them. A `corten-location` or changed layout is followed as for any `data-patch` form, mark or
    not. It never reloads to repair the address: a replace the browser refuses, or a `navigate` listener
    cancels, leaves the answer drawn under the entry's address, so a listener that cancels it sets
-   the address it means itself (or begins its own navigation). Pick `data-keep-place`
+   the address it means itself (or begins its own navigation); while a listener holds it before
+   it commits (`precommitHandler`), a press of a marked form is not sent. Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
    one part of a screen whose rest is costly to read. The patch draws everything the address
    changes, the form included, and any link or form that carries the scope (a `keep_query`

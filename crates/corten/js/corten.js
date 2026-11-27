@@ -3377,10 +3377,21 @@ const sentFrom = new WeakSet();
 const presses = new Map();
 
 /**
+ * The navigation a page's `navigate` listener holds the runtime's own replace in before its address
+ * goes in (`precommitHandler`), or one it began in that replace's place: while the browser shows it
+ * on its way, a marked press is for the page it may yet change, and is taken as one made while a
+ * visit is on its way ({@link pressed}), never sent, so nothing is drawn under the address it may
+ * put in.
+ * @type {NavigationTransition | null | undefined}
+ */
+let held;
+
+/**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
- * it was made on ({@link entry}), null while a visit of the runtime's was on its way, and that
- * entry exactly ({@link exact}), with the draw of the marked answer that made it, if one did
- * ({@link drawingFor}), and when it was made (`performance.now()`), for a move the browser made before
+ * it was made on ({@link entry}), null while a visit of the runtime's or a held replace
+ * ({@link held}) was on its way, and that entry exactly ({@link exact}), with the draw of the
+ * marked answer that made it, if one did ({@link drawingFor}), and when it was made
+ * (`performance.now()`), for a move the browser made before
  * it and says so only after it ({@link moves}). A marked form without an id cannot tell its latest
  * press from an older one, and is pressed as an unmarked form is: its answer leaves the address.
  * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: Draw | null, t?: number }} Press
@@ -3397,7 +3408,7 @@ const presses = new Map();
 function pressed(form) {
   const id = idOf(form);
   const marked = id && hasAttr(form, "data-address");
-  const press = marked ? { id, at: reading.size ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
+  const press = marked ? { id, at: reading.size || (held && held === navigation?.transition) ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3416,7 +3427,8 @@ const settled = (press) => void (press?.id && presses.get(press.id) === press &&
  * place, marked or not, drops it wherever it is), not once it is `drawing`, which a press its draw
  * makes (a `connectedCallback`) does not stop; and only on the entry and page it was pressed on
  * and while no visit of the runtime's is on its way, whose navigation its replace would cancel:
- * never one pressed while a visit is on its way, for the page it leaves.
+ * never one pressed while a visit is on its way, for the page it leaves, or while a page's listener
+ * holds the runtime's replace ({@link held}).
  * @param {Press} press @param {boolean} [drawing]
  */
 const standing = (press, drawing) => press.at === undefined || ((drawing || presses.get(/** @type {string} */ (press.id)) === press) && !reading.size && press.at === entry());
@@ -3507,8 +3519,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   const url = new URL(sends.action);
   const entries = sentEntries(data);
   const fields = new URLSearchParams(entries);
-  // A file by its size and time too: another file of the same name is a new submit.
-  const key = `${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
+  // A file by its size and time too: another file of the same name is a new submit. A marked read
+  // asks for another address than an unmarked one of the same values (an empty query keeps its
+  // `?`, below), so neither is the other's request.
+  const key = `${read?.at === undefined ? "" : "address "}${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
   // A marked form's one a navigation aborted is over, though its own code has not yet run to say so:
   // nothing waits for it or takes it over. An unmarked form's is as before the mark.
   let previous = submits.get(form);
@@ -3699,11 +3713,16 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // It is read before everything above is checked, so what runs as it is read (a page's
           // own `getState`, which can move or replace the entry) is checked too. Each state put in
           // an entry from then on is counted on that entry ({@link writes}), and is the page's, newer,
-          // which is the one kept.
+          // which is the one kept. The `history.state` it passes is a copy taken then too (which
+          // runs a getter of the page's on it), so the browser runs no page code as it takes it for
+          // the replace, after the checks.
           /** @type {unknown} */
           let state;
+          /** @type {unknown} */
+          let kept;
           const old = navigation?.currentEntry;
           try {
+            kept = structuredClone(history.state);
             state = old?.getState();
           } catch {
             return;
@@ -3715,7 +3734,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           const seen = changes;
           const key = where();
           try {
-            history.replaceState(history.state, "", to);
+            history.replaceState(kept, "", to);
           } catch {
             // Refused (WebKit throws past its limit of history updates): as below.
           }
@@ -3723,7 +3742,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
           // address stays as it was, the answer drawn under it, as an unmarked form's is: the
           // runtime neither guesses which nor reads the page again over what it cannot see.
-          if (location.href !== to) return;
+          // A listener that holds it (`precommitHandler`), or began a navigation in its place,
+          // leaves a navigation on its way, which may yet put this address in: until it ends, no
+          // marked press is sent ({@link held}), so no answer is drawn under it.
+          if (location.href !== to) {
+            if (navigation?.transition && navigation.transition !== transition) held = navigation.transition;
+            return;
+          }
           // The entry the answer was drawn on, at its new address, by this replace.
           entrySeen = where();
           // What it left, for a press this draw made: only when the Navigation API saw one change
