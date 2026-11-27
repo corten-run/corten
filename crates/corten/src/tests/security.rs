@@ -2345,7 +2345,7 @@ async fn an_answer_given_its_scope_s_lines_in_one_pass_is_sent_as_one_each_line_
 /// sent and its body. `given` is what its scope's lines say of a tag when it was given them in
 /// one pass, so `None` has every line of it searched.
 async fn tag_sent(res: Response, has: &[http::HeaderValue], given: Option<crate::cache::BesideATag>) -> LinesSent {
-    let (parts, body) = crate::cache::tag(res, has, given).await.into_parts();
+    let (parts, body) = crate::cache::tag(res, has, given.as_ref()).await.into_parts();
     (parts.status, lines_of(&parts.headers), body.collect().await.unwrap().to_bytes().to_vec())
 }
 

@@ -761,8 +761,11 @@ pub(crate) struct Unrepeatable;
 /// most, and every other line it has is one of those. Where none of them leaves an answer
 /// untagged or is part of a tag, its lines are not searched for one that does and its tag is made
 /// from its type alone: the answer and the tag the search would give. Any other answer is
-/// searched.
-pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<BesideATag>) -> Response {
+/// searched. It is handed over where the scope keeps it, not copied: with the byte itself for an
+/// argument the search's lookup of `Cache-Control` was a call again and a compressed page's
+/// request counted 55 instructions more (`bench/request-cost`, `page-browser`), as [`untagged`]
+/// says of the search as a function.
+pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&BesideATag>) -> Response {
     let ready = given.is_some_and(|lines| lines.0);
     if res.status() != StatusCode::OK
         || (!ready && untagged(res.headers()))

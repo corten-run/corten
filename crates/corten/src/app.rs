@@ -2801,7 +2801,7 @@ impl<S: Steps> Layer<S> {
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {
-                res = cache::tag(res, &has, ready.then_some(scope.beside_a_tag)).await;
+                res = cache::tag(res, &has, ready.then_some(&scope.beside_a_tag)).await;
             }
         }
         if let Some(mount) = mount {
