@@ -51,6 +51,29 @@ to any host. A `HOSTS` in the environment the kit is run in never reaches the pr
 | `unstaged-any-encoded` | `api`, `HOSTS=*` | As `unstaged` to a name of 4,093 `a` and `%4a` and the port | `3` |
 | `unstaged-any-short` | `api`, `HOSTS=*` | As `unstaged` to `Host: a.test` and the port, a name of 6 bytes | `3` |
 | `unstaged-subdomain` | `api` | As `unstaged` to `Host: seller-desk.localhost` and the port, a name under `localhost` whose 11 bytes before it are read as a name | `3` |
+| `get-own`, `post-own`, `unstaged-own`, `pipeline-own`, `get-browser-own`, `page-browser-own`, `unstaged-any-long-own` | as the case without `-own`, with `App::own_http1(true)` | The same | The same |
+
+**The cases with the switch on.** Every case above runs with `App::own_http1` off, as an app has
+it unless it asks. The seven with `-own` in their name send the same request to the same
+configuration with the switch on, so that a change to Corten's own HTTP/1.1 connection
+([design Choice 78](../../docs/design.md#choice-own-http1)) is counted. They are the requests that
+connection changes most: the bare `get`, `unstaged` and `pipeline` (also 16 at a time), `get-browser` and
+`page-browser` with a browser's lines, `unstaged-any-long`, whose head is longer than that
+connection's first read of 2,560 bytes, and `post`, whose body hands its connection to hyper,
+so that it counts the handoff. They are seven and not all nineteen because the hosted job has 24
+minutes for its readings (The hosted job, below). The probe is started for them with
+`PROBE_OWN_HTTP1=1`, read once as it starts; every other case is started without it, whatever
+the environment the kit runs in holds, so the cases without `-own` count what they counted
+before the switch was a case.
+
+A commit whose Corten has no `App::own_http1`, as any from before the switch was added, has
+no switch to turn on. [`build.sh`](build.sh) builds the probe with its `own-http1` feature, which
+is what calls the method, only for a commit whose `crates/corten/src` defines
+`pub fn own_http1(`, so the probe still builds against such a commit; built without the feature,
+it refuses `PROBE_OWN_HTTP1=1` with a line that begins `NO own_http1:`. For such a probe
+`count.mjs` and `idle.mjs` print that line in place of a figure, as `not run:` or, with `--json`,
+as the run's `unsupported`, `count.mjs --answers` writes it to `<case>.unsupported` in place of
+the answer, and each goes on to the next case and exits 0.
 
 `get` and `unstaged` differ by more than the stages. The staged handler, which also answers
 `post`, takes the request's body; a handler of a route that says `unstaged` cannot (the compiler
@@ -76,7 +99,7 @@ against the table: a 200, the encoding or none, and the body, which for the page
 it from its doctype to its last row. The compressed page is decompressed (with Node's own zstd)
 and checked as the page is. `count.mjs --depth 16` writes 16
 requests at a time, as a client that pipelines does; the rows read that way have been
-`pipeline`, `get`, `unstaged` and `text`.
+`pipeline`, `get`, `unstaged` and `text`, and are those four and `pipeline-own`.
 
 ## Running it
 
@@ -122,12 +145,19 @@ Then, with `<probe>` for one of those binaries and `<cpu>` for a CPU the server 
 ```sh
 node bench/request-cost/count.mjs <probe> --cpu <cpu> --answers <directory>/answers
 node bench/request-cost/count.mjs <probe> --cpu <cpu>
-node bench/request-cost/count.mjs <probe> --cpu <cpu> --depth 16 --cases pipeline,get,unstaged,text
+node bench/request-cost/count.mjs <probe> --cpu <cpu> --depth 16 --cases pipeline,get,unstaged,text,pipeline-own
 node bench/request-cost/count.mjs <probe> --cpu <cpu> --allocations
 node bench/request-cost/idle.mjs <probe> --cpu <cpu>
 node bench/request-cost/idle.mjs <probe> --cpu <cpu> --case get-browser --requests 3
 node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --case pipeline-own
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --case get-browser-own --requests 3
+node bench/request-cost/idle.mjs <probe> --cpu <cpu> --silent --case pipeline-own
 ```
+
+The last three are the idle readings with `App::own_http1` on, which holds another connection
+and other buffers for it; each is decided against base's reading with the switch on, not
+against the one with it off.
 
 1. `--answers` writes each case's answer as sent, with its `Date` and `ETag` values replaced.
    Compare the two builds' directories (`diff -r`) before counting: item 2 asks that the answers
@@ -347,8 +377,13 @@ On one runner it does what [Running it](#running-it) says, the first three by
 2. Writes both builds' answers (`count.mjs --answers`).
 3. Takes each run [`compare.mjs`](compare.mjs) names (`node compare.mjs --readings`) with
    `--json`, on base and then on head, a case a run: each case's instructions, three counts
-   each, the four at a depth of 16, each case's allocations, and the three idle readings
-   three times a build. A run ends in 120 seconds or is stopped, and none starts once 24
+   each, the five at a depth of 16, each case's allocations, and the six idle readings, three
+   with the switch off and three with it on, three times a build. The cases with the switch
+   on took the readings from 297 seconds to 452 on an 8-CPU host (`job.sh read`, one run
+   each, with the kit at `2f8984ddc` and at `8c4957bea`), about half as long again; the hosted
+   job's readings took 155 to 288 seconds before them, in its last four runs of the pull
+   request that adds the switch (on `17aa12549`, `69bfdbebf`, `554e0c57f` and `2f8984ddc`),
+   so half as long again is well inside its 24 minutes, an estimate and not a hosted reading. A run ends in 120 seconds or is stopped, and none starts once 24
    minutes have gone since the job's first step, which leaves six of the job's 30 for the
    table, a reserve in name and not a guarantee, since a run stopped at its time can take 10
    seconds more to end. The checkout, the toolchain and the two builds are not held to those 24: a job
@@ -387,6 +422,18 @@ is no figure or no answer, and a reading with no figure on either build, a case 
 gave no answer to, an idle reading not decided, and a base that did not build are each a case
 that cannot be counted. The
 job fails when the head does not build, whatever is declared.
+
+One kind of row is neither counted nor a case that cannot be counted: a case with the switch
+on that base's probe printed it could not run (`unsupported`, above), base being a commit whose
+Corten has no `App::own_http1`. Such a row is not compared, reads `not compared` in each table,
+and neither passes nor fails, and the verdict names those cases and adds what base's probe said.
+The rule then holds or not by the other rows alone, which it does not say covers the change's
+code; a change whose code only those rows would run is still of the fifth kind of item 2.1's
+list. Where head's probe could not run a case that base's ran, or the line is not the probe's
+own, the row has no figure, a case that cannot be counted. The kit, and so the probe's source,
+is the checkout's for both builds: a pull request against a branch whose Corten has
+`App::own_http1` but whose kit has no case with the switch on counts the new rows on both
+builds, and compares them as any other.
 The description's line says what a miss does:
 
 | The description says | The rule holds | It does not |
@@ -483,17 +530,17 @@ for them.
 
 | File | What it holds |
 | --- | --- |
-| `requests.test.mjs` | Each case's request byte for byte, its `HOSTS`, and the answer it must get, splitting a connection's bytes into answers, the masking |
+| `requests.test.mjs` | Each case's request byte for byte, its `HOSTS` and whether it turns `App::own_http1` on, and the answer it must get, splitting a connection's bytes into answers, the masking |
 | `figures.test.mjs` | The arithmetic of a count and of an idle reading, and when a window or a run is refused |
 | `allocations.test.mjs` | Reading a profile |
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
-| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
-| `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one page over base's agreeing three passing, two pages failing, more than base's span failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
+| `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with and that only a case with the switch on starts it with `PROBE_OWN_HTTP1=1`, what a probe built without the switch makes each script print for such a case, what is printed, and each refusal |
+| `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, that a failed build leaves no binary, and the `own-http1` feature turned on for a commit whose Corten has `App::own_http1` and not for one without it |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one page over base's agreeing three passing, two pages failing, more than base's span failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, what each declaration does with the verdict, and a case with the switch on that base's probe could not run (not compared, whatever head's figures), that head's could not run (no figure) or that neither could |
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux
-with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 49 of the 74 tests run.
+with `sh` or `bash` and `git`, and are skipped elsewhere: on Windows 50 of the 80 tests run.
 The hosted check runs on Linux. What no test covers is checked by running the kit: the probe
 itself, callgrind's own dumps, and a real build. Of the hosted job, the workflow's own steps
 around `job.sh` have no test but the workflow's shape (`scripts/benchmark-scope.test.mjs`).
