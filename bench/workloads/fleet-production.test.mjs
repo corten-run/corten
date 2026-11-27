@@ -168,7 +168,7 @@ const synthetic = (${syntheticDependencies.toString()})({
       source = source.replace(entry, "async function syntheticProductionMain(") + `
 export async function productionMain(...args) {
   const dispatch = ${JSON.stringify(dispatch ? { path: path.join(h.base, ...dispatch.path), cancel: dispatch.cancel,
-    quarantine: dispatch.quarantine } : undefined)};
+    quarantine: dispatch.quarantine, rewriteIntent: dispatch.rewriteIntent } : undefined)};
   if (dispatch) {
     const previous = args[1].interrupted;
     let afterIntent = 0;
@@ -176,7 +176,11 @@ export async function productionMain(...args) {
       const target = syntheticPath.join(syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], 'groups-r21', 'state.json');
       if (syntheticFs.existsSync(target) && JSON.parse(syntheticFs.readFileSync(target, 'utf8')).createIntentAt
           && ++afterIntent >= (dispatch.cancel || 1)) {
-        if (!syntheticFs.existsSync(dispatch.path)) {
+        if (dispatch.rewriteIntent && afterIntent === 1) {
+          const intent = JSON.parse(syntheticFs.readFileSync(dispatch.path, 'utf8'));
+          intent.approvalSha256 = '0'.repeat(64);
+          syntheticFs.writeFileSync(dispatch.path, JSON.stringify(intent));
+        } else if (!syntheticFs.existsSync(dispatch.path)) {
           const contents = dispatch.quarantine ? JSON.stringify({
             schema: 'benchmark-create-quarantine-witness/v1',
             quarantineSha256: digest(syntheticFs.readFileSync(syntheticPath.join(syntheticPath.dirname(dispatch.path), 'create-quarantine.json'))),
@@ -1189,13 +1193,14 @@ test("continuation appends authorized retries after no-create and retirement whi
 
 for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "external host sighting", "malformed name sighting", "malformed tags sighting",
   "oversized array sighting", "oversized tags sighting", "incomplete absence", "malformed absence",
-  "witnessed census", "absent census", "capacity", "historical ID", "replacement absent", "replacement sighted", "replacement late sighting"]) {
+  "witnessed census", "absent census", "capacity", "historical ID", "replacement absent", "replacement sighted", "replacement late sighting", "replacement intent changed"]) {
 test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
   const mixed = scenario === "historical ID";
   const external = scenario === "external host sighting";
   const replacement = scenario.startsWith("replacement ");
   const group = mixed ? "recoverable-live" : replacement ? "mixed-production" : "json-api", other = "hardening", round = "r19", next = "r21",
-    dispatch = scenario === "replacement late sighting" ? { path: [group, "receipts", "create-quarantine-witness.json"], quarantine: true } : undefined,
+    dispatch = scenario === "replacement late sighting" ? { path: [group, "receipts", "create-quarantine-witness.json"], quarantine: true }
+      : scenario === "replacement intent changed" ? { path: [`${group}--${next}`, "launch-intent.json"], rewriteIntent: true } : undefined,
     p = fixture(t, "success", replacement ? group : other, dispatch), slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("no collected evidence"); };
@@ -1277,8 +1282,14 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
     } else {
       assert.equal(posts.length, 0); assert.equal(code, 2); assert.equal(state.createIntentAt, undefined);
       assert.equal(state.status, "reserved");
-      const witness = JSON.parse(fs.readFileSync(path.join(slot, "receipts", "create-quarantine-witness.json")));
-      assert.deepEqual(witness, { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256, dropletId: "123" });
+      if (scenario === "replacement intent changed") {
+        const changed = JSON.parse(fs.readFileSync(path.join(p.h.base, replacementSlot, "launch-intent.json")));
+        assert.equal(changed.approvalSha256, "0".repeat(64));
+        assert.equal(treeHash(slot), sealed);
+      } else {
+        const witness = JSON.parse(fs.readFileSync(path.join(slot, "receipts", "create-quarantine-witness.json")));
+        assert.deepEqual(witness, { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256, dropletId: "123" });
+      }
       assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);
     }
     return;

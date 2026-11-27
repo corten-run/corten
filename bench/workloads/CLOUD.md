@@ -1005,8 +1005,14 @@ reviewing the risk that the unacknowledged allocation could still appear. The
 prepared fleet binds exactly one earlier, same-group quarantine. It has its own
 ownership, launch intent and approval. It takes the same account-bracketed
 census as another group: any sighting in the census is witnessed and refuses
-before the new create intent. A final local custody check after the intent and
-just before dispatch refuses a newly recorded witness without sending the POST.
+before the new create intent. After the intent, a final local admission check
+before hand-off to the provider worker refuses on changed custody. This
+proven-unsent refusal withdraws only the replacement's create intent, leaving
+the custody records as found. The only controller path that publishes a witness
+is the pre-create census under the shared continuation lock; another launch
+cannot publish one while that lock is held. The local check does not see
+out-of-band writes during worker hand-off. This does not prove that an earlier
+create cannot surface at the provider later.
 A replacement does not settle or edit the original
 attempt, and another replacement requires the preceding attempt to be settled
 or superseded under the ordinary rules for a never-launched reservation.

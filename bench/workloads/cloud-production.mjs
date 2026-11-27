@@ -418,16 +418,21 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
           });
         }
         if (beforeCreate === "dispatch") {
-          checkCustody(() => {
-            for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
-          });
+          for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
         }
       }
       return currentPeers;
     }
   });
   if (exitOneRetirements.length || externalFailures.length || setupRetirements.length || quarantined.length) {
-    checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
+    checkHistoricalDispatch = () => {
+      try { return checkFleetAdmission("dispatch"); } catch (error) {
+        // A quarantined successor must not strand another creating state on a
+        // local admission refusal before any request reaches the provider.
+        if (quarantined.length && error instanceof Error) createDispatchRefusals.add(error);
+        throw error;
+      }
+    };
   }
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
