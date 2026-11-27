@@ -12,6 +12,10 @@ on:
         description: Run only the native Linux check
         type: boolean
         default: false
+      docker_exit_control:
+        description: Also exercise the experimental Docker cgroup exit control
+        type: boolean
+        default: false
 
 # Keep every main run; only newer PR runs supersede older ones.
 concurrency:
@@ -122,7 +126,9 @@ jobs:
         # sudo resets the environment, so the two variables the script's guard reads are passed on.
         run: sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" CI="$CI" /bin/bash scripts/ci-docker-hub-mirror.sh "$(command -v node)"
       - name: Exercise actual delegated process and Docker participant boundaries
-        run: sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"
+        env:
+          CORTEN_NATIVE_DOCKER_EXIT: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_exit_control && '1' || '0' }}
+        run: sudo env CORTEN_NATIVE_DOCKER_EXIT="$CORTEN_NATIVE_DOCKER_EXIT" /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"
       - name: Prove bracketed JSON resource reads on a synthetic Docker participant
         timeout-minutes: 3
         run: |

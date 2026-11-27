@@ -24,6 +24,9 @@ button { font: inherit; font-weight: 600; padding: 8px 16px; border: 1px solid v
 button:hover { filter: brightness(1.08); }
 form[aria-busy="true"] { opacity: .6; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-[role="status"] { margin: 0; color: var(--muted); }
-[role="status"]:empty { display: none; }
+[role="status"] { color: var(--muted); }
+[role="status"] > p { margin: 0; }
+/* The status line's region stays on the page so a screen reader reads what a patch puts in it;
+   while it is empty, what follows it takes back the gap it adds. */
+main > [role="status"]:has(> p:empty) + * { margin-top: -16px; }
 @media (max-width: 40rem) { main { padding: 16px; } }
