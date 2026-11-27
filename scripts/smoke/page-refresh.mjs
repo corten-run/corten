@@ -1501,7 +1501,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // passed by the smoke's monotonic clock since the check read the note: a read sent between the
       // draw and the check seeing it counts against it, as the part case's check counts one (above).
       // The check that reading again keeps the document requires the load's own document, numbered
-      // by an init script added before the load, both once the load returns and after the wait.
+      // by an init script added before the load, both once the load returns and after the wait, and
+      // the same note of `Saved.` drawn from a read after the case's load that the check it stops
+      // requires: without that read, a document that stayed the first says nothing.
       {
         const faultsFrom = wholeAnswerFaults.length;
         const firstKey = `smoke-full-first-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -1583,9 +1585,16 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             drewSaving && came && read === "Saved." && wholeAnswerFaults.length === faultsFrom,
             `${faultsSince(faultsFrom)}loaded with ${fullLoadAnswer?.what ?? "no load of the receipt seen"}, first drew ${waiting} -> ${read}${came ? "" : " (Saved. not seen within 6 s)"}`,
           );
-          if (swaps) check("reading again keeps the document", loadedAs === 1 && endedAs === 1, `document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`);
-          else skip("reading again keeps the document", noSwaps);
           const drawn = first !== null && loadAt >= 0 && Number(first) > loadAt ? first : null;
+          // A document that stayed the first proves nothing when no read after the load drew
+          // `Saved.` in time: it requires that read, as the check that it stops does (below).
+          if (swaps)
+            check(
+              "reading again keeps the document",
+              drawn !== null && loadedAs === 1 && endedAs === 1,
+              `${drawn === null ? `no answer to a read of the receipt after its load (${loadAt}) drew Saved. within 6 s (${JSON.stringify(first)}); ` : ""}document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`,
+            );
+          else skip("reading again keeps the document", noSwaps);
           if (drawn !== null) await pause(2200);
           const terminal = drawn === null ? undefined : fullReads[Number(drawn)];
           const after = readsAfter(terminal);

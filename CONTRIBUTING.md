@@ -690,11 +690,12 @@ between the draw and the check's look counts against it. That the page read itse
 same document is told as the place case's is, by an init script added before the load that numbers
 each document the tab makes: the document once the load returns and once the wait for `Saved.` ends
 must both be the first, so a read again that loads the page in full, even before Playwright's load
-returns, is not taken for the load's own document. Its route and request listener are
-removed however its cases end, each removal and each read of the page bounded. Wherever a case
-other than the check that navigating away stops the reads (below) leaves by the header's link and
-then requires no further read for a while, the press and the wait for News are each bounded to 30
-seconds by the smoke's clock, and sending the alert until it says
+returns, is not taken for the load's own document, and it requires the same note of `Saved.` from a
+read after the load, without which a document that stayed the first says nothing. Its route and
+request listener are removed however its cases end, each removal and each read of the page
+bounded. Wherever a case other than the check that navigating away stops the reads (below) leaves
+by the header's link and then requires no further read for a while, the press and the wait for
+News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
 `Saving...` in the patch cases shares one budget of 30 seconds, checked as each of its steps starts,
 so none starts once they have passed; a driver that never answers ends the run with its reason
 rather than keeping the case from its cleanup. Every other driver action the cases of a page reading
