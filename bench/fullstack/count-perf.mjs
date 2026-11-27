@@ -297,16 +297,15 @@ export function probeVerdict(names, r, every = false) {
 }
 
 /**
- * The names perf prints the kit's one cache event by, `L1-icache-load-misses:u`, as far as one is
- * captured (#2232). perf names a legacy cache event as given less its modifier; with `-A` it may add
- * the core PMU's own name (`tools/perf/util/stat-display.c`, `uniquify_event_name`). By perf's source:
- * 6.1 to 6.7 print the bare name with `-A`; 6.8 to 6.12 print `L1-icache-load-misses [<PMU>]`, the PMU
- * `cpu` only on an x86 CPU with one core PMU (captured on 6.8.12); 6.13 and 6.14 print
- * `cpu/L1-icache-load-misses/` there; 6.15 on, the bare name again; a hybrid CPU's PMUs (`cpu_core`,
- * `cpu_atom`) are named in every version. Read are the bare name (captured on 6.8.12 without `-A`)
- * and `[cpu]`. Every other name is none of the kit's events, so a host that prints one (6.13 or 6.14,
- * an Arm or a hybrid CPU) has no L1i row: a round's count records none and count-pairs.mjs's probe
- * refuses the host. A name is added here only from a captured row.
+ * Aliases for the kit's one cache event, `L1-icache-load-misses:u`, which is also read as asked.
+ * The perf 6.8.12 captures omit `:u`: the name is bare without `-A`, and has `[cpu]` with `-A`
+ * on x86 with one core PMU. Issue #2232 reports the same names on 6.12.118.
+ * In the source for x86 with one core PMU and `-A`, v6.1 to v6.7 leave the name bare, v6.8 to
+ * v6.12 add `[cpu]`, v6.13 and v6.14 use `cpu/L1-icache-load-misses/`, and v6.15 and v6.16
+ * exempt legacy cache events from renaming. In v6.8 to v6.12 the bracketed name can be an Arm
+ * PMU's, and v6.8 uses `cpu_core/.../` or `cpu_atom/.../` on hybrid Intel (stat-display.c).
+ * If the row has an unrecognized name, a round can keep its other events; under count-pairs.mjs
+ * each invocation refuses at its probe, before its load. Add aliases only from captured rows.
  */
 const L1I_ROWS = Object.freeze(["L1-icache-load-misses", "L1-icache-load-misses [cpu]"]);
 const eventOf = (/** @type {string | undefined} */ event) => (event !== undefined && L1I_ROWS.includes(event) ? events.userL1iMissesPerRequest : event);

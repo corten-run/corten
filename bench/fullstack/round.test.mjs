@@ -1724,7 +1724,7 @@ test("perf's CPUs are every CPU or a CPU list, so nothing else (another -e) reac
   }
 });
 
-// The cache event is named as perf 6.8 prints it with -A (captured, #2232).
+// Constructed count rows, with the default cache name captured on perf 6.8.12 with -A (#2232).
 const mainText = (cacheEvent = "L1-icache-load-misses [cpu]") => [
   "# started on bench host",
   "CPU1,12345,,instructions:u,app.scope,60000,100.00,",
@@ -1739,9 +1739,8 @@ const pass = (text, requests = 10, failed = 0) => ({ counts: parsePerCpuCounts(t
 const measure = (/** @type {any} */ collect, /** @type {any} */ warn, /** @type {any} */ expected = {}) => measurePerfCounts(collect, warn, { cpus: [1], ...expected });
 
 test("count.mjs reads each count over its own pass's load", () => {
-  // The cache event as perf prints it with -A: with its PMU's name from perf 6.8 on (captured on
-  // 6.8.12), bare on perf 6.1, which adds the name only with --no-merge or on a hybrid CPU (its source).
-  for (const cacheEvent of ["L1-icache-load-misses [cpu]", "L1-icache-load-misses"]) {
+  // The two aliases captured on perf 6.8.12, with and without -A, and the name as asked (constructed).
+  for (const cacheEvent of ["L1-icache-load-misses [cpu]", "L1-icache-load-misses", "L1-icache-load-misses:u"]) {
     assert.deepEqual(countRow(pass(mainText(cacheEvent)), pass(kernelInstructions)), {
       requests: 10, failed: 0, kernelPass: { requests: 10, failed: 0 }, userPerRequest: 1235, kernelPerRequest: 123,
       userCyclesPerRequest: 568, kernelCyclesPerRequest: 0, userL1iMissesPerRequest: 9,
@@ -1798,8 +1797,8 @@ test("a count's events are summed over each CPU perf was given, and kept only wh
 
 // perf 6.8.12's rows under the count's own arguments (`-A -x , --log-fd 1 --delay=-1
 // --control=fd:3,4 -e <set> -G <cgroup>` once an event, enabled and disabled on its control
-// descriptor), captured for a cgroup that ran a loop on CPU 1. perf names a legacy cache event as it
-// was given less its modifier and, with -A, adds its PMU's name in brackets (#2232).
+// descriptor), captured for a cgroup that ran a loop on CPU 1. In this capture perf 6.8.12 omits the
+// cache event's modifier and, with -A, adds its PMU's name in brackets (#2232).
 const capturedMain = [
   "CPU1,3377767514,,cycles:u,system.slice/fix2232-load.scope,1003410720,100.00,,",
   "CPU1,10411677,,cycles:k,system.slice/fix2232-load.scope,1003410720,100.00,,",
@@ -1827,10 +1826,13 @@ test("a count reads perf's instruction-cache row by the name perf prints it with
   // Through both passes, as count.mjs reads them.
   const measured = await measure((p) => ({ text: p === "main" ? capturedMain : capturedKernel, summary: countSummary(10) }), assert.fail);
   assert.equal(measured.userL1iMissesPerRequest, 16854);
-  // Under another PMU's name, as perf prints a cache event of another PMU ("%s [%s]") or of a hybrid
-  // CPU's ("%s/%s/"); as asked of a named PMU (captured: `-e cpu/L1-icache-load-misses/u`); or
-  // another cache event: none is the event the kit asked for, so the count has no row for it.
-  for (const other of ["L1-icache-load-misses [cpu_core]", "cpu_core/L1-icache-load-misses/", "cpu/L1-icache-load-misses/u", "L1-dcache-load-misses [cpu]", "L1-icache-loads [cpu]"]) {
+  // None of these names is read as the event the kit asked for.
+  for (const other of [
+    "L1-icache-load-misses [cpu_core]", // constructed; v6.8 uses the slash form for hybrid PMUs
+    "cpu_core/L1-icache-load-misses/", // v6.8 source: "%s/%s/"
+    "cpu/L1-icache-load-misses/u", // captured on perf 6.8.12 when asked by this name
+    "L1-dcache-load-misses [cpu]", "L1-icache-loads [cpu]", // other events, using v6.8's bracket form
+  ]) {
     const text = capturedMain.replace("L1-icache-load-misses [cpu]", other);
     assert.equal(parsePerCpuCounts(text, [1]).get(l1i), undefined, other);
     const kept = countRow({ counts: parsePerCpuCounts(text, [1]), requests: 10, failed: 0 }, { counts: parsePerCpuCounts(capturedKernel, [1]), requests: 10, failed: 0 });
@@ -2195,7 +2197,7 @@ test("count.mjs falls back to user instructions when an optional event makes per
 });
 
 test("the probe refuses a set perf cannot count or does not answer for, and notes main's whole set the count falls back from", () => {
-  // A row a CPU (-A, no cgroup: CPU, count, unit, event, running time, running percentage), the cache event named as perf 6.8 prints it.
+  // Constructed rows a CPU (-A, no cgroup), with the cache name captured on perf 6.8.12.
   const shown = (/** @type {string} */ e) => (e === "L1-icache-load-misses:u" ? "L1-icache-load-misses [cpu]" : e);
   const counted = (names) => ({ status: 0, signal: null, stdout: names.map((e) => `CPU1,1000,,${shown(e)},1000000,100.00,,`).join("\n"), stderr: "" });
   for (const names of PROBE_SETS) assert.deepEqual(probeVerdict(names, counted(names)), { refuse: null, note: null });
@@ -2248,7 +2250,7 @@ test("the probe reads each CPU's row by the names a count reads, notes for a rou
   assert.deepEqual(probeVerdict(main, out(unsupported), true), { refuse: `perf stat -e ${main.join(",")} gave no count for L1-icache-load-misses:u: CPU 1: <not supported>`, note: null });
   // No row at all for an event the set holds, under EVERY_EVENT: refused (CPU 1's cycles:k row dropped).
   assert.match(String(probeVerdict(main, out(captured[main.join(",")].split("\n").filter((l) => !l.includes("cycles:k")).join("\n")), true).refuse), /gave no count for cycles:k: no row for it$/);
-  // A hybrid CPU's rows name every event by its PMU ("%s/%s/", from source): a set's required event is unread too, and refused either way.
+  // In v6.8 source a hybrid PMU uses "%s/%s/": a required event under that name is refused too.
   assert.match(String(probeVerdict(["instructions:u"], out("CPU1,9876399085,,cpu_core/instructions:u/,1001211953,100.00,,")).refuse), /printed a row for "cpu_core\/instructions:u\/"/);
   // A required event that did not count on one of its CPUs gave no count, naming that CPU (CPU 1's
   // row from the kernel set's probe, captured; CPU 0's edited, in the form of the <not counted>
