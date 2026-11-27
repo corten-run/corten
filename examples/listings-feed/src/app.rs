@@ -190,7 +190,7 @@ async fn move_market(
     Form(input): Form<MoveInput>,
 ) -> HtmlResult {
     let roll = market.writes.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ listing::now();
-    let written = write_market(&pool, &market, &at.seller, 5, roll, Some(input.submit.as_str())).await.map_err(unavailable)?;
+    let written = write_market(&pool, &market, &at.seller, 5, roll, Some(input.submit.as_str())).await.map_err(write_failed)?;
     req.patch_or(
         html! { <MoveStatus text="Market lows moved. The rows change when the feed brings the change, on every instance." /> },
         || async { req.redirect(&url::Seller { seller: &at.seller, after: written.seq }) },
@@ -225,7 +225,7 @@ struct Written {
 }
 
 /// `n` listings get a new market low, committed as one patch. Send an `Idempotency-Key` header and
-/// a retry of the same request commits at most once.
+/// a retry of the same request commits at most once; a key another seller's write used is a 422.
 async fn market(
     State(pool): State<PgPool>,
     State(market): State<Market>,
@@ -235,7 +235,7 @@ async fn market(
     let key = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
     let roll = market.writes.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ listing::now();
     let n = at.n.unwrap_or(5).clamp(1, 100);
-    Ok(Json(write_market(&pool, &market, &at.seller, n, roll, key).await.map_err(unavailable)?))
+    Ok(Json(write_market(&pool, &market, &at.seller, n, roll, key).await.map_err(write_failed)?))
 }
 
 async fn write_market(
@@ -319,6 +319,17 @@ fn unavailable(e: corten_cluster::Error) -> Error {
     Error::new(e).with_status(StatusCode::SERVICE_UNAVAILABLE)
 }
 
+/// A market write's failure: a key another seller's write already used is the client's to fix, a
+/// 422 that says so (it names no seller), not a 503 that invites the same retry; anything else is
+/// [`unavailable`].
+fn write_failed(e: corten_cluster::Error) -> Error {
+    if e.is::<corten_cluster::IdempotencyKeyReused>() {
+        Error::new(e).with_status(StatusCode::UNPROCESSABLE_ENTITY)
+    } else {
+        unavailable(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use corten::prelude::*;
@@ -342,6 +353,17 @@ mod tests {
         // The app's own stylesheet, by its hashed URL.
         let link = html.split(r#"<link rel="stylesheet" href=""#).nth(1).and_then(|rest| rest.split('"').next());
         assert!(link.is_some_and(|href| href.starts_with("/assets/") && href.ends_with("/style.css")), "{html}");
+    }
+
+    /// A market write whose key another seller's write used is refused as the client's mistake;
+    /// Postgres out of reach is still a 503.
+    #[test]
+    fn a_key_another_seller_used_is_a_422_and_an_outage_a_503() {
+        let reused = super::write_failed(corten_cluster::IdempotencyKeyReused.into());
+        assert_eq!(reused.status_code(), corten::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(reused.to_string(), corten_cluster::IdempotencyKeyReused.to_string());
+        let down = super::write_failed("connection refused".into());
+        assert_eq!(down.status_code(), corten::http::StatusCode::SERVICE_UNAVAILABLE);
     }
 
     /// The listing type the table's script reads (`types/app.d.ts`), and its row's view.
