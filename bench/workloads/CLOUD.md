@@ -1527,10 +1527,13 @@ with it depends on the retirement kind:
    DELETE, so the next collect only checks exact absence and records
    `destroyedAt`, with no second DELETE.
 2. A torn withdrawal (the drain proof's or an ordinary collect's) does not
-   recover. It keeps the intent of a DELETE that was never sent, on a host that
-   is still running, so every later collect waits for an exact absence that does
-   not come and refuses with `deletion not confirmed; outcome uncertain`,
-   sending no DELETE, until the operator clears it (operator cleanup below).
+   recover by itself. It keeps the intent of a DELETE that was never sent, while
+   the droplet still exists, so every later collect waits for an exact absence
+   that does not come and refuses with `deletion not confirmed; outcome
+   uncertain`, sending no DELETE. Nothing clears the intent. The operator
+   cleanup below removes that exact host and leaves the intent as saved; the
+   next collect then confirms exact absence and records `destroyedAt`, sending
+   no DELETE of its own.
 3. The handoff and exit-one retirements refuse. Their state save rechecks handoff
    custody and keeps the operation lock when it fails, and their publication check
    refuses every `state.json.*.tmp` name as an unsettled publication.
@@ -1538,19 +1541,22 @@ with it depends on the retirement kind:
    list of names in the state root, so a leftover stage refuses with
    `unexpected local bootstrap custody; preserve host`.
 
-Those refusals fail closed with no DELETE, as before, until the operator archives
-the stage (operator cleanup below). Other ordinary saves keep the fixed-name
-`state.json.tmp` stage, and one left by a torn ordinary save still refuses the
-next ordinary save with `EEXIST` until the operator archives it: fleet
-verification's external-failure check treats that exact name as an unsettled
-publication, and the handoff publication check treats every `state.json.*.tmp`
-name that way, so it is not bypassed.
+The refusals in items 3 and 4 fail closed with no DELETE, as before, until the
+operator archives the stage (operator cleanup below). Other ordinary saves keep
+the fixed-name `state.json.tmp` stage, and one left by a torn ordinary save
+still refuses the next ordinary save with `EEXIST` until the operator archives
+it: fleet verification's external-failure check treats that exact name as an
+unsettled publication, and the handoff publication check treats every
+`state.json.*.tmp` name that way, so it is not bypassed.
 
-All of these are saves that fail with an error, after which the collect
-releases its `operation.lock`. A controller killed during one (or anywhere else
-under the lock) also leaves that lock, and every later collect refuses on it
-until the operator accounts for that process tree and removes it, as for any
-retained lock (above).
+A torn save in items 1, 2 and 4 fails with an error, after which the collect
+releases the lock it holds: `operation.lock`, or `stream-recovery.lock` for an
+invalid-monitor recovery collect, which leaves any original `operation.lock` as
+it found it (below). The handoff and exit-one saves in item 3 keep the operation
+lock when they fail. A controller killed during any of these saves (or anywhere
+else under a lock) leaves the lock it held. A later collect that needs that lock
+refuses on it until the operator accounts for that process tree and releases it
+by the custody step for retained locks (above).
 
 A v2 or
 v3 receipt and its history copy are published whole: each is written and synced

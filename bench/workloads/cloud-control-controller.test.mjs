@@ -541,7 +541,7 @@ test("a torn withdrawal of an unsent DELETE's intent leaves its own stage and ke
   const tornBytes = readFileSync(join(h.local, stages[0]));
   assert.equal(tornBytes.length, 80);
   // The kept intent allows only exact absence: no DELETE while the host remains, and none once it is gone.
-  await assert.rejects(task().collect());
+  await assert.rejects(task().collect(), /deletion not confirmed; outcome uncertain/);
   assert.equal(attempts, 1); assert.equal(h.deletes, 0); assert.equal(h.saved().destroyedAt, undefined);
   h.hosts([]);
   assert.equal(await task().collect(), 1); assert.equal(attempts, 1); assert.equal(h.deletes, 0);
