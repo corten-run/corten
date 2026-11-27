@@ -105,9 +105,9 @@ clock. Failed confirmation retains the original gap; later proc reads and
 startup retries do not use this path.
 
 The same bounded exact-ID check can start after a successful opening stat if
-the complete, stable cgroup census is already empty. Its first inspect must
-start before 75 ms too. A census containing another process but missing the
-entry PID still fails; a failed census never takes this path.
+the complete, stable cgroup census is empty on the first attempt. Its first
+inspect must start before 75 ms too. A census that contains another process but
+not the entry PID still fails, as does an empty retry after a failed census.
 
 The closing Docker inspect can itself prove the same stopped transition after
 the kernel checks. The collector then discards the incomplete kernel census and
