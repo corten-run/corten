@@ -31,11 +31,13 @@
 # missing, not a number, zero or under 100%, fails the placement and records nothing.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
 # raw-<workload>.log (every turn's perf and wrk output), answers/, serve-{A,B}.log (each server's
-# error output and serve.mjs's) and, while a server runs, serve-{A,B}.pid. A diff.txt that is
-# there before the check creates it (answers/ is made afresh), cannot be created as a new file, is
-# not a regular file of its own or does not hold the difference diff or cmp reported, one that is
-# not readable when they report none, or a diff or cmp that cannot compare (status 2), fails the
-# placement. Every curl is run with --disable, so no curl configuration of HOME's (a
+# error output and serve.mjs's) and, while a server runs, serve-{A,B}.pid. The difference is
+# what diff printed, taken from its output and not from a file, with the bodies line, and that text
+# alone is compared with EXPECT and written, once, as diff.txt: something already at diff.txt
+# (answers/ is made afresh), a diff.txt that cannot be created as a new file or written, a diff or
+# cmp that cannot compare (status 2), a diff whose output disagrees with its status, a cmp that
+# disagrees with the bodies' sizes and SHA-256s, or a stage of the headers' normalization (tr,
+# grep, sed) that does not end with status 0, fails the placement. Every curl is run with --disable, so no curl configuration of HOME's (a
 # retry, a header) changes a request or how long it may take, and with --noproxy '*', so no proxy
 # of the environment's (http_proxy, ALL_PROXY) answers for 127.0.0.1. Every curl has a bound:
 # a second for the check that nothing accepts on the two ports before the start, each readiness
@@ -63,10 +65,11 @@
 # (set -e), so it is that line and status 4 together that say the answers differ and the stop
 # after them passed those checks.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,64p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,66p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; mask=$MASK; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
-columns=$(echo "$events" | tr ',' '\n' | sed 's/[^A-Za-z0-9]/_/g' | paste -sd, -)
+# One command of its own, so its status is the one checked (a pipeline's is its last stage's).
+columns=$(printf '%s\n' "$events" | sed 's/[^A-Za-z0-9,]/_/g')
 mkdir -p "$out"
 csv=$out/counts-$workload.csv; raw=$out/raw-$workload.log; ans=$out/answers
 rm -rf "$ans"; mkdir -p "$ans"; : >"$raw"
@@ -166,7 +169,8 @@ ready() { # <A|B> <port>: that server answers, its process number from serve.mjs
     # A command substitution is a subshell of this one, with its descriptors: it closes them first.
     p=$(exec 5>&- 6>&-; cat "$out/serve-$1.pid")
     case $p in ''|*[!0-9]*) fail "serve.mjs gave no process number for $1's server: $p";; esac
-    [ "$(exec 5>&- 6>&-; taskset -cp "$p" | sed 's/.*: //')" = "$cpu" ] || fail "pid $p is not on cpu $cpu"
+    aff=$(exec 5>&- 6>&-; taskset -cp "$p") || fail "taskset could not read the CPUs of pid $p (status $?)"
+    [ "${aff##*: }" = "$cpu" ] || fail "pid $p is not on cpu $cpu"
     if [ "$1" = A ]; then a=$p; else b=$p; fi
 }
 fresh() { # <A|B>: (re)starts that binary; its server's process number is then in $a or $b
@@ -184,7 +188,14 @@ answer() { # <port> <out prefix>: writes <prefix>.raw-headers, .headers (masked)
     grep -qi '^user-agent:' "$HEADERS" || set -- "$@" -H 'User-Agent:'
     while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
     curl --disable --noproxy '*' -sS --max-time 10 -D "$to.raw-headers" -o "$to.body" "$@" "http://127.0.0.1:$port$path" </dev/null 5>&- 6>&-
-    tr -d '\r' <"$to.raw-headers" | grep -iv '^date:' | sed -f "$mask" >"$to.headers"
+    # Each stage on its own, its status checked: a pipeline's status is its last stage's alone, so a
+    # tr or grep that printed part of the headers and then failed would leave both sides' headers
+    # cut short alike, and read as the same. The answer has a status line, so grep selects one.
+    tr -d '\r' <"$to.raw-headers" >"$to.lf" || fail "tr could not take the carriage returns out of $to.raw-headers (status $?)"
+    gst=0; grep -iv '^date:' "$to.lf" >"$to.dateless" || gst=$?
+    [ $gst = 0 ] || fail "grep could not take the Date line out of $to.lf (status $gst)"
+    sed -f "$mask" "$to.dateless" >"$to.headers" || fail "sed could not apply the plan's mask to $to.dateless (status $?)"
+    rm -f "$to.lf" "$to.dateless"
 }
 # The comparison runs in a subshell of its own, a command substitution, which closes descriptors 5
 # and 6 before it runs anything, so no command it runs (curl, mask.mjs, cmp, diff, sha256sum and
@@ -202,53 +213,60 @@ compare() {
     node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not within the range the plan states"
     cmp -s "$ans/A.headers" "$ans/A-again.headers" || fail "two answers of A differ in their headers after the mask: $ans/A*.headers"
     cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in their bodies: $ans/A*.body"
-    # diff.txt is created before anything is compared, so a file that cannot be is a failure and not
-    # an empty difference (printf, since a redirection that fails on the special builtin : would end
-    # the shell without the reason); diff and cmp say 0 for the same, 1 for different and 2 for trouble.
-    # answers/ is this check's own, made afresh above, so anything already at diff.txt is not one it
-    # made: a link to the expected difference, say, which a write would truncate and the check then
-    # compare with itself. It is refused, and diff.txt is created with noclobber (in a subshell, so
-    # the option goes no further), which makes a new file and follows no link to a regular one.
-    diffs=$ans/diff.txt
-    [ ! -e "$diffs" ] && [ ! -L "$diffs" ] || fail "$diffs cannot be written as a new file: something is there before the check made it"
-    (set -C; printf '' >"$diffs") || fail "$diffs cannot be written"
-    hst=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || hst=$?
+    # The headers' difference is diff's own output, taken in memory (a command substitution, with an
+    # x after it so no trailing newline is lost), not read back from a file: a diff.txt that held
+    # part of what diff printed (one hunk of two, say), or anything else, could otherwise stand for
+    # it. diff and cmp say 0 for the same, 1 for different and 2 for trouble, and diff's output must
+    # agree with what it said. (curl refuses a header with a NUL byte, which a shell variable cannot hold.)
+    hst=0; hdiff=$(s=0; diff "$ans/A.headers" "$ans/B.headers" || s=$?; printf x; exit $s) || hst=$?
     [ $hst -le 1 ] || fail "diff could not compare the two answers' headers (status $hst)"
+    hdiff=${hdiff%x}
+    if [ $hst = 1 ]; then
+        [ -n "$hdiff" ] || fail "diff reported that the two answers' headers differ and printed no difference: missing evidence"
+    else
+        [ -z "$hdiff" ] || fail "diff reported that the two answers' headers are the same and printed a difference"
+    fi
     na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
     da=$(sha256sum <"$ans/A.body"); da=${da%% *}; db=$(sha256sum <"$ans/B.body"); db=${db%% *}
     bst=0; cmp -s "$ans/A.body" "$ans/B.body" || bst=$?
+    # cmp reads the bodies again after their sizes and SHA-256s were taken: the two must agree, or
+    # a body changed between the reads and the bodies line would name what cmp did not compare.
     case $bst in
-        0) line="bodies same: $na bytes, sha256 $da" ;;
-        1) line="bodies differ: $na and $nb bytes, sha256 $da and $db" ;;
+        0) [ "$na" = "$nb" ] && [ "$da" = "$db" ] || fail "cmp found the two answers' bodies the same, though their sizes or SHA-256s, read before it, differ: a body changed between the reads"
+           line="bodies same: $na bytes, sha256 $da" ;;
+        1) [ "$na" != "$nb" ] || [ "$da" != "$db" ] || fail "cmp found the two answers' bodies different, though their sizes and SHA-256s, read before it, are the same: a body changed between the reads"
+           line="bodies differ: $na and $nb bytes, sha256 $da and $db" ;;
         *) fail "cmp could not compare the two answers' bodies (status $bst)" ;;
     esac
-    # Whether the two differ is what diff and cmp said, not what diff.txt holds: a difference either
-    # reported must be in diff.txt, which then ends with the bodies line (so an expected one names
-    # the bodies as well) and holds the headers' diff before it when the headers differ, and when
-    # neither reported one diff.txt is an empty regular file of its own that can be read. A diff.txt
-    # that does not hold what they said (one that took no writes, say), one that is not there
-    # (unlinked after diff wrote it) or not a regular file (a link, to /dev/null or the expected
-    # difference say), or, when they said the same, one that cannot be read, is missing evidence,
-    # and fails the placement rather than reading as the same.
+    # The difference: diff's output and then the bodies line (so an expected one names the bodies as
+    # well), or nothing when neither diff nor cmp reported one. This text alone is what EXPECT is
+    # compared with, and the same bytes are what diff.txt is written with, once; diff.txt is not read.
     if [ $hst = 1 ] || [ $bst = 1 ]; then
-        # The bodies line is added only to a regular file of the check's own, not through a link.
-        [ -f "$diffs" ] && [ ! -L "$diffs" ] \
-            || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence ($diffs is not there, not a regular file, or a link)"
-        echo "$line" >>"$diffs" || fail "$diffs cannot be written"
-        n=$(wc -l <"$diffs")
-        { if [ $hst = 1 ]; then [ "$n" -gt 1 ]; else [ "$n" -eq 1 ]; fi; } && [ "$(tail -n 1 "$diffs")" = "$line" ] \
-            || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence"
+        text="$hdiff$line
+"
     else
-        [ -f "$diffs" ] && [ ! -L "$diffs" ] && [ -r "$diffs" ] \
-            || fail "$diffs is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence"
-        [ ! -s "$diffs" ] || fail "$diffs holds a difference that neither diff nor cmp reported"
+        text=
     fi
+    # answers/ is this check's own, made afresh above, so anything already at diff.txt is not one it
+    # made: a link to the expected difference, say, which a write would truncate, or a file put there
+    # while the answers were compared. It is refused, and diff.txt is created with noclobber (in a
+    # subshell, so the option goes no further), which makes a new file and follows no link to a
+    # regular one; printf, since a redirection that fails on the special builtin : would end the
+    # shell without the reason.
+    diffs=$ans/diff.txt
+    [ ! -e "$diffs" ] && [ ! -L "$diffs" ] || fail "$diffs cannot be written as a new file: something is there before the check made it"
+    (set -C; printf '%s' "$text" >"$diffs") || fail "$diffs cannot be written"
     echo "body $na bytes as received, sha256 $(printf %.16s "$da") A and $(printf %.16s "$db") B" >"$ans/bodies.txt"
     if [ -n "${EXPECT:-}" ]; then
-        cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
+        # The x after cat, as after diff, keeps its trailing newlines; a cat that fails prints none.
+        want=$(cat "$EXPECT" && printf x) || fail "the plan's expected difference, $EXPECT, cannot be read"
+        if [ "$text" != "${want%x}" ]; then
+            { printf '%s' "$text" | diff "$EXPECT" - >&2; } || true
+            fail "the answers differ other than as the plan's expected difference says"
+        fi
         echo expected
     elif [ $hst != 0 ] || [ $bst != 0 ]; then
-        cat "$diffs" >&2
+        printf '%s' "$text" >&2
         echo differ
     else
         echo same
@@ -275,24 +293,35 @@ esac
 halt A B || fail "stopping the two servers after their answers were compared failed or is unconfirmed: no verdict"
 echo "$verdict" | tee "$ans/verdict.txt"
 # A turn's output is read in a subshell that closes descriptors 5 and 6 first, as the comparison is.
+# Each file is read once, into memory (with an x after it, so no trailing newline is lost): the raw
+# log, the RESULT line and every counter, the check that it is reported once included, come from
+# those same bytes, not from reads of a file that could differ between them.
 record() { # writes the turn's perf and wrk output to the raw log, and its CSV row
-    { echo "## pair $pair_ $version_"; cat "$out/turn.perf" "$out/turn.wrk"; } >>"$raw"
-    set -- $(sed -n 's/^RESULT //p' "$out/turn.wrk")
+    perfs=$(cat "$out/turn.perf" && printf x) || fail "perf's output for pair $pair_ $version_ cannot be read"; perfs=${perfs%x}
+    wrks=$(cat "$out/turn.wrk" && printf x) || fail "wrk's output for pair $pair_ $version_ cannot be read"; wrks=${wrks%x}
+    printf '## pair %s %s\n%s%s' "$pair_" "$version_" "$perfs" "$wrks" >>"$raw"
+    res=$(printf '%s' "$wrks" | sed -n 's/^RESULT //p') || fail "wrk's output for pair $pair_ $version_ cannot be read for its RESULT line"
+    set -- $res
     [ $# -eq 6 ] || fail "no RESULT line from wrk in pair $pair_ $version_"
     [ "$2$3$4$5$6" = 00000 ] || fail "errors in pair $pair_ $version_: requests $1, connect $2, read $3, write $4, status $5, timeout $6"
     requests=$1
     values=
-    for ev in $(echo "$events" | tr ',' ' '); do
+    # The plan's events, split at their commas by the shell itself, with no pattern expanded.
+    set -f; ifs=$IFS; IFS=,
+    for ev in $events; do
+        IFS=$ifs
         # perf names a cache event without its :u (L1-icache-load-misses), though it counts user
         # space only; a line names the event as asked or without the :u.
         sel='BEGIN { n = e; sub(/:u$/, "", n) } $3 == e || $3 == n'
-        [ "$(awk -F, -v e="$ev" "$sel" "$out/turn.perf" | wc -l)" = 1 ] || fail "$ev not reported once in pair $pair_ $version_: $(cat "$out/turn.perf")"
-        v=$(awk -F, -v e="$ev" "$sel { print \$1 }" "$out/turn.perf")
-        case "$v" in ''|0|*[!0-9]*) fail "unusable counter $ev in pair $pair_ $version_ (not a count above zero): $(cat "$out/turn.perf")";; esac
-        pct=$(awk -F, -v e="$ev" "$sel { print \$5 }" "$out/turn.perf")
+        c=$(printf '%s' "$perfs" | awk -F, -v e="$ev" "$sel { c++ } END { print c + 0 }") || fail "awk could not read perf's output in pair $pair_ $version_"
+        [ "$c" = 1 ] || fail "$ev not reported once in pair $pair_ $version_: $perfs"
+        v=$(printf '%s' "$perfs" | awk -F, -v e="$ev" "$sel { print \$1 }")
+        case "$v" in ''|0|*[!0-9]*) fail "unusable counter $ev in pair $pair_ $version_ (not a count above zero): $perfs";; esac
+        pct=$(printf '%s' "$perfs" | awk -F, -v e="$ev" "$sel { print \$5 }")
         [ "$(awk -v p="$pct" 'BEGIN { print (p + 0 >= 100) }')" = 1 ] || fail "counter under 100% in pair $pair_ $version_: $ev $pct"
         values="$values,$v"
     done
+    IFS=$ifs; set +f
     echo "$pair_,$version_,$requests$values" >>"$csv"
 }
 turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows

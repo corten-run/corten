@@ -84,7 +84,11 @@ halt() {
 }
 trap 'halt || :' EXIT
 trap 'exit 1' HUP INT PIPE TERM
-env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" env | LC_ALL=C sort >"$out/server-env.txt"
+# The environment a server is started with, as env prints it and then sorted: two commands, each
+# with its status checked, since a pipeline's status is its last command's alone.
+env -i PATH="$PATH" HOME="$HOME" PORT=18083 BIN="$B/base" env >"$out/server-env.unsorted" || { echo "verify: env could not print the server's environment (status $?)" >&2; exit 1; }
+LC_ALL=C sort "$out/server-env.unsorted" >"$out/server-env.txt" || { echo "verify: sort could not sort the server's environment (status $?)" >&2; exit 1; }
+rm -f "$out/server-env.unsorted"
 fifo=$out/serve.fifo
 for s in 1 2; do
     hold

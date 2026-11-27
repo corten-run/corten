@@ -928,59 +928,75 @@ test("the answers check on real servers: a diff.txt that cannot be written fails
   assert.ok(r.said.includes("answers/diff.txt cannot be written") && !r.said.includes("answers: same"), r.said);
 });
 
-test("the answers check on real servers: a difference diff or cmp reported that diff.txt does not hold fails it as missing evidence, and does not read as the same answers", LINUX, () => {
-  // A stand-in for diff puts a new empty diff.txt in place of the one turns.sh created, before
-  // diff writes the one it was given: a regular file that took none of the headers' difference.
-  const emptied = stand("emptied", "diff", 'case "$1" in */A.headers) rm "${1%/*}/diff.txt" && : >"${1%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec diff "$@"');
-  const headers = answers("answers-emptied-headers", serve("aaaa", "a"), serve("aaaa", "b"), 60, { first: emptied });
-  assert.equal(headers.status, 1, headers.said);
-  assert.ok(headers.said.includes("diff (status 1) or cmp (status 0) reported a difference that") && headers.said.includes("answers/diff.txt does not hold: missing evidence\n") && !headers.said.includes("answers: same"), headers.said);
-  // A stand-in for diff makes diff.txt a link to /dev/null in the same place: every write to it
-  // succeeds and it stays empty, so only diff's and cmp's own statuses say the answers differ.
-  const first = stand("swallowed", "diff", 'case "$1" in */A.headers) ln -sf /dev/null "${1%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec diff "$@"');
-  for (const [name, base, head] of [["answers-swallowed-headers", serve("aaaa", "a"), serve("aaaa", "b")], ["answers-swallowed-bodies", serve("aaaa"), serve("bbbb")]]) {
-    const r = answers(name, base, head, 60, { first });
-    assert.equal(r.status, 1, `${name}: ${r.said}`);
-    assert.ok(r.said.includes("reported a difference that") && r.said.includes("answers/diff.txt does not hold: missing evidence") && !r.said.includes("answers: same"), `${name}: ${r.said}`);
+test("the answers check on real servers: something put at diff.txt while the answers are compared fails it, and is neither written over nor read as the difference", LINUX, () => {
+  // A stand-in for diff puts an empty file at diff.txt, or a link to /dev/null (every write to which
+  // succeeds and leaves it empty), as it runs: the check writes diff.txt once, as a new file, from
+  // what diff printed, so either is something there before it, and refused, for answers that
+  // differ in their headers, in their bodies, or not at all.
+  for (const [kind, put] of [["emptied", ': >"${1%/*}/diff.txt"'], ["swallowed", 'ln -s /dev/null "${1%/*}/diff.txt"']]) {
+    const first = stand(kind, "diff", `case "$1" in */A.headers) ${put} ;; esac\nPATH=${"$"}{PATH#*:} exec diff "$@"`);
+    for (const [name, base, head] of [[`answers-${kind}-headers`, serve("aaaa", "a"), serve("aaaa", "b")], [`answers-${kind}-bodies`, serve("aaaa"), serve("bbbb")], [`answers-${kind}-same`, serve("aaaa"), serve("aaaa")]]) {
+      const r = answers(name, base, head, 60, { first });
+      assert.equal(r.status, 1, `${name}: ${r.said}`);
+      assert.ok(r.said.includes("answers/diff.txt cannot be written as a new file: something is there before the check made it") && !r.said.includes("answers: same") && !r.said.includes("answer differently"), `${name}: ${r.said}`);
+      assert.ok(!existsSync(join(r.answers, "verdict.txt")), `${name}: ${r.said}`);
+    }
   }
-  // The same answers through the same stand-in: nothing differs, but a link to /dev/null is not a
-  // diff.txt of the check's own, empty or not, so it is missing evidence and not "answers: same".
-  const same = answers("answers-swallowed-same", serve("aaaa"), serve("aaaa"), 60, { first });
-  assert.equal(same.status, 1, same.said);
-  assert.ok(same.said.includes("answers/diff.txt is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence") && !same.said.includes("answers: same"), same.said);
 });
 
-test("the answers check on real servers: a diff.txt that is gone when diff and cmp report the same answers fails it as missing evidence, and does not read as the same answers", LINUX, () => {
-  // A stand-in for cmp unlinks diff.txt after diff wrote it, just before the bodies are compared.
-  const first = stand("unlinked", "cmp", 'case "$3" in */B.body) rm -f "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
-  const r = answers("answers-unlinked", serve("aaaa"), serve("aaaa"), 60, { first });
+test("the answers check on real servers: a two-hunk difference in the headers is held whole, so a diff.txt left holding its first hunk alone, with that hunk expected, fails it", LINUX, () => {
+  // Two headers that differ, with one between them that does not: two hunks.
+  const twice = (side) => `require("node:http").createServer((q, s) => { s.setHeader("x-one", ${JSON.stringify(side)}); s.setHeader("content-type", "text/plain"); s.setHeader("x-two", ${JSON.stringify(side)}); s.end("aaaa"); }).listen(Number(process.argv[2]), "127.0.0.1");`;
+  const recorded = answers("answers-hunks", twice("a"), twice("b"), 60);
+  assert.equal(recorded.status, 4, recorded.said);
+  const difference = readFileSync(join(recorded.answers, "diff.txt"), "utf8");
+  assert.match(difference, /^(\d+)c\1\n< x-one: a\n---\n> x-one: b\n(\d+)c\2\n< x-two: a\n---\n> x-two: b\nbodies same: 4 bytes, sha256 [0-9a-f]{64}\n$/, difference);
+  const lines = difference.split("\n"), hunk = `${lines.slice(0, 4).join("\n")}\n`, one = `${hunk}${lines.at(-2)}\n`;
+  // The whole difference expected passes; its first hunk alone, with the right bodies line, does not.
+  const held = answers("answers-hunks-held", twice("a"), twice("b"), 60, { expect: difference });
+  assert.equal(held.status, 0, held.said);
+  assert.ok(held.said.includes("answers: differ only as the plan's expected difference says"), held.said);
+  const short = answers("answers-hunks-short", twice("a"), twice("b"), 60, { expect: one });
+  assert.equal(short.status, 1, short.said);
+  assert.ok(short.said.includes("turns: plain: the answers differ other than as the plan's expected difference says"), short.said);
+  // A stand-in for cmp writes the first hunk alone to diff.txt once diff has run, before the bodies
+  // are compared: what is compared with the expected difference is what diff printed, both hunks,
+  // and diff.txt, there before the check writes it, is refused rather than read.
+  const dir = join(tmp, "dropped"), file = join(dir, "hunk.txt");
+  const first = stand("dropped", "cmp", `case "$3" in */B.body) cat '${file}' >"${"$"}{3%/*}/diff.txt" ;; esac\nPATH=${"$"}{PATH#*:} exec cmp "$@"`);
+  writeFileSync(file, hunk);
+  const r = answers("answers-hunks-dropped", twice("a"), twice("b"), 60, { expect: one, first });
   assert.equal(r.status, 1, r.said);
-  assert.ok(r.said.includes("answers/diff.txt is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence") && !r.said.includes("answers: same"), r.said);
-  // The same stand-in on two answers that differ: a diff.txt that is gone when cmp's difference is
-  // to be added to it is missing evidence too, not a file for that line to begin afresh.
-  const two = answers("answers-unlinked-two", serve("aaaa"), serve("bbbb"), 60, { first });
-  assert.equal(two.status, 1, two.said);
-  assert.ok(two.said.includes("reported a difference that") && two.said.includes("answers/diff.txt does not hold: missing evidence") && !two.said.includes("answer differently"), two.said);
+  assert.ok(!r.said.includes("differ only as") && !existsSync(join(r.answers, "verdict.txt")), r.said);
+  assert.ok(r.said.includes("answers/diff.txt cannot be written as a new file: something is there before the check made it"), r.said);
+  assert.equal(readFileSync(r.expected, "utf8"), one, "the expected difference was changed");
+});
+
+for (const [tool, flag] of [["tr", "-d"], ["grep", "-iv"], ["sed", "-f"]]) test(`the answers check on real servers: a ${tool} that normalizes the headers, printing their status line and then failing, fails it, with no verdict and no counts`, LINUX, () => {
+  // A stand-in for that stage of the headers' normalization prints the first line of what it was
+  // given and ends with status 2. Both sides' headers would be cut to their status line alike, so
+  // two answers that differ in a header would read as the same if only the last stage were checked.
+  const first = stand(`cut-${tool}`, tool, `if [ "$1" = ${flag} ]; then PATH=${"$"}{PATH#*:} ${tool} "$@" | head -n 1; exit 2; fi\nPATH=${"$"}{PATH#*:} exec ${tool} "$@"`);
+  const r = answers(`answers-cut-${tool}`, serve("aaaa", "a"), serve("aaaa", "b"), 60, { first });
+  assert.equal(r.status, 1, r.said);
+  assert.ok(r.said.includes(`turns: plain: ${tool} could not `) && r.said.includes("(status 2)"), r.said);
+  assert.ok(!r.said.includes("answers: same") && !r.said.includes("answer differently") && !r.said.includes("differ only as"), r.said);
+  assert.ok(!existsSync(join(r.answers, "verdict.txt")) && !existsSync(join(r.answers, "..", "counts-plain.csv")), r.said);
 });
 
 test("the answers check on real servers: a diff.txt linked to the expected difference fails it, and the expected difference is left as it was", LINUX, () => {
   // Expected: the difference of aaaa and bbbb. The placement answers cccc, which it does not allow.
   const expect = `bodies differ: 4 and 4 bytes, sha256 ${full("aaaa")} and ${full("bbbb")}\n`;
-  // A stand-in for cmp links diff.txt to the expected difference before turns.sh creates it: a
-  // write through the link would truncate that file, take the difference found, and then compare
-  // the file with itself.
-  const before = stand("prelinked", "cmp", 'case "$3" in */A-again.body) ln -s "$EXPECT" "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
-  const r = answers("answers-prelinked", serve("aaaa"), serve("cccc"), 60, { expect, first: before });
-  assert.equal(readFileSync(r.expected, "utf8"), expect, "the expected difference was written through the link");
-  assert.equal(r.status, 1, r.said);
-  assert.ok(r.said.includes("answers/diff.txt cannot be written as a new file: something is there before the check made it") && !r.said.includes("differ only as"), r.said);
-  // A stand-in for cmp puts a link to the expected difference in place of diff.txt after diff
-  // wrote it, before the bodies line is added: that line goes through no link.
-  const later = stand("relinked", "cmp", 'case "$3" in */B.body) rm "${3%/*}/diff.txt" && ln -s "$EXPECT" "${3%/*}/diff.txt" ;; esac\nPATH=${PATH#*:} exec cmp "$@"');
-  const l = answers("answers-relinked", serve("aaaa"), serve("cccc"), 60, { expect, first: later });
-  assert.equal(readFileSync(l.expected, "utf8"), expect, "the bodies line was added through the link to the expected difference");
-  assert.equal(l.status, 1, l.said);
-  assert.ok(l.said.includes("answers/diff.txt does not hold: missing evidence") && l.said.includes("or a link)") && !l.said.includes("differ only as"), l.said);
+  // A stand-in for cmp links diff.txt to the expected difference, before diff runs or after it: a
+  // write through the link would truncate that file, take the difference found, and leave the two
+  // the same. The check writes diff.txt as a new file, so the link is refused and goes untouched.
+  for (const [name, at] of [["prelinked", "A-again.body"], ["relinked", "B.body"]]) {
+    const first = stand(name, "cmp", `case "$3" in */${at}) ln -s "$EXPECT" "${"$"}{3%/*}/diff.txt" ;; esac\nPATH=${"$"}{PATH#*:} exec cmp "$@"`);
+    const r = answers(`answers-${name}`, serve("aaaa"), serve("cccc"), 60, { expect, first });
+    assert.equal(readFileSync(r.expected, "utf8"), expect, `${name}: the expected difference was written through the link`);
+    assert.equal(r.status, 1, `${name}: ${r.said}`);
+    assert.ok(r.said.includes("answers/diff.txt cannot be written as a new file: something is there before the check made it") && !r.said.includes("differ only as"), `${name}: ${r.said}`);
+  }
 });
 
 test("the answers check on real servers: no request goes through a proxy of the environment's, so one that answers everything cannot stand in for the servers", LINUX, async () => {
