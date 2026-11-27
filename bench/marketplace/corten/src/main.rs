@@ -653,8 +653,8 @@ mod tests {
         const ITEM: &str = include_str!("../tests/marketplace.json");
         assert!(source::UPSTREAM_IDLE < FIXTURE_KEEP_ALIVE);
         let (fixed_upstream, old_upstream) = (ClosingUpstream::start(ITEM), ClosingUpstream::start(ITEM));
-        let fixed = app(Source::api(&fixed_upstream.at).unwrap()).test();
-        let old = app(Source::api_pooled(&old_upstream.at, None).unwrap()).test();
+        let fixed = app(Source::api(&fixed_upstream.at).unwrap(), false).test();
+        let old = app(Source::api_pooled(&old_upstream.at, None).unwrap(), false).test();
         let item = api::Record { id: "item_1" };
         assert_eq!(fixed.get(&item).await.status(), StatusCode::OK);
         assert_eq!(old.get(&item).await.status(), StatusCode::OK);
