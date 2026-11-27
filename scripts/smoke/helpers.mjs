@@ -586,6 +586,133 @@ function policy(context) {
   });
 }
 /**
+ * Whether `name` is one of the smoke's own marks on a request: a header named `smoke-*`
+ * (`smoke-note`, `smoke-control`, `smoke-start`, `smoke-styled`), which a case's fetch wrapper or
+ * explicit fetch puts on for its routes to read. A mark is the check's, never the server's.
+ * @param {string} name
+ */
+const isMark = (name) => /^smoke-/i.test(name);
+
+/**
+ * `headers` without the smoke's marks (`isMark`), or undefined when it carries none, so a request
+ * with no mark is let through untouched.
+ * @param {Record<string, string>} headers
+ * @returns {Record<string, string> | undefined}
+ */
+function unmarked(headers) {
+  if (!Object.keys(headers).some(isMark)) return undefined;
+  return Object.fromEntries(Object.entries(headers).filter(([name]) => !isMark(name)));
+}
+
+/** The routes whose `continue` and `fetch` already take the marks off (`unmarking`). */
+const unmarkedRoutes = new WeakSet();
+/**
+ * `route`, its `continue` and `fetch` sending the request without the smoke's marks: a case's
+ * route that lets a request go straight to the network (`continue`) or fetches it itself never
+ * passes a mark on. The headers given to either are kept but for their marks, as are the request's
+ * own (with any earlier `fallback`'s headers) when none are given; its URL, method and body are
+ * untouched.
+ * @param {import("@playwright/test").Route} route
+ */
+function unmarking(route) {
+  if (unmarkedRoutes.has(route)) return route;
+  unmarkedRoutes.add(route);
+  /** @param {{ headers?: Record<string, string> }} options */
+  const without = (options) => {
+    const headers = unmarked(options.headers ?? route.request().headers());
+    return headers ? { ...options, headers } : options;
+  };
+  const go = route.continue.bind(route);
+  const fetch = route.fetch.bind(route);
+  route.continue = (options = {}) => go(without(options));
+  route.fetch = (options = {}) => fetch(without(options));
+  return route;
+}
+
+/**
+ * Takes the smoke's marks off every request a context sends: a case marks a request
+ * (`smoke-note`, `smoke-start` and the rest) for its own route to read, and a mark that outlives
+ * that route, or one on a request the route leaves out, must not reach the server either. Each
+ * context gets one route of its own, after its routes and its pages' (Playwright asks a page's
+ * routes first, then its context's, newest first), that falls back with the request's headers but
+ * for its marks, so every case's route still sees the marks it reads, and a request with none goes
+ * on untouched. It is never removed: only closing the context ends it. A case's route that calls
+ * `continue` or `fetch` takes them off too (`unmarking`), as that skips the routes after it.
+ *
+ * The guard is set as the context or one of its pages sets its first route, not as the context is
+ * made: any route turns on Playwright's request interception, which turns off the browser's HTTP
+ * cache in all three engines while it is on, and a context with no route keeps its cache (the
+ * screen-read check's revalidation needs it). A mark is only put on for a route to read, so a
+ * context that marks a request has a route by then. A route limited to a number of uses (`times`),
+ * which only `steady`'s Linux WebKit first-load gate sets and which only falls back, does not set
+ * it, so that gate still leaves interception off after the first load.
+ * @param {import("@playwright/test").Browser} browser
+ */
+function unmarks(browser) {
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (...args) => {
+    const context = await newContext(...args);
+    guardMarks(context);
+    return context;
+  };
+}
+/** Sets up `unmarks`'s guard on `context`. @param {import("@playwright/test").BrowserContext} context */
+function guardMarks(context) {
+  const route = context.route.bind(context);
+  const unroute = context.unroute.bind(context);
+  const unrouteAll = context.unrouteAll.bind(context);
+  /** @param {import("@playwright/test").Route} r */
+  const guard = (r) => {
+    const headers = unmarked(r.request().headers());
+    return (headers ? r.fallback({ headers }) : r.fallback()).catch(() => {});
+  };
+  /** @type {Promise<void> | undefined} */
+  let guarded;
+  const guarding = () =>
+    (guarded ??= route(() => true, guard).catch((error) => {
+      guarded = undefined;
+      throw error;
+    }));
+  /** Each case's handler, as registered: it is given its route through `unmarking`. @type {WeakMap<Function, Function>} */
+  const handlers = new WeakMap();
+  /** @param {any} handler */
+  const wrapped = (handler) => {
+    let own = handlers.get(handler);
+    if (!own) handlers.set(handler, (own = (/** @type {import("@playwright/test").Route} */ r, /** @type {any} */ request) => handler(unmarking(r), request)));
+    return own;
+  };
+  /** @param {any} handler */
+  const registered = (handler) => (handler && handlers.get(handler)) ?? handler;
+  /** @param {any} target @param {(...args: any[]) => Promise<void>} add @param {(...args: any[]) => Promise<void>} remove */
+  const watchRoutes = (target, add, remove) => {
+    target.route = async (/** @type {any} */ url, /** @type {any} */ handler, /** @type {any} */ options) => {
+      if (options?.times === undefined) await guarding();
+      return add(url, wrapped(handler), options);
+    };
+    target.unroute = (/** @type {any} */ url, /** @type {any} */ handler) => remove(url, registered(handler));
+  };
+  watchRoutes(context, route, unroute);
+  // Removing every context route would take the guard too, so it is set again at once.
+  context.unrouteAll = async (options) => {
+    const had = guarded !== undefined;
+    guarded = undefined;
+    await unrouteAll(options);
+    if (had) await guarding();
+  };
+  /** The pages whose routes are watched. */
+  const pages = new WeakSet();
+  /** @param {import("@playwright/test").Page} page */
+  const watchPage = (page) => {
+    if (pages.has(page)) return page;
+    pages.add(page);
+    watchRoutes(page, page.route.bind(page), page.unroute.bind(page));
+    return page;
+  };
+  context.on("page", watchPage);
+  const newPage = context.newPage.bind(context);
+  context.newPage = async () => watchPage(await newPage());
+}
+/**
  * What is still loading, oldest first, each with its context's and page's number, so a stalled
  * request can be told apart from the open streams that share its connections (#1149).
  */
@@ -617,8 +744,8 @@ async function again() {
   for (const r of inflight.keys()) {
     if (r.method() !== "GET" || r.resourceType() === "eventsource" || gets.has(r.url())) continue;
     // Headers fetch refuses to send, ones the connection sets for itself, and the smoke's own marks
-    // on a request (`smoke-note`, `smoke-control`), which its routes take off or answer themselves.
-    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([name]) => !/^(host|connection|keep-alive|transfer-encoding|upgrade|expect|content-length|smoke-note|smoke-control)$/i.test(name)));
+    // on a request (any `smoke-*`, `isMark`), which never reach the server (`unmarks`).
+    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([name]) => !isMark(name) && !/^(host|connection|keep-alive|transfer-encoding|upgrade|expect|content-length)$/i.test(name)));
     gets.set(r.url(), headers);
   }
   return Promise.all(
@@ -661,6 +788,7 @@ export async function runSmoke(run) {
     const browser = steady(await engines[engine].launch({ headless: true }), { gateInitialWebKitLoad: true });
     track(browser);
     trusting(browser);
+    unmarks(browser);
     try {
       await run(browser);
     } catch (error) {
@@ -679,4 +807,4 @@ export async function runSmoke(run) {
   process.exit(failures.length ? 1 : 0);
 }
 
-export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollRecord, pollAsync, cleanUp, exchange, letThrough, opened, closeContext };
+export { base, swapped, shadowing, engine, seen, skip, check, watchBusy, busyEnded, precommits, entriesWhileRecordingAddresses, within, readWithin, actWithin, cameWithin, leftOf, notedBy, lookUntil, pause, steps, pollRecord, pollAsync, cleanUp, exchange, letThrough, opened, closeContext, again, isMark, unmarks };

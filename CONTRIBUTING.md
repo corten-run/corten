@@ -275,6 +275,17 @@ the navigation or extending its timeout. If setup or navigation already failed, 
 replace that error; after a successful navigation, failed cleanup fails the smoke. Remove the gate
 when Playwright's pinned WebKit includes the upstream fix.
 
+A watchlist case that marks a request for its own route to read names the header `smoke-*`
+(`smoke-note`, `smoke-start` and the rest). No mark reaches the server: `unmarks` in
+`scripts/smoke/helpers.mjs` gives each browser context a route of its own, after every route its
+cases and its pages set, that takes every `smoke-*` header off a request on its way out and leaves
+the method, body and other headers as they were, and a case's route that calls `continue` or
+`fetch` sends the request without them too. That route is set with the context's, or one of its
+pages', first route (the WebKit gate's one-shot route does not set it) and stays until the context
+closes, so a mark that outlives its case's route, or one on a request the route leaves out, is
+still taken off. A context with no route keeps the browser's HTTP cache; one with a route bypasses
+it from then on. The diagnostic replay of the requests still loading sends no `smoke-*` header
+either. The first area, `scripts/smoke/marks.mjs`, checks all of this against a recording server.
 In Playwright 1.64.1, Firefox sometimes acknowledged a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
 form validation

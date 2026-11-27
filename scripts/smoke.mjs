@@ -2,6 +2,7 @@
 // and WebKit (Playwright's builds: `npx playwright install chromium firefox webkit`).
 // Usage: node scripts/smoke.mjs [http://localhost:18480] [chromium|firefox|webkit ...]
 import { runSmoke } from "./smoke/helpers.mjs";
+import { smokeMarks } from "./smoke/marks.mjs";
 import { namedFormNavigation, generatedFormViews, formFailures, submitKeys, formSubmission } from "./smoke/forms.mjs";
 import { patchParsing, patchFixtures } from "./smoke/patch-parsing.mjs";
 import { openWatchlist } from "./smoke/fixtures.mjs";
@@ -31,6 +32,7 @@ import { withoutJs } from "./smoke/without-js.mjs";
 
 // Areas run in order and share their pages, routes, and listeners.
 await runSmoke(async (browser) => {
+  await smokeMarks(browser);
   await namedFormNavigation(browser);
   await generatedFormViews(browser);
   await patchParsing(browser);
