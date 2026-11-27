@@ -148,7 +148,9 @@ test("Spring Mixed form POST isolates two sessions and refuses only the foreign 
       assert.deepEqual(await readback(second), [alert(secondEmail)]);
       assert.deepEqual(await readback({}), [], "anonymous readback must not see the alert");
 
-      const refused = await post({ ...first, origin: "https://foreign.example.test" }, followup);
+      const foreign = new URL(base);
+      foreign.hostname = "foreign.example.test";
+      const refused = await post({ ...first, origin: foreign.origin }, followup);
       assert.equal(refused.status, 403);
       await refused.arrayBuffer();
       assert.deepEqual(await readback(first), [alert(firstEmail)]);
@@ -208,6 +210,7 @@ test("Spring Mixed image cancels real marketplace reads at headers and during th
             assert.ok(!active.close, "upstream closed while the client was still connected");
             upstream.requireLive();
             if (abort) {
+              assert.ok(!caller.destroyed && caller.socket && !caller.socket.destroyed, "caller was already closed before the client abort");
               const abortedAt = performance.now();
               caller.destroy();
               await requireCancelledAfter(active.closed.promise, abortedAt);
