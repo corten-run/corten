@@ -688,7 +688,7 @@ part make before a check or its cleanup (a click, fill, key press or load) is bo
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
 own time by the smoke's clock. The check that navigating away stops the reads is the exception: it
 is as it was before these bounds, its navigations, press and waits under Playwright's own timeouts
-and its 2.2 s by Playwright's timer. Where a check rests on a wait, that wait must come in its time,
+and its 2.2 s by Playwright's timer, until [#2217 The News leave smoke case ("navigating away stops the reads") needs a deterministic press and a request-identity check](https://github.com/corten-run/corten/issues/2217) reworks it. Where a check rests on a wait, that wait must come in its time,
 so one whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
 seconds, required by every check that waits for it), the `Saving...` a submit draws
 before its `Saved.`, and a refused field's mark (five seconds), which must also still be on the
