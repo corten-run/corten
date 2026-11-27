@@ -502,8 +502,9 @@ to five seconds. The body cut (or given in full) and its failure must then both 
 seconds of the body's release, by the times the page records as it lets the body go, as the body
 is cut (or given) and as that failure is first shown with nothing busy. With a second write the
 release time the page returned as the check let the body go bounds the first look too, so the time
-the check took to hear of the release is not added to them. The check looks until the page's clock
-is past those five seconds, then once more, and the times the page recorded decide, so a late look
+the check took to hear of the release is not added to them. The check looks until a look finds the
+failure or the page's clock at or past those five seconds, which is its last look, and the times
+the page recorded decide, so a late look
 neither passes an outcome that came after them nor fails one that came in time. The wait as a whole
 has ten seconds by the smoke's own monotonic clock, from the moment the check heard of the release it
 let go (without a second write, from the start of the wait): each look has what is left of them, at
@@ -679,13 +680,17 @@ returns, is not taken for the load's own document. The check that navigating awa
 reads requires a read of the page still on its way at the press: the page's first read of itself
 after the navigation's own fetch is held at its route from before the page is asked to navigate, so
 the page cannot draw `Saved.` before the press and leave nothing to cancel, and that read must fail
-while still held, after the press, and is let go only once News is drawn. It requires too no fetch
-of `/alerts` the page started after its press of the News link, both
-numbered in the page by one count in the order they happen, so a fetch started in the same instant
+while still held, and the page must note that same read (its second read of the address the route
+counts, as the route holds the second) still pending at its press of the News link and failing
+after it, so a read that fails while the driver is still preparing the click does not pass; it is
+let go only once News is drawn. It requires too no fetch of `/alerts` the page started after that
+press, the press and each fetch's start and end numbered in the page by one count in the order they
+happen, from notes the page has before it is asked to navigate, so a fetch started in the same instant
 as the press counts as after it (News can come from a prefetch sent before the press, so no request
 marks the moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
 document replaced meanwhile, which leaves no notes, fails it, and the page's `fetch` is put back
-and its press listener removed however it ends. Its route and request listener are
+and its press listener removed however it ends, an install of them the page runs only after that
+removal doing nothing. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
 for News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
