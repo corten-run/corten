@@ -1281,31 +1281,6 @@ fn ours_first(res: &mut Response, ours: &HeaderValue) {
 /// The CSP of JSON-only routes ([`crate::App::api`]): nothing loads, nothing frames them.
 const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
 
-/// A scope's lines ([`Applied::lines`]): what [`Applied::ready`] gives an answer in one pass, with
-/// what the stage after it needs to know of them. Made only by [`Lines::new`], so that is read
-/// from the lines themselves, whatever a later change makes them.
-pub(crate) struct Lines {
-    lines: HeaderMap,
-    /// Whether none of them leaves an answer without a tag or is part of one
-    /// ([`crate::cache::beside_a_tag`]).
-    beside_a_tag: bool,
-}
-
-impl Lines {
-    pub(crate) fn new(lines: HeaderMap) -> Self {
-        Lines { beside_a_tag: crate::cache::beside_a_tag(&lines), lines }
-    }
-
-    /// Whether an answer given these in one pass can be tagged without a search of its lines
-    /// ([`crate::cache::tag`]): it brought its `Content-Type` at most, and none of these leaves it
-    /// untagged or is part of its tag. No line a scope has today does either, so this is true of
-    /// every scope; where a line comes to, its scope's answers are searched as any other's are.
-    #[inline]
-    pub(crate) fn beside_a_tag(&self) -> bool {
-        self.beside_a_tag
-    }
-}
-
 impl Applied {
     /// `import_map` is the text of the app's import map, allowed by its hash. `areas` are the
     /// prefixes of the areas that add to the policy, with what each adds: a page in one gets the
@@ -1489,13 +1464,13 @@ impl Applied {
     /// of them and asks for nothing of its own (no nonce, no style block), made once for a scope:
     /// `csp` is the scope's and `page` whether its answers can be pages (not an API's). Those two
     /// write it, so it holds what they would insert, whatever the policy.
-    pub(crate) fn lines(&self, csp: &Csp, page: bool) -> Lines {
+    pub(crate) fn lines(&self, csp: &Csp, page: bool) -> HeaderMap {
         let mut res = Response::new(crate::body::Body::empty());
         let slot = page.then(NonceSlot::default);
         self.headers(&mut res, slot.as_ref(), csp, false);
         let seen = crate::cache::Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false };
         crate::cache::settle(&mut res, seen, "");
-        Lines::new(res.into_parts().0.headers)
+        res.into_parts().0.headers
     }
 
     /// Adds each of its scope's `lines` ([`Applied::lines`]) to `res`, in one pass, in place of
@@ -1509,14 +1484,21 @@ impl Applied {
     /// does differently for who asked to an answer this takes. Returns whether it did; `res` is
     /// untouched when not.
     #[inline]
-    pub(crate) fn ready(&self, res: &mut Response, lines: &Lines, nonce: Option<&NonceSlot>, csp: &Csp, caller: bool) -> bool {
+    pub(crate) fn ready(
+        &self,
+        res: &mut Response,
+        lines: &HeaderMap,
+        nonce: Option<&NonceSlot>,
+        csp: &Csp,
+        caller: bool,
+    ) -> bool {
         // A page brings more than its type: it is told apart here, without a call.
         res.headers().len() <= 1 && self.give(res, lines, nonce, csp, caller)
     }
 
     /// [`Applied::ready`], for an answer with one header at most.
     #[inline(never)]
-    fn give(&self, res: &mut Response, lines: &Lines, nonce: Option<&NonceSlot>, csp: &Csp, caller: bool) -> bool {
+    fn give(&self, res: &mut Response, lines: &HeaderMap, nonce: Option<&NonceSlot>, csp: &Csp, caller: bool) -> bool {
         let kind = match res.headers().iter().next() {
             None => None,
             Some((name, kind)) if name == header::CONTENT_TYPE => Some(kind),
@@ -1540,8 +1522,8 @@ impl Applied {
         }
         let headers = res.headers_mut();
         // Room for them and one more (`Vary`), as `headers` reserves: the map grows at most once.
-        headers.reserve(lines.lines.len() + 1);
-        for (name, value) in &lines.lines {
+        headers.reserve(lines.len() + 1);
+        for (name, value) in lines {
             headers.append(name, value.clone());
         }
         // One visitor's, for an app that relays it inline ([`crate::cache::Personal`]).

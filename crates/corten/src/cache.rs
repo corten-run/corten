@@ -756,14 +756,14 @@ pub(crate) struct Unrepeatable;
 /// as it is (an image, a PDF, `no-transform`) is tagged too: its `304` saves no compression but the
 /// whole body, which costs the client far more to receive than the hash costs here.
 ///
-/// `given` is the answer's scope's lines when it was given them in one pass
-/// ([`crate::security::Applied::ready`]): it brought its `Content-Type` at most, and every other
-/// line it has is one of those. Where none of them leaves an answer untagged or is part of a tag,
-/// which the lines say of themselves ([`crate::security::Lines::beside_a_tag`]), its lines are
-/// not searched for one that does and its tag is made from its type alone: the answer and the
-/// tag the search would give. Any other answer is searched.
-pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&crate::security::Lines>) -> Response {
-    let ready = given.is_some_and(crate::security::Lines::beside_a_tag);
+/// `given` is what the answer's scope's lines say of themselves ([`BesideATag`]) when it was
+/// given them in one pass ([`crate::security::Applied::ready`]): it brought its `Content-Type` at
+/// most, and every other line it has is one of those. Where none of them leaves an answer
+/// untagged or is part of a tag, its lines are not searched for one that does and its tag is made
+/// from its type alone: the answer and the tag the search would give. Any other answer is
+/// searched.
+pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<BesideATag>) -> Response {
+    let ready = given.is_some_and(|lines| lines.0);
     if res.status() != StatusCode::OK
         || (!ready && untagged(res.headers()))
         || res.extensions().get::<crate::answer::Relayed>().is_some()
@@ -854,13 +854,25 @@ fn counts(name: &header::HeaderName) -> bool {
     name == header::CONTENT_TYPE || name.as_str().starts_with("corten-")
 }
 
-/// Whether `lines`, a scope's ([`crate::security::Applied::lines`]), are beside the tag of an
-/// answer they are given to: none leaves it untagged ([`untagged`]) and none is part of its tag
-/// ([`counts`]), by the two tests [`tag`] makes of an answer's lines. Read once for each scope
-/// when the router is built ([`crate::security::Lines`]), which is what lets `tag` make neither
-/// test of an answer whose other lines are its scope's.
-pub(crate) fn beside_a_tag(lines: &HeaderMap) -> bool {
-    !untagged(lines) && !lines.keys().any(counts)
+/// Whether a scope's lines ([`crate::security::Applied::lines`]) are beside the tag of an answer
+/// they are given to: none leaves it untagged ([`untagged`]) and none is part of its tag
+/// ([`counts`]). Made only by [`BesideATag::of`], from the lines themselves and by the two tests
+/// [`tag`] makes of an answer's lines, once for each scope when the router is built: so it is
+/// true to them whatever a later change makes them, and it is what lets `tag` make neither test
+/// of an answer whose other lines are its scope's. No line a scope has today does either, so it
+/// holds of every scope; where a line comes to, its scope's answers are searched as any other's.
+#[derive(Clone, Copy)]
+pub(crate) struct BesideATag(bool);
+
+impl BesideATag {
+    pub(crate) fn of(lines: &HeaderMap) -> Self {
+        BesideATag(!untagged(lines) && !lines.keys().any(counts))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds(self) -> bool {
+        self.0
+    }
 }
 
 /// The tag from `hasher`, which has read the body with its length
