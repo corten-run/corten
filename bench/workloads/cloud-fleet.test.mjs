@@ -503,7 +503,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
   "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage",
   "receipt-edited-at-dispatch-evidence", "receipt-edited-at-intent-stage", "state-edited-at-receipt-stage", "proof-expired-at-receipt-stage",
-  "intent-save-torn", "destroyed-save-torn"]) test({
+  "delete-unsent-after-intent", "delete-expired-after-dispatch", "intent-save-torn", "destroyed-save-torn"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -546,6 +546,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-at-intent-stage": "a receipt edited while the intent's own stage is written refuses before its rename, removes that stage and saves no intent",
   "state-edited-at-receipt-stage": "a saved digest edited while the receipt's stage is written refuses before its link, removes that stage and publishes no receipt",
   "proof-expired-at-receipt-stage": "a drain proof that expires while the receipt's stage is written publishes no receipt, and a restart deletes once on a fresh proof",
+  "delete-unsent-after-intent": "a drain proof that expires after the intent, before the provider sends the DELETE, withdraws the intent on that acknowledgement, and a restart deletes once on a fresh proof",
+  "delete-expired-after-dispatch": "a drain proof that expires after the DELETE request started keeps the intent when the provider answers with an error, and a restart only confirms absence",
   "intent-save-torn": "a torn deletion intent save leaves its own stage and no intent, and the next collect deletes once on a fresh proof",
   "destroyed-save-torn": "a torn destroyedAt save after the one DELETE leaves its own stage, and the next collect records absence with no second DELETE",
 }[mode], async (t) => {
@@ -1136,6 +1138,59 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     await assert.rejects(h.task({ run }).collect(), { controllerStage: "setup-host-proof-refused" });
     assert.equal(queries, 1); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
     assert.equal(existsSync(lock), false); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+    return;
+  }
+  if (mode === "delete-unsent-after-intent" || mode === "delete-expired-after-dispatch") {
+    // The DELETE goes through the real production dispatch and an in-process provider engine,
+    // which checks the proof's deadline itself just before its request. The clock passes that
+    // deadline once, after the intent is saved: at the engine's checkpoint before the request
+    // (nothing sent), or inside the request after the provider deleted the droplet, which then
+    // answers with an error (sent; its outcome cannot be ruled out).
+    const real = Date.now; t.mock.method(Date, "now", () => real() + offset);
+    let engineDeleting = false, jumped = false, intentAtJump;
+    const jump = () => { jumped = true; intentAtJump = h.saved().deletionIntentAt; offset += 61000; };
+    const synthetic = syntheticProviderRequest(h);
+    const engine = createProviderEngine({ repo: h.repo, spawn: () => ({ status: 0, stdout: Buffer.from("SYNTHETIC_ONLY_CREDENTIAL_A\n") }),
+      request: async (input) => {
+        if (mode !== "delete-expired-after-dispatch" || input.method !== "DELETE" || jumped) return synthetic(input);
+        jump(); await synthetic(input); return { status: 500, value: null };
+      },
+      sleep: async () => {},
+      interrupted: () => { if (mode === "delete-unsent-after-intent" && engineDeleting && !jumped) jump(); return false; } });
+    const provider = (argv, ...rest) => { engineDeleting = argv[2] === "delete"; return engine(argv, ...rest); };
+    const production = productionDispatch({ processRun: run, provider: () => provider, interrupted: () => false });
+    if (mode === "delete-expired-after-dispatch") {
+      await assert.rejects(h.task({ run: production }).collect(), /provider control failed; preserve state\/evidence\/host/);
+      const saved = h.saved();
+      assert.ok(jumped && intentAtJump); assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+      // The request was sent, so the intent stays and nothing is withdrawn.
+      assert.equal(saved.status, "retired"); assert.equal(saved.deletionIntentAt, intentAtJump); assert.equal(saved.destroyedAt, undefined);
+      assert.equal(saved.pendingRetirement, undefined); assert.equal(existsSync(lock), false);
+      // Recovery is exact absence alone: no second query and no second DELETE.
+      assert.equal(await h.task({ run: production }).collect(), 1);
+      const s = h.saved();
+      assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+      assert.equal(s.deletionIntentAt, intentAtJump);
+      assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+      return;
+    }
+    await assert.rejects(h.task({ run: production }).collect(), /drain proof expired before its DELETE was sent; the next collect retires on a fresh proof/);
+    const saved = h.saved(), old = readFileSync(receipt), oldRecord = JSON.parse(old);
+    assert.ok(jumped && intentAtJump); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The positively unsent DELETE withdraws the intent: the receipt and its recorded digest stay.
+    assert.equal(saved.status, "starting"); assert.equal(saved.retirement, undefined);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.destroyedAt, undefined);
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) }); assert.equal(existsSync(lock), false);
+    assert.ok(!readdirSync(h.local).some((name) => /^state\.json\..*tmp$/.test(name)));
+    // A restart keeps that receipt for archival and deletes once on its own fresh drain proof.
+    assert.equal(await h.task({ run: production }).collect(), 1);
+    const s = h.saved(), record = JSON.parse(readFileSync(receipt));
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(readFileSync(join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`)).equals(old));
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
+    assert.notEqual(record.startedAtMs, oldRecord.startedAtMs);
+    assert.equal(record.observation.control.requests.length, s.control.ledger.length);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }
   if (mode === "intent-save-torn" || mode === "destroyed-save-torn") {

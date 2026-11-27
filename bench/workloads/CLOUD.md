@@ -1446,14 +1446,29 @@ v1 and v2 setup retirements save their intent before the DELETE's preflight, as
 before (a pinned unused proof that expires during that verification likewise
 saves no intent); a v1 or v2 setup retirement keeps its existing check of 60 seconds from
 the proof's end, made before the intent. Expiry before the intent does not
-consume the intent; expiry after the intent forbids another DELETE, so a later
-collect only verifies the saved receipt and checks exact absence. For a drain
-proof that leaves only the interval between the intent and the request (the
-dispatch guards, the production checkpoint and worker IPC, and the provider's own
-deadline check), which has no provider read; a proof that expires there still
-leaves the host retired with no DELETE sent, which
-[#2166 A failed-setup retirement whose drain proof expires before its DELETE is sent stays retired with no way to a fresh proof](https://github.com/corten-run/corten/issues/2166)
-tracks.
+consume the intent; expiry after the intent forbids another DELETE whenever that
+DELETE may have been sent, so a later collect only verifies the saved receipt and
+checks exact absence. For a drain proof that leaves only the interval between the
+intent and the request (the dispatch guards, the production checkpoint and worker
+IPC, and the provider's own deadline check), which has no provider read. A drain
+proof's DELETE is sent with `allowFail`, so a refusal in that interval that
+positively reports the request unsent (the production checkpoint cancelled before
+the action reached the provider, or the provider engine's own deadline check
+before its request, which the worker carries back over IPC) withdraws the intent:
+the controller restores the state it saved just before it (the receipt's recorded
+digest, with no intent or retirement) through its own fresh exclusive stage
+(`state.json.delete-unsent-<random>.tmp`), under the same custody check as the
+intent, and refuses with `drain proof expired before its DELETE was sent; the
+next collect retires on a fresh proof`. The next collect keeps that receipt as an
+interrupted one (below) and retires on a fresh drain proof of the same session.
+The restore only records how the DELETE ended, so it runs even after
+cancellation; a custody mismatch at the restore refuses and keeps the intent. Any
+other outcome after the intent keeps the intent, with recovery by exact absence
+alone: a request that started (an HTTP error, a timeout or a lost
+acknowledgement), an unacknowledged worker result, or a refusal by the
+controller's own dispatch guard. The pinned unused and v1 and v2 setup
+retirements send their DELETE without `allowFail`, as before, so for them any
+expiry after the intent keeps the intent.
 
 Expiry after the receipt is written but before the intent leaves a receipt with no
 intent. The next collect runs a fresh status check and host query, which appends

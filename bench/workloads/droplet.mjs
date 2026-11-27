@@ -1089,8 +1089,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // A state save writes and syncs its stage before the rename that replaces state.json, so
     // custody is checked again between the two: a change made while the stage was written
     // refuses before the rename, and the stage this call created is removed unread.
-    const saveState = (kind) => {
-      check();
+    // Withdrawing an unsent intent only records how the DELETE ended, so, like the generic
+    // unsent path, it checks the reservation's boundary rather than refusing on cancellation.
+    const saveState = (kind, recording = false) => {
+      if (recording) boundary(); else check();
       writeState(state, (stage, target) => {
         try { requireCustody(); } catch (error) { unlinkSync(stage); throw error; }
         renameSync(stage, target);
@@ -1157,7 +1159,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       try { verifyRetirement(pins); verified = true; requireCustody(); }
       catch (error) { state = prior; verified = false; pins.length = 0; throw error; }
       saveState("deletion-intent");
-      trusted = Buffer.from(stateBytes(state)); intentSaved = true;
+      trusted = Buffer.from(stateBytes(state)); intentSaved = true; beforeIntent = prior;
+    };
+    let beforeIntent;
+    // A drain proof's DELETE is sent with allowFail, so the provider worker, the in-process
+    // engine or the production checkpoint can positively acknowledge that it never sent the
+    // request (its deadline or cancellation refused before dispatch). Only then is the intent
+    // withdrawn: the state this process saved before it (the receipt's recorded digest, with
+    // no intent) is restored under the same custody, through its own fresh stage, so the next
+    // collect keeps this receipt for archival and retires on a fresh drain proof of the same
+    // session. A missing, failed or lost acknowledgement never reaches here and keeps the
+    // intent, whose recovery is exact absence alone.
+    const withdrawUnsentIntent = () => {
+      assert.ok(intentSaved && beforeIntent && !dispatched, "no unsent deletion intent to withdraw; preserve host");
+      const intended = state;
+      state = beforeIntent;
+      try { saveState("delete-unsent", true); } catch (error) { state = intended; throw error; }
+      trusted = Buffer.from(stateBytes(state)); intentSaved = false;
+      throw new Error("drain proof expired before its DELETE was sent; the next collect retires on a fresh proof");
     };
     // Everything the DELETE relies on, as this process left it, through the same custody
     // check: the pinned evidence first, then the receipt, the lock and the saved reservation
@@ -1173,7 +1192,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       // the deadline check that follows it, so a proof that expires during that read leaves
       // the receipt and its digest with no intent, which the next collect recovers on a
       // fresh proof. The deadline still goes with the DELETE itself.
-      await execute("doctl", deletion, 120000, false, { expiresAt: () => deleteProofExpiresAtMs, publishIntent },
+      await execute("doctl", deletion, 120000, true, { expiresAt: () => deleteProofExpiresAtMs, publishIntent, onUnsent: withdrawUnsentIntent },
         undefined, undefined, requireRetirementCustody);
     } else {
       publishIntent();
