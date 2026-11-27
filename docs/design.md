@@ -13118,10 +13118,12 @@ rules something out.
     writes its own `Host` and `Connection`, HAProxy and Envoy lower every name on HTTP/1.1 by
     default, Google Cloud's load balancers may, and Go's `net/http` writes each name in its
     canonical form, `Host` and `User-Agent` first, as their documents and source read);
-    measured (the gate's long run, seed 20261124, at `53c46ce23`, its streams now with the listed
-    names among their lines in both spellings and in some others: 252,454 streams, 252,260
-    answered alike, the app answering in 178,547 of them, 194 in the one listed class, none
-    failed, and the same figures, to the stream, on `2f8984ddc` with that gate; before the names
+    measured (the gate's long run, seed 20261124, at `7fd1cd46a`, its requests now with up to
+    two of 41 browser lines each, every listed name in both spellings and five in others:
+    252,454 streams, 252,272 answered alike, the app answering in 178,556 of them, 182 in the
+    one listed class, none failed, and the same figures, to the stream, on `2f8984ddc` with that
+    gate; at `53c46ce23`, with the lines that list had, 252,260 alike, 178,547 and 194, the same
+    on both; before the names
     were sent, at `568aa8d1a`: 252,454 streams, 252,276
     answered alike, the app answering in 177,925 of them, 178 in the one listed class, none
     failed; one run, which the same seed repeats; before its app had a route whose body
