@@ -1283,9 +1283,8 @@ impl<M: Middleware> App<M> {
     /// [`App::max_request_head`], [`App::max_connections`], the [deadline](App::deadline) and
     /// [`App::shutdown_grace`]. What is known to differ (the app guide lists each): the answers
     /// to requests that arrived together (pipelined) leave in one write, where hyper writes each
-    /// as it is made, so the handlers of up to 16 such requests run before any of their answers
-    /// has gone, and a handler can run for a request whose answer is never sent, which hyper
-    /// would not have begun; an answer's trailers are not sent; a head refused at the limit, or
+    /// as it is made, and their handlers run before the answers ahead of them have gone (the
+    /// next paragraph); an answer's trailers are not sent; a head refused at the limit, or
     /// before its end has come, may be refused with the other of 400 and 431, or sooner or
     /// later; an answer whose body fails after more than a buffer of it was ready is cut short
     /// where hyper would have sent none of it; behind a long body its handler left unread, a
@@ -1298,6 +1297,24 @@ impl<M: Middleware> App<M> {
     /// with hyper, which is why this is off unless an app asks
     /// (`docs/design.md#choice-own-http1`, with what was measured and what would make it the
     /// default). Behind a proxy that does not pipeline, that last does not arise.
+    ///
+    /// **Handlers run ahead of a client that does not read.** hyper begins a request only when
+    /// the socket has taken the answers before it, so for a client that sends requests and
+    /// reads no answer it runs one handler beyond what the socket takes. With this on, handlers
+    /// run for the requests such a client has sent until 16 KiB of their answers are written
+    /// and not taken, whatever the client reads. That bound is in bytes of answers, not in
+    /// requests: the connection also stops after 16 requests to let other tasks run, but that
+    /// holds the handlers to 16 only where all of them had been read and none of their handlers
+    /// waited, and a handler that waits, as any that does work does, begins the count again. So
+    /// how many run on one connection is 16 KiB over the length of an answer. Measured for a
+    /// client that reads nothing: 24 handlers for an answer of 697 bytes (two bytes of text with
+    /// the headers an app sends unless it says otherwise; 23 where every feature of the crate
+    /// is on, which makes that answer 720 bytes) where hyper ran 1, and 213 and 219 for
+    /// answers of 77 and 75 bytes, the shortest there are. Any of them can be
+    /// for a request whose answer is never sent, which hyper would not have begun. An app whose
+    /// handlers for requests without a body are costly, or change something, should leave this
+    /// off or bound that work itself (for each client, or by how much runs at once), unless its
+    /// clients reach it through a proxy that does not pipeline.
     pub fn own_http1(mut self, enabled: bool) -> Self {
         self.connections.own = enabled;
         self

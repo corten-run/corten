@@ -22,6 +22,13 @@
 //! together leave together. Nothing here looks at the bytes the client has sent to decide;
 //! hyper's `pipeline_flush` does, which is what makes it unsafe.
 //!
+//! So the handlers of requests a client has sent run before the answers ahead of them have
+//! gone, until [`FLUSH_AT`] bytes of answers are written and not taken, where hyper, which
+//! flushes each answer before it reads the next head, runs one handler beyond what the socket
+//! takes. [`TURN`] does not bound them: its count begins again whenever the task has waited,
+//! for a handler or for a head, so it holds them to 16 only where every request had been read
+//! and no handler waited.
+//!
 //! **What is held in memory.** Of what has not gone to the client, `out` holds less than
 //! [`FLUSH_AT`] bytes when more is written into it, and so at most that, one answer's head and
 //! one body piece small enough to copy with its chunk framing ([`COPIED`] bytes, or [`FLUSH_AT`]
@@ -142,7 +149,9 @@ pub(crate) const LINES_KEPT: usize = 64;
 /// it is, with the buffer in one vectored write where the IO has one.
 const COPIED: usize = 8 * 1024;
 /// How many requests in a row a connection answers without waiting before it lets other tasks
-/// run, as hyper's loop (16 turns).
+/// run, as hyper's loop (16 turns). Not a bound on the handlers that run ahead of a client that
+/// does not read: the count begins again when the task has waited, and what bounds those is
+/// [`FLUSH_AT`] bytes of answers unsent.
 const TURN: u32 = 16;
 
 #[cfg(test)]

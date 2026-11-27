@@ -235,12 +235,24 @@ answers any other ([below](#host-names)). What differs:
    writes each as it is made. No answer waits for a request that has not come: what is written is
    sent before the connection waits for anything. For a handler this means it may run sooner
    than hyper would run it. hyper begins a request only when the answers before it have been
-   taken by the socket; here the handlers of up to 16 requests that arrived together (or as
-   many as make 16 KiB of answers) run before any of their answers has gone. So a handler can
-   run for a request whose answer is never sent, where hyper would not have begun it: the
-   client left or stopped reading, or the connection closed on an answer before its own. A
-   handler that changes something has changed it then. Only a client that pipelines sends such
-   requests, and HTTP promises it nothing about a request it got no answer to.
+   taken by the socket, so for a client that sends requests and reads no answer it runs one
+   handler beyond what the socket takes. Here handlers run for the requests a client has sent
+   until 16 KiB of their answers are written and not taken, whatever the client reads. That
+   bound is in bytes of answers, not in requests. The connection does stop after 16 requests
+   to let other tasks run, but that holds the handlers to 16 only where all of them had been
+   read already and none of their handlers waited: a handler that waits, as any that does work
+   does, begins the count again. So how many run on one connection is 16 KiB over the length
+   of an answer. Measured for a client that reads nothing: 24 handlers for an answer of 697
+   bytes (two bytes of text with the headers an app sends unless it says otherwise; 23 where
+   every feature of the crate is on, which makes that answer 720 bytes) where hyper ran 1, and
+   213 and 219 for answers of 77 and 75 bytes, the shortest there are.
+   So a handler can run for a request whose answer is never sent, where hyper would not have
+   begun it: the client left or stopped reading, or the connection closed on an answer before
+   its own. A handler that changes something has changed it then. Only a client that pipelines
+   sends such requests, and HTTP promises it nothing about a request it got no answer to. An
+   app whose handlers for requests without a body are costly, or change something, should
+   leave the switch off or bound that work itself (for each client, or by how much runs at
+   once), unless its clients reach it through a proxy that does not pipeline.
 2. An answer's trailers are not sent, nor a `Trailer` line with them, and a status's reason
    phrase is always its own.
 3. A head that reaches `max_request_head` unfinished and is malformed further on is refused by
