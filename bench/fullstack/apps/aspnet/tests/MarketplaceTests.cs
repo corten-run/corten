@@ -234,7 +234,7 @@ public sealed class MarketplaceTests
             Assert.Equal(HttpStatusCode.BadRequest, await Post(edgeClient, edgeToken, edge, host: "unrecognized.invalid"));
             foreach (var client in new[] { edgeClient, directClient })
             {
-                using var rows = JsonDocument.Parse(await client.GetStringAsync("/api/alerts"));
+                using var rows = JsonDocument.Parse(await client.GetStringAsync("/api/alerts", TestContext.Current.CancellationToken));
                 Assert.Equal(1, rows.RootElement.GetArrayLength());
             }
         }
