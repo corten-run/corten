@@ -9,23 +9,31 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { beginLifetime, inspectLifetime } from "../host-lifetime.mjs";
+import { jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation } from "../../registry.mjs";
 
 export const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
 export const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
 export const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
 
-export async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false) {
+export async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false, json = null) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
   const exec = childProcess.execFileSync;
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   const temporary = fs.mkdtempSync(join(tmpdir(), "host-snapshot-churn-")), directory = join(temporary, "host");
   const f = { members: [], children: [], clock: 10000, wallOffset: 0, reads: [], cpu: 10, override() {}, scope: null };
-  const binding = { request: { group: browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy", round: "churn-control", commit: "a".repeat(40) } };
+  const campaign = "r21-0000000000000001", campaignRound = "r21", pid = nativePids[0] ?? 4242;
+  const round = json === "timing" ? "j43" : json ? jsonPreparationRound(campaignRound) : "churn-control";
+  const jsonInvocation = json === "timing" ? jsonTimingInvocation(round, "/bench/audits.json") : jsonPreparationInvocation(campaignRound);
+  if (json === "check-only-no-build") jsonInvocation.argv = jsonInvocation.argv.filter((arg) => arg !== "--build");
+  const binding = { request: { group: json ? "json-api" : browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy",
+    round, commit: "a".repeat(40) }, ...(json ? { execution: { invocation: jsonInvocation } } : {}) };
   const executable = join(temporary, "executable"), nextExecutable = join(temporary, "next-executable"), held = new Set();
-  const deferred = browser || catalog, executableFor = (path) => f.nextExecutable || path === `/proc/${f.nextPid}/exe` ? nextExecutable : executable;
+  const deferred = browser || catalog || json === "prepare" || json === "check-only-no-build";
+  const executableFor = (path) => f.nextExecutable || path === `/proc/${f.nextPid}/exe` ? nextExecutable : executable;
   if (deferred) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
-  const invocation = { executable: "node", argv: ["control"] }, campaign = "r21-0000000000000001", pid = nativePids[0] ?? 4242;
+  const invocation = json === "fixture" ? { executable: "node", argv: ["bench/catalog/fixtures.mjs", "c21"] }
+    : json ? jsonInvocation : { executable: "node", argv: ["control"] };
   const result = { terminal: true, code: 0, signal: null, cancelled: false, forced: false, success: true, error: null };
   let observer, finished = false;
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
