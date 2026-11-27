@@ -4,7 +4,7 @@
 // sh, git and a checkout, and is skipped without them; no test here compiles the probe.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
@@ -32,6 +32,7 @@ function standIn() {
     '[ "$1 $2" = "build --release" ] && [ -f Cargo.toml ] && [ -f Cargo.lock ] && [ -d ../work/crates/corten ] || exit 64',
     '[ -z "${STAND_IN_FAILS:-}" ] || exit 101',
     'mkdir -p "$CARGO_TARGET_DIR/release"',
+    'echo "$*" > "$CARGO_TARGET_DIR/cargo-args"',
     'echo "a probe built in $(pwd)" > "$CARGO_TARGET_DIR/release/probe"',
     "printf '\\n[[package]]\\nname = \"%s\"\\nversion = \"%s\"\\n' request-cost-probe 0.0.0 ${STAND_IN_ADDS:-} >> Cargo.lock",
     "",
@@ -104,7 +105,7 @@ test("build.sh leaves the probe built against the commit's tree at bin/<commit>,
     const commit = git("rev-parse", "HEAD").stdout.trim();
     const built = stand.build(directory);
     assert.equal(built.status, 0, built.stderr);
-    assert.equal(built.stdout, `built ${directory}/bin/${commit}\n`);
+    assert.equal(built.stdout, `the commit's Corten has App::own_http1: the probe is built with its own-http1 feature\nbuilt ${directory}/bin/${commit}\n`);
     assert.match(readFileSync(join(directory, "bin", commit), "utf8"), /^a probe built in .*\/built\/probe$/m);
     // The commit's tree beside the probe's copy, which has the commit's lock file.
     assert.ok(existsSync(join(directory, "work", "crates", "corten", "Cargo.toml")));
@@ -112,6 +113,43 @@ test("build.sh leaves the probe built against the commit's tree at bin/<commit>,
     const failed = stand.build(directory, { STAND_IN_FAILS: "1" });
     assert.equal(failed.status, 101, failed.stderr);
     assert.ok(!existsSync(join(directory, "bin", commit)), "the earlier build's binary was left");
+  } finally {
+    stand.remove();
+  }
+});
+
+test("build.sh builds the probe with its own-http1 feature for a commit whose Corten has App::own_http1, and without it for one that has not", { skip: skipBuilds }, () => {
+  const stand = standIn();
+  try {
+    // A repository of the kit's build.sh and probe and of a Corten that is a file or two, with
+    // the method and then without it, as a commit from before it was added has it.
+    const repository = join(stand.outside, "repository");
+    const app = join(repository, "crates", "corten", "src", "app.rs");
+    mkdirSync(dirname(app), { recursive: true });
+    mkdirSync(join(repository, "bench", "request-cost", "probe"), { recursive: true });
+    mkdirSync(join(repository, "docs"));
+    copyFileSync(join(kit, "build.sh"), join(repository, "bench", "request-cost", "build.sh"));
+    copyFileSync(join(kit, "probe", "Cargo.toml"), join(repository, "bench", "request-cost", "probe", "Cargo.toml"));
+    for (const file of ["Cargo.toml", "Cargo.lock", "README.md", "docs/design.md", "crates/corten/Cargo.toml"]) writeFileSync(join(repository, file), "");
+    const inRepository = (/** @type {string[]} */ ...args) => spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: repository, encoding: "utf8" });
+    assert.equal(inRepository("init", "-q").status, 0);
+    const commit = (/** @type {string} */ source) => {
+      writeFileSync(app, source);
+      assert.equal(inRepository("add", "-A").status, 0);
+      assert.equal(inRepository("commit", "-q", "-m", "a commit").status, 0);
+      return inRepository("rev-parse", "HEAD").stdout.trim();
+    };
+    const has = commit("impl<M: Middleware> App<M> {\n    pub fn own_http1(mut self, enabled: bool) -> Self {\n        self\n    }\n}\n");
+    // Named in a comment, a test or another method's name, it is not the method.
+    const lacks = commit("// own_http1 is not here: see App::own_http1 elsewhere\nfn own_http1_later() {}\n");
+    const directory = join(stand.outside, "built");
+    for (const [at, features, said] of /** @type {const} */ ([[has, "build --release --features own-http1", "has App::own_http1: the probe is built with"], [lacks, "build --release", "has no App::own_http1: the probe is built without"]])) {
+      const built = spawnSync("sh", [join(repository, "bench", "request-cost", "build.sh"), at, directory], { cwd: repository, env: { ...process.env, PATH: `${join(stand.outside, "bin")}${delimiter}${process.env.PATH}` }, encoding: "utf8" });
+      assert.equal(built.status, 0, built.stderr);
+      assert.equal(built.stdout, `the commit's Corten ${said} its own-http1 feature\nbuilt ${directory}/bin/${at}\n`);
+      assert.equal(readFileSync(join(directory, "target", "cargo-args"), "utf8"), `${features}\n`);
+      assert.ok(existsSync(join(directory, "bin", at)));
+    }
   } finally {
     stand.remove();
   }

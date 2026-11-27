@@ -7,7 +7,7 @@
 //   node stand-in.mjs control -d <pid>                                         callgrind_control
 //
 // Both keep their notes in the directory $STAND_IN: `started.json` (the options, the
-// allocator's settings and the `HOSTS` the server was last started with), `control-<pid>` (the port a dump is
+// allocator's settings, and the `HOSTS` and `PROBE_OWN_HTTP1` the server was last started with), `control-<pid>` (the port a dump is
 // asked for on), `controls` (how often the control was run) and `parts.json` (what each dump of
 // the last server held). A dump is callgrind's in name and shape: with `--separate-threads=yes`
 // a file a thread, `<out>.<part>-01` and `-02`, and `<out>-01` and `-02` when the server is
@@ -27,6 +27,8 @@
 //   STAND_IN_FEWER_MALLOCS=1     a part holds one call to malloc fewer than its requests (16 each)
 //   STAND_IN_NOT_FOUND_FROM=<n>  the server's nth request and those after it are answered 404
 //   STAND_IN_DEAF_AFTER=<n>      after its nth run the control exits 0 and asks for nothing
+//   STAND_IN_NO_OWN=1            started with PROBE_OWN_HTTP1, it refuses as a probe built without
+//                                the switch does, and serves nothing
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join } from "node:path";
@@ -56,8 +58,13 @@ function serve() {
   const out = options.find((option) => option.startsWith("--callgrind-out-file="))?.slice("--callgrind-out-file=".length);
   writeFileSync(
     join(/** @type {string} */ (state), "started.json"),
-    JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR, HOSTS: process.env.HOSTS ?? null }),
+    JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR, HOSTS: process.env.HOSTS ?? null, PROBE_OWN_HTTP1: process.env.PROBE_OWN_HTTP1 ?? null }),
   );
+  // As the probe built without its own-http1 feature refuses the switch.
+  if (process.env.STAND_IN_NO_OWN && process.env.PROBE_OWN_HTTP1 !== undefined) {
+    process.stderr.write("NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1\n");
+    process.exit(1);
+  }
   /** @type {Record<string, Record<string, string>>} */
   const bodies = { api: { "GET /baseline11?a=1&b=2": "3", "GET /unstaged11?a=1&b=2": "3", "GET /pipeline": "ok" }, pages: { "GET /text": "ok" } };
   const notFoundFrom = Number(process.env.STAND_IN_NOT_FOUND_FROM ?? Infinity);

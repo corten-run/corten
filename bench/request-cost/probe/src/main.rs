@@ -9,7 +9,10 @@
 //     GET /page              a page of about 12 KB
 //     GET /text              a short str out
 // PROBE_ALLOCATOR=jemalloc (or glibc) makes the probe refuse to start unless /proc/self/maps shows
-// that allocator.
+// that allocator. PROBE_OWN_HTTP1=1 starts either app with `App::own_http1(true)`; without it the
+// app keeps every default, the switch off. A probe built without the `own-http1` feature, as
+// build.sh builds it against a Corten that has no `App::own_http1`, refuses PROBE_OWN_HTTP1=1 with
+// a line that begins `NO own_http1:`, which the kit reads as a case this build cannot run.
 use corten::prelude::*;
 
 #[corten::routes(api = Root)]
@@ -105,6 +108,27 @@ fn check_allocator() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// Whether PROBE_OWN_HTTP1 asks for Corten's own HTTP/1.1 connection: `1`, or not set.
+fn own_http1() -> Result<bool, Box<dyn std::error::Error>> {
+    match std::env::var("PROBE_OWN_HTTP1") {
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Ok(asked) if asked == "1" => Ok(true),
+        _ => Err("PROBE_OWN_HTTP1 is 1 or not set".into()),
+    }
+}
+
+#[cfg(feature = "own-http1")]
+fn switched(app: App) -> Result<App, Box<dyn std::error::Error>> {
+    Ok(app.own_http1(true))
+}
+
+#[cfg(not(feature = "own-http1"))]
+fn switched(_: App) -> Result<App, Box<dyn std::error::Error>> {
+    let word = "NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1";
+    eprintln!("{word}");
+    Err(word.into())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -115,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("pages") => App::new(pages::router()),
         _ => return Err(usage.into()),
     };
+    let app = if own_http1()? { switched(app)? } else { app };
     check_allocator()?;
     // A queue as long as Linux allows by default: idle.mjs opens connections faster than one
     // runtime accepts them, and a connection the queue has no room for waits a second to retry.

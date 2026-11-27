@@ -54,7 +54,17 @@ git -C "$root" archive "$commit" Cargo.toml Cargo.lock README.md crates docs | t
 cp -R "$here/probe" "$directory/probe"
 cp "$directory/work/Cargo.lock" "$directory/probe/Cargo.lock"
 
-(cd "$directory/probe" && CARGO_TARGET_DIR="$directory/target" ZSTD_SYS_USE_PKG_CONFIG=1 cargo build --release)
+# The probe calls `App::own_http1` only with its `own-http1` feature, turned on for a commit
+# whose Corten defines that method, so that it builds against a commit from before the method
+# was added; built without it, it refuses the cases that ask for the switch (README.md, The cases).
+if grep -rqsF 'pub fn own_http1(' "$directory/work/crates/corten/src"; then
+    features=own-http1
+    echo "the commit's Corten has App::own_http1: the probe is built with its own-http1 feature"
+else
+    features=
+    echo "the commit's Corten has no App::own_http1: the probe is built without its own-http1 feature"
+fi
+(cd "$directory/probe" && CARGO_TARGET_DIR="$directory/target" ZSTD_SYS_USE_PKG_CONFIG=1 cargo build --release ${features:+--features "$features"})
 
 # Cargo rewrites the copied lock file for the probe's own crates (--locked would refuse the copy,
 # which names the whole workspace). Nothing it kept may be a version the commit's does not have.

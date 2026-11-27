@@ -15,6 +15,11 @@ path = "src/main.rs"
 # Not part of the Corten workspace.
 [workspace]
 
+# `own-http1` lets PROBE_OWN_HTTP1=1 call `App::own_http1(true)`. build.sh turns it on when the
+# commit's Corten has that method, so the probe still builds against one that does not.
+[features]
+own-http1 = []
+
 # Features: the template's (the defaults and compress) and json.
 [dependencies]
 corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }

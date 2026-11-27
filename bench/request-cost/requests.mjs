@@ -43,10 +43,12 @@ const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as lon
  * it must get: the body (as Latin-1 text, the whole of it or what it matches) and the
  * `Content-Encoding`, none unless given. A body sent with an encoding is the case's once decoded.
  * `hosts` is the `HOSTS` the probe is started with (`*`: it answers to any host); without it
- * the probe answers to its own, `localhost` and IP addresses.
- * @type {Record<string, { configuration: "api" | "pages", hosts?: "*", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
+ * the probe answers to its own, `localhost` and IP addresses. `own` starts the probe with
+ * `App::own_http1(true)` (`PROBE_OWN_HTTP1=1`); without it the switch is off, as an app has it.
+ * @typedef {{ configuration: "api" | "pages", hosts?: "*", own?: true, request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }} Case
+ * @type {Record<string, Case>}
  */
-export const cases = {
+const off = {
   // A staged route in an API: typed query parameters in, a short String out.
   get: { configuration: "api", request: get("/baseline11?a=1&b=2"), body: "3" },
   post: { configuration: "api", request: post("/baseline11?a=1&b=2", "text/plain", "20"), body: "23" },
@@ -82,6 +84,17 @@ export const cases = {
   // `.localhost`, `seller-desk`, is read as a name, where `localhost` itself is matched alone.
   "unstaged-subdomain": { configuration: "api", request: hosted("/unstaged11?a=1&b=2", SUBDOMAIN), body: "3" },
 };
+
+/**
+ * The cases also sent with `App::own_http1` on, each as `<case>-own`, with the same request and
+ * answer: those Corten's own connection changes most, the bare `get`, `unstaged` and `pipeline`
+ * and the two with a browser's lines, the head longer than its first read of 2,560 bytes, and
+ * `post`, whose body sends its connection to hyper.
+ */
+export const OWN = ["get", "post", "unstaged", "pipeline", "get-browser", "page-browser", "unstaged-any-long"];
+
+/** Every case: those above with the switch off, then those of `OWN` with it on. @type {Record<string, Case>} */
+export const cases = { ...off, ...Object.fromEntries(OWN.map((name) => [`${name}-own`, { .../** @type {Case} */ (off[name]), own: /** @type {const} */ (true) }])) };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */
 export function named(list) {

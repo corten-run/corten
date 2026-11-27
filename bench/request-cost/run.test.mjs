@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -213,6 +213,51 @@ test("a case of an app that answers to any host starts the probe with HOSTS=*, a
   assert.equal(named.started.HOSTS, null);
   const set = await counting("get-any", 1, { HOSTS: "shop.example" });
   assert.equal(set.started.HOSTS, "*");
+});
+
+test("a case with own_http1 on starts the probe with PROBE_OWN_HTTP1=1, and the others without it whatever the caller's holds", { skip }, async () => {
+  const own = await counting("unstaged-any-long-own", 1);
+  assert.deepEqual([own.started.PROBE_OWN_HTTP1, own.started.HOSTS, own.started.configuration], ["1", "*", "api"]);
+  assert.equal(own.window.serving, 1_000_600);
+  // Cases the stand-in answers, with the switch on and off.
+  for (const name of ["get", "get-own", "pipeline-own", "get-any", "text"]) {
+    const { started } = await counting(name, 1, { PROBE_OWN_HTTP1: "1" });
+    assert.equal(started.PROBE_OWN_HTTP1, cases[name]?.own ? "1" : null, name);
+  }
+});
+
+test("a probe built without the switch runs no case with own_http1 on, which each script says and goes on, exiting 0", { skip }, async () => {
+  const word = "NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1";
+  const asked = { STAND_IN_NO_OWN: "1" };
+  const text = await running("count.mjs", ["--cases", "get-own,get", "--reps", "1"], asked);
+  assert.equal(text.status, 0, text.stderr);
+  const [, own, get] = text.stdout.trimEnd().split("\n");
+  assert.equal(own, `${"get-own".padEnd(14)}not run: ${word}`);
+  assert.match(String(get), /^get\s+1001\s+1001\s+1001\s/);
+  // As compare.mjs reads it: the run asked for, and what the probe said, in place of a figure.
+  const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
+  for (const file of ["count-get-own.json", "count-16-pipeline-own.json", "allocations-post-own.json", "idle-request-own-1.json", "idle-browser-own-1.json", "idle-silent-own-1.json"]) {
+    const { script, options, expect } = /** @type {ReturnType<typeof compare.readings>[number]} */ (plan[file]);
+    const run = await running(script, options, asked);
+    assert.equal(run.status, 0, `${file}: ${run.stderr}`);
+    assert.match(run.stdout, /^\{.*\}\n$/, file);
+    assert.equal(compare.figure(run.stdout, expect), null, file);
+    assert.equal(compare.unsupported(run.stdout, expect), word, file);
+  }
+  // A probe that has the switch is counted as any other.
+  const has = await running("count.mjs", ["--json", "--cases", "get-own"]);
+  assert.equal(has.status, 0, has.stderr);
+  assert.equal(compare.figure(has.stdout, /** @type {any} */ (plan["count-get-own.json"]).expect)?.median, 1001);
+  // --answers writes what the probe said in the place of the case's answer, and the other answers.
+  const answers = mkdtempSync(join(tmpdir(), "request-cost-answers-"));
+  try {
+    const run = await running("count.mjs", ["--cases", "pipeline-own,pipeline", "--answers", answers], asked);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(readdirSync(answers).sort(), ["pipeline-own.unsupported", "pipeline.http"]);
+    assert.equal(readFileSync(join(answers, "pipeline-own.unsupported"), "utf8"), `${word}\n`);
+  } finally {
+    rmSync(answers, { recursive: true, force: true });
+  }
 });
 
 test("count.mjs widens the case's column for a name longer than it, and keeps it 14 for the rest", { skip }, async () => {
