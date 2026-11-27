@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps, stepsUntil } from "./round.mjs";
+import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -217,33 +217,22 @@ try {
   // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
   const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
   const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES), pageOnly);
-  for (const step of first ? stepsUntil(first, until).steps : []) {
-    if (step === "count" && process.platform !== "linux") continue;
-    progress(`start ${step}`);
-    // The matched tier's browser timing reaches the apps through the edge: without it, only
-    // browser.mjs is skipped (parity, look and bytes reach the apps directly).
-    const edgeFailed = step === "browser" ? await startEveryApp() : null;
-    if (edgeFailed) skip(step, `browser.mjs: ${edgeFailed}`);
-    const stepStarted = Date.now();
+  // A count call that exits 4 or is stopped ends the round there (round.mjs, countHalt): no later
+  // step, clean slate or summary, and the round is recorded failed.
+  await runSteps(first ? stepsUntil(first, until).steps : [], all, {
+    call,
+    progress,
+    skip,
+    reset: () => { if (unattended) reset(); },
     // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
-    if (step === "build") await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } });
-    else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
-      const { stopped } = await call(limit, args);
-      if (stopped) {
-        skip(step, stopped);
-        if (unattended) reset();
-        break;
-      }
-    }
-    if (step === "browser") stopEveryApp();
-    progress(`end ${step}`);
-  }
-  progress("start summary");
-  // A round whose summary failed has not finished.
-  const summary = await call(10, ["summarize.mjs", round]);
-  if (summary.stopped || summary.code !== 0) throw new Error(summary.stopped ?? `summarize.mjs exited with ${summary.code}`);
-  console.log(now(), "all done");
-  progress("finished");
+    build: async (stepStarted) => { await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } }); },
+    open: async (step) => (step === "browser" ? startEveryApp() : null),
+    close: (step) => { if (step === "browser") stopEveryApp(); },
+    linux: process.platform === "linux",
+    clock: () => Date.now(),
+    summary: ["summarize.mjs", round],
+    done: () => console.log(now(), "all done"),
+  });
 } catch (e) {
   console.log(now(), `round failed: ${e instanceof Error ? e.message : e}`);
   progress("failed");

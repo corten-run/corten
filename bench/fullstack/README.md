@@ -1386,7 +1386,13 @@ three runs:
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
    longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
    or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
-   droplet; the unit starts again at boot and the round goes on from the next step. A droplet
+   droplet; the unit starts again at boot and the round goes on from the next step.
+   The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
+   seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
+   does not reach the probe's process group of its own) ends the round there, with the reason in
+   `skipped.txt`: no later step, clean slate or summary runs and the round is recorded failed, so
+   it does not start again at boot.
+   A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
    only when DigitalOcean cannot be reached either). Either way the step it was in is skipped
@@ -1491,7 +1497,17 @@ three runs:
    load's). When user instructions are unusable in the first pass and its load had no failures,
    it is repeated with `instructions:u` alone; the second pass is not repeated. A count is kept
    only when each load's k6 summary gives its requests, failed requests and a status check a
-   request, both loads made 5,000 requests, and the second had no failure. On a bench host the counters are on the app's pinned cores only (`-C` with
+   request, both loads made 5,000 requests, and the second had no failure. A load that ran is
+   checked whole before anything else is read from it, so a first load short of
+   its requests is refused rather than repeated; the repeat is for counters, never for a load.
+   Each load is taken as counted whole on `perf`'s acknowledgments, not on a wait: `perf` starts with its events
+   disabled (`--delay=-1`), the load starts only once `perf` has acknowledged `enable` on its
+   control descriptor (`--control fd:3,4`), and once the load has ended `perf` must not have exited
+   and must acknowledge `disable` before it is asked to stop, each within 10 s; a `perf` that ends
+   before its load did, or does not acknowledge, fails that pass
+   ([#2183 The catalog count reads a perf that ended before its load did as one that counted the whole load](https://github.com/corten-run/corten/issues/2183)).
+   `perf` is given its CPUs as `-a` or `-C` with a CPU list and nothing else.
+   On a bench host the counters are on the app's pinned cores only (`-C` with
    `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
@@ -1517,6 +1533,7 @@ three runs:
    `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
    the count as no answer. A `perf`, probe or count, whose end is not seen may still count or be
    stuck in the kernel, so the count is not retried and no further load runs: `count.mjs` exits 4,
+   whatever writing its diagnostics or removing the container does then,
    and `count-pairs.mjs` stops its run there and refuses to go on with it, so the rest is counted
    on a fresh host under a new prefix. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed

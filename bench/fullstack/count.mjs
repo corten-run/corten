@@ -5,9 +5,13 @@
 // Xeon Platinum 8358 guest (#2151). All counts require a reported 100% running percentage.
 // Unusable optional counts are null with a diagnostic; if user instructions are unusable with
 // optional events enabled, the first load is repeated with them alone unless it had failures.
+// Each load runs while its perf is watched: perf starts with its events disabled, the load starts
+// only once perf has acknowledged enabling them, and perf must still be running and acknowledge
+// disabling them once the load has ended, or the pass did not count the whole load (#2183).
 // Before any load each event set is probed on the count's CPUs within a bound (PROBE_SETS). A perf,
 // probe or count, whose end is not seen stops the step with exit HALT_EXIT and counts nothing more
-// on the host: it may still be counting, or stuck in the kernel.
+// on the host: it may still be counting, or stuck in the kernel. That exit stands whatever its
+// diagnostics' writes or teardown do (halt).
 // Alternate one-repeat runs of the builds on a quiet host to compare cycles, which are noisier
 // than instructions.
 // Needs Linux with hardware counters (`perf`, root, cgroup v2): a bench host, not Docker Desktop.
@@ -19,7 +23,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
+import { ACK_FD, ACK_MS, CONTROL_FD, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -40,12 +44,35 @@ const dir = join(here, "results", round);
 mkdirSync(dir, { recursive: true });
 await recordLoadTool(dir);
 
+/**
+ * Exits HALT_EXIT, a perf not seen to end, after `diagnose` has written what it can: a write or
+ * teardown that fails in it is reported, and the exit is still HALT_EXIT, never an ordinary failure
+ * that count-pairs.mjs or run-all.mjs would go on past.
+ * @param {() => void} diagnose
+ * @returns {never}
+ */
+function halt(diagnose) {
+  try {
+    diagnose();
+  } catch (e) {
+    try { console.error(`the halt's diagnostics were not all written: ${e instanceof Error ? e.message : e}`); } catch {}
+  } finally {
+    process.exit(HALT_EXIT);
+  }
+}
+
+/** One k6 load, run to its end without blocking, so a count's perf is watched while it runs. */
 function k6(base, target, envs, summary) {
   const args = ["run", "--rm", "--network", network, ...k6Net, ...loadCpus, ...k6User, "-v", `${here}:/bench`, "-e", `BASE=${base}`, "-e", `TARGET=${target}`];
   for (const [k, v] of Object.entries(envs)) args.push("-e", `${k}=${v}`);
   args.push(k6Image, "run", "--quiet", "--summary-export", `/bench/${summary}`, "/bench/ssr-load.js");
-  const r = docker(...args);
-  if (r.status !== 0) throw new Error(r.stderr);
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", args, { stdio: ["ignore", "ignore", "pipe"] });
+    let said = "";
+    child.stderr.on("data", (d) => (said += d));
+    child.on("error", reject);
+    child.on("close", (code, signal) => (code === 0 ? resolve(undefined) : reject(new Error(said || `the load's docker run exited ${code ?? signal}`))));
+  });
 }
 
 /**
@@ -84,9 +111,14 @@ function answersError(id, answer) {
 }
 
 /**
- * Counts events in the cgroup of the container `docker run` gave this ID until `work` resolves:
- * by its ID, since the name can be another container's by then. `name` is what the log calls it,
- * `events` what perf counts.
+ * Counts events in the cgroup of the container `docker run` gave this ID over `work`, the load: by
+ * its ID, since the name can be another container's by then. `name` is what the log calls it,
+ * `events` what perf counts. perf starts with its events disabled, and the load starts only once
+ * perf has acknowledged `enable` on its control descriptor; once the load has ended perf must not
+ * have exited and must acknowledge `disable` before it is asked to stop. One that does not
+ * acknowledge `enable` runs no load (`ranLoad` false); one that ends before its load did, or does
+ * not acknowledge `disable`, did not count the whole load (#2183). A load is never taken as counted
+ * on a wait or on a signal that was delivered.
  */
 async function counted(id, name, work, events) {
   if (!/^[0-9a-f]{64}$/.test(id)) throw new Error(`docker run gave ${JSON.stringify(id)}, not a container ID`);
@@ -94,13 +126,31 @@ async function counted(id, name, work, events) {
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
   // `perf` attached to the cgroup with no load yet or the load had started.
   console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-e", events.join(","), "-G", id);
-  const perf = spawn("perf", perfCountArgs(countCpus, cgroup, events), { env: { ...process.env, LC_ALL: "C" } });
+  const perf = spawn("perf", perfCountArgs(countCpus, cgroup, events), { env: { ...process.env, LC_ALL: "C" }, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] });
   let text = "";
   let said = "";
   let spawnError;
-  perf.stdout.on("data", (d) => (text += d));
-  perf.stderr.on("data", (d) => (said += d));
+  perf.stdout?.on("data", (d) => (text += d));
+  perf.stderr?.on("data", (d) => (said += d));
   perf.on("error", (error) => { spawnError = error.message; });
+  // perf's control descriptor, and the acknowledgments it writes back: an "ack" line a command,
+  // which perf follows with a NUL byte (perf 6.1 writes "ack\n\0").
+  const control = /** @type {import("node:stream").Writable} */ (perf.stdio[CONTROL_FD]);
+  const acks = /** @type {import("node:stream").Readable} */ (perf.stdio[ACK_FD]);
+  control.on("error", () => {});
+  acks.on("error", () => {});
+  let acked = 0;
+  let partial = "";
+  /** @type {Set<() => void>} */
+  const listening = new Set();
+  acks.on("data", (d) => {
+    partial += d;
+    for (let at; (at = partial.indexOf("\n")) >= 0; partial = partial.slice(at + 1)) if (partial.slice(0, at).replaceAll("\0", "").trim() === "ack") acked += 1;
+    for (const heard of listening) heard();
+  });
+  // Reaped: once it is, perf is never signalled, its process ID may be another's.
+  let reaped = false;
+  perf.on("exit", () => { reaped = true; });
   const closed = new Promise((resolve) => perf.on("close", (code, signal) => resolve({ code, signal })));
   /** @type {{ code: number | null, signal: string | null } | null} */
   let exit = null;
@@ -110,8 +160,22 @@ async function counted(id, name, work, events) {
     const timer = setTimeout(() => resolve(false), ms);
     closed.then(() => { clearTimeout(timer); resolve(true); });
   });
-  const ready = await Promise.race([sleep(500).then(() => true), closed.then(() => false)]);
-  let stopped = false;
+  // Whether perf acknowledges its nth command within ACK_MS: "ack", "closed" (it ended first) or "timeout".
+  const acknowledged = (/** @type {number} */ n) => /** @type {Promise<"ack" | "closed" | "timeout">} */ (new Promise((resolve) => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    const settle = (/** @type {"ack" | "closed" | "timeout"} */ r) => { clearTimeout(timer); listening.delete(check); resolve(r); };
+    const check = () => { if (acked >= n) settle("ack"); };
+    timer = setTimeout(() => settle("timeout"), ACK_MS);
+    listening.add(check);
+    closed.then(() => settle(acked >= n ? "ack" : "closed"));
+    check();
+  }));
+  control.write("enable\n");
+  const enabled = await acknowledged(1);
+  const ready = enabled === "ack" && !reaped && exit === null;
+  /** Why perf did not count the whole load, or null. @type {string | null} */
+  let why = null;
   let hung = false;
   // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup. One
   // that does not exit once asked, nor once killed, is given up as no answer rather than waited
@@ -122,23 +186,30 @@ async function counted(id, name, work, events) {
       await work();
     }
   } finally {
-    if (ready) stopped = perf.kill("SIGINT");
+    if (!ready) why = enabled === "ack" ? "perf ended before its load started" : enabled === "closed" ? "perf ended before it acknowledged enable, so no load ran" : `perf did not acknowledge enable within ${ACK_MS / 1000} s, so no load ran`;
+    else if (reaped || exit !== null) why = "perf ended before its load did";
+    else {
+      control.write("disable\n");
+      const disabled = await acknowledged(2);
+      if (disabled !== "ack") why = disabled === "closed" ? "perf ended before it acknowledged disable at the load's end" : `perf did not acknowledge disable at the load's end within ${ACK_MS / 1000} s`;
+    }
+    if (!reaped) perf.kill("SIGINT");
     if (!(await within(PROBE_MS))) {
-      perf.kill("SIGKILL");
+      if (!reaped) perf.kill("SIGKILL");
       if (!(await within(GRACE_MS))) {
         hung = true;
         perf.unref();
-        perf.stdout.destroy();
-        perf.stderr.destroy();
+        for (const stream of perf.stdio) stream?.destroy();
       }
     }
     // However the work ended (a failed load included), a perf not seen to end stops the count and the host's counting.
     if (hung) throw new UnconfirmedPerf(`perf did not count the full load: no answer, it had not exited ${PROBE_MS / 1000} s after it was asked to stop nor ${GRACE_MS / 1000} s after it was killed; no further count runs on this host`);
   }
   const { code, signal } = exit ?? { code: null, signal: null };
-  const error = !stopped || (code !== 0 && signal !== "SIGINT")
-    ? `perf did not count the full load: ${spawnError ?? (said.trim() || signal || `exit ${code}`)}`
-    : null;
+  const reason = why ?? (code !== 0 && signal !== "SIGINT" ? `perf exited ${signal ?? code}` : null);
+  // What perf said, less its own notes that events were enabled and disabled.
+  const told = [spawnError, ...said.split("\n").map((l) => l.trim()).filter((l) => l && !/^Events (?:en|dis)abled$/.test(l))].filter(Boolean).join("; ");
+  const error = reason ? `perf did not count the full load: ${reason}${told ? `; perf said: ${told}` : ""}` : null;
   return { text, error, ranLoad: ready };
 }
 
@@ -162,13 +233,15 @@ for (const names of PROBE_SETS) {
   console.log(line);
   const probe = await runBounded("perf", perfProbeArgs(countCpus, names), { env: { ...process.env, LC_ALL: "C" } });
   const { refuse, note } = probeVerdict(names, probe);
-  appendFileSync(kernelFile, `${new Date().toISOString()} ${refuse ? `refused: ${refuse}` : note ? `not counted: ${note}` : "counted"}\n`);
-  if (note) console.warn(`probe: ${note}`);
-  if (probe.cleanup !== "confirmed") {
+  // A probe whose end was not seen stops the step before anything else is written: its record
+  // is the halt's to write, and a write that fails does not turn the halt into another exit.
+  if (probe.cleanup !== "confirmed") halt(() => {
+    appendFileSync(kernelFile, `${new Date().toISOString()} refused: ${refuse ?? probe.error ?? "cleanup unconfirmed"}\n`);
     appendFileSync(kernelFile, `${new Date().toISOString()} stopped: the probe's perf was not seen to end, so nothing more is counted on this host\n`);
     console.error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}; the probe's perf was not seen to end, so nothing more is counted on this host`);
-    process.exit(HALT_EXIT);
-  }
+  });
+  appendFileSync(kernelFile, `${new Date().toISOString()} ${refuse ? `refused: ${refuse}` : note ? `not counted: ${note}` : "counted"}\n`);
+  if (note) console.warn(`probe: ${note}`);
   if (refuse) throw new Error(`perf cannot count on kernel ${kernel} (${cpu}): ${refuse}`);
 }
 
@@ -214,7 +287,7 @@ for (const name of appsArg.split(",")) {
     // One app that cannot be counted is recorded as failed, and the others are still counted.
     try {
       // Warm up: JIT compilers, connection pools and lazily created threads settle first.
-      k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
+      await k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
       const runs = [];
       for (let r = 0; r < Number(repeats); r += 1) {
         const stem = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}`;
@@ -240,17 +313,19 @@ for (const name of appsArg.split(",")) {
       }
       results[`${name}/${target}${suffix}`] = runs;
     } catch (e) {
+      // A perf not seen to end may still count, or be stuck in the kernel: no further load or count
+      // on this host. The halt comes first, so nothing written here can change its exit.
+      if (e instanceof UnconfirmedPerf) halt(() => {
+        const why = e.message.trim().split("\n")[0] || "perf was not seen to end";
+        results[`${name}/${target}${suffix}`] = { failed: why };
+        console.error(`${name} ${target}${suffix}: ${why}`);
+        docker("rm", "-f", container);
+        writeFileSync(file, JSON.stringify(results, null, 1));
+      });
       // One line, never empty: summarize.mjs prints it in a table and reads an empty one as a count.
       const why = (e instanceof Error ? e.message : String(e)).trim().split("\n")[0] || "the count failed with no message";
       console.log(name, target + suffix, "failed:", why);
       results[`${name}/${target}${suffix}`] = { failed: why };
-      // A perf not seen to end may still count, or be stuck in the kernel: no further load or count on this host.
-      if (e instanceof UnconfirmedPerf) {
-        docker("rm", "-f", container);
-        writeFileSync(file, JSON.stringify(results, null, 1));
-        console.error(`${name} ${target}${suffix}: ${why}`);
-        process.exit(HALT_EXIT);
-      }
     }
     docker("rm", "-f", container);
     // Written after each app, so a restart partway through the step keeps the apps already counted.

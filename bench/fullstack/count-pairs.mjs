@@ -367,7 +367,8 @@ function split(/** @type {any[]} */ list) {
 
 const fmt = (/** @type {number | null} */ x) => (x == null ? "none" : pct(x));
 const num = (/** @type {number | null} */ x) => (x == null ? "none" : Math.round(x).toLocaleString("en-US"));
-const LABELS = { userCyclesPerRequest: "user cycles", kernelCyclesPerRequest: "kernel cycles", userPerRequest: "user instructions", kernelPerRequest: "kernel instructions", userL1iMissesPerRequest: "user L1i misses" };
+// Each measure names the load it is counted over: kernel instructions are a second load's (#2151).
+const LABELS = { userCyclesPerRequest: "user cycles, first load", kernelCyclesPerRequest: "kernel cycles, first load", userPerRequest: "user instructions, first load", kernelPerRequest: "kernel instructions, second load", userL1iMissesPerRequest: "user L1i misses, first load" };
 
 /** The report's Markdown for a run's reading. */
 export function markdown(/** @type {Record<string, any>} */ targets, /** @type {{ prefix: string, base: string, head: string }} */ run) {
@@ -382,6 +383,7 @@ export function markdown(/** @type {Record<string, any>} */ targets, /** @type {
       `| its A/A (base, base) | ${a.valid} of ${a.n} | ${fmt(a.min)} | ${fmt(a.median)} | ${fmt(a.max)} | ${fmt(a.bound)} | ${a.bound == null ? "none" : pct(a.bound - MARGIN)} | ${fmt(a.swappedBound)} |`,
       "", `The A/A: ${t.resolution}. The change is held or cleared only where both of the A/A's bounds, less +1%, are inside the band; with both bounds and either outside it is not decided, and with no bound the count failed.`, "",
       "Diagnostics, medians a request over the valid recorded invocations of each side, and the median of the per-pair changes:", "",
+      "Each invocation counts two loads of 5,000 requests on the same container: user and kernel cycles (the reading above), user instructions and user L1i misses over the first, kernel instructions alone over the second, each over its own load's requests. So kernel instructions are not from the load the cycles are, and their sum with user instructions is two loads'.", "",
       "| comparison | measure | side `base` | side `head` | per-pair change, median |",
       "| --- | --- | ---: | ---: | ---: |");
     for (const [comparison, d] of Object.entries(t.diagnostics)) {

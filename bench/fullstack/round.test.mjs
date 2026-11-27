@@ -1,13 +1,15 @@
 // Tests for round.mjs: node --test bench/fullstack/round.test.mjs (npm run check runs it).
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { countRow, measurePerfCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
+import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -108,6 +110,124 @@ test("a build.mjs that exits with an error or is killed skips that app's results
   assert.equal(log.filter((l) => l.startsWith("call")).length, 4);
 });
 
+/**
+ * run-all.mjs's steps from count through the builds, run with recording effects: `outcome` is each
+ * call's result by its script (by default it ends with 0).
+ * @param {(script: string) => { stopped?: string | null, code?: number | null }} [outcome]
+ */
+async function runRound(outcome = () => ({})) {
+  const all = calls("r13", "10", ["corten", "gin"], ["u1", "u2"]);
+  /** @type {string[]} */
+  const log = [];
+  const run = runSteps(stepsUntil("count", "build").steps, all, {
+    call: async (limit, args) => {
+      log.push(`call ${args[0]}`);
+      const r = outcome(args[0]);
+      return { stopped: r.stopped ?? null, code: r.code === undefined ? 0 : r.code };
+    },
+    progress: (what) => log.push(`progress ${what}`),
+    skip: (step, why) => log.push(`skip ${step}: ${why}`),
+    reset: () => log.push("reset"),
+    build: async () => { log.push("build"); },
+    open: async (step) => { log.push(`open ${step}`); return null; },
+    close: (step) => log.push(`close ${step}`),
+    linux: true,
+    clock: () => 0,
+    summary: ["summarize.mjs", "r13"],
+    done: () => log.push("done"),
+  });
+  return { run, log };
+}
+
+test("a count call that exits 4, or is stopped or killed before count.mjs saw its perfs end, ends the round: no later call, step, clean slate or summary, and no finish", async () => {
+  assert.equal(countHalt({ stopped: null, code: 4 }), "count.mjs exited 4: a perf it started was not seen to end");
+  assert.match(countHalt({ stopped: "count.mjs printed nothing for 60 minutes, so it was stopped", code: null }) ?? "", /^count\.mjs printed nothing for 60 minutes, so it was stopped, before count\.mjs saw every perf it started end$/);
+  assert.match(countHalt({ stopped: "count.mjs ran longer than 70 minutes, so it was stopped", code: 0 }) ?? "", /ran longer than 70 minutes/);
+  assert.match(countHalt({ stopped: null, code: null }) ?? "", /killed by a signal/);
+  // An exit count.mjs makes after it saw its perfs end does not.
+  for (const code of [0, 1, 2]) assert.equal(countHalt({ stopped: null, code }), null, String(code));
+  for (const result of [{ code: 4 }, { stopped: "count.mjs printed nothing for 60 minutes, so it was stopped", code: null }, { code: null }]) {
+    const { run, log } = await runRound((script) => (script === "count.mjs" ? result : {}));
+    await assert.rejects(run, /the round stopped in its count step/, JSON.stringify(result));
+    assert.deepEqual(log.slice(0, 3), ["progress start count", "open count", "call count.mjs"], JSON.stringify(result));
+    assert.equal(log.length, 4, log.join("\n"));
+    assert.match(log[3], /^skip count: .*, so the round stops here and nothing more runs on this host$/);
+    for (const after of ["reset", "progress end count", "call conform.mjs", "progress start conform", "build", "progress start summary", "call summarize.mjs", "done", "progress finished"]) assert.ok(!log.includes(after), `${after} after ${JSON.stringify(result)}`);
+  }
+  // The controls: a count that ends 0 or with an ordinary error goes on to every step, the summary and the finish.
+  for (const code of [0, 1]) {
+    const { run, log } = await runRound((script) => (script === "count.mjs" ? { code } : {}));
+    await run;
+    assert.deepEqual(log.filter((l) => l.startsWith("progress") || l.startsWith("call") || l === "build" || l === "done"), [
+      "progress start count", "call count.mjs", "progress end count", "progress start conform", "call conform.mjs", "progress end conform",
+      "progress start browser", "call parity.mjs", "call look.mjs", "call bytes.mjs", "call browser.mjs", "progress end browser",
+      "progress start build", "build", "progress end build", "progress start summary", "call summarize.mjs", "done", "progress finished",
+    ], String(code));
+  }
+  // Another step's call stopped at its limit skips the rest of that step alone and asks for a clean slate, as before.
+  const { run, log } = await runRound((script) => (script === "look.mjs" ? { stopped: "look.mjs ran longer than 15 minutes, so it was stopped", code: null } : {}));
+  await run;
+  assert.deepEqual(log.slice(log.indexOf("call look.mjs"), log.indexOf("call look.mjs") + 4), ["call look.mjs", "skip browser: look.mjs ran longer than 15 minutes, so it was stopped", "reset", "close browser"]);
+  assert.ok(log.includes("progress finished"));
+});
+
+/** The relative module files `entry` imports, itself included, followed through every file they import. */
+function importClosure(/** @type {string} */ entry) {
+  const seen = new Set();
+  const visit = (/** @type {string} */ file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    for (const [, spec] of readFileSync(file, "utf8").matchAll(/^\s*import\s+(?:[^"']*?\s+from\s+)?["'](\.{1,2}\/[^"']+)["']/gm)) visit(resolve(dirname(file), spec));
+  };
+  visit(entry);
+  return [...seen];
+}
+
+test("an unattended run-all.mjs whose count exits 4 starts no later step and does not finish; one whose count exits 0 or 1 goes on", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
+  const bench = resolve(import.meta.dirname, "..");
+  const root = mkdtempSync(join(tmpdir(), "run-all-halt-"));
+  try {
+    for (const code of [4, 0, 1]) {
+      const copy = join(root, String(code), "bench");
+      for (const file of importClosure(join(import.meta.dirname, "run-all.mjs"))) {
+        mkdirSync(dirname(join(copy, relative(bench, file))), { recursive: true });
+        copyFileSync(file, join(copy, relative(bench, file)));
+      }
+      const here = join(copy, "fullstack");
+      // Stand-ins for the step's scripts: each records that it ran; count.mjs exits with the code under test.
+      const stand = (/** @type {string} */ name, /** @type {string} */ exit) => writeFileSync(join(here, name), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, ${JSON.stringify(name)} + "\\n");\nprocess.exit(${exit});\n`);
+      stand("count.mjs", String(code));
+      stand("conform.mjs", "0");
+      stand("summarize.mjs", "0");
+      const scratch = join(root, String(code), "tmp");
+      mkdirSync(scratch);
+      // No docker on PATH: the clean slate's docker calls fail and change nothing.
+      const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      let said = "";
+      for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
+      const exit = await new Promise((done) => child.on("close", done));
+      const ran = readFileSync(join(here, "ran.txt"), "utf8").split("\n").filter(Boolean);
+      const progress = readFileSync(join(here, "results-r1.progress"), "utf8").split("\n").filter(Boolean).map((l) => l.split(" ").slice(1).join(" "));
+      if (code === 4) {
+        assert.equal(exit, 1, said);
+        assert.deepEqual(ran, ["count.mjs"], said);
+        assert.deepEqual(progress, ["boot", "start count", "failed"], said);
+        assert.match(readFileSync(join(here, "results", "r1", "skipped.txt"), "utf8"), /step count skipped: count\.mjs exited 4: a perf it started was not seen to end, so the round stops here/);
+        assert.ok(!said.includes("all done"), said);
+      } else {
+        assert.equal(exit, 0, said);
+        assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
+        assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished"], said);
+        assert.ok(!existsSync(join(here, "results", "r1", "skipped.txt")), said);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a round started from a step and then restarted goes on after the step it was in", () => {
   assert.deepEqual(resumeAt("t start api\n", "api"), { ended: null, skip: "api", app: null, next: "count", boots: 0, built: [] });
 });
@@ -200,16 +320,19 @@ test("count.mjs has perf watch the app's pinned cores on a bench host, and every
 });
 
 test("count.mjs counts user and kernel instructions in two perf sessions, never in one (#2151)", () => {
+  // Each session starts with its events disabled and takes enable and disable on its control
+  // descriptor, acknowledging each, so a count knows perf counted over its whole load (#2183).
+  const control = ["--delay=-1", "--control=fd:3,4"];
   assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", passEvents("main")), [
-    "stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e",
+    "stat", "-C", "1", "-x", ",", "--log-fd", "1", ...control, "-e",
     "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u",
     "-G", "app.scope,app.scope,app.scope,app.scope",
   ]);
   assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", passEvents("main", true)), [
-    "stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e", "instructions:u", "-G", "app.scope",
+    "stat", "-C", "1", "-x", ",", "--log-fd", "1", ...control, "-e", "instructions:u", "-G", "app.scope",
   ]);
   assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", passEvents("kernel")), [
-    "stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e", "instructions:k", "-G", "app.scope",
+    "stat", "-C", "1", "-x", ",", "--log-fd", "1", ...control, "-e", "instructions:k", "-G", "app.scope",
   ]);
   // The kernel pass already counts its one event: retrying it "with instructions only" is the same set.
   assert.deepEqual(passEvents("kernel", true), ["instructions:k"]);
@@ -235,6 +358,22 @@ test("count.mjs counts user and kernel instructions in two perf sessions, never 
   for (const set of PROBE_SETS) assert.doesNotThrow(() => perfProbeArgs(["-C", "1"], set));
   assert.throws(() => passEvents("both"), /unknown perf pass/);
   assert.deepEqual(perfProbeArgs(["-C", "1"], ["instructions:k"]), ["stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e", "instructions:k", "--", "sleep", "1"]);
+});
+
+test("perf's CPUs are every CPU or a CPU list, so nothing else (another -e) reaches its arguments in a count or a probe", () => {
+  // The positive forms: every CPU, one CPU, a range, a list of both.
+  for (const cpus of [["-a"], ["-C", "1"], ["-C", "1-2"], ["-C", "0,2-3,7"]]) {
+    assert.deepEqual(perfCountArgs(cpus, "app.scope", passEvents("kernel")).slice(1, 1 + cpus.length), cpus);
+    assert.deepEqual(perfProbeArgs(cpus, ["instructions:k"]).slice(1, 1 + cpus.length), cpus);
+  }
+  // A CPU argument that carries another event, or anything but those forms, is refused before perf runs.
+  for (const cpus of [
+    ["-C", "1", "-e", "instructions:u"], ["-a", "-e", "instructions:u"], ["-e", "instructions:u"], ["-C", "1 -e instructions:u"],
+    ["-C", "1,-e"], ["-C", "-e"], ["-C", ""], ["-C"], [], ["-C", "1", "-C", "2"], ["--cpu=1"], "-a", ["-C", 1], ["-a", "-a"],
+  ]) {
+    assert.throws(() => perfCountArgs(/** @type {any} */ (cpus), "app.scope", passEvents("kernel")), /not -a or -C with a CPU list/, JSON.stringify(cpus));
+    assert.throws(() => perfProbeArgs(/** @type {any} */ (cpus), ["instructions:k"]), /not -a or -C with a CPU list/, JSON.stringify(cpus));
+  }
 });
 
 const mainText = (cacheEvent = "L1-icache-load-misses:u") => [
@@ -361,7 +500,8 @@ test("count.mjs does not retry the kernel pass: an unusable kernel instructions 
   for (const [kernel, error] of [
     [{ text: kernelInstructions.replace("60000,100.00", "60000,50.00"), summary: countSummary(10) }, /kernel instructions' perf failed: instructions:k: perf ran 50%/],
     [{ text: "", error: "perf did not count the full load: no answer", summary: countSummary(10) }, /kernel instructions' perf failed: perf did not count the full load: no answer/],
-    [{ text: kernelInstructions, summary: countSummary(0) }, /kernel instructions' perf failed: k6 made no requests/],
+    // A load that ran is whole before its counts are read.
+    [{ text: kernelInstructions, summary: countSummary(0) }, /kernel instructions' load is not whole: 0 requests, not 10/],
     [{ text: "", error: "perf did not count the full load: exit 1", summary: countSummary(10, 3, 0) }, /kernel instructions' load had 3 HTTP request failures and 0 failed status checks/],
   ]) {
     const attempts = [];
@@ -396,6 +536,34 @@ test("a count is returned only when both loads are whole: as many requests as th
   await assert.rejects(run(countSummary(10), countSummary(9), {}), /kernel instructions' load is not whole: 9 requests, not 10/);
 });
 
+test("a first load that ran is whole before it is repeated: a counter error does not buy a load short of its requests a repeat", async () => {
+  // 4,999 requests, no failures, and user instructions crowded out: refused, not repeated.
+  const partial = mainText().replace("60000,100.00", "60000,12.50");
+  const attempts = [];
+  await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+    attempts.push([p, instructionsOnly]);
+    if (p === "kernel") return { text: kernelInstructions, summary: countSummary(5000) };
+    return instructionsOnly ? { text: userInstructions, summary: countSummary(5000) } : { text: partial, summary: countSummary(4999) };
+  }, () => {}, { requests: 5000 }), /first load is not whole: 4999 requests, not 5000/);
+  assert.deepEqual(attempts, [["main", false]]);
+  // A repeat that ran is whole too.
+  const repeated = [];
+  await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+    repeated.push([p, instructionsOnly]);
+    return { text: instructionsOnly ? userInstructions : partial, summary: countSummary(instructionsOnly ? 4999 : 5000) };
+  }, () => {}, { requests: 5000 }), /first load's repeat is not whole: 4999 requests, not 5000/);
+  assert.deepEqual(repeated, [["main", false], ["main", true]]);
+  // The control: a whole first load with the same counter error is repeated and kept.
+  const kept = [];
+  const row = await measurePerfCounts((p, instructionsOnly) => {
+    kept.push([p, instructionsOnly]);
+    if (p === "kernel") return { text: kernelInstructions, summary: countSummary(5000) };
+    return { text: instructionsOnly ? userInstructions : partial, summary: countSummary(5000) };
+  }, () => {}, { requests: 5000 });
+  assert.deepEqual(kept, [["main", false], ["main", true], ["kernel", false]]);
+  assert.equal(row.requests, 5000);
+});
+
 test("a perf not seen to end stops the count at once: no retry, no next pass, and an UnconfirmedPerf the caller stops the host for", async () => {
   const noAnswer = { text: "", error: "perf did not count the full load: no answer", unconfirmed: true, summary: countSummary(10) };
   for (const [stuck, calls, retried] of [
@@ -421,7 +589,7 @@ test("a perf not seen to end stops the count at once: no retry, no next pass, an
   assert.deepEqual(thrown, [["main", false]]);
 });
 
-test("count.mjs falls back to user instructions when an optional event makes perf abort before any rows", async () => {
+test("count.mjs falls back to user instructions when an optional event makes perf abort before any load ran", async () => {
   for (const summary of [undefined, countSummary(0)]) {
     const attempts = [];
     const warnings = [];
@@ -430,7 +598,7 @@ test("count.mjs falls back to user instructions when an optional event makes per
       if (p === "kernel") return { text: kernelInstructions, summary: countSummary(10) };
       return instructionsOnly
         ? { text: userInstructions, summary: countSummary(10) }
-        : { text: "", error: "event syntax error: L1-icache-load-misses:u", summary };
+        : { text: "", error: "event syntax error: L1-icache-load-misses:u", ranLoad: false, summary };
     }, (message) => warnings.push(message));
     assert.deepEqual(attempts, [["main", false], ["main", true], ["kernel", false]]);
     assert.deepEqual(warnings, ["event syntax error: L1-icache-load-misses:u; retrying with instructions only"]);
@@ -439,6 +607,15 @@ test("count.mjs falls back to user instructions when an optional event makes per
     assert.equal(row.userCyclesPerRequest, null);
     assert.equal(row.perfDiagnostics["cycles:u"], "no perf row");
   }
+  // A collect that says no load ran with no error of its own still fails that attempt, and is repeated.
+  const attempts = [];
+  const row = await measurePerfCounts((p, instructionsOnly) => {
+    attempts.push([p, instructionsOnly]);
+    if (p === "kernel") return { text: kernelInstructions, summary: countSummary(10) };
+    return instructionsOnly ? { text: userInstructions, summary: countSummary(10) } : { text: mainText(), ranLoad: false };
+  }, () => {});
+  assert.deepEqual(attempts, [["main", false], ["main", true], ["kernel", false]]);
+  assert.equal(row.userPerRequest, 1235);
 });
 
 test("the probe refuses a set perf cannot count or does not answer for, and notes main's whole set the count falls back from", () => {

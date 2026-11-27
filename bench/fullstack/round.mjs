@@ -1,6 +1,7 @@
 // The parts of a round that run-all.mjs and droplet.mjs share and round.test.mjs tests: the
 // steps, run-all.mjs's calls with their time limits, where a stopped round goes on, and the systemd
 // unit a round runs under on a droplet. No side effects.
+import { HALT_EXIT } from "./count-perf.mjs";
 
 /** run-all.mjs's steps, in order. The builds come last, so a slow one costs no other step its time. */
 export const steps = ["cold-start", "fixture", "api", "count", "conform", "browser", "build"];
@@ -240,6 +241,81 @@ export async function buildStep(all, built, { minutes, call, progress, skip, res
       reset();
     }
   }
+}
+
+/**
+ * Why a count call's end stops the round, or null. count.mjs exits HALT_EXIT when a perf it started
+ * was not seen to end; a count call stopped by run-all.mjs (past its limit or quiet too long) or
+ * killed by a signal ended before count.mjs could see its perfs end, and the probe's runs in a
+ * process group of its own, which that stop does not reach. Either may leave a perf counting or
+ * stuck in the kernel, so nothing more runs on the host. Any other exit, an error included, is
+ * count.mjs's after it saw every perf it started end.
+ * @param {{ stopped: string | null, code: number | null }} result
+ */
+export function countHalt({ stopped, code }) {
+  if (code === HALT_EXIT) return `count.mjs exited ${HALT_EXIT}: a perf it started was not seen to end`;
+  if (stopped) return `${stopped}, before count.mjs saw every perf it started end`;
+  if (code === null) return "count.mjs was killed by a signal before it saw every perf it started end";
+  return null;
+}
+
+/**
+ * run-all.mjs's steps in `list` and then the summary. A call stopped at its limit skips the rest of
+ * its step and asks for `reset`; `build` runs the build step (buildStep), `open` and `close` start
+ * and stop what a step needs (the browser step's apps; `open` gives why browser.mjs cannot run, or
+ * null), and `done` is called once the summary has run, before the round is recorded finished. A
+ * count call whose end stops the round (countHalt) stops it there: the reason is recorded as the
+ * step's skip, and no later call, clean slate, step or summary runs, nor is the step's end or the
+ * round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
+ * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
+ * loop itself.
+ * @param {string[]} list
+ * @param {ReturnType<typeof calls>} all
+ * @param {{
+ *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null }>,
+ *   progress: (what: string) => void,
+ *   skip: (step: string, why: string) => void,
+ *   reset: () => void,
+ *   build: (started: number) => Promise<void>,
+ *   open: (step: string) => Promise<string | null>,
+ *   close: (step: string) => void,
+ *   linux: boolean,
+ *   clock: () => number,
+ *   summary: string[],
+ *   done: () => void,
+ * }} effects
+ */
+export async function runSteps(list, all, { call, progress, skip, reset, build, open, close, linux, clock, summary, done }) {
+  for (const step of list) {
+    if (step === "count" && !linux) continue;
+    progress(`start ${step}`);
+    // The matched tier's browser timing reaches the apps through the edge: without it, only
+    // browser.mjs is skipped (parity, look and bytes reach the apps directly).
+    const edgeFailed = await open(step);
+    if (edgeFailed) skip(step, `browser.mjs: ${edgeFailed}`);
+    if (step === "build") await build(clock());
+    else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
+      const result = await call(limit, args);
+      const halt = step === "count" ? countHalt(result) : null;
+      if (halt) {
+        skip(step, `${halt}, so the round stops here and nothing more runs on this host`);
+        throw new Error(`${halt}; the round stopped in its count step`);
+      }
+      if (result.stopped) {
+        skip(step, result.stopped);
+        reset();
+        break;
+      }
+    }
+    close(step);
+    progress(`end ${step}`);
+  }
+  progress("start summary");
+  // A round whose summary failed has not finished.
+  const result = await call(10, summary);
+  if (result.stopped || result.code !== 0) throw new Error(result.stopped ?? `summarize.mjs exited with ${result.code}`);
+  done();
+  progress("finished");
 }
 
 /**

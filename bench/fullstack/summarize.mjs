@@ -129,7 +129,8 @@ if (mixedRows.length) {
   }
 }
 if (Object.keys(summary.instructions).length) {
-  console.log("\nInstructions per request (median, user / kernel)");
+  // Two loads a count (count.mjs): kernel instructions are not from the load user instructions are.
+  console.log("\nInstructions per request (median, user over the count's first load / kernel over its second, each over its own load's requests)");
   for (const [key, c] of Object.entries(summary.instructions)) if (c.failed) console.log(line([key, `FAILED: ${c.failed}`])); else console.log(line([key, `${c.user.toLocaleString("en-US")} / ${c.kernel.toLocaleString("en-US")}`, `${c.runs} runs`, `${c.failed} failed`]));
 }
 if (summary.build) {

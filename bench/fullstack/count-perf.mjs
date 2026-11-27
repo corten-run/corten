@@ -54,16 +54,39 @@ function supportedSet(/** @type {string[]} */ names) {
   return names;
 }
 
+/**
+ * The CPU flags perf is given, rebuilt from a checked form: `-a` (every CPU) or `-C` with a CPU
+ * list (numbers and ranges, comma-separated), so nothing else (another `-e`) reaches perf's arguments.
+ */
+function cpuFlags(/** @type {unknown} */ cpus) {
+  if (Array.isArray(cpus) && cpus.length === 1 && cpus[0] === "-a") return ["-a"];
+  if (Array.isArray(cpus) && cpus.length === 2 && cpus[0] === "-C" && typeof cpus[1] === "string" && /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(cpus[1])) return ["-C", cpus[1]];
+  throw new Error(`perf would be given CPUs ${JSON.stringify(cpus)}, not -a or -C with a CPU list`);
+}
+
+/**
+ * The descriptors a count's perf reads its commands from and acknowledges them on (`--control`),
+ * and how long it may take to acknowledge one before the count is given up.
+ */
+export const CONTROL_FD = 3, ACK_FD = 4, ACK_MS = 10_000;
+
+/**
+ * A count's perf: its events start disabled (`--delay=-1`) and are enabled and disabled by commands
+ * on CONTROL_FD, each acknowledged on ACK_FD, so the count has perf's own word that it counted from
+ * before its load started until after it ended.
+ */
 export function perfCountArgs(/** @type {string[]} */ cpus, /** @type {string} */ cgroup, /** @type {string[]} */ names) {
+  const flags = cpuFlags(cpus);
   supportedSet(names);
   // perf maps the cgroups to events in order; each event needs its own entry.
-  return ["stat", ...cpus, "-x", ",", "--log-fd", "1", "-e", names.join(","), "-G", names.map(() => cgroup).join(",")];
+  return ["stat", ...flags, "-x", ",", "--log-fd", "1", "--delay=-1", `--control=fd:${CONTROL_FD},${ACK_FD}`, "-e", names.join(","), "-G", names.map(() => cgroup).join(",")];
 }
 
 /** The probe of one event set before the first count: the same CPUs and events, over an idle second, no cgroup. */
 export function perfProbeArgs(/** @type {string[]} */ cpus, /** @type {string[]} */ names) {
+  const flags = cpuFlags(cpus);
   supportedSet(names);
-  return ["stat", ...cpus, "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
+  return ["stat", ...flags, "-x", ",", "--log-fd", "1", "-e", names.join(","), "--", "sleep", "1"];
 }
 
 /** Every set a count gives perf, in the order the probe runs them: each alone first, then main's whole set. */
@@ -231,12 +254,15 @@ function totalsError(/** @type {ReturnType<typeof loadTotals>} */ t, /** @type {
 /**
  * Both passes of one count. `collect(pass, instructionsOnly)` runs one load under perf with
  * `passEvents(pass, instructionsOnly)` and gives perf's output, its error, whether perf's end was
- * not seen (`unconfirmed`) and the load's k6 summary. A perf whose end was not seen stops the count
- * at once (UnconfirmedPerf): no retry and no next pass. The main pass is retried once with user
- * instructions alone when they are unusable and its load had no failures; the kernel pass counts
- * one event already, so it is not retried. Each load's request and status-check totals must be
- * whole (`expected.requests` requests each, when given); the kernel pass's load must also match the
- * main pass's request count and have no failures, since its count is not kept otherwise.
+ * not seen (`unconfirmed`), whether the load ran (`ranLoad`, false only where perf failed before
+ * the load started; a load is taken to have run unless it says so) and the load's k6 summary. A
+ * perf whose end was not seen stops the count at once (UnconfirmedPerf): no retry and no next pass.
+ * Each load that ran must be whole (`expected.requests` requests, when given, and a status check
+ * a request) before anything else is read from it, a retry included. The main pass is retried once
+ * with user instructions alone when they are unusable and its load, if it ran, was whole with no
+ * failures; the kernel pass counts one event already, so it is not retried. The kernel pass's load
+ * must also match the main pass's request count and have no failures, since its count is not kept
+ * otherwise.
  * @param {(pass: "main" | "kernel", instructionsOnly: boolean) => any} collect
  * @param {(message: string) => void} warn
  * @param {{ requests?: number }} [expected]
@@ -244,7 +270,7 @@ function totalsError(/** @type {ReturnType<typeof loadTotals>} */ t, /** @type {
 export async function measurePerfCounts(collect, warn, expected = {}) {
   const attempt = async (/** @type {"main" | "kernel"} */ pass, /** @type {boolean} */ instructionsOnly) => {
     const names = passEvents(pass, instructionsOnly);
-    const { text = "", error, summary, unconfirmed } = await collect(pass, instructionsOnly);
+    const { text = "", error, summary, unconfirmed, ranLoad = true } = await collect(pass, instructionsOnly);
     const load = pass === "kernel" ? "kernel instructions' load" : instructionsOnly ? "first load's repeat" : "first load";
     if (unconfirmed) throw new UnconfirmedPerf(`${load}: ${error || "perf was not seen to end"}; no further count runs on this host`);
     // Only the pass's own events are read from its output.
@@ -252,7 +278,7 @@ export async function measurePerfCounts(collect, warn, expected = {}) {
     const reason = countError(counts.get(REQUIRED[pass]));
     const totals = loadTotals(summary);
     const requests = totals.requests ?? 0, failed = totals.failed ?? 0, checksFailed = totals.checksFailed ?? 0;
-    return { load, totals, counts, requests, failed, checksFailed, error: error || (reason ? `${REQUIRED[pass]}: ${reason}` : null) || (requests ? null : "k6 made no requests") };
+    return { load, ranLoad, totals, counts, requests, failed, checksFailed, error: error || (ranLoad ? null : "no load ran") || (reason ? `${REQUIRED[pass]}: ${reason}` : null) || (requests ? null : "k6 made no requests") };
   };
   const requireWhole = (/** @type {Awaited<ReturnType<typeof attempt>>} */ run, /** @type {number | undefined} */ requests) => {
     const why = totalsError(run.totals, requests);
@@ -265,20 +291,23 @@ export async function measurePerfCounts(collect, warn, expected = {}) {
     }
   };
   let main = await attempt("main", false);
+  // A load that ran is whole or the count fails: a counter error does not buy a load short of its
+  // requests a repeat. Only perf failing before any load started skips this.
+  if (main.ranLoad) requireWhole(main, expected.requests);
   if (main.error) {
     noRetry(main, "first load");
     // Drop optional events that may have prevented perf from starting or crowded out instructions.
     warn(`${main.error}; retrying with instructions only`);
     main = await attempt("main", true);
+    if (main.ranLoad) requireWhole(main, expected.requests);
     if (main.error) throw new Error(`instructions-only perf failed: ${main.error}`);
   }
-  requireWhole(main, expected.requests);
   const kernel = await attempt("kernel", false);
+  if (kernel.ranLoad) requireWhole(kernel, main.requests);
   if (kernel.error) {
     noRetry(kernel, "kernel instructions' load");
     throw new Error(`kernel instructions' perf failed: ${kernel.error}`);
   }
-  requireWhole(kernel, main.requests);
   if (kernel.failed || kernel.checksFailed) throw new Error(`the kernel instructions' load had ${kernel.failed} HTTP request failures and ${kernel.checksFailed} failed status checks across ${kernel.requests} requests, so its count is not kept`);
   return countRow(main, kernel);
 }

@@ -267,7 +267,9 @@ test("the report keeps the user and kernel cycle split, kernel instructions and 
     assert.equal(d.ab.kernelPerRequest.head, 26500);
     assert.ok(Math.abs(d.ab.kernelPerRequest.change - (26500 / 26000 - 1)) < 1e-12);
     assert.equal(d.aa.userL1iMissesPerRequest.head, 4100);
-    for (const label of ["user cycles", "kernel cycles", "user instructions", "kernel instructions", "user L1i misses"]) assert.match(md, new RegExp(`\\| the change \\| ${label} \\|`));
+    // Each measure names the load it is counted over: kernel instructions are a second load's.
+    for (const label of ["user cycles, first load", "kernel cycles, first load", "user instructions, first load", "kernel instructions, second load", "user L1i misses, first load"]) assert.match(md, new RegExp(`\\| the change \\| ${label} \\|`));
+    assert.match(md, /user and kernel cycles \(the reading above\), user instructions and user L1i misses over the first, kernel instructions alone over the second, each over its own load's requests/);
     assert.match(md, /- its A\/A, pair 3, side head: count\.mjs exited 1/);
   } finally {
     s.done();
@@ -811,7 +813,11 @@ else if (a[0] === "network" && a[1] === "inspect") out = JSON.stringify(net) + "
 else if (a[0] === "run") {
   const summary = a[a.indexOf("--summary-export") + 1].replace("/bench", a[a.indexOf("-v") + 1].split(":/bench")[0]);
   const n = Number(env.ITERATIONS ?? 100);
+  // A counted load (MODE iterations) takes FAKE_LOAD_MS, and its start and end are recorded.
+  const counted = env.MODE === "iterations", started = Date.now();
+  if (counted && process.env.FAKE_LOAD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_LOAD_MS));
   fs.writeFileSync(summary, JSON.stringify({ metrics: { http_reqs: { count: n }, http_req_failed: { passes: 0 }, checks: { passes: n, fails: 0 } } }));
+  if (counted) fs.appendFileSync(path.join(process.env.FAKE_DIR, "loads.jsonl"), JSON.stringify({ start: started, end: Date.now() }) + "\\n");
   // Another container takes the name, as a second runner or a hand would.
   if (env.MODE === process.env.FAKE_REPLACE) s.names["fsw-corten"] = hex(++s.made);
   if (env.MODE === process.env.FAKE_ALIAS) leftover();
@@ -831,15 +837,41 @@ if (out) process.stdout.write(out + "\\n");
 process.exit(status);
 `;
 const fakePerf = `#!/usr/bin/env node
-const fs = require("node:fs"), path = require("node:path");
+const fs = require("node:fs"), path = require("node:path"), net = require("node:net");
 const a = process.argv.slice(2);
 // The probe (perf stat -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names.
 // With FAKE_PROBE_HOLD naming its set, it leaves a self-bounded child holding its output as it exits.
+// With FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
+if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1] && process.env.FAKE_BREAK) { fs.rmSync(process.env.FAKE_BREAK, { force: true }); fs.mkdirSync(process.env.FAKE_BREAK); }
 if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1]) require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 9000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
 if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map((e) => \`1000,,\${e},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); }
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
-process.on("SIGINT", () => { process.stdout.write(events.map((e) => \`500000000,,\${e},\${cgroup},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); });
+const set = events.join(",");
+// When this perf counted from ("enable") and to ("disable", "exit"), for each load to be held against.
+const mark = (what) => fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf-times.jsonl"), JSON.stringify({ set, what, at: Date.now() }) + "\\n");
+const print = () => process.stdout.write(events.map((e) => \`500000000,,\${e},\${cgroup},1000000,100.00,,\`).join("\\n") + "\\n");
+// A set FAKE_PERF_LATE names starts counting 1.5 s late; one FAKE_PERF_EARLY names ("|" between
+// sets) exits by itself 0.8 s after it started, printing rows a whole count's would have.
+const late = (process.env.FAKE_PERF_LATE ?? "").split("|").includes(set) ? 1500 : 0;
+const early = (process.env.FAKE_PERF_EARLY ?? "").split("|").includes(set);
+const start = () => { mark("enable"); if (early) setTimeout(() => { print(); mark("exit"); process.exit(0); }, 800); };
+// perf stat --delay=-1 --control=fd:<ctl>,<ack>: counting starts at "enable", and each command is
+// acknowledged as perf 6.1 does, "ack\\n" and a NUL byte.
+const control = a.find((x) => x.startsWith("--control=fd:"));
+if (control) {
+  const [ctl, ack] = control.slice("--control=fd:".length).split(",").map(Number);
+  let buffered = "";
+  new net.Socket({ fd: ctl, readable: true, writable: false }).on("data", (d) => {
+    buffered += d;
+    for (let at; (at = buffered.indexOf("\\n")) >= 0; buffered = buffered.slice(at + 1)) {
+      const command = buffered.slice(0, at);
+      if (command === "enable") setTimeout(() => { start(); fs.writeSync(ack, "ack\\n\\0"); }, late);
+      else if (command === "disable") { mark("disable"); fs.writeSync(ack, "ack\\n\\0"); }
+    }
+  });
+} else setTimeout(start, late);
+process.on("SIGINT", () => { print(); mark("exit"); process.exit(0); });
 setInterval(() => {}, 1000);
 `;
 
@@ -964,6 +996,71 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       assert.ok(!existsSync(join(dir, "perf.jsonl")), "no count after an unconfirmed probe");
       assert.ok(!existsSync(join(kit, "results", "probe-held", "instructions.json")));
       assert.match(readFileSync(join(kit, "results", "probe-held", "count-kernel.txt"), "utf8"), /refused: .*cleanup unconfirmed[\s\S]*stopped: the probe's perf was not seen to end/);
+    }
+    // Each pass's perf must be counting before its load starts and still counting when it ends
+    // (#2183): one that starts late is waited for, and one that exits during its load fails the
+    // pass, the first load after its repeat.
+    const timed = async (/** @type {string} */ round, /** @type {Record<string, string>} */ extra) => {
+      const got = await count(round, "none", "none", { FAKE_LOAD_MS: "1500", ...extra });
+      const lines = (/** @type {string} */ f) => existsSync(join(root, round, f)) ? readFileSync(join(root, round, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+      const marks = lines("perf-times.jsonl");
+      // Each perf in turn: when it started counting and when it stopped, by a disable or its exit.
+      const sessions = [];
+      for (const m of marks) {
+        if (m.what === "enable") sessions.push({ set: m.set, from: m.at, to: null });
+        else if (sessions.at(-1) && sessions.at(-1).to === null) sessions.at(-1).to = m.at;
+      }
+      const loads = lines("loads.jsonl");
+      // The loads perf counted over whole: each in its turn inside its perf's counting.
+      const covered = loads.map((load, i) => sessions[i] !== undefined && sessions[i].from <= load.start && sessions[i].to !== null && load.end <= sessions[i].to);
+      return { ...got, sessions, loads, covered };
+    };
+    const mainSet = "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u";
+    for (const [round, set] of [["late-main", mainSet], ["late-kernel", "instructions:k"]]) {
+      const got = await timed(round, { FAKE_PERF_LATE: set });
+      assert.equal(got.code, 0, round);
+      assert.ok(Array.isArray(got.row) && got.row[0].requests === 5000 && got.row[0].kernelPass.requests === 5000, `${round}: ${JSON.stringify(got.row)}`);
+      assert.equal(got.loads.length, 2, round);
+      assert.deepEqual(got.covered, [true, true], `${round}: a kept count's load started before its perf counted: ${JSON.stringify({ sessions: got.sessions, loads: got.loads })}`);
+    }
+    for (const [round, sets, why] of [
+      ["early-main", `${mainSet}|instructions:u`, /^instructions-only perf failed: perf did not count the full load: perf ended before its load did/],
+      ["early-kernel", "instructions:k", /^kernel instructions' perf failed: perf did not count the full load: perf ended before its load did/],
+    ]) {
+      const got = await timed(round, { FAKE_PERF_EARLY: sets });
+      assert.equal(got.code, 0, round);
+      assert.ok(!Array.isArray(got.row), `${round}: a count whose perf exited during its load was kept: ${JSON.stringify({ row: got.row, sessions: got.sessions, loads: got.loads })}`);
+      assert.match(got.row.failed, why, round);
+      // Its perf did exit during the load, before the load's end.
+      assert.ok(got.covered.includes(false), round);
+    }
+    // A write that fails as count.mjs records a probe it could not see end leaves its exit 4, so
+    // count-pairs.mjs starts no next invocation.
+    {
+      const round = "probe-held-unwritable";
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PROBE_HOLD: "instructions:k", FAKE_BREAK: join(kit, "results", round, "count-kernel.txt"), HOME: process.env.HOME ?? root };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.equal(code, 4, said);
+      assert.match(said, /the halt's diagnostics were not all written: EISDIR/);
+      assert.ok(!existsSync(join(dir, "perf.jsonl")), "no count after an unconfirmed probe");
+      // That exit, as count-pairs.mjs's runner sees it: the run stops there, now and when run again.
+      const s = scratch();
+      try {
+        const stuck = "t1-json-ab-002-base";
+        const h = host(s.results, { rc: (name) => (name === stuck ? /** @type {number} */ (code) : 0) });
+        await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
+        assert.equal(h.state.counted.at(-1)?.[0], stuck);
+        const ran = h.state.counted.length;
+        await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
+        assert.equal(h.state.counted.length, ran);
+      } finally {
+        s.done();
+      }
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
