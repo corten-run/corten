@@ -276,9 +276,54 @@ def stream_drain(root):
     return proof
 
 
+def stream_cells(identifier, socket):
+    # One nonblocking connection and one eight-byte value; no optional disk or thread.
+    peer, data = None, b''
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.setblocking(False)
+            listener.bind('\0corten-bench-cells-' + identifier)
+            listener.listen(1)
+            while True:
+                value, now = None, time.monotonic_ns()
+                if peer is not None and now >= expires:
+                    peer.close()
+                    peer = None
+                try:
+                    if peer is None:
+                        peer, _ = listener.accept()
+                        peer.setblocking(False)
+                        data, expires = b'', now + 1000000000
+                        uid = int.from_bytes(peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)[4:8], sys.byteorder)
+                        if uid != os.getuid():
+                            peer.close()
+                            peer = None
+                    if peer is not None:
+                        part = peer.recv(8 - len(data))
+                        data += part
+                        if len(data) == 8 or not part:
+                            peer.close()
+                            peer = None
+                            if len(data) == 8:
+                                started, total = int.from_bytes(data[:4], 'big'), int.from_bytes(data[4:], 'big')
+                                if 1 <= started <= total:
+                                    value = {'started': started, 'total': total}
+                except BlockingIOError:
+                    pass
+                yield value
+    except OSError:
+        return  # Best effort; required progress and lease are unaffected.
+    finally:
+        if peer is not None:
+            try: peer.close()
+            except OSError: pass
+
+
 def stream_monitor(root, expected):
     import base64
     import select
+    try: import socket as cell_socket
+    except (ImportError, OSError): cell_socket = None
     assert set(expected) == {'binding', 'id'} and expected['binding'] == load(root, 'binding.json')
     assert re.fullmatch(r'[a-f0-9]{32}', expected['id'])
     assert not (root / 'seal-bootstrap.json').exists() and not (root / 'campaign-active.json').exists()
@@ -296,6 +341,7 @@ def stream_monitor(root, expected):
     lease_until, challenge, challenge_at, renewal = at + 15000000000, None, 0, 0
     sequence, incoming, outgoing, journal_bytes, sampled, sample_sequence = 0, b'', b'', 0, 0, 0
     material, state_hash, delivery, terminal, sealed = iter(()), None, None, False, False
+    cells, last_cell = None, None
     observations = os.open(root / 'stream-observations.jsonl', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     os.set_blocking(0, False)
     os.set_blocking(1, False)
@@ -356,6 +402,20 @@ def stream_monitor(root, expected):
                         material = iter(())
                         emit(state['kind'], state['payload'])
                         terminal = state['kind'] == 'terminal'
+                payload = state['payload']
+                if (cell_socket is not None and not sealed and state['kind'] == 'progress' and payload.get('state') == 'active'
+                        and payload.get('round') == expected['binding']['round'] and payload.get('nextGroup') == 'hardening'):
+                    if cells is None:
+                        cells = stream_cells(expected['id'], cell_socket)
+                    counts = next(cells, None)
+                    # Never queue counts behind required traffic or fill the state-poll budget.
+                    if (counts is not None and not outgoing and len(encoded(payload)) < 32000
+                            and (last_cell is None or counts['total'] == last_cell['total'] and counts['started'] > last_cell['started'])):
+                        emit('progress', {**payload, 'nativeCellProgress': counts})
+                        last_cell = counts
+                elif cells is not None:
+                    cells.close()
+                    cells, last_cell = None, None
                 try:
                     # Internal checkpoints return to custody/lease sampling, never the wire.
                     frame = next(material)
@@ -420,5 +480,7 @@ def stream_monitor(root, expected):
             stream_failure(root, registration, 'control monitor', error)
         raise
     finally:
+        if cells is not None:
+            cells.close()
         os.close(observations)
 `;

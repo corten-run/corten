@@ -7,13 +7,13 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import { syncBuiltinESMExports } from "node:module";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { binding, registration } from "../test-fixtures/control-stream-fixture.mjs";
 import { streamHash, verifyStreamDrain } from "./control-stream.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
 import { digest } from "./evidence.mjs";
-import { supervise } from "./process.mjs";
 
 async function fixture(t, { survivor = false, autoExit = true, beforeReady = false, probe } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-control-lease-")), abort = new AbortController();
@@ -166,9 +166,8 @@ for mode in ('normal','wrong-at-start','drift','stale','eof','late-stop'):
 
 test("independent consumer supervises native windows, paused audit, immutable seal and actual drain probe", async (t) => {
   const f = await fixture(t), s = f.supervisor;
-  const payload = { state: "active", nextGroup: "hardening", nativeCellProgress: { started: 19, total: 108 } };
-  const samples = f.samples(); s.cellProgress(payload);
-  assert.equal(f.samples(), samples);
+  const payload = { state: "active", nextGroup: "hardening" };
+  s.progress(payload);
   assert.deepEqual(f.get("stream-state.json"), { kind: "progress", payload });
   s.open({ app: "1", api: "2", load: "3-7" }); s.close();
   s.progress({ state: "blocked-review-needed", campaign: "r21-0123456789abcdef", auditGroup: "json-api", auditSubjectSha256: "e".repeat(64) });
@@ -188,31 +187,49 @@ test("expired or stale guardian lease irrevocably cancels native independently o
   assert.equal(readFileSync(join(f.root, "stream-invalid.json")).length, 0);
 });
 
-test("a failed cell-progress publication cannot cancel the native command or block the next required state", { timeout: 15000 }, async (t) => {
-  const f = await fixture(t), s = f.supervisor, initial = { state: "active", nextGroup: "hardening" };
+test("stalled optional storage cannot block the lease or overwrite a newer required state", { timeout: 15000 }, async (t) => {
+  const f = await fixture(t), s = f.supervisor, campaign = "r21-0123456789abcdef";
+  const initial = { round: binding.round, campaign, state: "active", nextGroup: "hardening" };
   s.progress(initial);
-  const rename = fs.renameSync;
-  let faults = 0;
-  const fault = t.mock.method(fs, "renameSync", (from, to) => {
-    if (to === join(f.root, "stream-state.json")) {
-      faults++; throw Object.assign(new Error("synthetic telemetry disk failure"), { code: "ENOSPC" });
+  const open = fs.openSync, bytes = [], sockets = [];
+  let storageStalls = 0;
+  const fault = t.mock.method(fs, "openSync", (path, ...args) => {
+    if (String(path).endsWith(".cell-progress.pending")) {
+      storageStalls++; f.tick(16000000000n);
     }
-    return rename(from, to);
+    return open(path, ...args);
+  });
+  const connect = t.mock.method(net, "createConnection", ({ path }) => {
+    assert.equal(path, "\0corten-bench-cells-" + registration.id);
+    const socket = Object.assign(new EventEmitter(), { unref() {}, setTimeout() {}, destroy: t.mock.fn(),
+      end: (value) => bytes.push([value.readUInt32BE(0), value.readUInt32BE(4)]) });
+    sockets.push(socket);
+    return socket;
   });
   syncBuiltinESMExports();
-  let result;
   try {
-    result = await supervise({ executable: "node", shell: false, argv: ["bench/workloads/dispatcher-fixtures/native.mjs", "exit", "0"] },
-      { cwd: resolve(import.meta.dirname, "../../.."), env: process.env, signal: f.abort.signal,
-        log(_bytes, channel) { if (channel === "stdout") s.cellProgress({ ...initial, nativeCellProgress: { started: 1, total: 108 } }); } });
-  } finally { fault.mock.restore(); syncBuiltinESMExports(); }
-  assert.equal(faults, 1);
-  assert.equal(result.success, true);
-  assert.equal(f.abort.signal.aborted, false);
-  assert.deepEqual(f.get("stream-state.json"), { kind: "progress", payload: initial });
-  assert.equal(existsSync(f.root + ".cell-progress.pending"), false);
-  const proof = await s.seal();
-  await s.finish({ id: registration.id, nativeTerminal: true, sealSha256: digest(JSON.stringify(proof)) });
+    const count = (started, status = initial) => s.cellProgress({ ...status, nativeCellProgress: { started, total: 108 } });
+    count(100, { ...initial, campaign: "r21-fedcba9876543210" });
+    for (const started of [1, 2, 3]) count(started);
+    s.check(); // Required checks must still run on the original lease.
+    assert.equal(storageStalls, 0);
+    assert.equal(connect.mock.callCount(), 1);
+    assert.deepEqual(bytes, [[1, 108]]);
+    sockets[0].emit("close");
+    assert.deepEqual(bytes, [[1, 108], [3, 108]]);
+    count(4);
+    assert.deepEqual(f.get("stream-state.json"), { kind: "progress", payload: initial });
+    s.progress({ state: "blocked-review-needed", campaign, auditGroup: "json-api", auditSubjectSha256: "e".repeat(64) });
+    assert.equal(f.get("stream-state.json").kind, "audit-ready");
+    assert.equal(sockets[1].destroy.mock.callCount(), 1);
+    sockets[1].emit("close"); // Delayed completion must neither flush nor change required state.
+    assert.equal(connect.mock.callCount(), 2);
+    assert.equal(f.get("stream-state.json").kind, "audit-ready");
+    const proof = await s.seal();
+    await s.finish({ id: registration.id, nativeTerminal: true, sealSha256: digest(JSON.stringify(proof)) });
+    assert.equal(f.get("stream-state.json").kind, "terminal");
+    assert.equal(f.abort.signal.aborted, false);
+  } finally { connect.mock.restore(); fault.mock.restore(); syncBuiltinESMExports(); }
 });
 
 test("a pinned watchdog winning at publication preserves its first failure", async (t) => {

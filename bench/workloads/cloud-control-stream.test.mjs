@@ -49,12 +49,30 @@ function fixture(t, { autoClose = true, sealExec, peerLease, initialActive = tru
 async function waitForCells(local, started) {
   const deadline = performance.now() + 2000;
   do {
-    const status = localStreamStatus(local);
+    const status = localStreamStatus(local, { includeCells: true });
     if (status.nativeCellProgress?.started === started) return status;
     await delay(10);
   } while (performance.now() < deadline);
   assert.fail("optional cell progress did not publish");
 }
+
+test("optional counts belong only to the matching active Hardening campaign", async (t) => {
+  const f = fixture(t), result = await f.ready;
+  const active = { round: binding.round, campaign: "r21-0123456789abcdef", state: "active", nextGroup: "hardening" };
+  const count = (started, status = active) => f.frame("progress", { ...status, nativeCellProgress: { started, total: 108 } });
+  f.frame("progress", active);
+  count(2);
+  await waitForCells(f.local, 2);
+  assert.equal(localStreamStatus(f.local).nativeCellProgress, undefined);
+  count(100, { ...active, campaign: "r21-fedcba9876543210" });
+  count(4);
+  assert.deepEqual((await waitForCells(f.local, 4)).nativeCellProgress, { started: 4, total: 108 });
+  f.frame("progress", { ...active, nextGroup: "mixed-production" });
+  count(5);
+  assert.equal(localStreamStatus(f.local, { includeCells: true }).nativeCellProgress, undefined);
+  f.close(255);
+  await result.monitor.done;
+});
 
 test("production transport uses one fixed guardian exec, bounded journal, typed heartbeat and terminal close without remote-empty claims", async (t) => {
   const f = fixture(t), result = await f.ready;
@@ -65,6 +83,7 @@ test("production transport uses one fixed guardian exec, bounded journal, typed 
   assert.equal(options.shell, false); assert.equal(options.cwd, resolve("."));
   f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) }); assert.equal(f.input.at(-1).kind, "renew");
   const nativeCellProgress = { started: 19, total: 108 };
+  f.frame("progress", { round: binding.round, state: "active", nextGroup: "hardening" });
   f.frame("progress", { round: binding.round, state: "active", nextGroup: "hardening", nativeCellProgress });
   const progress = await waitForCells(f.local, nativeCellProgress.started);
   assert.equal(progress.kind, "progress");
@@ -120,7 +139,7 @@ test("an invalid 109/108 cell count still establishes the first active peer leas
     monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)) } } };
   const status = { round: binding.round, state: "active", nextGroup: "hardening" };
   f.frame("progress", { ...status, nativeCellProgress: { started: 109, total: 108 } });
-  const active = localStreamStatus(f.local);
+  const active = localStreamStatus(f.local, { includeCells: true });
   assert.equal(active.frame.kind, "progress");
   assert.deepEqual(active.frame.payload, status);
   assert.equal(active.nativeCellProgress, undefined);
@@ -137,6 +156,7 @@ test("a torn workstation cell update leaves custody intact and only the newest w
   const state = { ...binding, name: registration.host.hostname, control: { helperSha256: binding.helperSha256,
     monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)) } } };
   const journal = join(f.local, "monitor-journal.jsonl");
+  f.frame("progress", { round: binding.round, state: "active", nextGroup: "hardening" });
   const initial = readFileSync(journal);
   const progress = (started) => f.frame("progress", { round: binding.round, state: "active", nextGroup: "hardening",
     nativeCellProgress: { started, total: 108 } });
@@ -163,7 +183,7 @@ test("a torn workstation cell update leaves custody intact and only the newest w
     await torn.promise;
     progress(2); progress(3);
     assert.deepEqual(writes, [1]);
-    assert.equal(localStreamStatus(f.local).nativeCellProgress, undefined);
+    assert.equal(localStreamStatus(f.local, { includeCells: true }).nativeCellProgress, undefined);
     assert.deepEqual(readFileSync(journal), initial);
     requireUnfinishedJournal(journal, registration.id);
   } finally { resume.resolve(); }
@@ -284,18 +304,20 @@ test("late close is actual local evidence even after the foreground lost the lea
   t.mock.timers.tick(30000); assert.equal(streamRecoveryReady(f.local, saved), true);
 });
 
-async function queuedAudit(t, onInput) {
-  const f = fixture(t, { onInput }), result = await f.ready, group = "json-api", campaign = "r21-0123456789abcdef", protocol = auditProtocol(group);
-  const body = { schema: "benchmark-json-audit-subject/v1", commit: binding.commit, campaignSha256: "f".repeat(64), identities: protocol.members, sourcesManifest: manifest() };
+async function queuedAudit(t, onInput, group = "json-api") {
+  const f = fixture(t, { onInput }), result = await f.ready, campaign = "r21-0123456789abcdef", protocol = auditProtocol(group);
+  const mixed = group === "mixed-production";
+  const body = { schema: `benchmark-${protocol.prefix}-audit-subject/v1`, commit: binding.commit, campaignSha256: "f".repeat(64),
+    ...(mixed ? { requests: protocol.members.map((identity) => ({ identity })) } : { identities: protocol.members }), sourcesManifest: manifest() };
   const subjectSha256 = deploymentSha256(body), bytes = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
   f.frame("audit-begin", { campaign, group, subjectSha256 });
-  f.frame("audit-file", { group, path: "json-audit-subject.json", bytes: bytes.length, sha256: digest(bytes) });
+  f.frame("audit-file", { group, path: `${protocol.prefix}-audit-subject.json`, bytes: bytes.length, sha256: digest(bytes) });
   f.frame("audit-data", { offset: 0, data: bytes.toString("base64") }); f.frame("audit-file-end", {}); f.frame("audit-end", { group, subjectSha256 });
   writeFileSync(join(f.local, "operation.lock"), "test monitor custody");
   writeFileSync(join(f.local, "audit-delivery.lock"), "test approved publisher custody");
   const delivery = { schema: protocol.schema, subjectSha256,
     review: { subjectSha256, decision: "approved", findings: [], reviewer: "test reviewer", reviewedAt: "2026-11-17T12:00:00.000Z" },
-    bundle: { schema: "json-api-native-audits/v2", receipts: protocol.members.map((identity) => ({ identity })) } };
+    bundle: { schema: mixed ? "mixed-native-source-audits/v1" : "json-api-native-audits/v2", receipts: protocol.members.map((identity) => ({ identity })) } };
   const path = join(f.local, "approval.json"); writeFileSync(path, JSON.stringify(delivery));
   const state = { round: binding.round, commit: binding.commit, token: binding.token,
     control: { helperSha256: binding.helperSha256, monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)), phase: "live" } } };
@@ -304,6 +326,28 @@ async function queuedAudit(t, onInput) {
   assert.ok(!existsSync(queued + ".pending"));
   assert.equal(digest(readFileSync(queued)), digest(readFileSync(path)));
   return { f, result, group, campaign, subjectSha256, state, path, queued, delivery };
+}
+
+for (const group of ["json-api", "mixed-production"]) {
+  test(`${group} audit custody never reads the optional Hardening status file`, async (t) => {
+    const stat = fs.lstatSync;
+    let sidecarReads = 0;
+    const hook = t.mock.method(fs, "lstatSync", (path, ...args) => {
+      if (String(path).endsWith("monitor-native-cells.json")) { sidecarReads++; throw new Error("optional storage unavailable"); }
+      return stat(path, ...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      const { f, result, path } = await queuedAudit(t, undefined, group);
+      const deadline = performance.now() + 2000;
+      while (!f.input.some(({ kind }) => kind === "delivery-end") && performance.now() < deadline) await delay(10);
+      assert.equal(f.input.filter(({ kind }) => kind === "delivery-begin").length, 1);
+      assert.deepEqual(Buffer.concat(f.input.filter(({ kind }) => kind === "delivery-data")
+        .map(({ payload }) => Buffer.from(payload.data, "base64"))), readFileSync(path));
+      f.close(255); await result.monitor.done;
+      assert.equal(sidecarReads, 0);
+    } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  });
 }
 
 test("paused audit material and approved delivery use the same existing stream, never another process or channel", async (t) => {

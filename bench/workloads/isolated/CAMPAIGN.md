@@ -31,11 +31,19 @@ or authority to collect or retire a host. An older controller or one that
 has not received a complete first marker has no count. A missed marker or
 failed telemetry write can leave the last reported count stale. Telemetry
 failure does not cancel the command or change the required control checks.
-The workstation keeps the latest count in an optional status file, not in
-the journal that authorizes lease or custody decisions. It writes counts
-asynchronously, with at most one write in flight and one waiting count.
-Renewal and terminal publication never wait for those writes. An invalid
-count does not suppress the required active state that arrives with it.
+The campaign sends counts over a nonblocking, same-user Unix socket with
+no filesystem state. The guardian reads at most one eight-byte count at
+a time and attaches it only to matching active Hardening progress. It
+never waits for the optional sender or uses it as a state transition.
+The workstation keeps the latest count in an optional status file, not
+in the custody journal. The optional publisher at each end keeps one
+update in flight and at most one waiting count. Only an explicit status
+read with matching active Hardening progress reads the workstation
+file; audit and custody reads never open it. Renewal, audit readiness,
+seal and terminal publication are independent of the optional channel.
+The SSH frame and saved evidence schemas are unchanged. The source-bound
+guardian has new bytes; already-pinned runs keep their measured checkout
+and its guardian, not this revision's helper.
 
 ## Parent interface
 

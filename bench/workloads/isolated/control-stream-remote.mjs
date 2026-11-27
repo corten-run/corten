@@ -1,7 +1,8 @@
 // Campaign-owned lease consumer, independent of the SSH guardian. No reconnect.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, unlinkSync, write, writeFileSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, write } from "node:fs";
+import { createConnection } from "node:net";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
@@ -76,9 +77,33 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   const read = (name) => name === "stream-lease.json" ? leaseJSON(join(root, name)) : JSON.parse(readRegular(join(root, name)));
   assert.equal(streamHash(read("stream-registration.json")), streamHash(registration));
   let revoked = false, ended = false, sealed = false, draining = false, windowStart, renewal = 0;
+  // An abstract Unix socket has no filesystem stage or shared state slot.
+  let activeHardening, cellSocket, nextCells;
+  const stopCells = () => {
+    activeHardening = nextCells = undefined;
+    cellSocket?.destroy(); cellSocket = undefined;
+  };
+  function sendCells() {
+    if (!nextCells || cellSocket) return;
+    const { started, total } = nextCells; nextCells = undefined;
+    try {
+      const socket = createConnection({ path: "\0corten-bench-cells-" + registration.id });
+      cellSocket = socket;
+      socket.on("error", () => {});
+      socket.once("close", () => {
+        if (cellSocket === socket) { cellSocket = undefined; sendCells(); }
+      });
+      socket.unref();
+      socket.setTimeout(1000, () => socket.destroy());
+      const bytes = Buffer.alloc(8);
+      bytes.writeUInt32BE(started); bytes.writeUInt32BE(total, 4);
+      socket.end(bytes);
+    } catch { stopCells(); } // Unavailable telemetry must not escape the native stdout callback.
+  }
   const invalidate = (reason) => {
     if (revoked) return;
     revoked = true;
+    stopCells();
     abort.abort();
     try {
       // Job stderr is captured. The historical marker path is an existence gate;
@@ -128,22 +153,16 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       if (status.state === "blocked-review-needed") publish("audit-ready", { campaign: status.campaign, group: status.auditGroup,
         subjectSha256: status.auditGroup === "mixed-production" ? status.mixedAuditSubjectSha256 : status.auditSubjectSha256 });
       else publish("progress", status);
+      if (status.state === "active" && status.nextGroup === "hardening" && status.round === binding.round)
+        activeHardening = status;
+      else stopCells();
     },
     cellProgress(status) {
-      if (revoked || sealed || draining) return;
-      // The watchdog and required publications still check the lease. This
-      // one writer's optional update neither scans nor shares their stage.
-      // Keep the stage outside the fixed custody inventory in case cleanup fails.
-      const stage = root + ".cell-progress.pending";
-      let created = false;
-      try {
-        const fd = openSync(stage, "wx", 0o600); created = true;
-        try { writeFileSync(fd, JSON.stringify({ kind: "progress", payload: status })); }
-        finally { closeSync(fd); }
-        renameSync(stage, join(root, "stream-state.json"));
-      } catch {
-        if (created) try { unlinkSync(stage); } catch { /* Leave required control writes unaffected. */ }
-      }
+      if (!activeHardening || status.round !== activeHardening.round || status.campaign !== activeHardening.campaign
+        || status.state !== "active" || status.nextGroup !== "hardening") return;
+      const { started, total } = status.nativeCellProgress ?? {};
+      if (!Number.isSafeInteger(started) || !Number.isSafeInteger(total) || started < 1 || started > total || total > 0xffffffff) return;
+      nextCells = { started, total }; sendCells();
     },
     audit(group, bytes) {
       check(); assert.ok(!sealed && !draining); const proof = read("stream-audit-" + group + ".json");
@@ -152,6 +171,7 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       assert.equal(proof.intent.bytes, bytes.length); assert.equal(proof.intent.group, group); return proof;
     },
     async seal() {
+      stopCells();
       check(); assert.ok(!sealed && !draining && windowStart === undefined); publish("seal", {});
       const deadline = now() + 10000000000n;
       for (let attempts = 0; !existsSync(join(root, "stream-sealed.json")); attempts++) {

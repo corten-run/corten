@@ -15,10 +15,22 @@ test("actual fixed guardian registers and pins exact socket ancestry, streams au
   assert.equal(result.failed, false); assert.equal(result.terminal, true); assert.equal(result.invalid, false);
   assert.equal(result.drainStatus, 0);
   assert.deepEqual(result.pinned, [10, 20, 21]); assert.equal(result.auditPublished, true); assert.ok(result.seal);
+  assert.equal(result.cellAccepts, 0);
   verifyApparatus(result.binding, registration, { host: registration.host, monoNs: registration.createdMonoNs, members: registration.members, listener: registration.listener });
   assert.equal(verifyStreamDrain(result.binding, registration, result.drain).remoteDrained, true);
   assert.ok(result.frames.includes("progress") && result.frames.includes("audit-end") && result.frames.includes("delivery-sealed") && result.frames.at(-1) === "terminal");
 });
+for (const mode of ["hardening-count", "hardening-stalled"]) {
+  test("actual guardian keeps optional counts out of required state: " + mode, () => {
+    const r = kernel(mode), counted = mode === "hardening-count";
+    assert.deepEqual(r.cells, counted ? [{ started: 2, total: 108 }] : []);
+    assert.equal(r.cellReads, counted ? 2 : 15);
+    assert.equal(r.cellAccepts, r.cellCloses);
+    assert.ok(r.renewal >= (counted ? 1 : 2));
+    assert.equal(r.auditPublished, true);
+    assert.ok(r.seal); assert.equal(r.terminal, true); assert.equal(r.invalid, false); assert.equal(r.drainStatus, 0);
+  });
+}
 test("a failed group with no audit closes the guardian and admits a separate disappearance proof", () => {
   const r = kernel("failed-group");
   assert.deepEqual(r.frames.filter((kind) => kind !== "challenge"), ["registered", "progress", "terminal"]);

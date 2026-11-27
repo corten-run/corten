@@ -26,6 +26,8 @@ rows, descriptors, incoming, output, pinned = {}, {}, bytearray(), [], []
 diagnostic = bytearray()
 clock, next_fd = 1000000, 2
 session = '/user.slice/user-0.slice/session-7.scope'
+cell_mode = mode in ('hardening-count', 'hardening-stalled')
+cell_accepts, cell_reads, cell_closes = 0, 0, 0
 
 def add(pid, parent, group):
     fields = ['0'] * 49
@@ -88,6 +90,8 @@ def write(path, value, limit=8388608):
 def read(path, limit=8388608):
     value = data[str(path)]; assert len(value) <= limit; return value
 def send(kind, payload): incoming.extend(encoded({'id': identifier, 'kind': kind, 'payload': payload}))
+def audit_ready():
+    put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
 def emit(frame):
     output.append(frame)
     kind = frame['kind']
@@ -99,8 +103,13 @@ def emit(frame):
         if mode in ('already-exited', 'exit-after-renewals'):
             return
         put('campaign-active.json', {'owner': {'pid': 40}})
-        put('stream-state.json', {'kind': 'progress', 'payload': {'state': 'active'}})
+        progress = {'state': 'active'}
+        if cell_mode: progress.update(round=binding['round'], campaign=campaign, nextGroup='hardening')
+        put('stream-state.json', {'kind': 'progress', 'payload': progress})
     elif kind == 'progress':
+        if cell_mode:
+            if 'nativeCellProgress' in frame['payload']: audit_ready()
+            return
         if mode == 'new-child': add(22, 21, session)
         if mode == 'namespace': rows[20]['net'] = '999'
         if mode == 'affinity': rows[20]['cpus'] = '0-1'
@@ -108,7 +117,7 @@ def emit(frame):
         if mode == 'failed-group':
             # A failed timing group finishes without producing an audit subject.
             put('stream-state.json', {'kind': 'seal', 'payload': {}})
-        elif mode != 'lost-lease': put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
+        elif mode != 'lost-lease': audit_ready()
     elif kind == 'challenge':
         if mode == 'exit-after-renewals' and frame['payload']['sequence'] == 3:
             data['/bench/exit-code'] = b'2\n'
@@ -157,7 +166,30 @@ def select(readers, writers, errors, timeout):
     global clock
     clock += 100000000
     assert clock < 30000000000, 'fixture producer did not terminate'
+    if mode == 'hardening-stalled' and cell_reads == 15 and not any(v['kind'] == 'audit-begin' for v in output):
+        audit_ready()
     return ([0] if incoming else [], writers, [])
+class CellSocket:
+    def __enter__(self): return self
+    def __exit__(self, *args): pass
+    def setblocking(self, value): assert not value
+    def bind(self, address): assert cell_mode and address == '\0corten-bench-cells-' + identifier
+    def listen(self, backlog): assert backlog == 1
+    def accept(self):
+        global cell_accepts
+        cell_accepts += 1
+        return CellSocket(), None
+    def getsockopt(self, *args): return b'\0' * 12
+    def recv(self, length):
+        global cell_reads
+        cell_reads += 1
+        if mode == 'hardening-stalled':
+            raise BlockingIOError()
+        data = b'\0\0\0\x02\0\0\0\x6c'
+        return data[:3] if length == 8 else data[3:]
+    def close(self):
+        global cell_closes
+        cell_closes += 1
 class Scan:
     def __init__(self, path): self.path = path
     def __enter__(self): return iter(self.path.iterdir())
@@ -168,6 +200,7 @@ fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 21, uname=lambd
 scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'private': lambda p: None, 'read': read, 'write': write,
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)
+sys.modules['socket'] = types.SimpleNamespace(socket=lambda *_: CellSocket(), AF_UNIX=1, SOCK_STREAM=1, SOL_SOCKET=1, SO_PEERCRED=17)
 terminal, failed, drain, reason, drain_status = False, False, None, None, None
 if mode == 'already-exited':
     data['/bench/exit-code'] = b'2\n'
@@ -192,6 +225,8 @@ if terminal:
     assert data.get(root + '/stream-drain.json', b'') == drain_output
 print(json.dumps({'binding': binding, 'registration': next((v['payload'] for v in output if v['kind'] == 'registered'), None),
     'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'reason': reason, 'drain': drain,
+    'cells': [v['payload']['nativeCellProgress'] for v in output if v['kind'] == 'progress' and 'nativeCellProgress' in v['payload']],
+    'cellReads': cell_reads, 'cellAccepts': cell_accepts, 'cellCloses': cell_closes,
     'drainStatus': drain_status,
     'renewal': json.loads(data[root + '/stream-lease.json'])['renewal'] if root + '/stream-lease.json' in data else None,
     'invalid': root + '/stream-invalid.json' in data, 'diagnostic': diagnostic.decode(),

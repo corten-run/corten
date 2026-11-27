@@ -107,10 +107,14 @@ function cellCounts(value) {
   if (Number.isSafeInteger(started) && Number.isSafeInteger(total) && started >= 1 && started <= total) return { started, total };
 }
 
-function readCellProgress(local, id) {
+function isHardeningProgress(value, round) {
+  return value?.state === "active" && value.nextGroup === "hardening" && value.round === round;
+}
+
+function readCellProgress(local, { id, payload }) {
   try {
     const saved = JSON.parse(regular(join(local, cellFile), 1024));
-    if (saved.id === id) return cellCounts(saved);
+    if (saved.id === id && saved.round === payload.round && saved.campaign === payload.campaign) return cellCounts(saved);
   } catch { /* A missing, busy or damaged optional status file is not a custody error. */ }
 }
 
@@ -126,7 +130,8 @@ async function saveCellProgress(local, status) {
   }
 }
 
-export function localStreamStatus(local) {
+// Custody callers use only required records. Optional storage is read only by observers.
+export function localStreamStatus(local, { includeCells = false } = {}) {
   physical(local);
   for (const kind of ["invalid", "terminal"]) {
     const path = join(local, `monitor-${kind}.json`);
@@ -134,11 +139,16 @@ export function localStreamStatus(local) {
   }
   const path = join(local, "monitor-journal.jsonl");
   if (!existsSync(path)) return { kind: "pending" };
+  let latest;
   for (const frame of journalFrames(path)) {
-    const nativeCellProgress = readCellProgress(local, frame.id);
-    return { kind: "progress", frame, ...(nativeCellProgress && { nativeCellProgress }) };
+    latest ??= frame;
+    if (includeCells && frame.kind === "peer-lease" && frame.id === latest.id) continue;
+    const nativeCellProgress = includeCells && frame.id === latest.id && frame.kind === "progress"
+      && typeof frame.payload?.round === "string" && isHardeningProgress(frame.payload, frame.payload.round)
+      && readCellProgress(local, frame);
+    return { kind: "progress", frame: latest, ...(nativeCellProgress && { nativeCellProgress }) };
   }
-  return { kind: "progress", frame: null };
+  return { kind: "progress", frame: latest ?? null };
 }
 
 export function livePeerLease(local, state) {
@@ -290,7 +300,7 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
   physical(local); assert.ok(!existsSync(join(local, "monitor-journal.jsonl")), "monitor cannot restart/adopt a stream");
   const fd = openSync(join(local, "monitor-journal.jsonl"), "wx", 0o600);
   let bytes = 0, sequence = 0, buffer = Buffer.alloc(0), registration, terminal, child, timer, file, audit, auditBytes = 0;
-  let nativeEntered = false, lastPeerLease = 0, nativeCells;
+  let nativeEntered = false, lastPeerLease = 0, activeHardening, nativeCells;
   let pendingCells, writingCells = false;
   let readyResolve, readyReject, doneResolve, doneReject, settled = false, closing = false, last = Date.now(), deadline = last + streamLimits.maximumMs;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
@@ -356,23 +366,27 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
         }
       } else if (kind === "progress") {
         const { nativeCellProgress, ...status } = payload;
+        const hardening = isHardeningProgress(status, expected.binding.round);
         if (Object.hasOwn(payload, "nativeCellProgress")) {
-          if (status.round !== expected.binding.round || status.state !== "active" || status.nextGroup !== "hardening") return;
-          // The remote slot can coalesce the first active state with the first
-          // count. Preserve that required state regardless of the count.
-          if (!nativeEntered) { append({ ...frame, payload: status }); nativeEntered = true; }
+          if (!hardening) return;
+          // An older sender can combine the first active state with a count.
+          if (!nativeEntered) { append({ ...frame, payload: status }); nativeEntered = true; activeHardening = status; }
+          if (!activeHardening || activeHardening.campaign !== status.campaign) return;
           const counts = cellCounts(nativeCellProgress);
           if (counts && (!nativeCells || counts.total === nativeCells.total && counts.started > nativeCells.started)) {
             nativeCells = counts;
-            pendingCells = { id: expected.id, round: status.round, ...counts };
+            pendingCells = { id: expected.id, round: status.round, campaign: status.campaign, ...counts };
             if (!writingCells) void flushCells();
           }
         } else {
           if (status.state === "active") nativeEntered = true;
+          activeHardening = hardening ? status : undefined;
+          if (!hardening) pendingCells = undefined;
           append(frame);
         }
       }
       else if (kind === "audit-begin") {
+        activeHardening = pendingCells = undefined;
         assert.equal(audit, undefined); assert.ok(["json-api", "mixed-production"].includes(payload.group));
         assert.match(payload.campaign, /^r[1-9]\d*-[a-f0-9]{16}$/); assert.match(payload.subjectSha256, /^[a-f0-9]{64}$/);
         const root = join(local, "monitor-audit-" + payload.group), stage = root + ".partial";
