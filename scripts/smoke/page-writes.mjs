@@ -76,7 +76,10 @@ export async function pageWrites(page, browser) {
    * by the page's monotonic clock, as the request itself carries it (`smoke-start`, which a wrapper of
    * the page's `fetch`, added before the page loads, puts on each of its same-origin fetches; NaN for
    * a request without it, such as a load), so a draw the page recorded can be counted from the read
-   * that brought it by one clock.
+   * that brought it by one clock. `styled`, by the same place, whether the page had noted the held
+   * stylesheet's load (`__heldStyleAt`, which the stylesheet case sets as the document captures that
+   * load) when it started the request, as the wrapper marks it on the request in the same task
+   * (`smoke-styled`), so which came first is the page's own order of events, not two times compared.
    * `settled` holds, by each write's number, the length of `asked` and the time the moment the
    * stand-in fails that write or hands the page its answer (`Since`): no read the page asked after
    * it saw that answer, or that write fail, has a place before it, and a bound on that read counts
@@ -117,6 +120,7 @@ export async function pageWrites(page, browser) {
       /** @type {string[]} */ asked: [],
       /** When each request in `asked` reached the stand-in (`performance.now()` here). @type {number[]} */ askedAt: [],
       /** When the page started each request in `asked` (`performance.now()` there, its `smoke-start`), or NaN. @type {number[]} */ startedAt: [],
+      /** Whether the page had noted the held stylesheet's load when it started each request in `asked` (its `smoke-styled`). @type {boolean[]} */ styled: [],
       /** @type {Record<string, string>} */ answered: {},
       /** By write number, the length of `asked` and the time when the stand-in failed or answered it. @type {Record<number, Since>} */
       settled: {},
@@ -137,7 +141,8 @@ export async function pageWrites(page, browser) {
     try {
       const own = await within(30_000, "the write case's page was not made within 30 s", context.newPage());
       // Each same-origin fetch the page makes carries the time the page started it, by its own
-      // monotonic clock (`smoke-start`), from before its load.
+      // monotonic clock (`smoke-start`), from before its load, and, once the page has noted the held
+      // stylesheet's load (`__heldStyleAt`), that it had (`smoke-styled`), read in the same task.
       await within(
         5000,
         "the write case's fetch wrapper was not added within 5 s",
@@ -149,6 +154,7 @@ export async function pageWrites(page, browser) {
               if (new URL(input instanceof Request ? input.url : String(input), location.href).origin === location.origin) {
                 const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
                 headers.set("smoke-start", String(started));
+                if ((/** @type {any} */ (window)).__heldStyleAt !== undefined) headers.set("smoke-styled", "1");
                 return original.call(this, input, { ...init, headers });
               }
             } catch {}
@@ -170,6 +176,7 @@ export async function pageWrites(page, browser) {
             seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
             seen.askedAt.push(performance.now());
             seen.startedAt.push(Number(req.headers()["smoke-start"] ?? NaN));
+            seen.styled.push(req.headers()["smoke-styled"] === "1");
             // Counted as the write is sent, so the writes are numbered in the order the page sent them.
             if (write) seen.writes += 1;
             const writes = seen.writes;
@@ -178,8 +185,9 @@ export async function pageWrites(page, browser) {
             const holding = write ? undefined : seen.holdRead(at);
             // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
             const sent = { ...req.headers(), "accept-encoding": "identity" };
-            // The page's start time is the check's, not the server's.
+            // The page's start time and its note of the stylesheet are the check's, not the server's.
             delete sent["smoke-start"];
+            delete sent["smoke-styled"];
             if (write && !seen.draws) delete sent.prefer;
             // Each step within 5 s, and nothing sent once the case is over, when the request is aborted
             // (`exchange`); the holds are the case's, outside those bounds.
@@ -1056,9 +1064,9 @@ export async function pageWrites(page, browser) {
    * the smoke's own monotonic clock (`performance.now()` here), from `heard`, the moment the check
    * heard of the release it let go, or else from the start of the wait: the 5 s for the outcome and
    * 5 s more for the look that finds the page's clock past them. Each look has what is left of those
-   * 10 s, at most 5 s, and none starts once they are over; a look not answered in its time ends the
-   * wait with nothing, and one cut short by the 10 s with what the last answered look saw (a failure
-   * it did not see is no failure).
+   * 10 s, at most 5 s, and none starts once they are over; the pause between looks ends with them
+   * too. A look not answered in its time ends the wait with nothing, and one cut short by the 10 s
+   * with what the last answered look saw (a failure it did not see is no failure).
    * @param {import("@playwright/test").Page} own @param {number} [released] @param {number} [heard]
    */
   const bodyOutcome = async (own, released, heard) => {
@@ -1087,7 +1095,7 @@ export async function pageWrites(page, browser) {
       const by = (records.releasedAt ?? start) + 5000;
       last = { ...records, by };
       if (records.failedAt !== null || now >= by) return last;
-      await pause(Math.min(50, Math.max(0, by - now)));
+      await pause(Math.max(0, Math.min(50, by - now, until - performance.now())));
     }
   };
   // A write's body fails after its headers, optionally after another form's whole page has
@@ -1479,6 +1487,8 @@ export async function pageWrites(page, browser) {
       retry: /** @type {string | undefined} */ (undefined),
       /** When the page started that next read, by its clock (`seen.startedAt`), or null. */
       retryStartedAt: /** @type {number | null} */ (null),
+      /** Whether the page had noted the stylesheet's load when it started that read (`seen.styled`). */
+      retryStyled: false,
       /** When the page had the released stylesheet, by its clock. */
       styleAt: /** @type {number | null} */ (null),
       drawnNext: /** @type {{ time: number, failed: string | null } | null} */ (null),
@@ -1538,23 +1548,25 @@ export async function pageWrites(page, browser) {
         // the stand-in heard it, by the smoke's clock, against the moment before it let go; the draw
         // as the page recorded it, by the page's clock, against the moment the page had the released
         // stylesheet (its `load`, noted by the page as it came, `__heldStyleAt`), which cannot come
-        // before the release. The read must be one the page started once it had the stylesheet, and
-        // its draw come after that too, by the same clock (the read's `smoke-start`, the draw's
-        // record): a retry made, or drawn, while the stylesheet still held the poll is not one the
-        // held poll's end let go. The page's clock may be coarsened to a millisecond, and the load is
-        // noted as the document captures it, before the runtime hears of it, so a time equal to it is
-        // after it. A whole draw of the held answer would have replaced the header and lost its
+        // before the release. The read must be one the page started once it had the stylesheet: the
+        // page's fetch wrapper marks, in the task that starts the read, whether that note was made by
+        // then (`seen.styled`), so the order is the page's own and a clock coarsened so that the two
+        // times are equal does not decide it. The load is noted as the document captures it, before
+        // the runtime hears of it. A retry made while the stylesheet still held the poll is not one the
+        // held poll's end let go, and its draw must come at or after the load by the page's clock (the
+        // draw's record). A whole draw of the held answer would have replaced the header and lost its
         // failure mark.
         const from = sinceNow(seen);
         release();
         const nextAt = await readAsked(seen, from);
         got.retry = nextAt === null ? undefined : seen.asked[nextAt].split(" ")[2];
         got.retryStartedAt = nextAt === null || !Number.isFinite(seen.startedAt[nextAt]) ? null : seen.startedAt[nextAt];
+        got.retryStyled = nextAt !== null && seen.styled[nextAt] === true;
         // The page's note of the stylesheet's load, read once the read it leads to has come (bounded
         // plumbing): the load comes before the held poll's draw, and so before that read.
         got.styleAt = nextAt === null ? null : ((await pollAsync(5000, () => own.evaluate(() => /** @type {number | false} */ ((/** @type {any} */ (window)).__heldStyleAt ?? false)))) ?? null);
         got.drawnNext = nextAt === null || got.styleAt === null ? null : await drawnBy(own, nextAt, got.styleAt + 5000);
-        got.afterStyle = got.styleAt !== null && got.retryStartedAt !== null && got.drawnNext !== null && got.retryStartedAt >= got.styleAt && got.drawnNext.time >= got.styleAt;
+        got.afterStyle = got.styleAt !== null && got.retryStyled && got.drawnNext !== null && got.drawnNext.time >= got.styleAt;
         got.drewNext = got.drawnNext?.failed === "";
         got.kept = await readWithin(
           "whether the failure was still shown",
@@ -1809,7 +1821,9 @@ export async function pageWrites(page, browser) {
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
     /** @type {() => void} */
     let asked = () => {};
-    /** When the page asked for the held script, by the smoke's monotonic clock. @type {number | null} */
+    /** When the route saw each request for the held script, in order, by the smoke's monotonic clock. @type {number[]} */
+    const scriptAsks = [];
+    /** When the page asked for the held script, by the smoke's monotonic clock: the first request the route saw. @type {number | null} */
     let askedAt = null;
     const waiting = new Promise((resolve) => (asked = () => resolve(true)));
     // The held script is let go, its route removed and the page closed however the case ends, each
@@ -1819,7 +1833,8 @@ export async function pageWrites(page, browser) {
         5000,
         "the held script's route was not set within 5 s",
         own.route("**/scripts/quoted.js", async (route) => {
-          askedAt ??= performance.now();
+          scriptAsks.push(performance.now());
+          askedAt ??= scriptAsks[0];
           asked();
           await held;
           // Let through once let go, bounded, or aborted once the case is over.
@@ -1832,7 +1847,12 @@ export async function pageWrites(page, browser) {
       // click is asked for), by the time the check heard it finish (`finished.time`), and the page
       // asked for the script its patch names, which is held, within 5 s of that finish: a fulfill
       // that resolves need not have answered the write, and a request for the script does not say
-      // the write was answered. Without both, the link is not pressed and the case fails.
+      // the write was answered. That request is tied to the patch by order: it must be the page's
+      // first request for the script, heard after the stand-in handed the page the write's answer
+      // (`seen.settled`), before which the page had no patch to name it, so a request for it made
+      // before the patch came does not pass for the patch's. The page's end of the body can come before
+      // the check hears the write finish, so the request may be heard before that finish, not before
+      // the answer was handed over. Without all of it, the link is not pressed and the case fails.
       const pressedAt = performance.now();
       await actWithin("the press of the form's button", own.click("main form button"));
       const finishedBy = pressedAt + 5000;
@@ -1842,7 +1862,8 @@ export async function pageWrites(page, browser) {
       const heard = (await pollRecord(finishedBy - performance.now(), () => seen.finished[1] ?? false)) || null;
       const finished = heard !== null && heard.time <= finishedBy ? heard : null;
       if (finished !== null && askedAt === null) await cameWithin(leftOf(finished.time, 5000), waiting);
-      const stalled = finished !== null && askedAt !== null && askedAt <= finished.time + 5000;
+      const handed = seen.settled[1]?.time ?? null;
+      const stalled = finished !== null && handed !== null && askedAt !== null && askedAt >= handed && askedAt <= finished.time + 5000;
       let arrived = false;
       if (finished !== null && stalled) {
         const linkAt = performance.now();
@@ -1874,7 +1895,12 @@ export async function pageWrites(page, browser) {
         patch.drawn === false &&
         shown.same &&
         seen.asked.includes("GET /smoke/quoted page");
-      const timing = { pressedAt, finishedIn: heard === null ? null : Math.round(heard.time - pressedAt), scriptAskedIn: askedAt === null ? null : Math.round(askedAt - pressedAt) };
+      const timing = {
+        pressedAt,
+        handedIn: handed === null ? null : Math.round(handed - pressedAt),
+        finishedIn: heard === null ? null : Math.round(heard.time - pressedAt),
+        scriptAskedIn: scriptAsks.map((at) => Math.round(at - pressedAt)),
+      };
       check(patchName, leftWhole, JSON.stringify({ stalled, answers: seen.answers, finished, timing, faults: seen.faults, arrived, asked: seen.asked, shown, section, patch }));
       // The patch was answered before that page was asked for, so the page's layout drew it: the
       // navigation after reads <main> alone, not the whole page again. Only its reads of

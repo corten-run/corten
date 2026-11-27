@@ -1618,7 +1618,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // document read once the load returns and the one read after the wait must be the first, so a
       // full load at any moment after the case's own, even before `goto` returns, fails it. A full
       // load of the receipt is not the page reading itself again in place. Without the Navigation
-      // API, a load of the receipt is how the page reads itself again, and counts.
+      // API the page reads itself again by reloading, so that read must be a load of the receipt,
+      // drawn in a document the tab made after the case's own (numbered after the first by the same
+      // count): `Saved.` a fetch drew in place does not pass for it.
       {
         const target = await readWithin("the pending write's page", pending());
         const address = new URL(target).pathname + new URL(target).search;
@@ -1627,7 +1629,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         loadAnswer = null;
         placeLoads = { address, count: 0 };
         pollTarget = address;
-        /** The place in `wholeReads` of the read whose answer drew `Saved.`, as the wait saw it. @type {unknown} */
+        /** What the wait saw: the place in `wholeReads` of the read whose answer drew `Saved.`, and the number of the document it was drawn in. @type {unknown} */
         let poll = null;
         /** The `sessionStorage` key of the case's count of documents, its own each run. */
         const documentKey = `smoke-fragment-documents-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -1656,7 +1658,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             "Saved. drawn at the place by an answer to a later read of the receipt",
             (address) => {
               const status = document.getElementById("alert-status");
-              return location.pathname + location.search === address && location.hash === "#alert-status" && status?.textContent === "Saved." && status.getAttribute("data-smoke-poll");
+              const mark = status?.getAttribute("data-smoke-poll");
+              return (
+                location.pathname + location.search === address &&
+                location.hash === "#alert-status" &&
+                status?.textContent === "Saved." &&
+                mark && { mark, document: /** @type {number | null} */ ((/** @type {any} */ (window)).__smokeDocument ?? null) }
+              );
             },
             address,
             loadFrom,
@@ -1670,20 +1678,25 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             () => within(5000, "the fragment case's count of documents was not cleared within 5 s", page.evaluate((key) => sessionStorage.removeItem(key), documentKey)),
           );
         }
-        const by = typeof poll === "string" ? wholeReads[Number(poll)] : undefined;
-        const laterRead = by !== undefined && Number(poll) >= readFrom && by.address === address && !by.navigation && by.saved === true;
-        // With the Navigation API: the runtime's read (not a load), in the document the case loaded,
-        // the first the tab made after the count started, with no other made by the end of the wait.
-        const inPlace = !swaps || (laterRead && !by?.load);
+        const drawn = /** @type {{ mark: string, document: number | null } | null} */ (poll && typeof poll === "object" ? poll : null);
+        const by = drawn === null ? undefined : wholeReads[Number(drawn.mark)];
+        const laterRead = drawn !== null && by !== undefined && Number(drawn.mark) >= readFrom && by.address === address && !by.navigation && by.saved === true;
+        // The read the runtime makes. With the Navigation API: a read in place (not a load), in the
+        // document the case loaded, the first the tab made after the count started, with no other
+        // made by the end of the wait. Without it: a load of the receipt, drawn in a document made
+        // after the case's own.
+        const asRuntime = swaps ? laterRead && !by?.load : laterRead && !!by?.load && typeof drawn?.document === "number" && drawn.document > 1;
         const sameDocument = !swaps || (loadedAs === 1 && endedAs === 1);
-        const ownRead = laterRead && inPlace && sameDocument;
+        const ownRead = laterRead && asRuntime && sameDocument;
         const later = wholeReads.slice(readFrom).filter((r) => r.address === address).length;
         const shown = laterRead
           ? "Saved."
           : await readWithin("the status line after the wait for Saved.", page.evaluate(() => document.getElementById("alert-status")?.textContent ?? null));
         const drawnBy = !laterRead
           ? "not drawn by an answer to a later read of the receipt within 6 s"
-          : `drawn by read ${Number(poll) - readFrom + 1} of the case${by?.load ? " (a load)" : ""}${inPlace ? "" : ", a full load where the Navigation API reads in place"}`;
+          : `drawn by read ${Number(drawn?.mark) - readFrom + 1} of the case${by?.load ? " (a load)" : ""} in document ${drawn?.document ?? "unnumbered"}${
+              asRuntime ? "" : swaps ? ", a full load where the Navigation API reads in place" : by?.load ? ", not in a document a load made after the case's own" : ", a fetch in place where without the Navigation API the page reads itself again by reloading"
+            }`;
         const documents = sameDocument ? "" : `; document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`;
         check("a page at a place (#id) reads itself again too", !!loadAnswer?.saving && ownRead && wholeAnswerFaults.length === faultsFrom, `${faultsSince(faultsFrom)}${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${shown} at ${page.url()}, ${drawnBy}; ${later} reads of the receipt after its load${documents}`);
       }
@@ -2209,8 +2222,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // still on its way, is told from one started after it, however late the check hears either,
           // and one started in the same instant as the press is after it, not lost; a load of `/alerts`
           // heard after the press counts too, as does a document that was replaced, which leaves no
-          // notes. The notes are read 2.2 s after News is drawn, and the page's fetch is put back however
-          // the check ends.
+          // notes. The notes are read 2.2 s after News is drawn, and the page's fetch is put back and its
+          // press listener removed however the check ends.
           if (armed && leave) {
             const hold = leave;
             const pressFrom = pageLog.length;
@@ -2231,13 +2244,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                   } catch {}
                   return original.apply(this, /** @type {any} */ (arguments));
                 };
-                document.addEventListener(
-                  "click",
-                  (e) => {
-                    if (notes.pressedAt === null && /** @type {Element} */ (e.target)?.closest?.('a[href="/news"]')) notes.pressedAt = ++notes.count;
-                  },
-                  true,
-                );
+                // Kept by name, so the check's cleanup removes it with the wrapper.
+                w.__smokeLeaveClick = (/** @type {Event} */ e) => {
+                  if (notes.pressedAt === null && /** @type {Element} */ (e.target)?.closest?.('a[href="/news"]')) notes.pressedAt = ++notes.count;
+                };
+                document.addEventListener("click", w.__smokeLeaveClick, true);
               }),
             );
             try {
@@ -2270,6 +2281,8 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                 page.evaluate(() => {
                   const w = /** @type {any} */ (window);
                   if (w.__smokeFetch) window.fetch = w.__smokeFetch;
+                  if (w.__smokeLeaveClick) document.removeEventListener("click", w.__smokeLeaveClick, true);
+                  delete w.__smokeLeaveClick;
                   delete w.__smokeLeave;
                 }),
               ).catch(() => {});

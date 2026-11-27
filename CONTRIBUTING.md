@@ -485,9 +485,11 @@ navigation's `<main>`
 shows, with the failure shown at that draw, both within five seconds of the release: the read as
 the stand-in heard it, by the smoke's clock against its moment before it let go, and the draw by the
 page's clock against the moment the page had the released stylesheet, which it notes as that
-stylesheet loads. The page must also have started that read, and drawn its answer, no earlier than
-that moment by the same clock (the read's `smoke-start` and the draw's record), so a read made or
-drawn while the stylesheet still held the poll does not pass. It does not make a press once a step before it failed, and lets go of the hold, removes
+stylesheet loads. The page must also have started that read once it had noted that load, which the
+page's fetch wrapper marks on the read in the task that starts it (`smoke-styled`), so the page's own
+order of events decides, not two times a coarsened clock can make equal; and drawn its answer no
+earlier than that moment by the page's clock (the draw's record). A read made, or drawn, while the
+stylesheet still held the poll does not pass. It does not make a press once a step before it failed, and lets go of the hold, removes
 its routes and closes its page however it ends, setting and removing its route each bounded to
 five seconds. The
 cut-body cases take a failure as the body's only when the page's own wrapper of that write's
@@ -505,7 +507,8 @@ is past those five seconds, then once more, and the times the page recorded deci
 neither passes an outcome that came after them nor fails one that came in time. The wait as a whole
 has ten seconds by the smoke's own monotonic clock, from the moment the check heard of the release it
 let go (without a second write, from the start of the wait): each look has what is left of them, at
-most five seconds, none starts once they are over, and a failure no look saw by then is none. The page's first failure
+most five seconds, none starts once they are over, the pause between looks ends with them, and a
+failure no look saw by then is none. The page's first failure
 must be the one expected, said after the wrapper cut (or gave) the body, on the form that sent the
 held write: each failure the page says
 is recorded with the wrapper's state at that moment and its target, compared with the form noted
@@ -516,7 +519,9 @@ requires the browser to have finished loading that write with the stand-in's ans
 `requestfinished`, with the answer's own `smoke-write` mark, heard within five seconds of the press
 of the form's button, the press and the finish taken by the same monotonic clock and judged by the
 time the finish was heard, however late the click returns), and the held
-script the patch asks for to have been asked within five seconds of that finish, before the case
+script the patch asks for to have been asked within five seconds of that finish, the page's first
+request for it heard after the stand-in handed the page the write's answer (before then the page had
+no patch to name it; the page can have the whole body before the check hears the finish), before the case
 presses the link, which it presses only once both are confirmed; and that page to show what the write
 changed: its brand, and the section the patch draws,
 which every page after the write draws too, drawn by that page's own section element and not by the
@@ -650,7 +655,8 @@ whatever the store says by then, so a write that landed before the load cannot p
 requires `Saved.` drawn at the place by the answer to a later read of that receipt within six
 seconds of the load's start the same way: with the Navigation API, the runtime's read in the document the case loaded
 (a full load of the receipt is not the page reading itself again in place); without it, a load of
-the receipt. That document is told by an init script added before the load, which numbers each
+the receipt, drawn in a document the tab made after the case's own by the count below (`Saved.` a
+fetch drew in place does not pass for it). That document is told by an init script added before the load, which numbers each
 document the tab makes from then on in the order they are made (a count in the page's session
 storage, which a reload keeps): the document once the load returns and once the wait ends must both
 be the first, so a full load at any moment after the case's own, even one before Playwright's load
@@ -679,7 +685,7 @@ numbered in the page by one count in the order they happen, so a fetch started i
 as the press counts as after it (News can come from a prefetch sent before the press, so no request
 marks the moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
 document replaced meanwhile, which leaves no notes, fails it, and the page's `fetch` is put back
-however it ends. Its route and request listener are
+and its press listener removed however it ends. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
 leaves by the header's link and then requires no further read for a while, the press and the wait
 for News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
@@ -738,7 +744,8 @@ the same, as its request listener is removed. Each answer the slow part's routes
 through, a read aborted or held and let go, the empty patch below) is bounded to five seconds, and
 the empty patch is not sent once its case has ended; a patch not sent fails its check. The first check of a held slow part looks at it only
 once its load's read has reached the route, within five seconds counted from just before the load
-(or, after a client navigation, the press of the link), judged by the time the route saw it, so a
+(or, after a client navigation, the press of the link), judged by the time the route saw it; only a
+read the route saw after that load or press began counts, not one an earlier document sent, and a
 read seen in time counts however late the load or press returns: Firefox marks the
 part busy as its fetch starts, which can be before the route sees it. The link a failed slow part
 shows is pressed in the page too; the page it opens, at exactly the link's address (`/?picks=true`,

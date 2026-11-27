@@ -124,24 +124,27 @@ export async function partReads(page, browser, swaps, noSwaps) {
           }))(),
         );
       /**
-       * Whether the route has seen `count` part reads within 5 s of `from`, a `performance.now()`
-       * time taken just before the load or press that sends the read, so the time the driver took to
-       * return from it is not added. The part is busy once its fetch starts, which in Firefox can be
-       * before the route sees it. Judged by the time the route saw the `count`th read (`readAt`),
-       * looked for with no call to the browser until the 5 s are over and then once more, so a call
-       * that never settles cannot keep the case from its `finally`, a read the route saw in time
-       * counts however late the load or press returned, and a read it saw after the 5 s does not.
-       * @param {number} count @param {number} from
+       * Whether the route has seen a part read at or after `cursor` (the count of reads it had seen
+       * when `from` was taken) within 5 s of `from`, a `performance.now()` time taken just before
+       * the load or press that sends the read, so the time the driver took to return from it is not
+       * added, and a read the route saw before the load or press (an earlier document's) is not taken
+       * for it. The part is busy once its fetch starts, which in Firefox can be before the route sees
+       * it. Judged by the time the route saw that read (`readAt`), looked for with no call to the
+       * browser until the 5 s are over and then once more, so a call that never settles cannot keep
+       * the case from its `finally`, a read the route saw in time counts however late the load or
+       * press returned, and a read it saw after the 5 s does not.
+       * @param {number} cursor @param {number} from
        */
-      const routeSaw = async (count, from) => {
+      const routeSaw = async (cursor, from) => {
         const by = from + 5000;
-        const at = await pollRecord(by - performance.now(), () => readAt[count - 1] ?? false);
-        return at !== null && at <= by;
+        const at = await pollRecord(by - performance.now(), () => readAt[cursor] ?? false);
+        return at !== null && at >= from && at <= by;
       };
+      const loadedCursor = readAt.length;
       const loadedFrom = performance.now();
       await actWithin("the held part's page load", held.goto(`${base}/`));
       await within(5000, "the part was not busy within 5 s", held.waitForSelector('#picks[aria-busy="true"]', { state: "attached", timeout: 5000 })).catch(() => {});
-      const readInTime = await routeSaw(1, loadedFrom);
+      const readInTime = await routeSaw(loadedCursor, loadedFrom);
       const loaded = { ...(await placeholder()), readInTime };
       // Busy: the runtime ran and sent the read, which the route holds unanswered.
       check(
@@ -153,6 +156,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
         held.on("request", onDocument);
         await actWithin("the press of the link to News", held.click('header nav a[href="/news"]'));
         await within(30_000, "the News page was not drawn within 30 s", held.waitForFunction(() => document.title === "News | Watchlist"));
+        const homeCursor = readAt.length;
         const homeFrom = performance.now();
         await actWithin("the press of the link home", held.click('header nav a[href="/"]'));
         await within(
@@ -160,7 +164,7 @@ export async function partReads(page, browser, swaps, noSwaps) {
           "the part was not busy on the page drawn within 5 s",
           held.waitForFunction(() => location.pathname === "/" && !!document.querySelector('#picks[aria-busy="true"]'), null, { timeout: 5000 }),
         ).catch(() => {});
-        const readInTime = await routeSaw(2, homeFrom);
+        const readInTime = await routeSaw(homeCursor, homeFrom);
         const drawn = { ...(await placeholder()), documents, readInTime };
         check("and so does it in a page a client navigation drew", readInTime && drawn.line && !drawn.link && drawn.busy === "true" && drawn.reads === 2 && documents === 0, JSON.stringify(drawn));
       } else skip("and so does it in a page a client navigation drew", noSwaps);
