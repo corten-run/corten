@@ -1493,6 +1493,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // alerts page after that answer's own request in the log, as the log stands once 2.2 s have
       // passed by the smoke's monotonic clock since the check read the note: a read sent between the
       // draw and the check seeing it counts against it, as the part case's check counts one (above).
+      // That answer must be to a read of the page: the runtime's (`corten: page` or `nav`) or a load
+      // of the receipt, never a prefetch (`isPrefetch`), which the route marks too but which reads
+      // nothing again, and all three checks require it.
       // The check that reading again keeps the document requires the load's own document, numbered
       // by an init script added before the load, both once the load returns and after the wait, and
       // the same note of `Saved.` drawn from a read after the case's load that the check it stops
@@ -1573,19 +1576,25 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             ? await readWithin("the page's note of what it drew Saved. from", page.evaluate((key) => sessionStorage.getItem(key), firstKey)).catch(() => null)
             : null;
           const read = await readWithin("the status line after the wait for Saved.", saved());
+          /** The request whose answer first drew `Saved.`, if the page noted one. */
+          const drewFrom = first === null ? undefined : fullReads[Number(first)];
+          /** Whether `r` is a read of the page itself: the runtime's fetch of it or a load, not a prefetch. @param {import("@playwright/test").Request} r */
+          const readsPage = (r) => r.method() === "GET" && !isPrefetch(r) && (r.isNavigationRequest() || ["page", "nav"].includes(r.headers()["corten"] ?? ""));
+          const drawn = drewFrom !== undefined && loadAt >= 0 && Number(first) > loadAt && readsPage(drewFrom) ? first : null;
+          /** Why no answer counts as the one that first drew `Saved.`, for a check's detail. */
+          const notDrawn = `no answer to a read of the receipt after its load (${loadAt}) drew Saved. within 6 s (${JSON.stringify(first)}${drewFrom === undefined || readsPage(drewFrom) ? "" : `, from a ${isPrefetch(drewFrom) ? "prefetch" : "request that is no read of the page"}`})`;
           check(
             "a page waiting for a write reads itself again after a full load",
-            drewSaving && came && read === "Saved." && wholeAnswerFaults.length === faultsFrom,
-            `${faultsSince(faultsFrom)}loaded with ${fullLoadAnswer?.what ?? "no load of the receipt seen"}, first drew ${waiting} -> ${read}${came ? "" : " (Saved. not seen within 6 s)"}`,
+            drewSaving && came && drawn !== null && read === "Saved." && wholeAnswerFaults.length === faultsFrom,
+            `${faultsSince(faultsFrom)}loaded with ${fullLoadAnswer?.what ?? "no load of the receipt seen"}, first drew ${waiting} -> ${read}${came ? "" : " (Saved. not seen within 6 s)"}${came && drawn === null ? `; ${notDrawn}` : ""}`,
           );
-          const drawn = first !== null && loadAt >= 0 && Number(first) > loadAt ? first : null;
           // A document that stayed the first proves nothing when no read after the load drew
           // `Saved.` in time: it requires that read, as the check that it stops does (below).
           if (swaps)
             check(
               "reading again keeps the document",
               drawn !== null && loadedAs === 1 && endedAs === 1,
-              `${drawn === null ? `no answer to a read of the receipt after its load (${loadAt}) drew Saved. within 6 s (${JSON.stringify(first)}); ` : ""}document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`,
+              `${drawn === null ? `${notDrawn}; ` : ""}document ${loadedAs ?? "unnumbered"} once the load returned and ${endedAs ?? "unnumbered"} after the wait, where the load's own is 1 and stays`,
             );
           else skip("reading again keeps the document", noSwaps);
           if (drawn !== null) await pause(2200);
@@ -1596,7 +1605,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             drawn !== null && after !== null && after.reads.length === 0 && wholeAnswerFaults.length === faultsFrom,
             `${faultsSince(faultsFrom)}${
               drawn === null
-                ? `no answer to a read of the receipt after its load (${loadAt}) drew Saved. within 6 s (${JSON.stringify(first)})`
+                ? notDrawn
                 : after === null
                   ? `the request whose answer first drew Saved. (${drawn}) is not in the page's requests`
                   : `${after.reads.length} reads after the one whose answer first drew Saved. (${drawn}), by the check's look at least 2.2 s after that draw: ${after.reads.join(", ") || "none"}${after.prefetches.length ? `; prefetches not counted: ${after.prefetches.join(", ")}` : ""}`
