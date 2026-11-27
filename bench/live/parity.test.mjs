@@ -106,7 +106,7 @@ for (const { name, times, attempts, message, receipt } of [
     assert.equal(phase, "before");
     measuring = true;
     return { receipt: { startedAt: 1000 } };
-  }), (error) => {
+  }, (active) => { if (!active) measuring = false; }), (error) => {
     assert.equal(error.message, message);
     if (message === "native publisher behind offered rate") assert.equal(error.code, "ERR_ASSERTION");
     assert.equal(error.evidence.browsers.length, clients);

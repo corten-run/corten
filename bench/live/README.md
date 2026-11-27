@@ -221,16 +221,18 @@ reading omits the diagnostic, not the failure. Successful levels do not write th
 The saved verifiers still classify the artifact as failed with or without this diagnostic;
 they do not validate the diagnostic or use it to qualify a level.
 
-After a failed level, closing the browser contexts does not prove that the adapter has
-released its readers. Before starting another level on that instance, the runner reads
-`GET /parity/resources` for up to the existing 5-second cleanup bound after context close.
+Browser context closure and any follow-up reader probe share one 5-second cleanup bound.
+The runner confirms every context close; a rejection or unconfirmed close stops the run
+without probing and records `context-close` beside the original failure. After a failed
+level with confirmed closes, the runner reads `GET /parity/resources` in the time left
+before starting another level on that instance.
 Only a direct HTTP 200 with numeric `connections: 0` and `subscriptions: 0` within that
 bound permits the next level. Valid nonzero counts can settle; a fetch error, malformed or
 unavailable response, or timeout stops the run. The original failure is kept with a fixed
 `teardownFailure` code (`fetch`, `malformed`, `unavailable`, or `timeout`), not response
-text. Replay uses the existing cancelled-run inventory: later levels are unattempted,
-not replaced with failure artifacts or eligible for qualification. Successful levels
-make no extra requests; the offered rate and lag gate are unchanged.
+text. Replay requires a teardown refusal to end the retained cells of a cancelled run.
+Later levels are unattempted, not replaced with failure artifacts or eligible for
+qualification. Successful levels make no extra requests; the rate and lag gate are unchanged.
 
 Raw browser frame observations retain the first animation frame seeing a version and the
 following frame (a paint opportunity, not a pixel-photometry claim). Visible latency uses

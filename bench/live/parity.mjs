@@ -435,8 +435,9 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
             signal.throwIfAborted();
             let a;
             const actor = beginActorWindow(isolated);
+            const teardown = {};
             try {
-              const observed = await fanout(browser, base, settings, clients, port, kernelCounters, actor.recordRenderer);
+              const observed = await fanout(browser, base, settings, clients, port, kernelCounters, actor.recordRenderer, teardown);
               a = { schema: "native-live-fanout/v3", profile: fanoutProfile, app, group, provenance, qualification: files,
                 comparative: false, repeats: 1, ...observed };
               a.summary = verifyFanout(a, { app, group, provenance, qualification: files, settings: qualified[0].settings, wire: port.wire });
@@ -447,11 +448,12 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
               console.error(`${app}/fanout-${clients}: ${error.message}`);
             }
             actor.finish(a);
-            let teardownFailure;
-            if (a.schema === "native-live-fanout-failure/v1" && index + 1 < fanoutProfile.clients.length && !signal.aborted) {
-              teardownFailure = await waitForFanoutDrain(base, settings.maxCleanupMs, signal);
-              if (teardownFailure) a.teardownFailure = teardownFailure;
+            let teardownFailure = teardown.failure;
+            if (!teardownFailure && a.schema === "native-live-fanout-failure/v1"
+              && index + 1 < fanoutProfile.clients.length && !signal.aborted) {
+              teardownFailure = await waitForFanoutDrain(base, settings.maxCleanupMs, signal, teardown.deadline);
             }
+            if (teardownFailure) a.teardownFailure = teardownFailure;
             const file = `${app}-fanout-${clients}.json.gz`, bytes = gzipSync(JSON.stringify(a));
             await writeFile(join(out, file), bytes); measurementFiles.push({ file, sha256: hash(bytes) });
             if (teardownFailure) {

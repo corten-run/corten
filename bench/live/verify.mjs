@@ -8,7 +8,7 @@ import { coverage } from "../workloads/evidence.mjs";
 import { contractSha256, selectedApps } from "../workloads/registry.mjs";
 import { recordedInventory, portFor, scenarios, settingsFor, workloadFor } from "./native.mjs";
 import { verifyArtifact } from "./parity.mjs";
-import { fanoutProfile, verifyFanout } from "./fanout.mjs";
+import { fanoutProfile, fanoutTeardownRefusals, verifyFanout } from "./fanout.mjs";
 
 // A stopped run can retain a non-empty prefix, never a reordered/substituted
 // case or a gap. A normal completion still requires the full inventory.
@@ -105,7 +105,7 @@ export async function verifyRound(directory) {
     } else {
       assert.equal(cell.parity, "not-run");
     }
-    let measuredCount = 0;
+    let measuredCount = 0, teardownRefused = false;
     const expectsMeasurement = plan.measurement && artifacts.length === plan.scenarios.length
       && artifacts.every((a) => a.schema === "native-live-evidence/v1");
     if (hasMeasurements || ["complete", "failed"].includes(cell.measurement)
@@ -127,6 +127,15 @@ export async function verifyRound(directory) {
         assert.equal(artifact.app, entry.app); assert.equal(artifact.group, plan.group);
         assert.deepEqual(artifact.provenance, artifacts[0].provenance);
         assert.deepEqual(artifact.qualification, manifest.files);
+        if (Object.hasOwn(artifact, "teardownFailure")) {
+          assert.equal(artifact.schema, "native-live-fanout-failure/v1", "fanout teardown refusal must be a failed cell");
+          assert.ok(fanoutTeardownRefusals.includes(artifact.teardownFailure), "invalid fanout teardown refusal");
+          assert.ok(cancelled && !startupFailure, "fanout teardown refusal requires cancellation");
+          assert.equal(i + 1, measuredCount, "fanout evidence follows teardown refusal");
+          assert.ok(artifact.teardownFailure === "context-close" || i + 1 < fanoutProfile.clients.length,
+            "fanout drain was not required after the final level");
+          teardownRefused = true;
+        }
         if (["native-live-fanout/v1", "native-live-fanout/v2", "native-live-fanout/v3"].includes(artifact.schema)) {
           capturedPasses++;
           if (attempt(entry.app, { clients: artifact.clients }, () => {
@@ -153,7 +162,7 @@ export async function verifyRound(directory) {
       if (scenarios.length || clients.length) notAttempted[entry.app] = { scenarios, clients };
       if (!startupFailure && !hasScenarios) assert.ok(["Cancelled before first scenario", "Cancelled before adapter started"].includes(cell.reason));
       cancelOrder.set(entry.app, { started: hasScenarios || Boolean(startupFailure) || cell.reason === "Cancelled before first scenario",
-        interrupted: !startupFailure && (scenarios.length > 0 || clients.length > 0) });
+        interrupted: !startupFailure && (teardownRefused || scenarios.length > 0 || clients.length > 0) });
     }
     rows.push(cell);
   }

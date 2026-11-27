@@ -10,13 +10,16 @@ import { verifyResources, verifyResourceBounds, verifyResourceLifecycle } from "
 export const fanoutProfile = Object.freeze({ schema: "native-live-fanout-profile/v1", clients: [1, 2, 4],
   seed: 17, rowCount: 5, eventCount: 60, rate: 20, deadlineMs: 90000, maxScheduleLagMs: 500,
   limits: "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking" });
+export const fanoutTeardownRefusals = Object.freeze(["context-close", "fetch", "malformed", "unavailable", "timeout"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Context close can finish before the native endpoint drops its readers.
 // A nonzero observation may settle; a failed or ambiguous observation cannot.
-export async function waitForFanoutDrain(base, maxCleanupMs, signal) {
-  const deadline = performance.now() + maxCleanupMs;
-  const timeout = AbortSignal.timeout(maxCleanupMs);
+export async function waitForFanoutDrain(base, maxCleanupMs, signal, deadline = performance.now() + maxCleanupMs) {
+  if (signal.aborted) return;
+  const remaining = Math.min(maxCleanupMs, Math.ceil(deadline - performance.now()));
+  if (remaining <= 0) return "timeout";
+  const timeout = AbortSignal.timeout(remaining);
   const probe = AbortSignal.any([signal, timeout]);
   const expired = () => timeout.aborted || performance.now() >= deadline;
   const refuse = (reason) => signal.aborted ? undefined : expired() ? "timeout" : reason;
@@ -43,6 +46,16 @@ export async function waitForFanoutDrain(base, maxCleanupMs, signal) {
     }
     await sleep(Math.max(0, Math.min(25, deadline - performance.now())));
   }
+}
+
+async function confirmContextCloses(closes, deadline) {
+  let timer;
+  try {
+    const settled = await Promise.race([Promise.all(closes), new Promise((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, Math.ceil(deadline - performance.now())));
+    })]);
+    return settled?.every((ok) => ok) && performance.now() < deadline;
+  } finally { clearTimeout(timer); }
 }
 
 const sort = (rows) => [...rows].sort((a, b) => a.id.localeCompare(b.id));
@@ -191,12 +204,21 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   return summary;
 }
 
-export async function fanoutJourney(browser, base, settings, clients, { wire }, kernelCounters, recordRenderer) {
+export async function fanoutJourney(browser, base, settings, clients, { wire }, kernelCounters, recordRenderer, teardown = {}) {
   const workload = createLiveWorkload(fanoutProfile), contexts = [], readers = [];
   const host = { timeOrigin: performance.timeOrigin, base, requests: [] }, resourceObservations = {};
   /** @type {PublisherLag | undefined} */
   let publisherLag;
-  const deadline = setTimeout(() => { for (const c of contexts) c.close().catch(() => {}); }, fanoutProfile.deadlineMs);
+  let failed = false;
+  const closing = new Map();
+  const closeContexts = () => {
+    teardown.deadline ??= performance.now() + settings.maxCleanupMs;
+    return contexts.map((context) => {
+      if (!closing.has(context)) closing.set(context, Promise.resolve().then(() => context.close()).then(() => true, () => false));
+      return closing.get(context);
+    });
+  };
+  const deadline = setTimeout(closeContexts, fanoutProfile.deadlineMs);
   const api = async (name, data, phase = name) => {
     const startedAt = performance.now();
     const r = await fetch(`${base}/parity/${name}`, { ...(data === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }), signal: AbortSignal.timeout(10000) });
@@ -284,10 +306,18 @@ export async function fanoutJourney(browser, base, settings, clients, { wire }, 
     return { clients, configuration, workload, settings, resources: { attached, delivered, released }, resourceObservations,
       host, interval, kernel: { before, after }, browsers, schedule };
   } catch (error) {
+    failed = true;
     error.evidence = { workload, settings, ...(publisherLag ? { publisherLag } : {}), browsers: await Promise.all(readers.map(async (r) => ({
       network: r.network, failures: r.failures, records: await r.page.evaluate(() => window.liveApp?.records ?? []).catch(() => []),
       html: await captureHtml(r.page, wire).catch(() => ""),
     }))) };
     throw error;
-  } finally { recordRenderer?.(false); clearTimeout(deadline); await Promise.all(contexts.map((c) => c.close())); }
+  } finally {
+    recordRenderer?.(false);
+    clearTimeout(deadline);
+    if (!await confirmContextCloses(closeContexts(), teardown.deadline)) {
+      teardown.failure = "context-close";
+      if (!failed) throw new Error("native fanout context closure unconfirmed");
+    }
+  }
 }
