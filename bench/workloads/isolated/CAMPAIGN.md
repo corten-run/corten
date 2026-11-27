@@ -129,10 +129,12 @@ finalization. Historical result paths, standalone commands and the archive layou
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
 groups and mixed-production-measure in the legacy full campaign. Dedicated Mixed
-campaigns use `mixed-production-django-asgi`: the same `--measure --profile matched`,
-plus the fixed `--django-deployment django-granian-asgi` selection. The build and
-audit bind that deployment for both sources, without changing the measured workload
-or its gates. The older mixed-measure remains the default-profile recipe,
+campaigns use `mixed-production-asgi-webflux`: the same `--measure --profile matched`,
+plus `--django-deployment django-granian-asgi --spring-deployment spring-webflux`.
+The build and audit bind both deployments for both sources, without changing the
+measured workload or its gates. The earlier Django-only recipe remains
+`mixed-production-django-asgi`; replay uses the measured commit.
+The older mixed-measure remains the default-profile recipe,
 unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
 client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
 legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser

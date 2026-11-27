@@ -59,6 +59,22 @@ test("dedicated Mixed replay requires the exact Django ASGI flag and rejects a W
   assert.equal(validator.mock.callCount(), 1);
 });
 
+test("combined Mixed replay requires both deployments in the fixed invocation and saved options", async () => {
+  const argv = binding.execution.invocation.argv;
+  binding.request.recipe = "mixed-production-asgi-webflux";
+  argv.splice(6, 0, "--django-deployment", "django-granian-asgi");
+  assert.equal((await inspect()).status, "invalid");
+  argv.splice(8, 0, "--spring-deployment", "spring-webflux");
+  const effective = parseArgs(argv.slice(1)); effective.apps = apps;
+  binding.execution.effectiveOptions = effective;
+  summary.options = { ...effective }; delete summary.options.springDeployment;
+  assert.equal((await inspect()).status, "invalid");
+  assert.equal(validator.mock.callCount(), 0);
+  summary.options = structuredClone(effective);
+  assert.equal((await inspect()).status, "verified");
+  assert.equal(validator.mock.callCount(), 1);
+});
+
 test("production mixed fixed native API has a complete positive composition path", async () => {
   const result = await inspect(); assert.equal(result.status, "verified"); assert.equal(result.attemptComplete, true);
   assert.equal(result.cleanupComplete, true); assert.equal(result.resources, "verified"); assert.equal(validator.mock.callCount(), 1);

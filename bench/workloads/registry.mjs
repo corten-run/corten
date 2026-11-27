@@ -3,6 +3,15 @@ import { createHash } from "node:crypto";
 import { allApps } from "../fullstack/inventory.mjs";
 import { locales } from "../marketplace/contract.mjs";
 
+export const springWebflux = Object.freeze({
+  recipe: "mixed-production-asgi-webflux",
+  deployment: "spring-webflux",
+  buildProfile: "matched-webflux",
+  dockerfile: "Dockerfile.mixed",
+  entrypoint: Object.freeze(["java", "-jar", "marketplace-mixed.jar"]),
+  command: null,
+});
+
 export const registrySchema = "benchmark-groups/v1";
 const freeze = (value) => {
   if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }

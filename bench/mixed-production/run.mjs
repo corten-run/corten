@@ -9,7 +9,7 @@ import { commands } from "../json-api/process.mjs";
 import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
-import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit, nativeDeployment, validateDeploymentOption, verifyImageDeployment } from "./source-audit.mjs";
+import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit, nativeDeployment, validateDeploymentOption, verifyDeploymentCommand, verifyImageDeployment } from "./source-audit.mjs";
 import { extractNativeSource, nativeBuildContext } from "./build-context.mjs";
 import { createAttachedParticipant, createExecutionEvidence, executionContext, participantSetupCause } from "./execution-evidence.mjs";
 import { withImmutableGit } from "./immutable-git.mjs";
@@ -28,6 +28,7 @@ export function parseArgs(args) {
     if (["--build", "--measure"].includes(flag)) { options[flag.slice(2)] = true; continue; }
     assert.ok(args[i] && !args[i].startsWith("--"), "option value required");
     if (flag === "--django-deployment") { options.djangoDeployment = args[i++]; continue; }
+    if (flag === "--spring-deployment") { options.springDeployment = args[i++]; continue; }
     const key = flag === "--build-ref" ? "buildRef" : flag === "--native-audits" ? "nativeAudits" : names[flag.slice(2)] ?? flag.slice(2); assert.ok(key !== "round" && Object.hasOwn(options, key), "unknown option");
     options[key] = ["apps", "images", "readbacks", "nativeAudits", "buildRef", "profile"].includes(key) ? args[i++] : Number(args[i++]);
   }
@@ -175,8 +176,8 @@ export async function run(args) {
             "--label", `run.corten.marketplace.profile=${options.profile}`,
             ...(deployment ? ["--label", `run.corten.mixed-production.deployment=${deployment.deployment}`,
               "--label", `run.corten.mixed-production.build-profile=${deployment.buildProfile}`] : []),
-            "--build-arg", `PROFILE=${deployment?.buildProfile ?? options.profile}`,
-            "-t", tag, "-f", context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });
+            ...(!deployment?.dockerfile ? ["--build-arg", `PROFILE=${deployment?.buildProfile ?? options.profile}`] : []),
+            "-t", tag, "-f", deployment?.dockerfile ?? context.dockerfile, "-"], { timeout: 20 * 60 * 1000, file: join(folder, `${app}-build.log`), input: context.input });
           if (!options.buildRef) {
             assert.equal(await io.command("git", ["rev-parse", "HEAD"]), summary.provenance.commit, "checkout changed during build");
             assert.equal(await io.command("git", ["status", "--porcelain"]), summary.provenance.dirty, "working tree changed during build");
@@ -186,11 +187,7 @@ export async function run(args) {
         const image = JSON.parse(await docker(["image", "inspect", tag]))[0];
         verifyImageDeployment({ nativeDeployment: image.Config.Labels?.["run.corten.mixed-production.deployment"],
           buildProfile: image.Config.Labels?.["run.corten.mixed-production.build-profile"] }, deployment);
-        if (deployment) {
-          assert.ok((image.Config.Entrypoint ?? null) === deployment.entrypoint, "unexpected Django ASGI image entrypoint");
-          assert.ok(JSON.stringify(image.Config.Cmd) === JSON.stringify(deployment.command), "unexpected Django ASGI image command");
-          assert.ok(image.Config.Env?.includes(`DJANGO_SETTINGS_MODULE=${deployment.settings}`), "unexpected Django ASGI image settings");
-        }
+        if (deployment) verifyDeploymentCommand(image.Config, deployment);
         entry.image = { tag, id: image.Id, repoDigests: image.RepoDigests, bytes: image.Size,
           buildCommit: image.Config.Labels?.["run.corten.marketplace.commit"] ?? null,
           buildDirty: image.Config.Labels?.["run.corten.marketplace.dirty"] ?? null,

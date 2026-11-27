@@ -108,7 +108,9 @@ Named override recipes include `marketplace-short-window` (three passes,
 15 s phases/10 s warmup/rate 150), `mixed-measure` (adds measurement without changing the
 default native profile/settings), `mixed-production-measure` (the separately reviewed
 production procedure adds measurement and the native matched profile), `mixed-production-django-asgi`
-(the dedicated Mixed recipe selects Django's ASGI build and keeps the same timing, resources, and gates),
+(the earlier dedicated recipe selects Django ASGI), and `mixed-production-asgi-webflux`
+(the current dedicated recipe retains Django ASGI and selects Spring WebFlux with
+the same timing, resources, and gates),
 `native-feed-measure` for either live group
 (native-feed for every candidate, 1,044 events, queue 1,024/history 1,025, then the native
 1/2/4-browser measurement levels), and [`client-heavy-comparison-v1`](../../client-heavy/README.md#dedicated-comparison-recipe)
