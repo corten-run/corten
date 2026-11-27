@@ -355,6 +355,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The alternate Spring image has its own build and HTTP test budget. Keep it
+  # out of the MVC parity job's budget for its test and transport proof builds.
+  spring-mixed-parity:
+    needs: [scope, harness]
+    if: contains(fromJSON(needs.scope.outputs.apps), 'spring')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - run: npm ci --no-audit --no-fund
+      - name: Qualify the Spring Mixed WebFlux image and check HTTP cancellation
+        timeout-minutes: 28
+        shell: bash
+        run: |
+          iid_file=$(mktemp "$RUNNER_TEMP/spring-mixed-iid.XXXXXXXX")
+          trap 'rm -f "$iid_file"' EXIT
+          app=bench/fullstack/apps/spring
+          timeout --kill-after=10s 20m docker build --iidfile "$iid_file" -f "$app/Dockerfile.mixed" "$app"
+          image=$(cat "$iid_file")
+          SPRING_MIXED_IMAGE="$image" node --test "$app/mixed-http.test.mjs"
+
   json-harness:
     needs: scope
     if: needs.scope.outputs.json == 'true'

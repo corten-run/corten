@@ -249,6 +249,7 @@ function candidates(group, app, baseline) {
       productionParity: "requires full native Mixed qualification before timing" }, [dockerfile], "source-present");
     choices.at(-1).configuration = { ...baseline.configuration, framework: "Spring Boot WebFlux + Thymeleaf", server: "Reactor Netty",
       workers: "one JVM; Reactor Netty event loops", command: [...springWebflux.entrypoint], middleware: "WebFlux request and upstream cancellation; native session middleware",
+      profile: "matched", environment: { ...baseline.configuration.environment, PROFILE: "matched" },
       builds: { app: { context, dockerfile, args: {} } }, sourceRefs: [dockerfile, ...["mixed/pom.xml",
         "mixed/src/main/resources/application.properties", "mixed/src/main/java/bench/mixed/MarketplaceApplication.java",
         "mixed/src/main/java/bench/mixed/MarketplaceController.java", "mixed/src/main/java/bench/mixed/MarketplaceSource.java"].map((path) => `${context}/${path}`)] };
