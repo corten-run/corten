@@ -1412,8 +1412,11 @@ three runs:
    `/bench`). It fails unless systemd confirms, each query succeeding, that the round's unit is
    either unknown to it or was disabled and stopped (both succeeding), that it cannot start at
    boot (`is-enabled` disabled, static or masked, and no wants or requires link to it left), that
-   it is inactive, and that nothing is left anywhere in its control group (cgroup v2
-   `cgroup.events` reads `populated 0`, which counts child groups too, or the group is absent).
+   no job for it is queued (`systemctl list-jobs`, read before its state and again after its
+   control group: a start queued for a disabled unit leaves it inactive with no control group
+   until the job runs), that it is inactive, and that nothing is left anywhere in its control group
+   (cgroup v2 `cgroup.events` reads `populated 0`, which counts child groups too, or the group is
+   absent).
    It refuses the launch when the round's progress file shows a count step that started in this
    boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a
    count step that started in this boot, after a reboot. From that check until the round's unit
@@ -1426,7 +1429,10 @@ three runs:
    check that must read as the first did and only reads (it disables and stops nothing), so a unit
    that started again since refuses. A step refused that way, or because another launch holds or
    took the lock, downloads nothing (it would land beside the other launch's results) and leaves
-   the droplet, even one this launch created. The start is sent once, and counts as acknowledged
+   the droplet, even one this launch created, with how to delete it. So does a step that checks the
+   lock whose answer never came back on its last try (no answer within its time limit, or ssh's own
+   failure such as a dropped connection): it may have refused there, so it is taken as refused. The
+   start is sent once, and counts as acknowledged
    only when `systemctl start` succeeded: it can fail having lost systemd's reply while its job
    goes on, and nothing read afterwards ties the unit's state to that start. An acknowledged start
    whose unit is then not read as active (the round already ended, or that check or its connection
@@ -1438,9 +1444,16 @@ three runs:
    start is not tried again), leaves the lock and the droplet, and says how to check the
    round read-only (`systemctl status` and `systemctl list-jobs`) and remove the lock once no
    launch is running (`rm` it on the droplet). Do not `--collect` such a round until its unit is
-   running, or no start job for it is queued and it is inactive or failed: `--collect` reads only
-   the unit's state and the log, so a queued start reads as a stopped round, and it downloads
-   partial results and destroys the droplet. The
+   running, or no start job for it is queued and it is inactive or failed: `--collect` waits for
+   a queued job, but a start still waiting its turn at the droplet's flock is not yet queued and
+   reads as a stopped round, and `--collect` then downloads partial results and destroys the
+   droplet. The watch (`--collect`, or a launch that waits) takes a round as ended, and downloads
+   from or destroys its droplet, only when its unit reads inactive or failed with no job queued for
+   it, each query succeeding; a unit still active, or whose state or job queue could not be read,
+   is watched on (`--collect` leaves it, exit 3). The log's `all done` only says whether a round
+   that has ended finished or stopped short: it is printed before the unit's process exits, and a
+   round going on with `--from` keeps the earlier run's log, so one read while the unit is active
+   is not the round's end, whichever run printed it. The
    upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.

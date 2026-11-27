@@ -337,6 +337,9 @@ const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * - it cannot start at boot: `systemctl is-enabled` says disabled, static or masked (a known unit),
  *   and no wants or requires link to it is left in `unitDir` (which a unit file without an
  *   [Install] section would not remove);
+ * - no job for it is queued, read before its state and again after its control group: a start
+ *   queued for a disabled unit (a manual `systemctl start` waiting its turn) leaves it inactive
+ *   with no control group until the job runs, so its state alone does not show it;
  * - it is inactive (or failed);
  * - no process is left anywhere in its control group, its descendants included: the group's
  *   cgroup v2 `cgroup.events` reads `populated 0`, or the group's directory is absent from a
@@ -345,7 +348,8 @@ const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Then it prints this boot's ID and the full-stack round's progress file, base64 ("present
  * <base64>", or "absent"), which relaunchError reads, in one write once both are read.
  * With `observe` (clearAfterCustody's second check) it disables and stops nothing: it only reads,
- * so a unit that started again since the first check reads as active, or enabled, and fails.
+ * so a unit that started again since the first check reads as active, or enabled, or with a job
+ * queued, and fails.
  * @param {string} unitName the round's unit, without ".service"
  * @param {string} progressFile the full-stack round's progress file on the droplet
  * @param {{ unitDir?: string, cgroupRoot?: string, observe?: boolean }} [paths] systemd's unit directory and
@@ -360,6 +364,9 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
   const since = observe ? "since the launch's custody check" : "after its stop";
   return [
     `fail() { echo "unit ${unitName}: $*" >&2; exit 1; }`,
+    // A job the manager lists for the unit (with --no-legend, none prints nothing); a list that
+    // could not be read is no answer either.
+    `nojob() { queue=$(systemctl list-jobs --no-legend --no-pager ${service}) || fail "its job queue could not be read"; [ -z "$queue" ] || fail "a job for it is queued ${since} ($queue), so it may yet start"; }`,
     `load=$(systemctl show -p LoadState --value ${service}) || fail "its load state could not be read"`,
     `case "$load" in`,
     // Nothing to disable or stop; whether something of it still runs is checked below all the same.
@@ -376,6 +383,7 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
     `for link in ${quote(unitDir)}/*.wants/${service} ${quote(unitDir)}/*.requires/${service}; do`,
     `  if [ -e "$link" ] || [ -L "$link" ]; then fail "$link is left, so a boot could start it"; fi`,
     `done`,
+    "nojob",
     `state=$(systemctl show -p ActiveState --value ${service}) || fail "its state could not be read"`,
     `case "$state" in inactive|failed) ;; *) fail "it is \${state:-of unknown state} ${since}" ;; esac`,
     `cg=$(systemctl show -p ControlGroup --value ${service}) || fail "its control group could not be read"`,
@@ -390,6 +398,7 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
     `  populated=$(printf '%s\\n' "$events" | sed -n 's/^populated \\([01]\\)$/\\1/p')`,
     `  [ "$populated" = 0 ] || fail "it still has processes ${since} (or its control group's events say nothing of them)"`,
     `fi`,
+    "nojob",
     `boot=$(cat /proc/sys/kernel/random/boot_id) || fail "this boot's ID could not be read"`,
     `if [ -e ${progress} ] || [ -L ${progress} ]; then`,
     `  saved=$(base64 -w0 < ${progress}) || fail "the progress file could not be read"`,

@@ -11,7 +11,8 @@
 //     acknowledged leaves it, with how to check the round and remove it)
 //   --detach: start the round and leave: it runs on the droplet by itself; collect it later.
 //   --collect: look at the round once: download its results and destroy the droplet if it has
-//     ended (exit 0 when it finished, 1 when it stopped short), or show where it is (exit 3).
+//     ended (exit 0 when it finished, 1 when it stopped short), or show where it is (exit 3). It
+//     has ended only when its unit reads inactive or failed with no job queued for it.
 //   --attach: wait for a round already started and download it (then destroy its droplet).
 //   --from <step>: start run-all.mjs at that step and keep the droplet's earlier results.
 //   --stall <minutes>: how long a droplet may not answer before it is power-cycled (default 15).
@@ -158,14 +159,31 @@ let startUnknown = false;
 // neither collected from nor destroyed until the watch has seen it end.
 let startUnconfirmed = false;
 // Whether a step of the launch refused because another launch holds the round's lock, took it, or
-// changed what the custody check read (takeLaunch, ownsLaunch, clearAfterCustody): something else
-// is acting on the droplet, so this run neither collects from it nor destroys it.
+// changed what the custody check read (takeLaunch, ownsLaunch, clearAfterCustody), or such a step's
+// answer never came back (custodyUnconfirmed): something else may be acting on the droplet, so this
+// run neither collects from it nor destroys it.
 let custodyRefused = false;
+// Whether a step of the launch that checks its custody (the custody check, the clear, the builds
+// and the unit's files) failed without an answer from the droplet on its last try: no answer
+// within its time limit, or ssh's own failure (exit 255) such as a dropped connection. It may have
+// refused there (exit 3 or 4), so it is taken as a refusal.
+let custodyUnconfirmed = false;
 // Exit statuses of a launch's steps on the droplet (round.mjs): the lock another launch holds
 // (takeLaunch), and the lock lost or the custody changed since its check (ownsLaunch,
 // clearAfterCustody). Neither is tried again: each would refuse again.
 const lockHeldElsewhere = (/** @type {any} */ e) => e?.status === 3;
 const lockLost = (/** @type {any} */ e) => e?.status === 4;
+// A remote call that ended without the droplet's answer (run's status: null for no answer or no
+// process, 255 for ssh's own failure).
+const noAnswer = (/** @type {any} */ e) => e?.status === null || e?.status === 255;
+// A step that checks the launch's custody, tried as `work` does; one whose last try had no answer
+// marks the launch's custody unconfirmed.
+const custodyStep = async (/** @type {() => Promise<unknown>} */ work) => {
+  try { return await work(); } catch (e) {
+    if (noAnswer(e)) custodyUnconfirmed = true;
+    throw e;
+  }
+};
 // The corten-bench droplets as [id, name, ip]. Throws when DigitalOcean cannot list them, so no
 // decision about which droplet is ours is made from an empty list.
 const tagged = () => run("doctl", ["compute", "droplet", "list", "--tag-name", "corten-bench", "--format", "ID,Name,PublicIPv4", "--no-header"], { quiet: true, timeout: minute })
@@ -348,7 +366,7 @@ const launch = async () => {
     // has this name and clears /bench. A lock another launch holds is not tried again.
     const progressFile = `/bench/bench/fullstack/results-${round}.progress`;
     const check = relaunchCustody(unitName, progressFile);
-    const custody = /** @type {{ stdout?: string }} */ (await retry(3, () => remote(`${takeLaunch(lock, token)}\n${check}`, 2, { quiet: true }), lockHeldElsewhere));
+    const custody = /** @type {{ stdout?: string }} */ (await custodyStep(() => retry(3, () => remote(`${takeLaunch(lock, token)}\n${check}`, 2, { quiet: true }), lockHeldElsewhere)));
     const refused = relaunchError(String(custody.stdout ?? ""));
     if (refused) throw new Error(`round ${round} may not start again on the droplet at ${host}: ${refused}. Start it on a new droplet, or, for a count step that started in this boot, reboot this one first (a new boot ID)`);
 
@@ -374,13 +392,13 @@ const launch = async () => {
     // below, its log), cleared under the lock in one step with a second custody check that must read
     // as the first did and only reads, so a unit that started again since refuses (round.mjs,
     // clearAfterCustody).
-    await retry(3, () => remote(clearAfterCustody({ lock, token, custody: relaunchCustody(unitName, progressFile, { observe: true }), expected: String(custody.stdout ?? ""), clear: `${from ? "mkdir -p /bench" : "rm -rf /bench && mkdir -p /bench"} && rm -f ${suiteDir}/results-${round}.progress` }), 2, { quiet: true }), lockLost);
+    await custodyStep(() => retry(3, () => remote(clearAfterCustody({ lock, token, custody: relaunchCustody(unitName, progressFile, { observe: true }), expected: String(custody.stdout ?? ""), clear: `${from ? "mkdir -p /bench" : "rm -rf /bench && mkdir -p /bench"} && rm -f ${suiteDir}/results-${round}.progress` }), 2, { quiet: true }), lockLost));
     await retry(3, () => scp(tarball, `root@${host}:/bench/src.tgz`));
     remove(tarball);
 
     console.log("building the images");
     const fullstackImages = (/** @type {string[]} */ names) => names.filter((app) => app !== "corten").map((app) => `docker ${buildArgs(app, tier).join(" ")}`);
-    await retry(2, () => remote(owns + "\n" + (suite === "live"
+    await custodyStep(() => retry(2, () => remote(owns + "\n" + (suite === "live"
       ? [
         "cd /bench && tar -xzf src.tgz",
         "docker build -q -f bench/live/apps/corten/Dockerfile -t cb-live-corten .",
@@ -396,7 +414,7 @@ const launch = async () => {
         // The browser suite's run-all.mjs runs attended and expects the item API (fullstack's
         // unattended run-all.mjs starts it itself).
         ...(suite === "browser" ? ["(docker rm -f item-api >/dev/null 2>&1; docker run -d --name item-api --network rustbench --cpuset-cpus 2-3 -v /bench/bench/fullstack:/b:ro node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067 node /b/item-api/server.mjs /b/fixtures/items.json >/dev/null)"] : []),
-      ].join(" && ")), 90), lockLost);
+      ].join(" && ")), 90), lockLost));
 
     // The round, as a script its unit runs. Only a full-stack round starts again at boot.
     const command = {
@@ -408,7 +426,7 @@ const launch = async () => {
       harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round} && echo all done`,
     }[suite];
     const script = `/bench/round-${round}.sh`;
-    await retry(3, () => remote(owns + "\n" + [
+    await custodyStep(() => retry(3, () => remote(owns + "\n" + [
       // The matched tier's edge has cores 4-9, so its round needs 16 vCPUs, or k6 gets too few.
       write(script, `cd ${suiteDir}\n${edged ? 'if [ "$(nproc)" -lt 16 ]; then echo "round failed: the matched tier needs 16 vCPUs (the edge on 4-9, k6 on 10 and up), this host has $(nproc)"; exit 1; fi\n' : ""}export ${env}\n${command}\n`),
       // The full comparison's calls have their own limits and its builds a budget (round.mjs: they
@@ -418,7 +436,7 @@ const launch = async () => {
       from ? `touch ${log}` : `: > ${log}`,
       "systemctl daemon-reload",
       suite === "fullstack" ? `systemctl enable --quiet ${unitName}` : "true",
-    ].join(" && "), 2), lockLost);
+    ].join(" && "), 2), lockLost));
     // The start runs once, under the same flock as the other steps, after the lock check (round.mjs,
     // startUnit), and says it has settled only when systemctl's start succeeded. Any other return
     // may only have lost systemd's reply while the job goes on, and nothing read afterwards can tie
@@ -445,12 +463,13 @@ const launch = async () => {
     // A step that failed has ended there (a remote step's limit there is shorter than its limit
     // here), and release runs under the same flock as remote steps, after any still running. A
     // start not acknowledged is the exception: whether the round is starting is not known, so the
-    // lock is left, as an interrupt leaves it, with how to check and remove it.
-    if (!startUnknown && (lockLost(e) || lockHeldElsewhere(e))) {
+    // lock is left, as an interrupt leaves it, with how to check and remove it. A custody step
+    // with no answer is refused as one that refused there is.
+    if (!startUnknown && (lockLost(e) || lockHeldElsewhere(e) || custodyUnconfirmed)) {
       custodyRefused = true;
       mayDestroy = false;
     }
-    if (startUnknown) console.log(`the start of ${unitName} on the droplet at ${host} was not acknowledged, so whether round ${round} is running is not known and the launch lock ${lock} is left there, as is the droplet (below). Check read-only with ssh root@${host} systemctl status ${unitName} and ssh root@${host} systemctl list-jobs, and do not run --collect until the unit is running, or no start job for it is queued and it is inactive or failed: --collect reads only the unit's state and the log, so a start still queued reads as a stopped round, and it downloads partial results and deletes the droplet. Once no droplet.mjs is launching round ${round} there, remove the lock with ssh root@${host} rm ${lock}`);
+    if (startUnknown) console.log(`the start of ${unitName} on the droplet at ${host} was not acknowledged, so whether round ${round} is running is not known and the launch lock ${lock} is left there, as is the droplet (below). Check read-only with ssh root@${host} systemctl status ${unitName} and ssh root@${host} systemctl list-jobs, and do not run --collect until the unit is running, or no start job for it is queued and it is inactive or failed: --collect waits for the unit to read inactive or failed with no job queued for it, but a start still waiting its turn at the droplet's flock, not yet queued, reads as a stopped round, and --collect then downloads partial results and deletes the droplet. Once no droplet.mjs is launching round ${round} there, remove the lock with ssh root@${host} rm ${lock}`);
     else if (!started) await releaseLock(token);
     throw e;
   }
@@ -471,7 +490,13 @@ const find = () => {
 };
 
 // Waits for the round to end ("finished" or "stopped"), or with `once` (--collect), returns
-// "running" as soon as it knows the round is going on. A droplet that does not answer for `stall`
+// "running" as soon as it knows the round is going on, or "unknown" when its unit's state or job
+// queue could not be read. The round has ended only when its unit reads inactive or failed with no
+// job queued for it, each read succeeding: until then nothing is collected or destroyed, whatever
+// the log says. The log's last line ("all done") only says how a round that has ended ended: a
+// line printed before the unit's process exits, or one a round resumed with --from kept from an
+// earlier run, is read while the unit is still active, and is not taken as the round's end.
+// A droplet that does not answer for `stall`
 // (and is not cut off from here: DigitalOcean answers) is power-cycled, at most twice; a full-stack
 // round goes on by itself after that. --collect waits that long too, and gives up (leaving the
 // droplet) only when DigitalOcean cannot be reached either.
@@ -481,27 +506,32 @@ const watch = async (/** @type {boolean} */ once) => {
   let silentPolls = 0;
   let cycles = 0;
   let stopped = 0;
+  let unreadableSaid = false;
   for (let poll = 0; ; poll += 1) {
     if (poll) await sleep(minute);
-    // The first line: seconds since boot and the unit's state; then the log.
-    const r = ssh(`echo "$(cut -d. -f1 /proc/uptime) $(systemctl show -p ActiveState --value ${unitName})"; cat ${log} 2>/dev/null; true`, { quiet: true, allowFail: true });
+    // The first line: seconds since boot, the unit's state and whether a job is queued for it
+    // ("unreadable" for a query that failed or said nothing); then the log.
+    const r = ssh(`state=$(systemctl show -p ActiveState --value ${unitName}) && [ -n "$state" ] || state=unreadable; queue=$(systemctl list-jobs --no-legend --no-pager ${unitName}.service) && { [ -z "$queue" ] && queue=none || queue=queued; } || queue=unreadable; echo "$(cut -d. -f1 /proc/uptime) $state $queue"; cat ${log} 2>/dev/null; true`, { quiet: true, allowFail: true });
     if (r.status === 0) {
       silentSince = null;
       silentPolls = 0;
       const [first, ...rest] = r.stdout.split("\n");
-      const [uptime, unitState] = first.trim().split(" ");
+      const [uptime, unitState, queue] = first.trim().split(" ");
       const text = rest.join("\n");
       const lines = text.split("\n").filter((l) => /^\d{4}-|step failed|step \S+ skipped|all done|round failed|browser suite|^\|/.test(l));
       for (const l of lines.slice(once ? Math.max(shown, lines.length - 8) : shown)) console.log(l);
       shown = lines.length;
-      if (doneMarker.test(text)) return "finished";
-      // The unit is not running and the round did not finish. A full-stack round's droplet that
+      const unreadable = unitState === "unreadable" || (queue !== "none" && queue !== "queued");
+      const ended = (unitState === "inactive" || unitState === "failed") && queue === "none";
+      if (ended && doneMarker.test(text)) return "finished";
+      // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
-      const inactive = unitState === "inactive" || unitState === "failed";
-      stopped = inactive && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
+      stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
       if (stopped >= 3 || (stopped && /round failed/.test(text))) return "stopped";
-      if (once && !stopped) return "running";
+      if (once && !stopped) return unreadable ? "unknown" : "running";
+      if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its job queue could not be read (${first.trim()}): round ${round} is watched until it reads as ended`);
+      unreadableSaid = unreadable;
       continue;
     }
     silentSince ??= Date.now();
@@ -540,9 +570,9 @@ try {
   }
   const state = await watch(collect);
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
-  if (state !== "running") startUnconfirmed = false;
-  if (state === "running") {
-    console.log(`round ${round} is still running`);
+  if (state === "finished" || state === "stopped") startUnconfirmed = false;
+  if (state === "running" || state === "unknown") {
+    console.log(state === "running" ? `round ${round} is still running` : `whether round ${round} has ended is not known: the state of ${unitName} or its job queue could not be read, so nothing is downloaded or destroyed`);
     leftRunning();
     process.exitCode = 3;
   } else {
@@ -593,9 +623,13 @@ try {
   // started the round, which goes on by itself, and so may a start that succeeded whose round the
   // watch has not seen end: the droplet is left for a --collect. A launch refused for its custody
   // (another launch holds or took the lock, or the round's unit or progress file changed) collects
-  // nothing, which would land beside another launch's, and leaves the droplet to it.
+  // nothing, which would land beside another launch's, and leaves the droplet to it; so does one
+  // whose custody step got no answer, which may have refused there.
   if (custodyRefused) {
-    console.log(`round ${round}'s launch on the droplet at ${host} was refused: another launch holds or took its lock, or the round's unit or progress file changed after its custody check. Nothing is downloaded from that droplet and it is left as it is${dropletId && !keep ? ` (droplet ${dropletId}: once no launch or round of ${round} is using it, delete it with doctl compute droplet delete ${dropletId} --force)` : ""}`);
+    const why = custodyUnconfirmed
+      ? "a step that checks its lock got no answer from the droplet, so whether another launch holds or took its lock, or the round's unit or progress file changed after its custody check, is not known, and it is taken as refused"
+      : "another launch holds or took its lock, or the round's unit or progress file changed after its custody check";
+    console.log(`round ${round}'s launch on the droplet at ${host} was refused: ${why}. Nothing is downloaded from that droplet and it is left as it is${dropletId && !keep ? ` (droplet ${dropletId}: once no launch or round of ${round} is using it, delete it with doctl compute droplet delete ${dropletId} --force)` : ""}`);
     throw e;
   }
   if (!collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
