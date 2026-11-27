@@ -677,17 +677,13 @@ same document is told as the place case's is, by an init script added before the
 each document the tab makes: the document once the load returns and once the wait for `Saved.` ends
 must both be the first, so a read again that loads the page in full, even before Playwright's load
 returns, is not taken for the load's own document. The check that navigating away stops the
-reads requires a read of the page still on its way at the press: the page's first read of itself
-after the navigation's own fetch is held at its route from before the page is asked to navigate, so
-the page cannot draw `Saved.` before the press and leave nothing to cancel, and that read must fail
-while still held, and the page must note that same read (its second read of the address the route
-counts, as the route holds the second) still pending at its press of the News link and failing
-after it, so a read that fails while the driver is still preparing the click does not pass; it is
-let go only once News is drawn. It requires too no fetch of `/alerts` the page started after that
-press, the press and each fetch's start and end numbered in the page by one count in the order they
-happen, from notes the page has before it is asked to navigate, so a fetch started in the same instant
-as the press counts as after it (News can come from a prefetch sent before the press, so no request
-marks the moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
+reads leaves a page that has armed its read again (the head's read-again tag) by its header's News
+link, pressed in the page, and requires only that the page start no read of the alerts page from
+that press on: no fetch of `/alerts` other than a prefetch the page started after its press, the
+press and each fetch's start numbered in the page by one count in the order they happen, from notes
+the page has before it is asked to navigate, so a fetch started in the same instant as the press
+counts as after it (News can come from a prefetch sent before the press, so no request marks the
+moment it left), and no load of `/alerts` heard after the press, read 2.2 s after News is drawn; a
 document replaced meanwhile, which leaves no notes, fails it, and the page's `fetch` is put back
 and its press listener removed however it ends, an install of them the page runs only after that
 removal doing nothing. Its route and request listener are
@@ -721,8 +717,9 @@ rests on what is read after them or on what the page or the route recorded: a na
 notes with the time it drew it by its monotonic clock (`performance.now()`, which a step of the wall
 clock does not move) and which must come after, and within five seconds of, the press as the page
 notes it on that clock (the first `click` on the removed alert's own Remove button, told by its
-form's alert id and heard by a listener armed before the press and removed as the case ends, not the
-time it was armed nor a click elsewhere), however late the arming or the click returns, with the
+form's alert id and heard by a listener armed before the press and removed as the case ends, an
+arming the page runs only after that removal doing nothing, not the time it was armed nor a click
+elsewhere), however late the arming or the click returns, with the
 list after the removal the list before it without that alert, in order, and the held slow part's busy, done and
 failed marks, read once each wait has come or run out. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the

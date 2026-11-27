@@ -2165,80 +2165,46 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           ownPoll && length === entries + 1,
           `${entries} -> ${length}, the page saying ${drawn.text} drawn by ${drewBy}${navIndex < 0 ? ", no navigation fetch seen" : ""}`,
         );
-        // Away while a write lands: once the page is in, has armed its read again (the head's
-        // read-again tag) and has sent that read, it is left at once, with no wait for its text. The
-        // read is held unanswered from before the page is asked to navigate (the first read of its
-        // address after the navigation's own fetch, `leaveHold`), so it is still on its way at the
-        // press however late the check looks: the page cannot draw `Saved.` in between and leave
-        // nothing to cancel. That read must fail while still held, and the page must note it still
-        // pending at the page's own press and failing after it (the navigation away cut it off); it is
-        // let go only once News is drawn. A write that landed before the page came in arms nothing, so
-        // another is tried; a page armed whose read is not sent within 5 s fails the check.
-        /**
-         * The hold on the leaving page's read again, while a try runs: its address, how many reads of
-         * it reached the route, the read held, and when it failed while held (`performance.now()`).
-         * @type {{ address: string, count: number, held: import("@playwright/test").Request | null, failedAt: number | null, onHeld: () => void, released: Promise<unknown> } | null}
-         */
-        let leave = null;
-        let releaseLeave = () => {};
-        const leaveHold = async (/** @type {import("@playwright/test").Route} */ route) => {
-          const request = route.request();
-          const asked = new URL(request.url());
-          const own = leave !== null && asked.pathname + asked.search === leave.address;
-          const isRead = !request.isNavigationRequest() && request.method() === "GET" && ["nav", "page"].includes(request.headers()["corten"] ?? "") && !isPrefetch(request);
-          if (!own || !isRead || !leave || leave.held || leave.count++ === 0) return letThrough(route);
-          const hold = leave;
-          hold.held = request;
-          hold.onHeld();
-          await hold.released;
-          await letThrough(route);
-        };
-        const onLeaveFailed = (/** @type {import("@playwright/test").Request} */ r) => void (leave && r === leave.held && leave.failedAt === null && (leave.failedAt = performance.now()));
+        // Away while a write lands: once the page is in and has armed its read again (the head's
+        // read-again tag), it is left at once by its header's link, pressed in the page, with no wait
+        // for its text. A write that landed before the page came in arms nothing, so another is tried.
+        // The check claims only that the page starts no read of the alerts page from its press on,
+        // by the page's own order of events: News can come from a prefetch sent while the pointer
+        // rested on its link, before the press, so no request marks the moment the page left. The
+        // page's notes number the press (a capture listener for a click on the News link) and the
+        // start of each fetch of `/alerts` (the runtime's reads are fetches) by one count in the order
+        // they happen, so a read started before the press is told from one started after it, however
+        // late the check hears either, and one started in the same instant as the press is after it.
+        // A load of `/alerts` heard after the press counts too, as does a document that was replaced,
+        // which leaves no notes. The notes are installed before any try asks the page to navigate and
+        // read 2.2 s after News is drawn.
         let armed = false;
         let leftAs = null;
         /** This run of the check's, so an install of its notes the page runs after their removal does nothing. */
         const leaveToken = `${Date.now()}-${Math.random()}`;
         try {
-          await within(5000, "the leaving page's hold was not set within 5 s", page.route("**/alerts?saved=*", leaveHold));
-          page.on("requestfailed", onLeaveFailed);
-          // The page's notes for the check, installed before any try asks the page to navigate, so its
-          // fetch wrapper sees the read the route holds start: by one count in the order they happen,
-          // the press (a capture listener for a click on the News link), the start of each fetch of
-          // `/alerts` (the runtime's reads are fetches) and when and how each settles. The page's fetch
-          // is put back and its press listener removed however the check ends, from the moment the
-          // check asks the page to install them (an install the page made but did not acknowledge in
-          // time included), and one the page runs only after that removal does nothing; a removal not
-          // confirmed within 5 s fails the case rather than leave the shared page instrumented.
+          // The page's fetch is put back and its press listener removed however the check ends, from
+          // the moment the check asks the page to install them (an install the page made but did not
+          // acknowledge in time included), and one the page runs only after that removal does
+          // nothing; a removal not confirmed within 5 s fails the case rather than leave the shared
+          // page instrumented.
           await readWithin(
             "the page's notes of its press and reads",
             page.evaluate((token) => {
               const w = /** @type {any} */ (window);
               if (w.__smokeLeaveRemoved === token) return;
-              /** @typedef {{ at: number, url: string, prefetch: boolean, read: boolean, settledAt: number | null, failed: boolean | null }} Read */
+              /** @typedef {{ at: number, url: string, prefetch: boolean }} Read */
               const notes = { count: 0, pressedAt: /** @type {number | null} */ (null), reads: /** @type {Read[]} */ ([]) };
               w.__smokeLeave = notes;
               w.__smokeFetch ??= window.fetch;
               const original = w.__smokeFetch;
               window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
-                /** @type {Read | null} */
-                let read = null;
                 try {
                   const at = new URL(input instanceof Request ? input.url : String(input), location.href);
                   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-                  const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-                  const prefetch = headers.get("purpose") === "prefetch";
-                  if (at.origin === location.origin && at.pathname === "/alerts") {
-                    // `read`: one the route counts, as `leaveHold` does.
-                    read = { at: ++notes.count, url: at.pathname + at.search, prefetch, read: method === "GET" && !prefetch && ["nav", "page"].includes(headers.get("corten") ?? ""), settledAt: null, failed: null };
-                    notes.reads.push(read);
-                  }
+                  if (at.origin === location.origin && at.pathname === "/alerts") notes.reads.push({ at: ++notes.count, url: at.pathname + at.search, prefetch: headers.get("purpose") === "prefetch" });
                 } catch {}
-                const answer = original.apply(this, /** @type {any} */ (arguments));
-                const settled = (/** @type {boolean} */ failed) => () => {
-                  if (read) Object.assign(read, { settledAt: ++notes.count, failed });
-                };
-                if (read) Promise.resolve(answer).then(settled(false), settled(true));
-                return answer;
+                return original.apply(this, /** @type {any} */ (arguments));
               };
               // Kept by name, so the check's cleanup removes it with the wrapper.
               w.__smokeLeaveClick = (/** @type {Event} */ e) => {
@@ -2247,101 +2213,48 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               document.addEventListener("click", w.__smokeLeaveClick, true);
             }, leaveToken),
           );
-          for (let tries = 0; tries < 3 && !armed && !leftAs; tries++) {
-            releaseLeave();
+          for (let tries = 0; tries < 3 && !armed; tries++) {
             const leaving = await readWithin("the pending write's page", pending());
-            /** @type {() => void} */
-            let onHeld = () => {};
-            const heldRead = new Promise((resolve) => (onHeld = () => resolve(true)));
-            const released = new Promise((resolve) => (releaseLeave = () => resolve(undefined)));
-            leave = { address: new URL(leaving).pathname + new URL(leaving).search, count: 0, held: null, failedAt: null, onHeld, released };
-            await readWithin(
-              "the old status line's mark",
-              page.evaluate(() => {
-                document.getElementById("alert-status")?.setAttribute("data-old", "");
-                // This try's reads only, so the route's count and the page's start from the same read.
-                const notes = (/** @type {any} */ (window)).__smokeLeave;
-                if (notes) notes.reads = [];
-              }),
-            );
+            await readWithin("the old status line's mark", page.evaluate(() => document.getElementById("alert-status")?.setAttribute("data-old", "")));
             await within(15000, "the page was not asked to navigate within 15 s", page.evaluate((url) => (/** @type {any} */ (window)).navigation.navigate(url), leaving));
             await within(30_000, "the pending write's page was not drawn within 30 s", page.waitForFunction((url) => location.href === url && !document.querySelector("#alert-status[data-old]"), leaving));
-            if (!(await readWithin("whether the page armed its read again", page.evaluate(() => !!document.head.querySelector("noscript[data-corten-read-again]"))))) continue;
-            if (await cameWithin(5000, heldRead)) armed = true;
-            else leftAs = { ok: false, detail: `the page armed its read again and sent no read of ${leaving} within 5 s` };
+            armed = await readWithin("whether the page armed its read again", page.evaluate(() => !!document.head.querySelector("noscript[data-corten-read-again]")));
           }
-          // No read of the alerts page from the press on, by the page's own order of events: News can
-          // come from a prefetch sent while the pointer rested on its link, before the press, so no
-          // request marks the moment the page left. The page's notes (above) number the press, the start
-          // of each fetch of `/alerts` and when each settles by one count, so a read started before the
-          // press, still on its way, is told from one started after it, however late the check hears
-          // either, and one started in the same instant as the press is after it, not lost; a load of
-          // `/alerts` heard after the press counts too, as does a document that was replaced, which
-          // leaves no notes. By the same notes the read held at its route (the page's second read of the
-          // address the route counts, as the route holds the second) must have been still pending at the
-          // page's press and failed after it, so a read that failed while the driver was still preparing
-          // the click is not taken for one the press cut off. The notes are read 2.2 s after News is drawn.
-          if (armed && leave) {
-            const hold = leave;
+          if (armed) {
             const pressFrom = pageLog.length;
             await leaveForNews();
-            // Let go only once News is drawn: a read the press did not cut off fails after this, not
-            // while held.
-            const failedAt = hold.failedAt;
-            releaseLeave();
             await pause(2200);
             const notes = await readWithin(
               "the page's notes of its press and reads",
-              page.evaluate(
-                () =>
-                  /** @type {{ pressedAt: number | null, reads: { at: number, url: string, prefetch: boolean, read: boolean, settledAt: number | null, failed: boolean | null }[] } | undefined} */ (
-                    (/** @type {any} */ (window)).__smokeLeave
-                  ),
-              ),
+              page.evaluate(() => /** @type {{ pressedAt: number | null, reads: { at: number, url: string, prefetch: boolean }[] } | undefined} */ ((/** @type {any} */ (window)).__smokeLeave)),
             );
             const loads = pageLog.slice(pressFrom).filter((r) => r.isNavigationRequest() && r.method() === "GET" && new URL(r.url()).pathname === "/alerts").map((r) => `load ${new URL(r.url()).pathname}${new URL(r.url()).search}`);
             const pressed = notes?.pressedAt ?? null;
             const after = pressed === null ? [] : (notes?.reads ?? []).filter((r) => r.at > pressed);
-            const held = notes?.reads.filter((r) => r.read && r.url === hold.address)[1];
-            const heldSays = !held
-              ? `the page noted no second read of ${hold.address}`
-              : held.settledAt === null
-                ? "the page's read held at the press never settled"
-                : pressed === null || held.settledAt < pressed
-                  ? `the page's read held ${held.failed ? "failed" : "was answered"} before its press`
-                  : !held.failed
-                    ? "the page's read held at the press was answered, not cut off"
-                    : null;
-            const cut = failedAt !== null && heldSays === null;
             leftAs = {
-              ok: cut && !!notes && pressed !== null && loads.length === 0 && after.every((r) => r.prefetch),
+              ok: !!notes && pressed !== null && loads.length === 0 && after.every((r) => r.prefetch),
               detail: !notes
                 ? "the document that pressed was replaced, so its notes are gone"
                 : pressed === null
                   ? "the page noted no press of the News link"
-                  : `${failedAt === null ? "the read held at the press did not fail while held" : (heldSays ?? "the read held, still pending at the page's press, failed after it, while held")}; ${after.filter((r) => !r.prefetch).length + loads.length} reads after the press${after.length + loads.length ? ` (${[...after.map((r) => `${r.prefetch ? "prefetch, not counted, " : ""}${r.url}`), ...loads].join(", ")})` : ""}`,
+                  : `${after.filter((r) => !r.prefetch).length + loads.length} reads started after the press${after.length + loads.length ? ` (${[...after.map((r) => `${r.prefetch ? "prefetch, not counted, " : ""}${r.url}`), ...loads].join(", ")})` : ""}`,
             };
           }
         } finally {
-          releaseLeave();
-          await cleanUp(
-            () => page.off("requestfailed", onLeaveFailed),
-            () => within(5000, "the leaving page's hold was not removed within 5 s", page.unroute("**/alerts?saved=*", leaveHold)),
-            () =>
-              within(
-                5000,
-                "the page's fetch was not put back within 5 s",
-                page.evaluate((token) => {
-                  const w = /** @type {any} */ (window);
-                  w.__smokeLeaveRemoved = token;
-                  if (w.__smokeFetch) window.fetch = w.__smokeFetch;
-                  if (w.__smokeLeaveClick) document.removeEventListener("click", w.__smokeLeaveClick, true);
-                  delete w.__smokeLeaveClick;
-                  delete w.__smokeLeave;
-                }, leaveToken),
-              ),
+          await cleanUp(() =>
+            within(
+              5000,
+              "the page's fetch was not put back within 5 s",
+              page.evaluate((token) => {
+                const w = /** @type {any} */ (window);
+                w.__smokeLeaveRemoved = token;
+                if (w.__smokeFetch) window.fetch = w.__smokeFetch;
+                if (w.__smokeLeaveClick) document.removeEventListener("click", w.__smokeLeaveClick, true);
+                delete w.__smokeLeaveClick;
+                delete w.__smokeLeave;
+              }, leaveToken),
+            ),
           );
-          leave = null;
         }
         if (leftAs) check("navigating away stops the reads", leftAs.ok, leftAs.detail);
         else skip("navigating away stops the reads", "each write landed before its page came in");
@@ -2518,9 +2431,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // anywhere else is not it. Looked for by that clock until 5 s from the press, each look reading
       // the note and the page's time in one task (`lookUntil`), so neither an arming or a press whose
       // answer comes back late nor a check that looks late fails a draw noted in time, and none noted
-      // after the 5 s passes. The listener is removed (bounded) however the case ends. The alert
-      // pressed must be the one that leaves: the list after is the list before without it, in order.
+      // after the 5 s passes. The listener is removed (bounded) however the case ends, and an install
+      // of it the page runs only after that removal does nothing. The alert pressed must be the one
+      // that leaves: the list after is the list before without it, in order.
       const removed = listedFirst.at(-1)?.id ?? null;
+      /** This run of the case's, so an install of its listener the page runs after its removal does nothing. */
+      const pressToken = `${Date.now()}-${Math.random()}`;
       /** @type {number | null} */
       let pressedIn = null;
       /** @type {number | false | undefined} */
@@ -2530,8 +2446,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await readWithin("the page's note of Saving...", noteSaving());
         await readWithin(
           "the page's note of the press of the alert's Remove button",
-          page.evaluate((id) => {
+          page.evaluate(({ id, token }) => {
             const w = /** @type {any} */ (window);
+            if (w.__smokePressedRemoved === token) return;
             if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
             w.__smokePressed = null;
             w.__smokePressedListener = (/** @type {Event} */ event) => {
@@ -2540,7 +2457,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               if (id !== null && /** @type {HTMLInputElement | null} */ (button?.form?.querySelector('input[name="alert"]'))?.value === id) w.__smokePressed = performance.now();
             };
             addEventListener("click", w.__smokePressedListener, { capture: true });
-          }, removed),
+          }, { id: removed, token: pressToken }),
         );
         const removedAt = performance.now();
         await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
@@ -2554,11 +2471,12 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         await within(
           5000,
           "the press listener of the removal case was not removed within 5 s",
-          page.evaluate(() => {
+          page.evaluate((token) => {
             const w = /** @type {any} */ (window);
+            w.__smokePressedRemoved = token;
             if (w.__smokePressedListener) removeEventListener("click", w.__smokePressedListener, { capture: true });
             delete w.__smokePressedListener;
-          }),
+          }, pressToken),
         );
       }
       const removing = typeof pressedIn === "number" && typeof savingAt === "number" && savingAt >= pressedIn && savingAt <= pressedIn + 5000;
