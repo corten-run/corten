@@ -1421,8 +1421,9 @@ async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, 
 /// `NoStore` is watched as the answer it holds is: around an answer type of the app's own that
 /// is `Public` on one branch, a relay that kept the upstream's `Surrogate-Control` drew a form's
 /// new submit key, and goes out `private, no-store` without that header, which `no-store` does not
-/// replace, rather than with the CDN still told to keep it. With no key it goes out the same way, as
-/// every `NoStore` answer does.
+/// replace, rather than with the CDN still told to keep it, and without the upstream's tag. With no
+/// key it goes out `private, no-store` without that header too, as every `NoStore` answer does, and
+/// keeps its tag: only the watch takes the tag away.
 #[tokio::test]
 async fn a_no_store_answer_that_holds_a_public_one_whose_handler_drew_a_submit_key_keeps_no_cdn_header() {
     use crate::answer::{AnyInputs, Format, NotAFeed};
@@ -1453,6 +1454,7 @@ async fn a_no_store_answer_that_holds_a_public_one_whose_handler_drew_a_submit_k
     let relay = move |body: String| {
         let mut headers = HeaderMap::new();
         headers.insert("surrogate-control", HeaderValue::from_static("max-age=3600"));
+        headers.insert(header::ETAG, HeaderValue::from_static("\"upstream\""));
         Public::new(minute, crate::Relay::new(StatusCode::OK, headers, Body::from(body)))
     };
     let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
@@ -1473,6 +1475,7 @@ async fn a_no_store_answer_that_holds_a_public_one_whose_handler_drew_a_submit_k
         for cdn in CDN_OVERRIDES {
             assert!(!headers.contains_key(cdn), "{app}: {headers:?}");
         }
+        assert!(!headers.contains_key(header::ETAG), "{app}: {headers:?}");
         assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}");
         for path in ["/plain", "/mine"] {
             let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
@@ -1485,6 +1488,8 @@ async fn a_no_store_answer_that_holds_a_public_one_whose_handler_drew_a_submit_k
                 assert!(!headers.contains_key(cdn), "{app}: {path}: {headers:?}");
             }
         }
+        let (_, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+        assert_eq!(headers[header::ETAG], "\"upstream\"", "{app}: {headers:?}");
     }
 }
 

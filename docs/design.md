@@ -12191,9 +12191,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
     are not in the tag, so one that only some answers at a URL carry (`Content-Disposition`) stays
     on a cache's copy after a `304`. An app value drawn at random for each render (a token in the
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
-    own (the nonce, a submit key), which saves time only, and for a key placed as `raw(..)`
-    markup only in an answer that may be `Public` (`Public`, or a type of the app's own), whose
-    handler is watched for one.
+    own (the nonce, a submit key), which saves time only. For a key placed as `raw(..)` markup,
+    it skips the hash in any answer of a staged route, text and a bare `Json<T>` included, when the
+    key was made with `req.rendered`, which marks the request; a key rendered bare with
+    `to_html()` is seen only in an answer that may be `Public` (`Public`, or a type of the app's
+    own), whose handler is watched for one.
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which
