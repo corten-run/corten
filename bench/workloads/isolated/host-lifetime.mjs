@@ -200,6 +200,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
 const retryPause = new Int32Array(new SharedArrayBuffer(4));
 const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
   "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
+const retriedEmptyCensuses = new WeakSet();
 function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses) {
   // Spend only the time left in the existing continuity window. A monotonic
   // deadline also bounds retries when the wall clock moves backwards.
@@ -217,6 +218,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
             p.executableRef === successor.parent.ref && sameProcess(p, successor.parent.identity, successor.cgroup)));
         });
         if (race && performance.now() > deadline) throw race;
+        if (race && observed.processes.length === 0) retriedEmptyCensuses.add(observed);
         return observed;
       };
       return pending ? pending.transaction(attempt) : attempt();
@@ -428,6 +430,16 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     participantGroup(path, id);
     stage = "kernel-census";
     const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    // The entry PID can exit after the opening stat. Empty PID walks alone
+    // cannot settle the exit, nor can an empty retry after a failed census.
+    if (observed.processes.length === 0 && !retriedEmptyCensuses.has(observed)
+      && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+      && observed.groups.every(({ files }) => files["cgroup.events"]?.split("\n")
+        .filter((line) => /^populated(?:[ \t]|$)/.test(line)).join("\n") === "populated 0")
+      && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+      const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+      if (stopped) throw new ClosingDockerExit(stopped);
+    }
     assert.ok(observed.processes.some((p) => processIdentity(p.stat).pid === pid));
     stage = "process-identity-close";
     const closing = processIdentity(readFileSync(`${at}/stat`, "utf8"));

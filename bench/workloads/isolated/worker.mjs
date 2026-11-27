@@ -37,7 +37,7 @@ export function verifyWorkingSources(binding) {
     // Git's documented text checkout conversion changes only CRLF, never binary data.
     assert.ok(matchesWorkingSource(bytes, entry.sha256), `executed working source differs: ${entry.path}`);
   }
-  assert.equal(captureSources(binding.request.commit).sha256, binding.sources.sha256);
+  assert.equal(captureSources(binding.request.commit, binding.request.group).sha256, binding.sources.sha256);
 }
 
 /** The callback is caller authority, not an unsigned binding/declaration field. No default. */

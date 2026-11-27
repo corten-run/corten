@@ -4,7 +4,7 @@ import { constants, closeSync, fstatSync, statfsSync, openSync, readSync, writeS
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative, isAbsolute, posix, win32 } from "node:path";
-import { validateBudget, phases } from "./plan.mjs";
+import { appSourcePath, appSourceRows, validateBudget, phases } from "./plan.mjs";
 import { verifyContainerCommands, requireCommandAcknowledgement } from "./lifecycle.mjs";
 import { qualificationSettings, featureProfile } from "../marketplace/feature-contract.mjs";
 import { edgeOffset, nginxConf } from "../fullstack/edge.mjs";
@@ -343,10 +343,13 @@ function verifyWorker(r, cell, summary, receipts, isolatedRun) {
     certificate: ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
   };
   const info = r.created;
+  // Image inspect may omit an unset Cmd or Entrypoint; container inspect records null.
+  // Keep the container receipt and any explicit image value exact.
   if (commands[step]) assert.deepEqual(info.Config.Cmd, commands[step], "launched native worker command differs");
   else if (step === "application" || step === "proxy") {
     const image = step === "application" ? summary.builds[cell.app].image : summary.tools.edge;
-    assert.deepEqual(info.Config.Cmd, image.Config.Cmd); assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint);
+    assert.deepEqual(info.Config.Cmd, image.Config.Cmd ?? null);
+    assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint ?? null);
   } else if (/^(application|upstream|proxy)-health$/.test(step)) {
     const role = step.split("-")[0], path = r.intent.healthPath;
     assert.ok(path === null || typeof path === "string" && path.startsWith("/"));
@@ -367,7 +370,7 @@ function verifyWorker(r, cell, summary, receipts, isolatedRun) {
   if (step !== "application") assert.equal(info.Image, summary.tools[tool].Id);
   else assert.equal(info.Image, summary.builds[cell.app].imageId);
   const image = step === "application" ? summary.builds[cell.app].image : summary.tools[tool];
-  if (!["application", "proxy"].includes(step)) assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint);
+  if (!["application", "proxy"].includes(step)) assert.deepEqual(info.Config.Entrypoint, image.Config.Entrypoint ?? null);
   for (const key of ["User", "WorkingDir"]) assert.equal(info.Config[key] ?? "", image.Config[key] ?? "");
   const environment = new Map((image.Config.Env ?? []).map((s) => [s.slice(0, s.indexOf("=")), s.slice(s.indexOf("=") + 1)]));
   const overrides = step === "application" ? { MARKETPLACE_SOURCE: cell.source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json",
@@ -626,7 +629,7 @@ export function verifyRunInputs(folder, summary) {
   const input = JSON.parse(readFileSync(join(folder, "inputs.json"), "utf8"));
   assert.equal(input.schema, "native-hardening-inputs/v1"); assert.equal(input.commit, summary.commit);
   const files = committedInputs(repository, summary.commit); assert.deepEqual(input.files, files);
-  const contextFiles = (app) => files.filter((f) => app === "corten" || f.path.startsWith(`bench/fullstack/apps/${app}/`));
+  const contextFiles = (app) => files.filter((f) => app === "corten" || appSourcePath(app, f.path));
   const body = (file) => readFileSync(join(folder, file));
   for (const [app, build] of Object.entries(summary.builds ?? {})) {
     assert.match(app, /^[a-z][a-z0-9-]*$/); assert.ok(summary.cells.some((c) => c.app === app));
@@ -645,9 +648,7 @@ export function verifyRunInputs(folder, summary) {
     assert.equal(receipt.inputSha256, build.contextSha256); assert.equal(receipt.inputBytes, archive.length);
     assert.ok(Date.parse(receipt.finishedAt) >= Date.parse(receipt.startedAt));
     const dockerfile = app === "corten" ? "bench/marketplace/corten/Dockerfile" : "Dockerfile";
-    const labels = build.image.Config.Labels, expectedSource = digest(JSON.stringify(files.filter((f) => app === "corten"
-      ? ["Cargo.toml", "Cargo.lock"].includes(f.path) || f.path.startsWith("crates/") || f.path.startsWith("bench/marketplace/corten/")
-      : f.path.startsWith(prefix)).map((f) => [f.path, f.sha256])));
+    const labels = build.image.Config.Labels, expectedSource = digest(JSON.stringify(appSourceRows(app, files)));
     assert.equal(labels["run.corten.hardening.source"], expectedSource);
     assert.deepEqual(receipt.args, ["build", "--label", `run.corten.hardening=${summary.runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${summary.runId}`,
       "--label", `run.corten.marketplace.commit=${summary.commit}`, "--label", "run.corten.marketplace.dirty=false", "--label", `run.corten.marketplace.profile=${featureProfile}`,

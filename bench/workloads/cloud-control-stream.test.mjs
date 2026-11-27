@@ -19,13 +19,16 @@ function manifest(entries = [{ path: "", type: "directory" }, { path: "blobs", t
   return { ...body, sha256: deploymentSha256(body) };
 }
 
-function fixture(t, { autoClose = true, sealExec, peerLease } = {}) {
+function fixture(t, { autoClose = true, sealExec, peerLease, onInput } = {}) {
   const local = mkdtempSync(join(tmpdir(), "corten-control-wire-")), child = new EventEmitter(), input = [], calls = [];
   let sequence = 0, ended = false;
   const close = (code = 0) => { if (!ended) { ended = true; child.emit("close", code, null); } };
   child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.stdin = new Writable({ write(bytes, encoding, next) {
-    for (const line of bytes.toString().trimEnd().split("\n")) { const frame = JSON.parse(line); input.push(frame); if (frame.kind === "close") setImmediate(close); }
+    for (const line of bytes.toString().trimEnd().split("\n")) {
+      const frame = JSON.parse(line); onInput?.(frame, local); input.push(frame);
+      if (frame.kind === "close") setImmediate(close);
+    }
     next();
   } });
   child.stdin.on("close", () => { if (autoClose && !ended) setImmediate(() => close(254)); });
@@ -141,8 +144,8 @@ test("late close is actual local evidence even after the foreground lost the lea
   t.mock.timers.tick(30000); assert.equal(streamRecoveryReady(f.local, saved), true);
 });
 
-test("paused audit material and approved delivery use the same existing stream, never another process or channel", async (t) => {
-  const f = fixture(t), result = await f.ready, group = "json-api", campaign = "r21-0123456789abcdef", protocol = auditProtocol(group);
+async function queuedAudit(t, onInput) {
+  const f = fixture(t, { onInput }), result = await f.ready, group = "json-api", campaign = "r21-0123456789abcdef", protocol = auditProtocol(group);
   const body = { schema: "benchmark-json-audit-subject/v1", commit: binding.commit, campaignSha256: "f".repeat(64), identities: protocol.members, sourcesManifest: manifest() };
   const subjectSha256 = deploymentSha256(body), bytes = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
   f.frame("audit-begin", { campaign, group, subjectSha256 });
@@ -157,16 +160,42 @@ test("paused audit material and approved delivery use the same existing stream, 
   const state = { round: binding.round, commit: binding.commit, token: binding.token,
     control: { helperSha256: binding.helperSha256, monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)), phase: "live" } } };
   queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 }, digest(readFileSync(path)));
-  assert.ok(!existsSync(join(f.local, "monitor-delivery-" + group + ".json.pending")));
-  assert.equal(digest(readFileSync(join(f.local, "monitor-delivery-" + group + ".json"))), digest(readFileSync(path)));
+  const queued = join(f.local, `monitor-delivery-${group}.json`);
+  assert.ok(!existsSync(queued + ".pending"));
+  assert.equal(digest(readFileSync(queued)), digest(readFileSync(path)));
+  return { f, result, group, campaign, subjectSha256, state, path, queued, delivery };
+}
+
+test("paused audit material and approved delivery use the same existing stream, never another process or channel", async (t) => {
+  let approvalPresentAtBegin;
+  const { f, result, group, campaign, subjectSha256, state, path } = await queuedAudit(t, (frame, local) => {
+    if (frame.kind === "delivery-begin") approvalPresentAtBegin = existsSync(join(local, "monitor-delivery-json-api.json.approved-sha256"));
+  });
   await new Promise((resolve, reject) => { const deadline = Date.now() + 1000; const timer = setInterval(() => {
     if (f.input.some((v) => v.kind === "delivery-end")) { clearInterval(timer); resolve(); }
     else if (Date.now() >= deadline) { clearInterval(timer); reject(new Error("bounded delivery missing")); }
   }, 10); });
   assert.deepEqual(f.input.filter((v) => v.kind.startsWith("delivery-")).map((v) => v.kind), ["delivery-begin", "delivery-data", "delivery-end"]);
+  assert.equal(f.input.find(({ kind }) => kind === "delivery-begin").payload.sha256, digest(readFileSync(path)));
+  assert.equal(approvalPresentAtBegin, false, "sealed orphan recovery keeps the original file set");
   assert.equal(f.calls.length, 1); assert.throws(() => queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 }, digest(readFileSync(path))));
   f.close(255); await result.monitor.done;
 });
+
+for (const mode of ["changed delivery", "changed approval", "missing approval"]) {
+  test(`the live monitor never begins sending an audit with ${mode}`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const { f, result, queued, delivery } = await queuedAudit(t);
+    if (mode === "changed delivery") writeFileSync(queued, JSON.stringify({ ...delivery, review: { ...delivery.review, reviewer: "changed review" } }));
+    else if (mode === "changed approval") writeFileSync(queued + ".approved-sha256", "0".repeat(64) + "\n");
+    else rmSync(queued + ".approved-sha256");
+    t.mock.timers.tick(25);
+    assert.ok(!f.input.some(({ kind }) => kind.startsWith("delivery-")));
+    assert.equal(localStreamStatus(f.local).kind, "invalid");
+    f.close(255);
+    assert.equal((await result.monitor.done).publicationRevoked, true);
+  });
+}
 
 function packet(f, content = Buffer.from("source"), count = 1) {
   const group = "mixed-production", campaign = "r21-0123456789abcdef", path = "mixed-audit-sources/contexts/corten.tar";

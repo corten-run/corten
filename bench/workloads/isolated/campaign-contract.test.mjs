@@ -257,8 +257,10 @@ test("group campaigns bind the entire exact native group with stable all-group p
     assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), `${group}: dedicated group binding differs`);
     assert.equal(dedicated.host.region, providerCreateHost("dedicated").region);
     assert.notEqual(dedicated.subjectSha256, legacy.subjectSha256);
-    for (const field of ["procedures", "sourceSha256", "ready", "executionAuthorized"])
+    for (const field of ["procedures", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
+    assert.equal(dedicated.sources.sha256, legacy.sources.sha256);
+    assert.equal(plan.sourceSha256, group === "hardening" ? dedicated.sources.sha256 : all.sourceSha256);
     assert.deepEqual(plan.recipes, { ...all.recipes, [group]: recipe });
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
     if (group === "hardening") {
