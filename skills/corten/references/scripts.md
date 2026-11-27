@@ -184,8 +184,10 @@ division: end statements with `;` and keep a division on the line it continues.
    not. It never reloads to repair the address: a replace the browser refuses, or a `navigate` listener
    cancels, leaves the answer drawn under the entry's address, so a listener that cancels it sets
    the address it means itself (or begins its own navigation); while a listener holds it before
-   it commits (`precommitHandler`), or a navigation a listener began during the replace is on its
-   way, and while that listener runs inside the replace, a press of a marked form is not sent.
+   it commits (`precommitHandler`) or after (`handler`, until that handler settles, not merely until
+   the address is in), or a navigation a listener began during the replace or as the runtime puts
+   the entry's state back is on its way, and while that listener runs inside the replace, a press
+   of a marked form is not sent.
    Pick `data-keep-place`
    when the change redraws most of the page (a list's results), `data-address` when it redraws
    one part of a screen whose rest is costly to read. The patch draws everything the address

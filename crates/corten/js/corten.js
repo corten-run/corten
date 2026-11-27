@@ -3379,9 +3379,11 @@ const presses = new Map();
 /**
  * The navigation a page's `navigate` listener holds the runtime's own replace in, before its address
  * goes in (`precommitHandler`) or after, or any other the browser shows on its way as that call
- * returns and did not before it (one a listener began in the replace's place or once its address
- * went in), and `true` while the runtime's `replaceState` call runs, which runs the page's listeners
- * and their `precommitHandler` before it returns: while it holds ({@link holding}), a marked press
+ * returns and did not before it (one a listener began in the replace's place, once its address
+ * went in or as its state went back), cleared as that navigation ends; and `true` from just before
+ * the runtime's `replaceState` call, which runs the page's listeners and their `precommitHandler`
+ * before it returns, until the entry's state is back and that navigation has been read: while it
+ * holds ({@link holding}), a marked press
  * is for the page it may yet change, and is taken as one made while a visit is on its way
  * ({@link pressed}), never sent, and a marked answer already on its way draws nothing
  * ({@link standing}), so nothing is drawn under the address it may put in.
@@ -3390,8 +3392,8 @@ const presses = new Map();
 let held;
 
 /**
- * The press whose answer's replace is held ({@link held}), set with it and cleared when no hold is
- * left as the call returns: that answer has drawn, and goes on as any drawn answer does.
+ * The press whose answer's replace is held ({@link held}), set and cleared with it: that answer has
+ * drawn, and goes on as any drawn answer does.
  * @type {Press | undefined}
  */
 let heldFor;
@@ -3740,76 +3742,111 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // entry ({@link writes}), and is the page's, newer, which is the one kept. The
           // `history.state` it passes is a copy taken then too (which runs a getter of the page's on
           // it), so the browser runs no page code as it takes it for the replace, after the checks.
-          const goes = () => here(true) && to !== location.href && (!navigation?.transition || navigation.transition === readAgainTransition) && onEntry(pending.here);
+          // A read that throws (a page's own getter on `navigation`) leaves the address: the answer
+          // has drawn, so it is not said to have failed.
+          const goes = () => {
+            try {
+              return here(true) && to !== location.href && (!navigation?.transition || navigation.transition === readAgainTransition) && onEntry(pending.here);
+            } catch {
+              return false;
+            }
+          };
           if (!goes()) return;
           /** @type {unknown} */
           let state;
           /** @type {unknown} */
           let kept;
+          /** @type {NavigationTransition | null | undefined} */
+          let transition;
           const old = navigation?.currentEntry;
           try {
             kept = structuredClone(history.state);
             state = old?.getState();
+            transition = navigation?.transition;
           } catch {
             return;
           }
           const wrote = written(old);
-          const transition = navigation?.transition;
           if (!goes()) return;
           const before = exact();
           const seen = changes;
           const key = where();
-          // Held from here until the call returns: a marked press a listener makes inside it (a
-          // `precommitHandler`, which the browser runs before the call returns) is not sent, as
-          // one made while a held replace is on its way, whatever the call ends in.
+          // Held from here until the call has returned, the entry's state is back and what is left
+          // on its way has been read: a marked press a listener makes inside the call (a
+          // `precommitHandler`, which the browser runs before the call returns), as the state goes
+          // back (a `currententrychange` listener) or as the runtime reads the navigation on its
+          // way (a page's getter) is not sent, as one made while a held replace is on its way,
+          // whatever the call ends in.
           heldFor = pending.here;
           held = true;
           try {
-            history.replaceState(kept, "", to);
-          } catch {
-            // Refused (WebKit throws past its limit of history updates): as below.
-          }
-          // Not in the entry: the browser refused it (Chromium past its limit says nothing), or a
-          // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
-          // address stays as it was, the answer drawn under it, as an unmarked form's is: the
-          // runtime neither guesses which nor reads the page again over what it cannot see.
-          // A listener that holds it (`precommitHandler`), or began a navigation in its place or
-          // after it went in (its address the same or not), leaves a navigation on its way, which
-          // may yet put an address in: until it ends, no marked press is sent ({@link held}),
-          // so no answer is drawn under it. The address being in says nothing of that. The hold
-          // the call ran under ends first, so a read of the page's that throws leaves none.
-          held = heldFor = undefined;
-          if ((held = navigation?.transition !== transition && navigation?.transition)) heldFor = pending.here;
-          if (location.href !== to) return;
-          // The entry the answer was drawn on, at its new address, by this replace.
-          entrySeen = where();
-          // What it left, for a press this draw made: only when the Navigation API saw one change
-          // of the entry inside the call, a replace that kept its key (not a listener's own
-          // `replaceState` there, another's replace, nor a push a `navigate` listener made in its
-          // place to the same address). A state a listener puts in the entry there changes no entry.
-          const alone = !navigation || (changes === seen + 1 && changed === "replace" && where() === key);
-          if (alone) {
-            draw.found = before;
-            draw.left = exact();
-          }
-          // Its Navigation API state, back in the entry this replace made (`updateCurrentEntry`
-          // keeps its key and id, adding no entry and beginning no navigation). Not in one a
-          // listener replaced or pushed inside the call, which is that listener's, nor once a
-          // listener has put a state in the entry this replace made (one cleared included), which is
-          // newer. One a listener put in the entry before this replace took its place (a `navigate`
-          // listener's, as it commits) is newer than the one the runtime read, and goes in instead.
-          // Reading it runs a page's own `getState`: only if the entry this replace made is still
-          // the screen's and still holds no state of the page's after that does it go in.
-          const made = navigation?.currentEntry;
-          if (alone && !written(made))
             try {
-              const put = written(old) === wrote ? state : old?.getState();
-              if (put !== undefined && navigation?.currentEntry === made && !written(made)) navigation?.updateCurrentEntry({ state: put });
+              history.replaceState(kept, "", to);
             } catch {
-              // A document no longer fully active, or a state the runtime cannot read: it is left.
+              // Refused (WebKit throws past its limit of history updates): as below.
             }
-          // Read again at the new address, which without the Navigation API goes by the path.
-          if (location.pathname !== path) readAgainLater();
+            // Not in the entry: the browser refused it (Chromium past its limit says nothing), or a
+            // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
+            // address stays as it was, the answer drawn under it, as an unmarked form's is: the
+            // runtime neither guesses which nor reads the page again over what it cannot see.
+            if (location.href !== to) return;
+            // The entry the answer was drawn on, at its new address, by this replace.
+            entrySeen = where();
+            // What it left, for a press this draw made: only when the Navigation API saw one change
+            // of the entry inside the call, a replace that kept its key (not a listener's own
+            // `replaceState` there, another's replace, nor a push a `navigate` listener made in its
+            // place to the same address). A state a listener puts in the entry there changes no entry.
+            const alone = !navigation || (changes === seen + 1 && changed === "replace" && where() === key);
+            if (alone) {
+              draw.found = before;
+              draw.left = exact();
+            }
+            // Its Navigation API state, back in the entry this replace made (`updateCurrentEntry`
+            // keeps its key and id, adding no entry and beginning no navigation). Not in one a
+            // listener replaced or pushed inside the call, which is that listener's, nor once a
+            // listener has put a state in the entry this replace made (one cleared included), which is
+            // newer. One a listener put in the entry before this replace took its place (a `navigate`
+            // listener's, as it commits) is newer than the one the runtime read, and goes in instead.
+            // Reading it runs a page's own `getState`: only if the entry this replace made is still
+            // the screen's and still holds no state of the page's after that does it go in.
+            const made = navigation?.currentEntry;
+            if (alone && !written(made))
+              try {
+                const put = written(old) === wrote ? state : old?.getState();
+                if (put !== undefined && navigation?.currentEntry === made && !written(made)) navigation?.updateCurrentEntry({ state: put });
+              } catch {
+                // A document no longer fully active, or a state the runtime cannot read: it is left.
+              }
+            // Read again at the new address, which without the Navigation API goes by the path.
+            if (location.pathname !== path) readAgainLater();
+          } finally {
+            // A listener that holds it (`precommitHandler`), or began a navigation in its place,
+            // after it went in or as its state went back (its address the same or not), leaves a
+            // navigation on its way, which may yet put an address in: until it ends, no marked press
+            // is sent ({@link held}), so no answer is drawn under it. The address being in says
+            // nothing of that. It is read while the call's hold is still on, so a press the read
+            // makes is held too; a read that throws (a page's own getter) leaves no hold, and the
+            // answer, drawn, is not said to have failed.
+            /** @type {NavigationTransition | null | undefined} */
+            let now;
+            try {
+              now = navigation?.transition;
+            } catch {
+              now = null;
+            }
+            held = heldFor = undefined;
+            if (now && now !== transition) {
+              held = now;
+              heldFor = pending.here;
+              // Let go as it ends, so nothing of it is kept, nor read again for a press after it.
+              const end = () => void (held === now && (held = heldFor = undefined));
+              try {
+                now.finished.then(end, end);
+              } catch {
+                // Not a navigation the browser made (a page's getter): it holds while it is shown.
+              }
+            }
+          }
         };
         draws.set(done, draw);
       }

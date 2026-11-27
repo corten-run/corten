@@ -12452,12 +12452,17 @@ rules something out.
     an answer already on its way (to a press the held answer's own draw made, before the hold) draws
     nothing, as one that would draw while a visit is on its way does not. The browser runs the
     listener, and its `precommitHandler`, inside the `replaceState` call, before the runtime can
-    read the hold back: so the runtime holds from just before the call until it returns, then goes
-    on holding only while the browser shows that navigation (one it did not show before the call),
-    and a press of a marked form made inside the call (by the listener or its `precommitHandler`)
-    is never sent, whatever the call ends in. The hold the call ran under ends before the runtime
-    reads anything back, so a read that throws (a page's own getter on `navigation`) leaves no
-    hold, and the press whose answer it was is kept only while one is left. So nothing is drawn under
+    read the hold back: so the runtime holds from just before the call until it has put the entry's
+    state back (above) and read what is on its way, which it reads with that hold still on, then
+    goes on holding only while the browser shows that navigation (one it did not show before the
+    call), and a press of a marked form made inside the call (by the listener or its
+    `precommitHandler`), as the state goes back (a `currententrychange` listener, which can begin
+    such a navigation there too) or as that read runs (a page's own getter on `navigation`) is
+    never sent, whatever the call ends in. A read that throws (such a getter) leaves no hold, and
+    the answer, which has drawn, is not said to have failed, nor is one whose read throws as the
+    runtime checks its replace before the call, which leaves the address. The hold ends with that
+    navigation (its `finished` settles), keeping neither it nor the press whose answer it was, so a
+    later press reads nothing of it again. So nothing is drawn under
     an address that may still change, and the screen keeps the answer whose address that is. The
     limit is when it ends: the runtime goes by `navigation.transition`, which shows the navigation
     until it finishes, is aborted or gives way to another, not merely until its address commits (the
@@ -12848,9 +12853,16 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 2,948 bytes larger raw (46,502 to 49,450), 1,203
-    with gzip (16,718 to 17,921) and 1,064 with brotli (15,106 to 16,170), paid once a release by
-    every user (9, 8 and 6 larger than the build before this one, which took the replace's address
+    What it costs: the runtime every page loads is 3,076 bytes larger raw (46,502 to 49,578), 1,249
+    with gzip (16,718 to 17,967) and 1,110 with brotli (15,106 to 16,216), paid once a release by
+    every user (128, 46 and 46 larger than the build before this one, which lifted the call's hold
+    before it read the navigation on its way, and read it before it put the entry's state back, so
+    a press a page's getter made as it was read, or a navigation a `currententrychange` listener
+    began as the state went back, let a press through whose panel the held navigation then put
+    another address over; said a drawn answer had failed when that read, or one as it checked the
+    replace, threw; and kept an ended hold's navigation, which the next press read again, so a getter
+    that threw then lost that press; that build was 9, 8 and 6 larger than the one before it, which
+    took the replace's address
     being in as no navigation on its way, so a navigation a listener began once it was in, held,
     let a press through whose panel it then put another address over, and which kept the hold for
     good when a read after the call threw; that build was 14, 14 and 7 larger than the one before
@@ -12995,7 +13007,19 @@ rules something out.
     when a replace a page's listener holds could be ended rather than waited out.
 
     Last checked: 2026-11-27, the runtime's size with this change against main's runtime, unchanged
-    since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
+    since `ab1025517` (main at `2e42c00a1`), and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-27, a marked press a getter of the page's on `navigation.transition` makes as the
+    runtime reads it after its call, and one made while a navigation a `currententrychange`
+    listener began as the runtime put the entry's state back is held (`precommitHandler`) and,
+    let go, goes to another address, the `corten:error` of a marked answer whose read of
+    `navigation.transition` throws after its call or as its replace is checked, and a marked press
+    once a held replace (`handler`) has finished, under a getter that throws, in Playwright 1.65.1's
+    Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, of which the build before this
+    one fails the first two in Chromium and Firefox, sending the press and leaving its panel under
+    the other address, the third and fourth in all three, saying each drawn answer failed, and the
+    fifth in all three, losing the press; WebKit has no `precommitHandler` and skips the first two;
+    the check of the held navigation the `currententrychange` listener began inside the call now
+    also reads its redirect's address, which a smoke without the redirect fails);
     2026-11-27, a marked press while a navigation a `currententrychange` listener began inside the
     runtime's committed replace, to the same address, is held (`precommitHandler`) and, let go,
     goes to another, and a marked press after a `navigate` listener cancelled the runtime's replace
