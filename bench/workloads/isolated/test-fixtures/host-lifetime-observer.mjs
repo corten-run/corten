@@ -132,8 +132,12 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     if (String(path).replaceAll("\\", "/") === `/sys/fs/cgroup${f.scope}/cgroup.procs`) { f.members = [Number(value)]; return; }
     return original.writeFileSync(path, value, ...args);
   });
-  t.mock.method(fs, "lstatSync", (path, ...args) => String(path).replaceAll("\\", "/").startsWith("/sys/fs/cgroup")
-    ? { isSymbolicLink: () => false } : original.lstatSync(path, ...args));
+  t.mock.method(fs, "lstatSync", (path, ...args) => {
+    const normalized = String(path).replaceAll("\\", "/");
+    if (!normalized.startsWith("/sys/fs/cgroup")) return original.lstatSync(path, ...args);
+    const result = f.cgroupStat?.(normalized, args[0], path);
+    return result === null ? undefined : result ?? { isSymbolicLink: () => false };
+  });
   t.mock.method(fs, "statSync", (path, ...args) => {
     if (!/^\/proc\/\d+\/exe$/.test(String(path)) || nativePids.includes(Number(String(path).split("/")[2]))) return original.statSync(path, ...args);
     if (!deferred) return { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };

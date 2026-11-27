@@ -429,7 +429,27 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
     participantGroup(path, id);
     stage = "kernel-census";
-    const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
+    const ancestors = parents(posix.dirname(path));
+    let observed;
+    try { observed = snapshot(path, executables, pending); }
+    catch (error) {
+      const scope = join(root, path);
+      // A nested or unreadable cgroup is still a gap. For the exact missing
+      // scope, confirm Docker's terminal generation, then check it is still gone.
+      if (error?.code === "ENOENT" && error.path === scope && observationOperations.get(error) === "cgroup-read"
+        && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+        && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        if (stopped && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
+          let absent = false;
+          try { absent = lstatSync(scope, { throwIfNoEntry: false }) === undefined; }
+          catch { /* Retain the original census fault. */ }
+          if (absent && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs)
+            throw new ClosingDockerExit({ ...stopped, endedAt: Date.now() });
+        }
+      }
+      throw error;
+    }
     // The entry PID can exit after the opening stat. Empty PID walks alone
     // cannot settle the exit, nor can an empty retry after a failed census.
     if (observed.processes.length === 0 && !retriedEmptyCensuses.has(observed)
