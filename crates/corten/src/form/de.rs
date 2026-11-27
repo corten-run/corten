@@ -121,7 +121,6 @@ pub fn sorted_pairs(query: &str) -> Vec<Pair<'_>> {
 /// end: the next `&`, for a key the next `=` if that comes first, or the query's end. Those and
 /// the two characters looked for are ASCII, so no byte of another character is taken for one
 /// and the text between them is whole characters.
-#[inline(always)]
 fn half<'a>(query: &'a str, at: &mut usize, key: bool) -> Cow<'a, str> {
     let (start, mut plus, mut percent) = (*at, false, false);
     while let Some(&byte) = query.as_bytes().get(*at) {
@@ -143,7 +142,8 @@ fn half<'a>(query: &'a str, at: &mut usize, key: bool) -> Cow<'a, str> {
 /// A key or a value with a `+` (`plus`) or a `%` (`percent`) in it, read as `form_urlencoded`
 /// reads one (it offers that for a whole query only): each `+` a space, then percent-decoded
 /// with the function it uses, then as UTF-8 with what is not UTF-8 replaced. Out of line, so the
-/// walk stays small for the queries with nothing to decode.
+/// walk stays small for the queries with nothing to decode: left to the compiler, this was put
+/// into [`half`] and `half` was then called from the walk, which cost every query more.
 #[inline(never)]
 fn unescaped(text: &str, plus: bool, percent: bool) -> Cow<'_, str> {
     let spaced: Cow<'_, [u8]> = if plus {
