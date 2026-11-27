@@ -1098,7 +1098,8 @@ it did the first time, and the user sees that and can send the change. A `data-p
 change made while its write is out waits for the answer instead, and goes under the new key
 (below). The key is the app's to store, next to the write (Corten keeps
 no store); `corten_cluster::begin` takes it as its idempotency key. Its keys are unique across the
-whole cluster store, not per feed: a key a write to one feed used is refused on another
+whole cluster store, not per feed: while the store keeps it (`corten_cluster::prune` drops keys
+older than the age it is given), a key a write to one feed used is refused on another
 (`corten_cluster::IdempotencyKeyReused`, which the app answers with a 422), never replayed there. A field that is not a UUID v4
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
