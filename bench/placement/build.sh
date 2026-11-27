@@ -46,12 +46,14 @@
 # unpadded ones too, is written with LLD's --no-demangle, so it names each symbol as the ELF symbol
 # table does, which layout.mjs and order.mjs read functions from, and 4 and 5's checks of the
 # functions are layout.mjs --order with the unpadded map and the placement's, which asks for the
-# placement's map's input sections in the file's order, each function in its section, in place of
+# placement's map's input sections in the file's order (sections of one key in any order among
+# themselves, as LLD promises no more), each function in its section, in place of
 # each moved by the pad with its neighbours (5's map check takes --shuffled, its sections in any
 # order). Each head placement is then checked against base's at its index (layout.mjs --alike,
 # bin/layout/head-p<n>-alike.txt, from both sides' unpadded binaries, maps, placement maps and
-# ordering files): the functions both have lie in one order in both, a name defined more than once
-# matched definition by definition by its object or input section, or head is refused (7).
+# ordering files): the function definitions both have lie in one order in both, each place holding
+# the same of them, a name defined more than once matched copy by copy by what a rebuild keeps of
+# its object (less ordinals and hashes) and input section, or head is refused (7).
 # A refusal (3, 5 or 7) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
 # 5 and 7 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
