@@ -1018,7 +1018,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(current >= finishedAtMs && (bounded ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
         "retirement proof expired before deletion");
     };
-    await own(); check();
+    // The provider read awaits, so the lock is checked again after it and before each
+    // publication below: a lock replaced during the read refuses with nothing saved.
+    await own(); check(); held.own();
     if (pinned) requireUnusedBootstrapCustody();
     requireFreshProof();
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
@@ -1047,34 +1049,38 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
       if (recorded) discardPublicationStage(retained);
       if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
-      else (recorded ? durableNew : durable)(retained, prior);
+      else { held.own(); (recorded ? durableNew : durable)(retained, prior); }
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
-      unlinkSync(path); syncDirectory(local);
+      held.own(); unlinkSync(path); syncDirectory(local);
     }
     // Supersedes any earlier digest; the retirement state below clears it. The digest is
     // saved before the receipt is published, so a published receipt always has one. Like
     // publishCreateErrored, it goes through its own fresh exclusive stage, so a save torn
     // here leaves an unread stage rather than a state.json.tmp that blocks the next collect.
     const written = digest(bytes);
-    if (recorded) { check(); state.pendingRetirement = { kind, evidenceSha256: written }; writeState(state, renameSync, "pending-retirement"); }
-    (recorded ? durableNew : durable)(path, bytes);
+    if (recorded) { check(); held.own(); state.pendingRetirement = { kind, evidenceSha256: written }; writeState(state, renameSync, "pending-retirement"); }
+    held.own(); (recorded ? durableNew : durable)(path, bytes);
     if (bounded) requireFreshProof();
     // The bytes this process wrote, not the file, are the authority: the published receipt
     // must still be them before the intent and again just before the DELETE is sent.
     const requirePublished = () => assert.equal(digest(regular(path, limit)), written,
       "published retirement receipt differs from the bytes written; preserve host");
     requirePublished();
-    delete state.pendingRetirement;
-    Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() }); save();
     // For a setup retirement, this verification also pins the archive and its extraction.
     const pins = [];
-    verifyRetirement(pins);
+    let savedState;
+    const publishIntent = () => {
+      requirePublished(); held.own();
+      delete state.pendingRetirement;
+      Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() }); save();
+      verifyRetirement(pins);
+      savedState = Buffer.from(stateBytes(state));
+    };
     // Everything the DELETE relies on, as this process left it: the receipt, the saved
     // reservation that names its digest, the archived control custody the proof was built
     // from (including any watcher failure), for a setup retirement the archive and the
     // extracted tree its replay verifier hashes, and the lock this operation holds.
     // The transport calls this again after its last local await before the request.
-    const savedState = Buffer.from(stateBytes(state));
     const custody = recorded ? evidence.observation.control.custody : undefined;
     const requireRetirementCustody = () => {
       requirePublished();
@@ -1092,8 +1098,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       for (const pin of pins) pin();
       held.own();
     };
-    requireRetirementCustody();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);
+    const deletion = ["compute", "droplet", "delete", state.id, "--force"];
+    if (drained) {
+      // A drain proof's intent is saved only after the DELETE's own account preflight and
+      // the deadline check that follows it, so a proof that expires during that read leaves
+      // the receipt and its digest with no intent, which the next collect recovers on a
+      // fresh proof. The deadline still goes with the DELETE itself.
+      await execute("doctl", deletion, 120000, false, { expiresAt: () => deleteProofExpiresAtMs, publishIntent },
+        undefined, undefined, requireRetirementCustody);
+    } else {
+      publishIntent();
+      requireRetirementCustody();
+      await execute("doctl", deletion, 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);
+    }
     await confirmDeleted();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };

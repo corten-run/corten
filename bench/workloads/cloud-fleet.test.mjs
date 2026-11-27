@@ -490,14 +490,14 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished",
   "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn",
   "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch",
-  "receipt-edited-at-engine", "engine-unchanged"]) test({
+  "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
   // The restart recognizes the refused drain query only by its exact drain script digest.
   refused: "a drain query that exits nonzero refuses, and a restart sends no second query",
   "invalid-proof": "a drain query that exits zero with unusable proof refuses, and a restart sends no second query",
-  "delete-expired": "a drain proof that expires during the DELETE's account preflight sends no DELETE, and a restart sends none either",
+  "delete-expired": "a drain proof that expires during the DELETE's account preflight saves no intent and sends no DELETE, and a restart deletes once on a fresh proof",
   "delete-in-time": "a drain proof still current after the DELETE's account preflight sends one DELETE with its own deadline",
   "receipt-expired": "a drain proof that expires between its receipt and the intent is kept, and a restart deletes once on a fresh proof",
   "receipt-expired-kept": "a restart whose earlier recovery already kept the interrupted receipt recovers it at the receipt's own bound",
@@ -519,6 +519,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "evidence-edited-at-dispatch": "an extracted file outside control/ edited during the production dispatch checkpoint refuses and sends no DELETE",
   "receipt-edited-at-engine": "a receipt edited at the in-process provider engine's checkpoint refuses there and sends no DELETE",
   "engine-unchanged": "an unchanged receipt passes the provider engine's guard and sends exactly one DELETE",
+  "lock-replaced-at-read": "an operation lock replaced during the retirement's exact host read refuses with no digest, receipt, intent or DELETE",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -531,17 +532,25 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
   const token = fleet.jobs[1].token;
   kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource, drainSource: setupDrainSource }) + "\n");
-  let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry, editAtPreflight = false, edited;
-  const receipt = join(h.local, "failed-setup-host.json");
+  let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry, editAtPreflight = false, edited, replacedAtRead;
+  const receipt = join(h.local, "failed-setup-host.json"), lockReplacement = `${JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z" })}\n`;
   const editReceipt = () => {
     const bytes = readFileSync(receipt), record = JSON.parse(bytes); record.startedAtMs -= 1000;
     writeFileSync(receipt, `${JSON.stringify(record, null, 2)}\n`); edited = bytes;
   };
   const run = async (binary, args, timeout, allowFail, expiry, control) => {
     if (!control) {
-      // After the intent, the first provider read is the DELETE's own account preflight.
-      if (stall && !stalled && binary === "doctl" && args[0] === "account" && h.saved().deletionIntentAt) { stalled = true; offset += stall; }
-      if (editAtPreflight && !edited && binary === "doctl" && args[0] === "account" && h.saved().deletionIntentAt) editReceipt();
+      // After the receipt is published, the first provider read is the DELETE's own account
+      // preflight; the drain proof's intent is saved only after it.
+      const preflight = binary === "doctl" && args[0] === "account" && existsSync(receipt);
+      if (stall && !stalled && preflight) { stalled = true; offset += stall; }
+      if (editAtPreflight && !edited && preflight) editReceipt();
+      // The first exact host read after the drain query is the retirement's own ownership read.
+      if (mode === "lock-replaced-at-read" && !replacedAtRead && queries === 1 && binary === "doctl"
+        && args[0] === "compute" && args[1] === "droplet" && args[2] === "get" && !existsSync(receipt)) {
+        const path = join(h.local, "operation.lock");
+        replacedAtRead = readFileSync(path); unlinkSync(path); writeFileSync(path, lockReplacement);
+      }
       if (binary === "doctl" && args[2] === "delete") deleteExpiry = expiry;
       return h.run(binary, args, timeout, allowFail);
     }
@@ -608,15 +617,12 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     const saved = h.saved();
     assert.ok(edited); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     assert.equal(saved.destroyedAt, undefined); assert.notEqual(digest(readFileSync(receipt)), digest(edited));
-    if (mode === "receipt-edited-before-intent") {
-      assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
-      assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(edited) });
-      // The edited receipt stays refused on restart.
-      await assert.rejects(h.task({ run }).collect(), /interrupted retirement receipt differs from its recorded digest; preserve host/);
-    } else {
-      assert.ok(saved.deletionIntentAt); assert.equal(saved.retirement.evidenceSha256, digest(edited));
-      await assert.rejects(h.task({ run }).collect(), /retirement evidence changed/);
-    }
+    // Edited before the intent, or during the DELETE's account preflight, which precedes a
+    // drain proof's intent: either way no intent is saved and the recorded digest stays.
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(edited) });
+    // The edited receipt stays refused on restart.
+    await assert.rejects(h.task({ run }).collect(), /interrupted retirement receipt differs from its recorded digest; preserve host/);
     assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     return;
   }
@@ -785,6 +791,17 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }
+  if (mode === "lock-replaced-at-read") {
+    await assert.rejects(h.task({ run }).collect(), (error) => /operation\.lock was replaced during this operation; the replacement is kept/.test(error.message)
+      && /operation\.lock changed; preserve custody/.test(error.cause?.message));
+    const saved = h.saved();
+    assert.ok(replacedAtRead); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.equal(saved.pendingRetirement, undefined); assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined);
+    assert.equal(existsSync(receipt), false); assert.ok(!readdirSync(h.local).some((name) => name.startsWith("failed-setup-host")));
+    assert.ok(!readdirSync(h.local).some((name) => /^state\.json\..*tmp$/.test(name)));
+    assert.equal(readFileSync(lock, "utf8"), lockReplacement, "the replacement lock is kept for its owner");
+    return;
+  }
   if (mode === "pending-monitor") {
     writeFileSync(join(h.local, "monitor-registration.json"), "{}");
     await assert.rejects(h.task({ run }).collect(), /ambiguous pre-bootstrap custody/);
@@ -829,18 +846,21 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       return;
     }
     await assert.rejects(h.task({ run }).collect(), /current retirement proof expired/);
-    const saved = h.saved(), record = JSON.parse(readFileSync(join(h.local, "failed-setup-host.json")));
+    const saved = h.saved(), old = readFileSync(receipt), oldRecord = JSON.parse(old);
     assert.ok(stalled); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
-    assert.equal(record.schema, "benchmark-failed-setup-retirement/v3");
-    assert.equal(saved.status, "retired"); assert.equal(saved.retirement.kind, "setup-failed"); assert.equal(saved.retirement.evidenceSha256, digest(readFileSync(join(h.local, "failed-setup-host.json"))));
-    assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined); assert.equal(existsSync(lock), false);
-    // As on the pinned unused path, expiry after the intent forbids another DELETE: a restart
-    // verifies the saved receipt and checks exact absence, with no second query.
-    await assert.rejects(h.task({ run }).collect(), /deletion not confirmed/);
-    assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0); assert.equal(h.saved().destroyedAt, undefined);
-    h.hosts([]);
+    assert.equal(oldRecord.schema, "benchmark-failed-setup-retirement/v3");
+    // The intent follows the preflight, so the expired proof leaves only its receipt and digest.
+    assert.equal(saved.status, "starting"); assert.equal(saved.retirement, undefined);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.destroyedAt, undefined);
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) }); assert.equal(existsSync(lock), false);
+    // A restart keeps that receipt for archival and deletes once on its own fresh proof.
     assert.equal(await h.task({ run }).collect(), 1);
-    assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.ok(h.saved().destroyedAt);
+    const s = h.saved(), record = JSON.parse(readFileSync(receipt));
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(readFileSync(join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`)).equals(old));
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
+    assert.notEqual(record.startedAtMs, oldRecord.startedAtMs); assert.equal(deleteExpiry, record.startedAtMs + 60000);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }
   if (mode.startsWith("receipt-expired")) {
@@ -1466,9 +1486,11 @@ test("failed or wrong common bootstrap leaves the first host observable without 
 // An invalid-monitor recovery collect holds stream-recovery.lock and never takes the
 // crashed launcher's operation.lock. Its failed-setup retirement (a v2 receipt, from the
 // real guardian in the in-memory kernel) is held to the lock it actually holds.
-for (const mode of ["retired", "lock-replaced"]) test(mode === "retired"
-  ? "an invalid-monitor recovery collect retires a failed setup under its stream-recovery lock with one DELETE"
-  : "a stream-recovery lock replaced before a failed-setup retirement refuses with no receipt, intent or DELETE", async (t) => {
+for (const mode of ["retired", "lock-replaced", "lock-replaced-at-read"]) test({
+  retired: "an invalid-monitor recovery collect retires a failed setup under its stream-recovery lock with one DELETE",
+  "lock-replaced": "a stream-recovery lock replaced before a failed-setup retirement refuses with no receipt, intent or DELETE",
+  "lock-replaced-at-read": "a stream-recovery lock replaced during the retirement's exact host read refuses with no digest, receipt, intent or DELETE",
+}[mode], async (t) => {
   const h = harness(t, { active: true, monitorHold: true });
   const kernel = spawn(process.platform === "win32" ? "python" : "python3",
     ["-I", fileURLToPath(new URL("./test-fixtures/control-session-kernel.py", import.meta.url)), "setup-fleet"],
@@ -1481,6 +1503,11 @@ for (const mode of ["retired", "lock-replaced"]) test(mode === "retired"
   let token, replaced, queries = 0;
   const run = async (binary, args, timeout, allowFail, expiry, control) => {
     if (!control?.request) {
+      // The first exact host read after the setup query is the retirement's own ownership read.
+      if (mode === "lock-replaced-at-read" && !replaced && queries === 1 && binary === "doctl"
+        && args[0] === "compute" && args[1] === "droplet" && args[2] === "get" && !existsSync(join(h.local, "failed-setup-host.json"))) {
+        const bytes = readFileSync(recovery); unlinkSync(recovery); writeFileSync(recovery, bytes, { flag: "wx" }); replaced = bytes;
+      }
       const result = await h.run(binary, args, timeout, allowFail, expiry, control);
       // The monitor registers, then the bootstrap seal's exact host read fails before its
       // request enters the ledger: the monitor ends invalid with no seal.

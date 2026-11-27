@@ -1394,12 +1394,23 @@ stay as they were, and it never qualifies the group.
 
 The drain proof observes host state that can change, so its DELETE carries the
 same deadline as the pinned unused proof: 60 seconds from the local start of the
-host query, checked before the receipt is written, again before the intent, and
-when the DELETE is sent, including after the DELETE's account preflight and in
-the provider request. A v1 or v2 setup retirement keeps its existing check of 60
-seconds from the proof's end, made before the intent. Expiry before the intent
-does not consume the intent; expiry after the intent forbids another DELETE, so a
-later collect only verifies the saved receipt and checks exact absence.
+host query, checked before the receipt is written, again after it, after the
+DELETE's account preflight and in the provider request. A drain proof's intent
+is saved only after that preflight and the deadline check that follows it, as the
+exit-one retirement's is, so a proof that expires during the preflight (or a
+preflight that fails) leaves its receipt and recorded digest with no intent, and
+the next collect recovers them on a fresh proof as below. The pinned unused and
+v1 and v2 setup retirements save their intent before the DELETE's preflight, as
+before; a v1 or v2 setup retirement keeps its existing check of 60 seconds from
+the proof's end, made before the intent. Expiry before the intent does not
+consume the intent; expiry after the intent forbids another DELETE, so a later
+collect only verifies the saved receipt and checks exact absence. For a drain
+proof that leaves only the interval between the intent and the request (the
+dispatch guards, the production checkpoint and worker IPC, and the provider's own
+deadline check), which has no provider read; a proof that expires there still
+leaves the host retired with no DELETE sent, which
+[#2166 A failed-setup retirement whose drain proof expires before its DELETE is sent stays retired with no way to a fresh proof](https://github.com/corten-run/corten/issues/2166)
+tracks.
 
 Expiry after the receipt is written but before the intent leaves a receipt with no
 intent. The next collect runs a fresh status check and host query, which appends
@@ -1464,9 +1475,11 @@ its replay verifier hashes, and the lock this operation holds (the file this pro
 created, by identity and bytes). That lock is `operation.lock` for an ordinary collect
 and `stream-recovery.lock` for an invalid-monitor recovery collect, which never takes
 the original `operation.lock` it finds; a retirement under any other lock refuses.
-The same lock is also checked when the retirement begins, before its receipt, digest
-or intent is written, so a missing or replaced lock refuses with nothing saved and
-no DELETE. Those other inputs are `results.tgz` and the
+The same lock is also checked when the retirement begins, again after its exact
+host read (a provider read, so an await), and immediately before each write of its
+digest, receipt, history copy and intent, so a lock missing or replaced at any of
+those points refuses before the next write; replaced during that read, nothing is
+saved and no DELETE is sent. Those other inputs are `results.tgz` and the
 whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
 and `control/`). They are pinned without rereading them: the verification after
 the intent hashes each, recording `results.tgz`'s file identity (device, inode,
@@ -1489,7 +1502,8 @@ these checks refuses with `saved retirement reservation changed; preserve host`,
 `archived control custody changed; preserve host`, `setup archive changed;
 preserve host`, `setup evidence changed; preserve host`, `operation.lock changed;
 preserve custody` or `stream-recovery.lock changed; preserve custody` and sends no
-DELETE. A receipt edited before the intent refuses with
+DELETE. A receipt edited before the intent (for a drain proof, including during
+the DELETE's account preflight) refuses with
 `published retirement receipt differs from the bytes written; preserve host`,
 saving no intent; its recorded digest stays, so a later collect refuses it as an
 interrupted receipt that differs from its recorded digest. Edited after the
