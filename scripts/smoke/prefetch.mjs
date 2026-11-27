@@ -362,12 +362,15 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
  * as `/smoke/nav/settings`, so there its server marks the entry and its runtime does not (the limit
  * the guide names), and it is checked in Chromium and Firefox only. Then a nav whose deeper entry's
  * own URL (`/smoke/nav/old%7c/team/people`) is under another entry's older address: it wins at a page
- * under it in either spelling of the escape, by the server and the runtime alike.
+ * under it in either spelling of the escape, and at a page under that older address and outside
+ * People (`/smoke/nav/old%7c/team/other`) the section naming it wins by that address alone, by the
+ * server, by the runtime at load with the server's marks taken out, and by the runtime after a
+ * client navigation.
  */
 export async function navAlso(browser, swaps) {
   const name = "a nav entry is current at its page's older addresses, by the server and the runtime alike";
   const not = "a nav entry is not current at an address with an escaped unreserved character, by the server and the runtime alike";
-  const team = "in a nav with other addresses a deeper entry's own URL wins in any spelling, by the server and the runtime alike";
+  const team = "in a nav with other addresses a deeper entry's own URL wins in any spelling, and a section's other address holds a page under it, by the server and the runtime alike";
   const engine = browser.browserType().name();
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -383,8 +386,15 @@ export async function navAlso(browser, swaps) {
   // two typed by hand. WebKit asks for `%73ettings` decoded, `/smoke/nav/settings`, an older address.
   const nots = ["/smoke/nav/%2e%2ex", "/smoke/nav/%7eold%41", "/smoke/nav/%7%33ettings"];
   if (engine !== "webkit") nots.push("/smoke/nav/%73ettings");
-  // Pages under the team nav's People entry, in the spelling its URL has and in another.
-  const visits = ["/smoke/nav/old%7c/team/people/alex", "/smoke/nav/old%7C/team/people/alex"];
+  // Pages under the team nav's People entry, in the spelling its URL has and in another, where People
+  // is current; and a page under Settings's older address that People does not hold, where only that
+  // older address, matched as a prefix, makes Settings current. Each with the Settings and People marks.
+  const visits = [
+    ["/smoke/nav/old%7c/team/people/alex", "- page"],
+    ["/smoke/nav/old%7C/team/people/alex", "- page"],
+    ["/smoke/nav/old%7c/team/other", "page -"],
+    ["/smoke/nav/old%7C/team/other", "page -"],
+  ];
   const also = cases.map(([, path]) => path).join(" ");
   /** Whether the server draws the entry marked and the section not, in one answer. */
   const marked = (/** @type {string} */ html) => {
@@ -427,19 +437,49 @@ export async function navAlso(browser, swaps) {
     const marks = response ? navMarks(response.status(), await response.text()) : "no answer";
     if (marks !== "200 page -") notSeen.push(`server at the browser's request for ${href} (${response?.url()}): ${marks}`);
   }
-  for (const visit of visits) {
+  for (const [visit, want] of visits) {
     const outside = teamMarks(await (await page.request.get(new URL(visit, base).href)).text());
-    if (outside !== "- page") teamSeen.push(`server at ${visit}: ${outside}`);
+    if (outside !== want) teamSeen.push(`server at ${visit}: ${outside}`);
     const response = await page.goto(new URL(visit, base).href);
     const marks = response ? teamMarks(await response.text()) : "no answer";
-    if (marks !== "- page") teamSeen.push(`server at the browser's request for ${visit}: ${marks}`);
+    if (marks !== want) teamSeen.push(`server at the browser's request for ${visit}: ${marks}`);
+  }
+  // A page that only Settings's older address holds, loaded with every mark taken out of the
+  // server's answer before the runtime starts: only the runtime's ranking at load, which must match
+  // that address as a prefix, can mark Settings.
+  for (const [visit, want] of visits.filter(([visit]) => visit.endsWith("/team/other"))) {
+    const unmarkedContext = await browser.newContext({ serviceWorkers: "block" });
+    const unmarked = await unmarkedContext.newPage();
+    /** How many marks each intercepted answer held before they were taken out. @type {number[]} */
+    const removed = [];
+    // WebKit asks for `%7c` as `%7C`.
+    await unmarked.route(
+      (url) => url.origin === new URL(base).origin && url.pathname.toLowerCase() === visit.toLowerCase(),
+      async (route) => {
+        if (route.request().resourceType() !== "document") return route.continue();
+        // Uncompressed, since Playwright's Firefox hands a zstd body over undecoded.
+        const answer = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const html = await answer.text();
+        removed.push((html.match(/\saria-current="page"/g) ?? []).length);
+        return route.fulfill({ response: answer, body: html.replace(/\saria-current="page"/g, "") });
+      },
+    );
+    await unmarked.goto(new URL(visit, base).href);
+    await unmarked.waitForFunction(() => !!document.querySelector("main a[data-nav-group][aria-current]"), null, { timeout: 5000 }).catch(() => {});
+    const reranked = await unmarked.evaluate(() => ({
+      at: location.pathname,
+      marks: Array.from(document.querySelectorAll("main a[data-nav-group]")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "),
+    }));
+    await unmarkedContext.close();
+    if (removed.length !== 1 || removed[0] < 1) teamSeen.push(`marks taken out of the intercepted answers for ${visit}: ${JSON.stringify(removed)}`);
+    if (reranked.marks !== want) teamSeen.push(`runtime at load of ${reranked.at} with the server's marks taken out: ${reranked.marks}`);
   }
   if (!swaps) {
     check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
     skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
     check(not, notSeen.length === 0, notSeen.join("; ") || `server only at ${nots.join(" ")}: without swaps a client navigation loads the page in full`);
     skip(`${not} (runtime)`, "without the Navigation API the browser loads that page in full");
-    check(team, teamSeen.length === 0, teamSeen.join("; ") || "server only: without swaps a client navigation loads the page in full");
+    check(team, teamSeen.length === 0, teamSeen.join("; ") || "server and the runtime's ranking at load only: without swaps a client navigation loads the page in full");
     skip(`${team} (runtime)`, "without the Navigation API the browser loads that page in full");
     await context.close();
     return;
@@ -496,7 +536,7 @@ export async function navAlso(browser, swaps) {
     if (marks !== "page -") notSeen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${marks}`);
   }
   check(not, notSeen.length === 0, notSeen.join("; ") || `server and runtime marked only the section at ${nots.join(" ")}`);
-  for (const visit of visits) {
+  for (const [visit, want] of visits) {
     await page.goto(`${base}/smoke/nav/old%7c/team/people/start`);
     // Unmarked copies of the team nav's links in the shell, and a plain link to the page under it.
     await page.evaluate((visit) => {
@@ -518,9 +558,9 @@ export async function navAlso(browser, swaps) {
     await page.waitForFunction((before) => location.pathname !== before && document.title.startsWith("Nav team"), before);
     await page.waitForFunction(() => !!document.querySelector("#team-copy a[aria-current]"), null, { timeout: 5000 }).catch(() => {});
     const marks = await page.evaluate(() => Array.from(document.querySelectorAll("#team-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
-    if (marks !== "- page") teamSeen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${marks}`);
+    if (marks !== want) teamSeen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${marks}`);
   }
-  check(team, teamSeen.length === 0, teamSeen.join("; ") || "server and runtime marked People under it in both spellings");
+  check(team, teamSeen.length === 0, teamSeen.join("; ") || "server and runtime marked People under it and Settings under its older address, in both spellings");
   await context.close();
 }
 

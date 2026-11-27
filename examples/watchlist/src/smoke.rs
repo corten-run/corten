@@ -113,6 +113,14 @@ pub mod url {
         pub who: &'a str,
     }
 
+    /// A page under the team nav's older address and outside its deeper entry, where the section
+    /// that names that address is current by it alone (#2119).
+    #[route("/smoke/nav/{name}/team/{page}", get = nav_team_page)]
+    pub struct NavTeamPage<'a> {
+        pub name: &'a str,
+        pub page: &'a str,
+    }
+
     /// Navs whose entries lead off this site in forms a browser reads as another host, never
     /// current, by the server and the runtime alike (#2119).
     #[route("/smoke/far/{name}", get = far_page)]
@@ -178,6 +186,16 @@ async fn nav_page(req: Req, Params(_): Params<url::NavPage<'_>>) -> HtmlResult {
 /// `/smoke/nav/old%7c/team/people`, deeper, so current on every page under it in any spelling of
 /// its `%7c`: WebKit asks for it as `%7C` and shows it as written, and a stored link may carry `%7C`.
 async fn nav_team(req: Req, Params(_): Params<url::NavTeam<'_>>) -> HtmlResult {
+    team_nav(req)
+}
+
+/// The team nav at a page under `/smoke/nav/old%7c/team` but not under People, such as
+/// `/smoke/nav/old%7c/team/other`: only Settings's older address holds it.
+async fn nav_team_page(req: Req, Params(_): Params<url::NavTeamPage<'_>>) -> HtmlResult {
+    team_nav(req)
+}
+
+fn team_nav(req: Req) -> HtmlResult {
     let settings = corten::Local::parse("/smoke/nav/settings").expect("a local path");
     let team = corten::Local::parse("/smoke/nav/old%7c/team").expect("a local path");
     let people = corten::Local::parse("/smoke/nav/old%7c/team/people").expect("a local path");
