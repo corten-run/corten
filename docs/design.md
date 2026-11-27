@@ -5904,6 +5904,15 @@ rules something out.
     more). A post to a route with no named post, mounted as before, is 21,893 against 21,882 (11
     more, with none of this change's code on its path). The runtime is unchanged.
 
+    A route's query has since been read in one pass that decodes only a key or a value with a
+    `%` or a `+` in it, without the decoder
+    ([#2169 A route's query is run through the form decoder even when it holds nothing to decode, about 260 instructions a request](https://github.com/corten-run/corten/issues/2169)),
+    which lowers the last part of that cost, the one more pair `Params` reads and drops. With
+    that change, at `449fcdf9c`, the named post is 20,872 where the route of its own is 20,154,
+    718 (3.6%) more; at its base, `0ccda3bc9`, they were 21,472 and 20,436, 1,036 more. The
+    cases whose query is `page=3` each read 282 fewer than at that base, and the named post,
+    whose query is `page=3&do=price`, 600 fewer.
+
     Stands on: measured (instructions per request under callgrind, three runs of each case alternating between the
     two builds, every run within 2 of the others); platform (a form's submission goes to its submitter's
     `formaction`, else its `action`, query kept, for `application/x-www-form-urlencoded` and
@@ -5926,7 +5935,10 @@ rules something out.
     runs of each case alternating between the two; 2026-11-15, three runs of each case on
     `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
     others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
-    Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
+    Firefox 157 and WebKit 27.2 (Playwright 1.64.1); 2026-11-26, instructions per request of the
+    four cases on `449fcdf9c` against `0ccda3bc9`, three rounds alternating between the two,
+    every run within 0.1 of the others but one of the base's, 1.2 over (rustc 1.100.0, valgrind
+    3.24.0, jemalloc 5.3.0 preloaded; the browsers were not run again).
 54. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser parses differently from how it
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
     taken out of foreign content, and literal HTML nesting that closes or discards an open
