@@ -1075,6 +1075,22 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     if chance(&mut dice, 30) && !read {
         bytes = mutate(&mut dice, bytes);
     }
+    // And no request of such a stream asks to switch: behind one, hyper drops what it has
+    // written and not flushed when the connection ends, and how much that is differs once
+    // Corten's connection has answered a request with a body before it
+    // (`a_refusal_behind_a_switch_is_cut_by_hyper_where_the_socket_was_full`). The line's name
+    // and the method are made ones that ask for nothing.
+    if read {
+        for at in 0..bytes.len() {
+            let line = at == 0 || bytes[at - 1] == b'\n';
+            if line && bytes[at..].len() >= 8 && bytes[at..at + 8].eq_ignore_ascii_case(b"upgrade:") {
+                bytes[at] = b'x';
+            }
+            if line && bytes[at..].starts_with(b"CONNECT ") {
+                bytes[at..at + 7].copy_from_slice(b"OPTIONS");
+            }
+        }
+    }
     // A handler that holds its body is sent its request whole, in one write no longer than
     // hyper's first read. hyper reads a piece ahead of the app, so while a body is held it has
     // read what came meanwhile, in pieces that end where its reads did, and Corten's connection
@@ -1939,5 +1955,77 @@ async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection
                 ahead[0].0, ahead[0].1, ahead[1].1
             );
         }
+    }
+}
+
+/// **hyper cuts a refusal short behind a request that asked to switch, and where it cuts depends
+/// on what the socket had taken.** A request with an `Upgrade` line leaves hyper with a switch
+/// it may be asked to make; when the connection then ends (a head behind it is refused), hyper
+/// gives the connection up for that switch without sending what it has written and not yet
+/// flushed (`Dispatcher::poll_inner`, which returns `Dispatched::Upgrade` before
+/// `poll_shutdown`). Over a pipe that holds little, part of the refusal, or more, is lost: by
+/// hyper's own connection, and by the one Corten's connection hands to hyper at the switch,
+/// which is hyper's from there.
+///
+/// With nothing before the switch but requests that have no body, the two lose the same bytes at
+/// every size of pipe tried. With requests before it that have bodies they do not: hyper's task
+/// waits once for each body (it reads the body in one turn and has the handler's answer in the
+/// next), its client takes what the pipe holds meanwhile, and so less waits unsent when the
+/// refusal is written; Corten's connection answers both in one turn and sends them before it
+/// hands over. Nothing differs but how much of what hyper wrote last was lost: what one sent is
+/// the beginning of what the other sent, and both closed.
+///
+/// So the gate sends no request that switches in a stream that has a body over a pipe that
+/// holds little ([`stream`]), and this holds both sides of it.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_behind_a_switch_is_cut_by_hyper_where_the_socket_was_full() {
+    let get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    let switch = "HEAD /drip HTTP/1.1\r\nupgrade: websocket\r\nhost: localhost\r\n\r\n";
+    let wrong = "PUT http://other.example/ \r\nhost: localhost\r\nx-a: 1\r\r\n\r\n";
+    let bodies = "PUT /read HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n0\r\nx-t: 1\r\n\r\n\
+                  POST /read HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n\
+                  b;a\r\n012345689ab\r\n4\r\n0123\r\n2\r\n01\r\n6\r\n012345\r\nC\r\n012345689abc\r\nC\r\n012345689abc\r\n0\r\n\r\n";
+    let (hyper, own) = (serve(false, 700), serve(true, 700));
+    let whole = |outcome: &Outcome| outcome.before.0.ends_with(b"content-length: 0\r\ndate: -\r\n\r\n");
+    for (name, before, alike) in [
+        ("no request before", "", true),
+        ("two without bodies", &*format!("{get}{get}"), true),
+        ("two with bodies", bodies, false),
+    ] {
+        let (mut cut, mut differ) = (0, 0);
+        for pipe in (64..1200).step_by(3) {
+            let bytes = format!("{before}{switch}{wrong}").into_bytes();
+            let stream = Stream { index: 0, writes: vec![bytes], closes: false, pipe };
+            let (theirs, ours) = (exchange(&hyper, &stream).await, exchange(&own, &stream).await);
+            assert!(theirs.closed && ours.closed, "{name}, a pipe of {pipe}: hyper's {theirs:?}\nown: {ours:?}");
+            cut += usize::from(!whole(&theirs));
+            if theirs == ours {
+                continue;
+            }
+            differ += 1;
+            assert!(!alike, "{name}, a pipe of {pipe}: hyper's {theirs:?}\nown: {ours:?}");
+            // What each sent, to its end, or to its last `Date` where it ends inside that line's
+            // value, which is compared nowhere.
+            let sent = |outcome: &Outcome| {
+                let sent = outcome.before.0.clone();
+                match sent.windows(6).rposition(|part| part == b"date: ") {
+                    Some(at) if !sent[at..].contains(&b'\n') => sent[..at + 6].to_vec(),
+                    _ => sent,
+                }
+            };
+            let (theirs, ours) = (sent(&theirs), sent(&ours));
+            let (more, fewer) = if theirs.len() > ours.len() { (&theirs, &ours) } else { (&ours, &theirs) };
+            assert!(
+                more.starts_with(fewer),
+                "a pipe of {pipe}: hyper's {:?}\nown: {:?}",
+                Sent(theirs.clone()),
+                Sent(ours.clone())
+            );
+            // The answers Corten's connection made itself, before the switch, went whole.
+            assert!(find(&ours, b"read 47").is_some(), "a pipe of {pipe}: {:?}", Sent(ours.clone()));
+        }
+        println!("{name}: hyper's refusal cut short at {cut} of 379 sizes of pipe, the two differ at {differ}");
+        assert!(cut > 0, "{name}: hyper's connection sent its refusal whole at every size");
+        assert_eq!(differ > 0, !alike, "{name}");
     }
 }
