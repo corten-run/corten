@@ -2201,8 +2201,12 @@ test("on POSIX a bounded run kills the probe's whole group at its bound, and doe
   assert.equal(killed.signal, "SIGKILL");
   const descendant = Number(killed.stdout.trim());
   assert.ok(descendant > 0, killed.stdout);
-  // Gone, or a zombie its new parent has not reaped yet (in a container whose init does not reap).
-  const gone = () => { try { process.kill(descendant, 0); } catch { return true; } return /^\S+ \(.*\) Z/.test(readFileSync(`/proc/${descendant}/stat`, "utf8")); };
+  // Gone, or a zombie its new parent has not reaped yet (in a container whose init does not reap):
+  // Linux's /proc says so, and elsewhere ps's process state.
+  const zombie = () => process.platform === "linux"
+    ? /^\S+ \(.*\) Z/.test(readFileSync(`/proc/${descendant}/stat`, "utf8"))
+    : /^Z/.test((spawnSync("ps", ["-o", "stat=", "-p", String(descendant)], { encoding: "utf8" }).stdout ?? "").trim());
+  const gone = () => { try { process.kill(descendant, 0); } catch { return true; } return zombie(); };
   assert.ok(gone(), `the leader's child ${descendant} still runs`);
   // A leader that exits 0 at once while a self-bounded child holds its stdout: given up a grace after
   // the exit, not when the child ends, and the group is not signalled after the leader was reaped.
