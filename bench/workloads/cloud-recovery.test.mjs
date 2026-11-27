@@ -414,6 +414,63 @@ test("a torn destroyedAt save on a pinned unused restart leaves its own stage, n
   assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
 });
 
+// An ordinary collect saves its intent before the DELETE and destroyedAt after absence; a restart
+// that finds an intent without destroyedAt records it on absence alone. Each save is torn once.
+const ordinaryStage = (h, pattern) => {
+  // A torn save leaves only its own fresh stage, never the fixed-name state.json.tmp.
+  assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+  const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+  assert.equal(stages.length, 1); assert.match(stages[0], pattern);
+  const bytes = readFileSync(join(h.local, stages[0]));
+  assert.equal(bytes.length, 80); assert.equal(existsSync(join(h.local, "operation.lock")), false);
+  return { name: stages[0], bytes };
+};
+const intentStage = /^state\.json\.deletion-intent-[a-f0-9]{32}\.tmp$/, destroyedStage = /^state\.json\.destroyed-[a-f0-9]{32}\.tmp$/;
+
+test("a torn ordinary deletion intent save leaves its own stage and no intent, and the next collect deletes once", async (t) => {
+  const h = harness(t); h.seed();
+  const tear = tearStateSave(t, '"deletionIntentAt"');
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 0);
+  const stage = ordinaryStage(h, intentStage), interrupted = h.saved();
+  assert.equal(interrupted.deletionIntentAt, undefined); assert.equal(interrupted.destroyedAt, undefined);
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt); assert.ok(h.saved().destroyedAt);
+  assert.ok(readFileSync(join(h.local, stage.name)).equals(stage.bytes));
+});
+
+test("a torn ordinary destroyedAt save after the one DELETE leaves its own stage, and the next collect records absence with no second DELETE", async (t) => {
+  const h = harness(t); h.seed();
+  const tear = tearStateSave(t, '"destroyedAt"');
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 1);
+  const stage = ordinaryStage(h, destroyedStage), interrupted = h.saved();
+  assert.ok(interrupted.deletionIntentAt); assert.equal(interrupted.destroyedAt, undefined);
+  assert.equal(await h.task().collect(), 1);
+  const s = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(s.destroyedAt); assert.equal(s.deletionIntentAt, interrupted.deletionIntentAt);
+  assert.ok(readFileSync(join(h.local, stage.name)).equals(stage.bytes));
+});
+
+test("a torn destroyedAt save on an ordinary restart after a lost DELETE acknowledgement leaves its own stage, and the next collect records absence with no second DELETE", async (t) => {
+  const h = harness(t, { deleteLost: true }); h.seed();
+  await assert.rejects(h.task().collect(), /acknowledgement/);
+  const intent = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(intent.deletionIntentAt); assert.equal(intent.destroyedAt, undefined);
+  // The restart finds the intent and only confirms absence; its destroyedAt save is torn.
+  const tear = tearStateSave(t, '"destroyedAt"');
+  await assert.rejects(h.task().collect(), /injected torn write/);
+  tear.restore();
+  assert.ok(tear.torn()); assert.equal(h.deletes, 1); assert.deepEqual(h.saved(), intent);
+  const stage = ordinaryStage(h, destroyedStage);
+  assert.equal(await h.task().collect(), 1);
+  const s = h.saved();
+  assert.equal(h.deletes, 1); assert.ok(s.destroyedAt); assert.equal(s.deletionIntentAt, intent.deletionIntentAt);
+  assert.ok(readFileSync(join(h.local, stage.name)).equals(stage.bytes));
+});
+
 test("settled upload approval binds the exact measured checkout, reservation, host and key", async (t) => {
   const h = await stoppedUpload(t), s = h.saved(), key = join(h.local, "known_hosts");
   const plan = () => unusedPlan(h, key);

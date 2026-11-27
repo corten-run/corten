@@ -503,7 +503,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
   "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage",
   "receipt-edited-at-dispatch-evidence", "receipt-edited-at-intent-stage", "state-edited-at-receipt-stage", "proof-expired-at-receipt-stage",
-  "delete-unsent-after-intent", "delete-cancelled-after-intent", "delete-expired-after-dispatch", "intent-save-torn", "destroyed-save-torn"]) test({
+  "delete-unsent-after-intent", "delete-cancelled-after-intent", "delete-expired-after-dispatch", "delete-failed-after-intent", "withdrawal-save-torn",
+  "intent-save-torn", "destroyed-save-torn"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -549,6 +550,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "delete-unsent-after-intent": "a drain proof that expires after the intent, before the provider sends the DELETE, withdraws the intent on that acknowledgement, and a restart deletes once on a fresh proof",
   "delete-cancelled-after-intent": "a controller cancelled after the intent, so the production checkpoint never sends the DELETE, still withdraws the intent, and a restart deletes once on a fresh proof",
   "delete-expired-after-dispatch": "a drain proof that expires after the DELETE request started keeps the intent when the provider answers with an error, and a restart only confirms absence",
+  "delete-failed-after-intent": "a DELETE the provider answers with a failure that does not say it was unsent keeps the intent, and a restart only confirms absence",
+  "withdrawal-save-torn": "a torn withdrawal of an unsent DELETE's intent leaves its own stage and keeps the intent, so later collects refuse while the host runs and send no DELETE",
   "intent-save-torn": "a torn deletion intent save leaves its own stage and no intent, and the next collect deletes once on a fresh proof",
   "destroyed-save-torn": "a torn destroyedAt save after the one DELETE leaves its own stage, and the next collect records absence with no second DELETE",
 }[mode], async (t) => {
@@ -1141,7 +1144,31 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(existsSync(lock), false); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
     return;
   }
-  if (mode === "delete-unsent-after-intent" || mode === "delete-expired-after-dispatch") {
+  if (mode === "delete-failed-after-intent") {
+    // The provider answers the DELETE, after it reached the provider, with a failure that carries
+    // no not-dispatched acknowledgement. Only that acknowledgement withdraws the intent.
+    let intentAtDelete;
+    const failing = async (binary, args, timeout, allowFail, expiry, ctl) => {
+      const result = await run(binary, args, timeout, allowFail, expiry, ctl);
+      if (ctl || binary !== "doctl" || args[2] !== "delete") return result;
+      intentAtDelete = h.saved().deletionIntentAt;
+      return { ...result, status: 1 };
+    };
+    await assert.rejects(h.task({ run: failing }).collect(), /delete outcome uncertain; preserve intent/);
+    const saved = h.saved();
+    assert.ok(intentAtDelete); assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    assert.equal(saved.status, "retired"); assert.equal(saved.deletionIntentAt, intentAtDelete); assert.equal(saved.destroyedAt, undefined);
+    assert.equal(saved.pendingRetirement, undefined); assert.equal(existsSync(lock), false);
+    assert.ok(!readdirSync(h.local).some((name) => /^state\.json\..*tmp$/.test(name)));
+    // Recovery is exact absence alone: no second query and no second DELETE.
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved();
+    assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.equal(s.deletionIntentAt, intentAtDelete);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
+  if (mode === "delete-unsent-after-intent" || mode === "delete-expired-after-dispatch" || mode === "withdrawal-save-torn") {
     // The DELETE goes through the real production dispatch and an in-process provider engine,
     // which checks the proof's deadline itself just before its request. The clock passes that
     // deadline once, after the intent is saved: at the engine's checkpoint before the request
@@ -1157,7 +1184,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
         jump(); await synthetic(input); return { status: 500, value: null };
       },
       sleep: async () => {},
-      interrupted: () => { if (mode === "delete-unsent-after-intent" && engineDeleting && !jumped) jump(); return false; } });
+      interrupted: () => { if (mode !== "delete-expired-after-dispatch" && engineDeleting && !jumped) jump(); return false; } });
     const provider = (argv, ...rest) => { engineDeleting = argv[2] === "delete"; return engine(argv, ...rest); };
     const production = productionDispatch({ processRun: run, provider: () => provider, interrupted: () => false });
     if (mode === "delete-expired-after-dispatch") {
@@ -1172,6 +1199,47 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       const s = h.saved();
       assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
       assert.equal(s.deletionIntentAt, intentAtJump);
+      assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+      return;
+    }
+    if (mode === "withdrawal-save-torn") {
+      // The DELETE is positively unsent; the next exclusive state stage, the withdrawal's, is torn.
+      const fds = new Set(); let torn = false;
+      hookFs(t, {
+        openSync: (original) => (path, flags, ...rest) => {
+          const fd = original(path, flags, ...rest);
+          if (jumped && !torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(path)))) { torn = true; fds.add(fd); }
+          return fd;
+        },
+        writeFileSync: (original) => (target, data, ...rest) => {
+          if (!fds.has(target)) return original(target, data, ...rest);
+          fds.delete(target); fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+          throw new Error("injected torn write");
+        },
+      });
+      await assert.rejects(h.task({ run: production }).collect(), /injected torn write/);
+      restoreFs(t);
+      const intent = h.saved();
+      assert.ok(torn && jumped && intentAtJump); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+      // The withdrawal failed, so the intent stays for a DELETE that was never sent.
+      assert.equal(intent.status, "retired"); assert.equal(intent.deletionIntentAt, intentAtJump); assert.equal(intent.destroyedAt, undefined);
+      assert.equal(existsSync(lock), false);
+      // It never wrote the fixed-name stage every later ordinary save would refuse on.
+      assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+      const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+      assert.equal(stages.length, 1); assert.match(stages[0], /^state\.json\.delete-unsent-[a-f0-9]{32}\.tmp$/);
+      const tornBytes = readFileSync(join(h.local, stages[0]));
+      assert.equal(tornBytes.length, 80);
+      // The kept intent allows only exact absence: while the host runs every collect refuses,
+      // with no second query and no DELETE; that is for the operator to clear.
+      await assert.rejects(h.task({ run }).collect(), /deletion not confirmed; outcome uncertain/);
+      assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0); assert.deepEqual(h.saved(), intent);
+      h.hosts([]);
+      assert.equal(await h.task({ run }).collect(), 1);
+      const s = h.saved();
+      assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+      assert.ok(s.destroyedAt); assert.equal(s.deletionIntentAt, intentAtJump);
+      assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
       assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
       return;
     }
