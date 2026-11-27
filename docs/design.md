@@ -8678,7 +8678,21 @@ rules something out.
     2,488 at `9c8cd07e7`, the handler's 760 at all of them (`staged_page_future_sizes`); with
     `Ends` owning the stages' hold on their signal in place of the reference (`273e27b05`) it
     was 2,480 too, and `bench/request-cost` read 7, 5 and 8 more than `66d66c28e` for `get`,
-    `post` and `page`. A first
+    `post` and `page`. Watching a page's and a JSON answer's handler too adds the watch to a
+    page route that had none (an `HtmlResult` handler): `bench/request-cost` (Last checked,
+    2026-11-26), `e4a2e3db1`, whose counts are `d10bedc5f`'s above, against `6fbba4f8d`, reads
+    `page` 43,146 and 43,173 (+27, +0.06%; -0.12% against main's 43,223) and `page-browser`
+    221,762 and 221,788 (+26), the read and reset of the thread's mark around the handler's
+    polls, every other case within 1, at a depth of 16 too, with the same allocations and
+    answers; the futures are the same size, 2,480 and 760 bytes in release and 3,152 and 760 in
+    a debug build. In `what_settling_a_page_costs`, whose `Public` answers were watched already
+    and whose private page is routed by Corten's own `router::get`, which is never watched, every
+    case is within 2.4 of `e4a2e3db1` in both rounds (the page given from the store 16,009 there
+    and 16,010 and 16,011 here, one made for each request 18,975 and 18,976 there and 18,977
+    here) but one: a `Public` JSON body made
+    for each request counts 54,164 and 54,188 (+25), which by function is `Json`'s
+    `into_response` no longer folded into `Public`'s (96 more there, 72 fewer in `Public`'s), an
+    optimizer's choice in that binary rather than work the request does. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
