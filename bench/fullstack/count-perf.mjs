@@ -64,6 +64,27 @@ function cpuFlags(/** @type {unknown} */ cpus) {
   throw new Error(`perf would be given CPUs ${JSON.stringify(cpus)}, not -a or -C with a CPU list`);
 }
 
+/** The most CPUs a count's CPU list may name. */
+const MAX_CPUS = 4096;
+
+/**
+ * The CPUs a count's perf counts on, as numbers: the `-C` list, or for `-a` every online CPU
+ * (`online`, as /sys/devices/system/cpu/online lists them). Each must give its own row (`-A`).
+ */
+export function selectedCpus(/** @type {unknown} */ cpus, /** @type {string | undefined} */ online) {
+  const flags = cpuFlags(cpus);
+  const list = (flags[0] === "-a" ? online : flags[1])?.trim();
+  if (typeof list !== "string" || !/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/.test(list)) throw new Error(`cannot tell which CPUs perf counts on: ${JSON.stringify(list ?? null)} is not a CPU list`);
+  const out = new Set();
+  for (const part of list.split(",")) {
+    const [from, to = from] = part.split("-").map(Number);
+    if (to < from || to - from >= MAX_CPUS || !Number.isSafeInteger(to)) throw new Error(`cannot tell which CPUs perf counts on: ${part} in ${list} is not a CPU range`);
+    for (let cpu = from; cpu <= to; cpu += 1) out.add(cpu);
+  }
+  if (out.size > MAX_CPUS) throw new Error(`cannot tell which CPUs perf counts on: ${list} names more than ${MAX_CPUS}`);
+  return [...out].sort((a, b) => a - b);
+}
+
 /**
  * The descriptors a count's perf reads its commands from and acknowledges them on (`--control`),
  * and how long it may take to acknowledge one before the count is given up.
@@ -73,13 +94,67 @@ export const CONTROL_FD = 3, ACK_FD = 4, ACK_MS = 10_000;
 /**
  * A count's perf: its events start disabled (`--delay=-1`) and are enabled and disabled by commands
  * on CONTROL_FD, each acknowledged on ACK_FD, so the count has perf's own word that it counted from
- * before its load started until after it ended.
+ * before its load started until after it ended. Each CPU's count is a row of its own (`-A`): perf
+ * goes on past a CPU whose counter it could not enable, and its total sums the enabled and running
+ * times of every CPU, so only each CPU's own times show it counted there (parsePerCpuCounts).
  */
 export function perfCountArgs(/** @type {string[]} */ cpus, /** @type {string} */ cgroup, /** @type {string[]} */ names) {
   const flags = cpuFlags(cpus);
   supportedSet(names);
   // perf maps the cgroups to events in order; each event needs its own entry.
-  return ["stat", ...flags, "-x", ",", "--log-fd", "1", "--delay=-1", `--control=fd:${CONTROL_FD},${ACK_FD}`, "-e", names.join(","), "-G", names.map(() => cgroup).join(",")];
+  return ["stat", ...flags, "-A", "-x", ",", "--log-fd", "1", "--delay=-1", `--control=fd:${CONTROL_FD},${ACK_FD}`, "-e", names.join(","), "-G", names.map(() => cgroup).join(",")];
+}
+
+/**
+ * perf's acknowledgments on ACK_FD, each bound to the command it answers. perf is given one command
+ * at a time, `command()` called before it is written, and must answer it with one `ack` line (perf
+ * 6.1 writes "ack\n" and a NUL byte) before the next is given; an acknowledgment with no command
+ * waiting for it, or anything else on the descriptor, is a fault (`error()`), and the count is not
+ * kept. `command()` resolves "ack", "closed" (perf ended first), "timeout" (none within ackMs) or
+ * "fault". `end()` is called once perf has closed its descriptors, so nothing more can arrive.
+ */
+export function acknowledgments(ackMs = ACK_MS) {
+  let partial = "", given = 0, heard = 0, ended = false;
+  /** @type {string | null} */
+  let fault = null;
+  /** @type {{ resolve: (r: "ack" | "closed" | "timeout" | "fault") => void, timer: ReturnType<typeof setTimeout> } | null} */
+  let waiting = null;
+  const settle = (/** @type {"ack" | "closed" | "timeout" | "fault"} */ r) => {
+    const w = waiting;
+    if (!w) return;
+    waiting = null;
+    clearTimeout(w.timer);
+    w.resolve(r);
+  };
+  const fail = (/** @type {string} */ why) => { fault ??= why; settle("fault"); };
+  return {
+    data(/** @type {string} */ chunk) {
+      partial += chunk;
+      for (let at; (at = partial.indexOf("\n")) >= 0;) {
+        // The NUL perf writes after each "ack\n" begins the next line.
+        const line = partial.slice(0, at).replace(/^\0+/, "");
+        partial = partial.slice(at + 1);
+        if (line !== "ack") fail(`perf wrote ${JSON.stringify(line.slice(0, 80))} on its acknowledgment descriptor, not an acknowledgment`);
+        else if (++heard > given) fail(`perf acknowledged ${heard} commands where it had been given ${given}`);
+        else settle("ack");
+      }
+    },
+    end() {
+      ended = true;
+      if (partial.replace(/\0/g, "") !== "") fault ??= `perf left ${JSON.stringify(partial.slice(0, 80))} on its acknowledgment descriptor, not an acknowledgment`;
+      settle("closed");
+    },
+    command() {
+      if (waiting) throw new Error("a perf command is still waiting for its acknowledgment");
+      given += 1;
+      return /** @type {Promise<"ack" | "closed" | "timeout" | "fault">} */ (new Promise((resolve) => {
+        if (fault) return resolve("fault");
+        if (ended) return resolve("closed");
+        waiting = { resolve, timer: setTimeout(() => settle("timeout"), ackMs) };
+      }));
+    },
+    error: () => fault,
+  };
 }
 
 /** The probe of one event set before the first count: the same CPUs and events, over an idle second, no cgroup. */
@@ -202,17 +277,74 @@ export function probeVerdict(names, r) {
   return whole && !r.error ? { refuse: null, note: `${why}; the count repeats its first load with ${REQUIRED.main} alone` } : { refuse: why, note: null };
 }
 
+/** Some perf versions omit :u when displaying a generic cache event. */
+const eventOf = (/** @type {string | undefined} */ event) => (event === "L1-icache-load-misses" ? events.userL1iMissesPerRequest : event);
+
+/** A probe's counts, perf's total over its CPUs (`perf stat -x ,` with no `-A`): only whether each event gave a count is read from it. */
 export function parsePerfCounts(/** @type {string} */ text) {
   const counts = new Map();
   for (const line of text.split("\n")) {
     const [value, , event, , , running] = line.split(",");
-    // Some perf versions omit :u when displaying a generic cache event.
-    const name = event === "L1-icache-load-misses" ? events.userL1iMissesPerRequest : event;
+    const name = eventOf(event);
     if (!eventNames.includes(name)) continue;
     const raw = value.trim();
     const runningPct = /^\d+(?:\.\d+)?$/.test(running?.trim() ?? "") ? Number(running) : null;
     const count = /^\d+$/.test(raw) ? Number(raw) : null;
     counts.set(name, { count, runningPct, error: count === null ? raw || "missing count" : null });
+  }
+  return counts;
+}
+
+/**
+ * A count's counts from perf's rows a CPU (`-A -x , -G`: CPU, count, unit, event, cgroup, running
+ * time in ns, running percentage), each event summed here over `cpus`, the CPUs perf was given. An
+ * event is usable only when every one of those CPUs gave it exactly one row, with a whole count, a
+ * running time above zero and a running percentage, and no other CPU did: perf 6.1 goes on past a
+ * CPU whose counter it could not enable, and its own total sums the times of every CPU, so a 100%
+ * total does not show each CPU counted. A CPU the cgroup never ran on gives no running time either,
+ * and is refused the same way, as it cannot be told apart. Its percentage is the lowest of its CPUs'.
+ * @param {string} text
+ * @param {number[]} cpus
+ */
+export function parsePerCpuCounts(text, cpus) {
+  if (!Array.isArray(cpus) || !cpus.length || !cpus.every((c) => Number.isSafeInteger(c) && c >= 0)) throw new Error(`a count's CPUs are ${JSON.stringify(cpus)}, not a list of CPU numbers`);
+  /** @type {Map<string, Map<number, { raw: string, count: number | null, run: number | null, pct: number | null, twice: boolean }>>} */
+  const rows = new Map();
+  for (const line of text.split("\n")) {
+    const [cpuField, value = "", , event, , run, running] = line.split(",");
+    const cpu = /^CPU(\d+)$/.exec(cpuField?.trim() ?? "");
+    const name = eventOf(event);
+    if (!cpu || !name || !eventNames.includes(name)) continue;
+    const at = rows.get(name) ?? new Map();
+    rows.set(name, at);
+    const raw = value.trim(), n = Number(cpu[1]);
+    at.set(n, {
+      raw,
+      count: /^\d+$/.test(raw) ? Number(raw) : null,
+      run: /^\d+$/.test(run?.trim() ?? "") ? Number(run) : null,
+      pct: /^\d+(?:\.\d+)?$/.test(running?.trim() ?? "") ? Number(running) : null,
+      twice: at.has(n),
+    });
+  }
+  const counts = new Map();
+  for (const [name, at] of rows) {
+    /** @type {string | null} */
+    let error = null;
+    let count = 0;
+    /** @type {number | null} */
+    let runningPct = 100;
+    for (const cpu of at.keys()) if (!cpus.includes(cpu)) error ??= `a row for CPU ${cpu}, which perf was not given`;
+    for (const cpu of cpus) {
+      const r = at.get(cpu);
+      if (!r) { error ??= `no row for CPU ${cpu}`; continue; }
+      if (r.twice) error ??= `two rows for CPU ${cpu}`;
+      if (r.count === null) error ??= `CPU ${cpu}: ${r.raw || "missing count"}`;
+      else if (!r.run) error ??= `CPU ${cpu}: no running time, so perf is not shown to have counted there`;
+      runningPct = r.pct === null || runningPct === null ? null : Math.min(runningPct, r.pct);
+      count += r.count ?? 0;
+    }
+    if (!error && !Number.isSafeInteger(count)) error = `its CPUs' counts sum past 2^53 - 1`;
+    counts.set(name, { count: error ? null : count, runningPct, error });
   }
   return counts;
 }
@@ -253,7 +385,8 @@ function totalsError(/** @type {ReturnType<typeof loadTotals>} */ t, /** @type {
 
 /**
  * Both passes of one count. `collect(pass, instructionsOnly)` runs one load under perf with
- * `passEvents(pass, instructionsOnly)` and gives perf's output, its error, whether perf's end was
+ * `passEvents(pass, instructionsOnly)` and gives perf's output (its rows a CPU, read over
+ * `expected.cpus`, the CPUs perf was given), its error, whether perf's end was
  * not seen (`unconfirmed`), whether the load ran (`ranLoad`, false only where perf failed before
  * the load started; a load is taken to have run unless it says so) and the load's k6 summary. A
  * perf whose end was not seen stops the count at once (UnconfirmedPerf): no retry and no next pass.
@@ -265,16 +398,18 @@ function totalsError(/** @type {ReturnType<typeof loadTotals>} */ t, /** @type {
  * otherwise.
  * @param {(pass: "main" | "kernel", instructionsOnly: boolean) => any} collect
  * @param {(message: string) => void} warn
- * @param {{ requests?: number }} [expected]
+ * @param {{ requests?: number, cpus: number[] }} expected
  */
-export async function measurePerfCounts(collect, warn, expected = {}) {
+export async function measurePerfCounts(collect, warn, expected) {
+  // Checked before any load, so a count with no CPUs to read its rows over runs none.
+  parsePerCpuCounts("", expected?.cpus);
   const attempt = async (/** @type {"main" | "kernel"} */ pass, /** @type {boolean} */ instructionsOnly) => {
     const names = passEvents(pass, instructionsOnly);
     const { text = "", error, summary, unconfirmed, ranLoad = true } = await collect(pass, instructionsOnly);
     const load = pass === "kernel" ? "kernel instructions' load" : instructionsOnly ? "first load's repeat" : "first load";
     if (unconfirmed) throw new UnconfirmedPerf(`${load}: ${error || "perf was not seen to end"}; no further count runs on this host`);
     // Only the pass's own events are read from its output.
-    const counts = new Map([...parsePerfCounts(text)].filter(([event]) => names.includes(event)));
+    const counts = new Map([...parsePerCpuCounts(text, expected.cpus)].filter(([event]) => names.includes(event)));
     const reason = countError(counts.get(REQUIRED[pass]));
     const totals = loadTotals(summary);
     const requests = totals.requests ?? 0, failed = totals.failed ?? 0, checksFailed = totals.checksFailed ?? 0;

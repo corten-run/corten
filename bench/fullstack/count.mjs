@@ -5,13 +5,17 @@
 // Xeon Platinum 8358 guest (#2151). All counts require a reported 100% running percentage.
 // Unusable optional counts are null with a diagnostic; if user instructions are unusable with
 // optional events enabled, the first load is repeated with them alone unless it had failures.
+// perf gives each CPU's count a row of its own, and a count is kept only when every CPU it was
+// given counted (count-perf.mjs, parsePerCpuCounts).
 // Each load runs while its perf is watched: perf starts with its events disabled, the load starts
 // only once perf has acknowledged enabling them, and perf must still be running and acknowledge
-// disabling them once the load has ended, or the pass did not count the whole load (#2183).
+// disabling them once the load has ended, one acknowledgment to each command and no other, or the
+// pass did not count the whole load (#2183).
 // Before any load each event set is probed on the count's CPUs within a bound (PROBE_SETS). A perf,
 // probe or count, whose end is not seen stops the step with exit HALT_EXIT and counts nothing more
 // on the host: it may still be counting, or stuck in the kernel. That exit stands whatever its
-// diagnostics' writes or teardown do (halt).
+// diagnostics' writes or teardown do (halt), and it is not held up by them: the container is
+// removed by a docker rm that is started and not waited for.
 // Alternate one-repeat runs of the builds on a quiet host to compare cycles, which are noisier
 // than instructions.
 // Needs Linux with hardware counters (`perf`, root, cgroup v2): a bench host, not Docker Desktop.
@@ -23,7 +27,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { ACK_FD, ACK_MS, CONTROL_FD, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
+import { ACK_FD, ACK_MS, acknowledgments, CONTROL_FD, GRACE_MS, HALT_EXIT, measurePerfCounts, PROBE_MS, PROBE_SETS, passEvents, perfCountArgs, perfProbeArgs, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -47,7 +51,8 @@ await recordLoadTool(dir);
 /**
  * Exits HALT_EXIT, a perf not seen to end, after `diagnose` has written what it can: a write or
  * teardown that fails in it is reported, and the exit is still HALT_EXIT, never an ordinary failure
- * that count-pairs.mjs or run-all.mjs would go on past.
+ * that count-pairs.mjs or run-all.mjs would go on past. `diagnose` waits on nothing outside this
+ * process (removeUnwaited), so the exit reaches the caller however Docker answers.
  * @param {() => void} diagnose
  * @returns {never}
  */
@@ -58,6 +63,22 @@ function halt(diagnose) {
     try { console.error(`the halt's diagnostics were not all written: ${e instanceof Error ? e.message : e}`); } catch {}
   } finally {
     process.exit(HALT_EXIT);
+  }
+}
+
+/**
+ * Asks Docker to remove a container and does not wait for it: a halt's teardown, which must not
+ * keep HALT_EXIT from its caller (a docker client that does not answer would). Its own process,
+ * with no descriptor of this one, so it neither holds this step's output open nor stops with it.
+ */
+function removeUnwaited(/** @type {string} */ id) {
+  try {
+    const rm = spawn("docker", ["rm", "-f", id], { detached: true, stdio: "ignore" });
+    rm.on("error", () => {});
+    rm.unref();
+    console.error(`asked docker to remove ${id}, not waiting for it`);
+  } catch (e) {
+    console.error(`could not ask docker to remove ${id}: ${e instanceof Error ? e.message : e}`);
   }
 }
 
@@ -115,9 +136,10 @@ function answersError(id, answer) {
  * its ID, since the name can be another container's by then. `name` is what the log calls it,
  * `events` what perf counts. perf starts with its events disabled, and the load starts only once
  * perf has acknowledged `enable` on its control descriptor; once the load has ended perf must not
- * have exited and must acknowledge `disable` before it is asked to stop. One that does not
- * acknowledge `enable` runs no load (`ranLoad` false); one that ends before its load did, or does
- * not acknowledge `disable`, did not count the whole load (#2183). A load is never taken as counted
+ * have exited and must acknowledge `disable` before it is asked to stop, each acknowledgment bound
+ * to its command (count-perf.mjs, acknowledgments). One that does not acknowledge `enable` runs no
+ * load (`ranLoad` false); one that ends before its load did, does not acknowledge `disable`, or
+ * acknowledges what it was not given, did not count the whole load (#2183). A load is never taken as counted
  * on a wait or on a signal that was delivered.
  */
 async function counted(id, name, work, events) {
@@ -133,21 +155,15 @@ async function counted(id, name, work, events) {
   perf.stdout?.on("data", (d) => (text += d));
   perf.stderr?.on("data", (d) => (said += d));
   perf.on("error", (error) => { spawnError = error.message; });
-  // perf's control descriptor, and the acknowledgments it writes back: an "ack" line a command,
-  // which perf follows with a NUL byte (perf 6.1 writes "ack\n\0").
+  // perf's control descriptor, and the acknowledgments it writes back, each bound to its command:
+  // one "ack" line to each, which perf follows with a NUL byte (perf 6.1 writes "ack\n\0").
   const control = /** @type {import("node:stream").Writable} */ (perf.stdio[CONTROL_FD]);
-  const acks = /** @type {import("node:stream").Readable} */ (perf.stdio[ACK_FD]);
+  const ackStream = /** @type {import("node:stream").Readable} */ (perf.stdio[ACK_FD]);
   control.on("error", () => {});
-  acks.on("error", () => {});
-  let acked = 0;
-  let partial = "";
-  /** @type {Set<() => void>} */
-  const listening = new Set();
-  acks.on("data", (d) => {
-    partial += d;
-    for (let at; (at = partial.indexOf("\n")) >= 0; partial = partial.slice(at + 1)) if (partial.slice(0, at).replaceAll("\0", "").trim() === "ack") acked += 1;
-    for (const heard of listening) heard();
-  });
+  ackStream.on("error", () => {});
+  ackStream.setEncoding("latin1");
+  const acks = acknowledgments(ACK_MS);
+  ackStream.on("data", (d) => acks.data(d));
   // Reaped: once it is, perf is never signalled, its process ID may be another's.
   let reaped = false;
   perf.on("exit", () => { reaped = true; });
@@ -155,25 +171,21 @@ async function counted(id, name, work, events) {
   /** @type {{ code: number | null, signal: string | null } | null} */
   let exit = null;
   closed.then((e) => (exit = /** @type {any} */ (e)));
+  // Once perf has closed, every acknowledgment it wrote has been read.
+  closed.then(() => acks.end());
   // Whether perf exits within ms; the timer is cleared when it does, so none outlives the count.
   const within = (/** @type {number} */ ms) => new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), ms);
     closed.then(() => { clearTimeout(timer); resolve(true); });
   });
-  // Whether perf acknowledges its nth command within ACK_MS: "ack", "closed" (it ended first) or "timeout".
-  const acknowledged = (/** @type {number} */ n) => /** @type {Promise<"ack" | "closed" | "timeout">} */ (new Promise((resolve) => {
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let timer;
-    const settle = (/** @type {"ack" | "closed" | "timeout"} */ r) => { clearTimeout(timer); listening.delete(check); resolve(r); };
-    const check = () => { if (acked >= n) settle("ack"); };
-    timer = setTimeout(() => settle("timeout"), ACK_MS);
-    listening.add(check);
-    closed.then(() => settle(acked >= n ? "ack" : "closed"));
-    check();
-  }));
-  control.write("enable\n");
-  const enabled = await acknowledged(1);
-  const ready = enabled === "ack" && !reaped && exit === null;
+  // Gives perf a command and waits for its own acknowledgment within ACK_MS.
+  const send = (/** @type {string} */ command) => {
+    const answered = acks.command();
+    control.write(`${command}\n`);
+    return answered;
+  };
+  const enabled = await send("enable");
+  const ready = enabled === "ack" && !acks.error() && !reaped && exit === null;
   /** Why perf did not count the whole load, or null. @type {string | null} */
   let why = null;
   let hung = false;
@@ -186,12 +198,12 @@ async function counted(id, name, work, events) {
       await work();
     }
   } finally {
-    if (!ready) why = enabled === "ack" ? "perf ended before its load started" : enabled === "closed" ? "perf ended before it acknowledged enable, so no load ran" : `perf did not acknowledge enable within ${ACK_MS / 1000} s, so no load ran`;
+    if (!ready) why = acks.error() ? `${acks.error()}, so no load ran` : enabled === "ack" ? "perf ended before its load started" : enabled === "closed" ? "perf ended before it acknowledged enable, so no load ran" : `perf did not acknowledge enable within ${ACK_MS / 1000} s, so no load ran`;
+    else if (acks.error()) why = `${acks.error()}, so its acknowledgments do not show it counted the whole load`;
     else if (reaped || exit !== null) why = "perf ended before its load did";
     else {
-      control.write("disable\n");
-      const disabled = await acknowledged(2);
-      if (disabled !== "ack") why = disabled === "closed" ? "perf ended before it acknowledged disable at the load's end" : `perf did not acknowledge disable at the load's end within ${ACK_MS / 1000} s`;
+      const disabled = await send("disable");
+      if (disabled !== "ack") why = disabled === "closed" ? "perf ended before it acknowledged disable at the load's end" : disabled === "fault" ? `${acks.error()}, so its acknowledgments do not show it counted the whole load` : `perf did not acknowledge disable at the load's end within ${ACK_MS / 1000} s`;
     }
     if (!reaped) perf.kill("SIGINT");
     if (!(await within(PROBE_MS))) {
@@ -205,6 +217,8 @@ async function counted(id, name, work, events) {
     // However the work ended (a failed load included), a perf not seen to end stops the count and the host's counting.
     if (hung) throw new UnconfirmedPerf(`perf did not count the full load: no answer, it had not exited ${PROBE_MS / 1000} s after it was asked to stop nor ${GRACE_MS / 1000} s after it was killed; no further count runs on this host`);
   }
+  // An acknowledgment perf wrote after its last command, read once it closed.
+  if (!why && acks.error()) why = `${acks.error()}, so its acknowledgments do not show it counted the whole load`;
   const { code, signal } = exit ?? { code: null, signal: null };
   const reason = why ?? (code !== 0 && signal !== "SIGINT" ? `perf exited ${signal ?? code}` : null);
   // What perf said, less its own notes that events were enabled and disabled.
@@ -224,6 +238,8 @@ const kernel = spawnSync("uname", ["-r"], { encoding: "utf8" }).stdout.trim();
 const cpu = existsSync("/proc/cpuinfo") ? /^model name\s*:\s*(.+)$/m.exec(readFileSync("/proc/cpuinfo", "utf8"))?.[1]?.trim() ?? "unknown" : "unknown";
 const waiting = existsSync("/var/run/reboot-required.pkgs") ? readFileSync("/var/run/reboot-required.pkgs", "utf8").trim().split("\n").join(", ") : "";
 const pending = waiting ? ` (installed, waiting for a reboot: ${waiting})` : "";
+// The CPUs perf counts on, each of which must give its own row in a count: -C's list, or every online CPU for -a.
+const cpus = selectedCpus(countCpus, existsSync("/sys/devices/system/cpu/online") ? readFileSync("/sys/devices/system/cpu/online", "utf8") : undefined);
 const kernelFile = join(dir, "count-kernel.txt");
 writeFileSync(kernelFile, `${kernel}${pending}\ncounting with perf stat ${countCpus.join(" ")}\ncpu ${cpu}\n`);
 console.log(`counting on kernel ${kernel}${pending}, cpu ${cpu}, perf stat ${countCpus.join(" ")}`);
@@ -306,7 +322,7 @@ for (const name of appsArg.split(",")) {
             return { ...perf, summary: perf.ranLoad ? JSON.parse(readFileSync(summaryFile, "utf8")) : undefined };
           },
           (message) => console.warn(name, target + suffix, message),
-          { requests: ITERATIONS },
+          { requests: ITERATIONS, cpus },
         );
         runs.push(row);
         console.log(name, target + suffix, JSON.stringify(row));
@@ -319,8 +335,8 @@ for (const name of appsArg.split(",")) {
         const why = e.message.trim().split("\n")[0] || "perf was not seen to end";
         results[`${name}/${target}${suffix}`] = { failed: why };
         console.error(`${name} ${target}${suffix}: ${why}`);
-        docker("rm", "-f", container);
         writeFileSync(file, JSON.stringify(results, null, 1));
+        removeUnwaited(container);
       });
       // One line, never empty: summarize.mjs prints it in a table and reads an empty one as a count.
       const why = (e instanceof Error ? e.message : String(e)).trim().split("\n")[0] || "the count failed with no message";

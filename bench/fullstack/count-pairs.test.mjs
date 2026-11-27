@@ -3,12 +3,13 @@
 // runner, with a stand-in for Docker and count.mjs: its ledger, its locks and its failure paths.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
 import { BAND, compare, complete, COUNTS, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
 
@@ -313,6 +314,91 @@ test("a count.mjs that could not see its perf end (exit 4) stops the run: no fur
     await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
     assert.deepEqual(h.state.counted.map(([round]) => round), ran);
     assert.equal(h.state.tags.length, tags);
+  } finally {
+    s.done();
+  }
+});
+
+test("a count.mjs exit 4 is in the ledger before anything that can fail: a failed image read or seal after it still stops the run, now and when run again", async () => {
+  const stuck = "t1-json-ab-002-base";
+  const records = (/** @type {string} */ results) => readFileSync(join(results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  // What fails once count.mjs has returned 4: the read of the tag's image, or reading an output to seal it.
+  for (const where of ["image", "seal"]) {
+    const s = scratch();
+    let armed = false;
+    try {
+      const h = host(s.results, { rc: (round) => (round === stuck ? ((armed = true), 4) : 0) });
+      const exec = h.exec;
+      const failing = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ options) => {
+        if (armed && where === "image" && cmd === "docker" && args[0] === "image" && args[4] === "cb-corten") throw Object.assign(new Error("EIO: i/o error, docker image inspect"), { code: "EIO" });
+        return exec(cmd, args, options);
+      };
+      const read = fs.readFileSync;
+      mock.method(fs, "readFileSync", function (/** @type {any} */ path, /** @type {any[]} */ ...rest) {
+        if (armed && where === "seal" && String(path).endsWith(join(stuck, "count-corten-json-0-kernel.json"))) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" });
+        return read.call(this, path, ...rest);
+      });
+      syncBuiltinESMExports();
+      await assert.rejects(runPairs(options(s, { ...h, exec: failing })), /count\.mjs exited 4 in t1-json-ab-002-base: a perf it started was not seen to end/, where);
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      armed = false;
+      // Its exit is in the ledger, though its end is not.
+      const mine = records(s.results).filter((r) => r.name === stuck);
+      assert.deepEqual(mine.map((r) => Object.keys(r).find((k) => ["started", "dispatched", "exited", "ended"].includes(k))), ["started", "dispatched", "exited"], where);
+      assert.equal(mine[2].rc, 4, where);
+      const ran = h.state.counted.length, tags = h.state.tags.length;
+      assert.equal(h.state.counted.at(-1)?.[0], stuck, where);
+      // Run again: refused before any tag or count.
+      await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/, where);
+      assert.equal(h.state.counted.length, ran, where);
+      assert.equal(h.state.tags.length, tags, where);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      s.done();
+    }
+  }
+});
+
+test("a count.mjs started with no end recorded stops the run when run again: its exit not kept may have been 4, and one kept was not sealed", async () => {
+  const stuck = "t1-json-ab-002-base";
+  // The runner dies while count.mjs runs (its exit never comes back), or once count.mjs has exited 0
+  // and before its end is recorded (a seal that fails).
+  for (const [kind, why] of [
+    ["died", /count\.mjs was started in t1-json-ab-002-base and its exit was not recorded: it may have exited 4, a perf it started not seen to end, so no further count runs on this host; stopped with no report/],
+    ["unsealed", /count\.mjs exited 0 in t1-json-ab-002-base and the end of that invocation \(the image it counted and its sealed outputs\) was not recorded; stopped with no report/],
+  ]) {
+    const s = scratch();
+    let armed = false;
+    try {
+      const h = host(s.results, { onCount: (round) => { if (kind === "died" && round === stuck) throw new Error("the runner died"); }, rc: (round) => ((armed = round === stuck), 0) });
+      const exec = h.exec;
+      const failing = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ options) => {
+        if (armed && cmd === "docker" && args[0] === "image" && args[4] === "cb-corten") throw new Error("EIO: i/o error, docker image inspect");
+        return exec(cmd, args, options);
+      };
+      await assert.rejects(runPairs(options(s, { ...h, exec: failing })), kind === "died" ? /the runner died/ : /EIO/, kind);
+      armed = false;
+      const ran = h.state.counted.length, tags = h.state.tags.length;
+      await assert.rejects(runPairs(options(s, h)), why, kind);
+      assert.equal(h.state.counted.length, ran, kind);
+      assert.equal(h.state.tags.length, tags, kind);
+    } finally {
+      s.done();
+    }
+  }
+  // The control: a start row with nothing after it (the runner stopped before count.mjs started)
+  // is the interrupted invocation it always was, not run again, and the run goes on past it.
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 3 })), /stopped before/);
+    appendFileSync(join(s.results, "t1", "invocations.jsonl"), JSON.stringify({ name: schedule(6, ["json"], "t1")[3].name, want: "sha256:base", started: 0 }) + "\n");
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4 - 1);
+    assert.ok(targets.json);
   } finally {
     s.done();
   }
@@ -833,6 +919,8 @@ else if (a[0] === "run") {
   else status = 1;
 } else if (a[0] === "rm") for (const [n, id] of Object.entries(s.names)) if (n === a.at(-1) || id === a.at(-1)) delete s.names[n];
 fs.writeFileSync(file, JSON.stringify(s));
+// With FAKE_DOCKER_RM_STALL, removing a container by its ID does not answer: it records itself and waits a minute.
+if (a[0] === "rm" && process.env.FAKE_DOCKER_RM_STALL && /^[0-9a-f]{64}$/.test(a.at(-1))) { fs.writeFileSync(path.join(process.env.FAKE_DIR, "rm-stall.pid"), String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000); }
 if (out) process.stdout.write(out + "\\n");
 process.exit(status);
 `;
@@ -848,16 +936,29 @@ if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "pr
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
 const set = events.join(",");
+const named = (knob) => (process.env[knob] ?? "").split("|").includes(set);
+// With -A a row a CPU, for -C's CPUs or every online one, their counts summing to a whole count's;
+// in a set FAKE_PERF_CPU_GAP names the last CPU's counter never ran, printed as perf 6.1 prints one
+// (its total would still read 100%).
+const cpuList = a.includes("-C") ? a[a.indexOf("-C") + 1] : fs.readFileSync("/sys/devices/system/cpu/online", "utf8").trim();
+const cpus = cpuList.split(",").flatMap((p) => { const [x, y = x] = p.split("-").map(Number); return Array.from({ length: y - x + 1 }, (_, i) => x + i); });
+const counting = named("FAKE_PERF_CPU_GAP") ? cpus.length - 1 : cpus.length;
+const share = (i) => Math.floor(500000000 / counting) + (i === 0 ? 500000000 % counting : 0);
+const rows = (e) => a.includes("-A")
+  ? cpus.map((c, i) => "CPU" + c + "," + (i >= counting ? "<not counted>" : share(i)) + ",," + e + "," + cgroup + "," + (i >= counting ? 0 : 1000000) + ",100.00,,").join("\\n")
+  : "500000000,," + e + "," + cgroup + ",1000000,100.00,,";
 // When this perf counted from ("enable") and to ("disable", "exit"), for each load to be held against.
 const mark = (what) => fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf-times.jsonl"), JSON.stringify({ set, what, at: Date.now() }) + "\\n");
-const print = () => process.stdout.write(events.map((e) => \`500000000,,\${e},\${cgroup},1000000,100.00,,\`).join("\\n") + "\\n");
+const print = () => process.stdout.write(events.map(rows).join("\\n") + "\\n");
 // A set FAKE_PERF_LATE names starts counting 1.5 s late; one FAKE_PERF_EARLY names ("|" between
 // sets) exits by itself 0.8 s after it started, printing rows a whole count's would have.
 const late = (process.env.FAKE_PERF_LATE ?? "").split("|").includes(set) ? 1500 : 0;
 const early = (process.env.FAKE_PERF_EARLY ?? "").split("|").includes(set);
 const start = () => { mark("enable"); if (early) setTimeout(() => { print(); mark("exit"); process.exit(0); }, 800); };
 // perf stat --delay=-1 --control=fd:<ctl>,<ack>: counting starts at "enable", and each command is
-// acknowledged as perf 6.1 does, "ack\\n" and a NUL byte.
+// acknowledged as perf 6.1 does, "ack\\n" and a NUL byte; a set FAKE_PERF_DOUBLE_ACK names
+// acknowledges enable twice and disable not at all.
+const double = named("FAKE_PERF_DOUBLE_ACK");
 const control = a.find((x) => x.startsWith("--control=fd:"));
 if (control) {
   const [ctl, ack] = control.slice("--control=fd:".length).split(",").map(Number);
@@ -866,12 +967,16 @@ if (control) {
     buffered += d;
     for (let at; (at = buffered.indexOf("\\n")) >= 0; buffered = buffered.slice(at + 1)) {
       const command = buffered.slice(0, at);
-      if (command === "enable") setTimeout(() => { start(); fs.writeSync(ack, "ack\\n\\0"); }, late);
-      else if (command === "disable") { mark("disable"); fs.writeSync(ack, "ack\\n\\0"); }
+      if (command === "enable") setTimeout(() => { start(); fs.writeSync(ack, double ? "ack\\n\\0ack\\n\\0" : "ack\\n\\0"); }, late);
+      else if (command === "disable") { mark("disable"); if (!double) fs.writeSync(ack, "ack\\n\\0"); }
     }
   });
 } else setTimeout(start, late);
-process.on("SIGINT", () => { print(); mark("exit"); process.exit(0); });
+// A set FAKE_PERF_HOLD names leaves a process holding its output open as it exits, so its end is never seen.
+process.on("SIGINT", () => {
+  if (named("FAKE_PERF_HOLD")) require("node:child_process").spawn(process.execPath, ["-e", "require('node:fs').writeFileSync(" + JSON.stringify(path.join(process.env.FAKE_DIR, "holder.pid")) + ", String(process.pid)); setTimeout(() => {}, 50000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
+  print(); mark("exit"); process.exit(0);
+});
 setInterval(() => {}, 1000);
 `;
 
@@ -1033,6 +1138,55 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       assert.match(got.row.failed, why, round);
       // Its perf did exit during the load, before the load's end.
       assert.ok(got.covered.includes(false), round);
+    }
+    // Each CPU perf is given must count, read from its own row (-A): perf 6.1 sums every CPU's
+    // enabled and running times, so a CPU whose counter never ran leaves its total at 100%. Given
+    // CPUs 0 and 1, both counting is kept, their counts summed; CPU 1 never running is not.
+    {
+      const both = await count("cpus-both", "none", "none", { BENCH_APP_CPUS: "0-1" });
+      assert.equal(both.code, 0);
+      assert.ok(Array.isArray(both.row) && both.row[0].userPerRequest === 100000 && both.row[0].kernelPerRequest === 100000, JSON.stringify(both.row));
+      assert.ok(both.perf.length === 2 && both.perf.every((args) => args.includes("-A") && args[args.indexOf("-C") + 1] === "0-1"), JSON.stringify(both.perf));
+      const gap = await count("cpus-gap", "none", "none", { BENCH_APP_CPUS: "0-1", FAKE_PERF_CPU_GAP: "instructions:k" });
+      assert.equal(gap.code, 0);
+      assert.ok(!Array.isArray(gap.row), `a count with a CPU that never counted was kept: ${JSON.stringify(gap.row)}`);
+      assert.match(gap.row.failed, /^kernel instructions' perf failed: instructions:k: CPU 1: <not counted>/);
+    }
+    // An acknowledgment answers one command: a perf that acknowledges enable twice and disable not
+    // at all has not acknowledged its disable, and its count is not kept.
+    {
+      const doubled = await count("acks-double", "none", "none", { FAKE_PERF_DOUBLE_ACK: "instructions:k" });
+      assert.equal(doubled.code, 0);
+      assert.ok(!Array.isArray(doubled.row), `a count whose perf acknowledged enable twice was kept: ${JSON.stringify(doubled.row)}`);
+      assert.match(doubled.row.failed, /^kernel instructions' perf failed: perf did not count the full load: perf acknowledged 2 commands where it had been given 1/);
+    }
+    // A count's perf whose end is not seen halts the step with exit 4 as soon as it is given up,
+    // whatever Docker does then: the counted container's removal is asked for and not waited for,
+    // so a docker that does not answer cannot hold the exit back.
+    {
+      const round = "halt-docker-stalled";
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PERF_HOLD: mainSet, FAKE_DOCKER_RM_STALL: "1", HOME: process.env.HOME ?? root };
+      const started = Date.now();
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      const took = Date.now() - started;
+      const pid = (/** @type {string} */ f) => existsSync(join(dir, f)) ? Number(readFileSync(join(dir, f), "utf8")) : null;
+      try {
+        assert.equal(code, 4, said);
+        // perf is given 30 s to stop and 5 s once killed, then the halt: not the stalled docker's minute.
+        assert.ok(took < 50_000, `exit 4 came ${took} ms after the start, held by the docker rm: ${said}`);
+        assert.match(said, /asked docker to remove [0-9a-f]{64}, not waiting for it/);
+        assert.match(JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"].failed, /perf did not count the full load: no answer/);
+        // The removal was asked for: the stalled docker rm started.
+        for (let i = 0; i < 50 && pid("rm-stall.pid") === null; i++) await new Promise((r) => setTimeout(r, 100));
+        assert.notEqual(pid("rm-stall.pid"), null, "no docker rm was started");
+      } finally {
+        for (const f of ["rm-stall.pid", "holder.pid"]) try { const p = pid(f); if (p) process.kill(p, "SIGKILL"); } catch {}
+      }
     }
     // A write that fails as count.mjs records a probe it could not see end leaves its exit 4, so
     // count-pairs.mjs starts no next invocation.

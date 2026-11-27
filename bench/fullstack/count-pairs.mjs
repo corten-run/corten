@@ -33,7 +33,10 @@
 // and a run going on refuses if any differs or cannot be established) and `invocations.jsonl`
 // (each invocation as it starts and as it ends, with the SHA-256 and size of the row, the k6
 // summaries of its two loads and the launched image it is read from: a replay reads those bytes
-// or none). No invocation is run again: the command run again goes on from the first not started.
+// or none; and, between those, as count.mjs is started and as it exits, its exit written before
+// anything that can fail). No invocation is run again: the command run again goes on from the first
+// not started, and refuses where count.mjs was started and its end was not recorded, as it may have
+// exited 4.
 // `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
 // that only one runner can make and that runs while it is held, so a prune leaves it (the lock on
 // the daemon's `cb-corten` tag and the `fsw-corten` container count.mjs starts, whatever directory
@@ -659,6 +662,14 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
   // A perf count.mjs could not see end may still run on this host (count-perf.mjs): nothing more is counted on it.
   const halt = (/** @type {string} */ name) => new Error(`count.mjs exited ${HALT_EXIT} in ${name}: a perf it started was not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`);
   for (const [name, r] of records) if (r.rc === HALT_EXIT) throw halt(name);
+  // A count.mjs started with no end recorded: its exit, if it was kept, is not 4, but what it
+  // counted was not sealed; if not, it may have been 4. Either way the run does not go on.
+  for (const [name, r] of records) {
+    if (r.dispatched == null || r.ended != null) continue;
+    throw new Error(r.exited != null
+      ? `count.mjs exited ${r.rc ?? r.signal ?? "-"} in ${name} and the end of that invocation (the image it counted and its sealed outputs) was not recorded; stopped with no report. Count under a new prefix`
+      : `count.mjs was started in ${name} and its exit was not recorded: it may have exited ${HALT_EXIT}, a perf it started not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`);
+  }
   for (const inv of plan) {
     if (records.has(inv.name)) continue;
     if (o.stop?.()) throw new Error(`stopped before ${inv.name}; run the command again to go on`);
@@ -675,10 +686,26 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       const before = id(TAG);
       if (tag.status !== 0) end = { ...start, ended: now(), fresh: true, tagRc: tag.status, before };
       else {
+        // Written before count.mjs starts, so a restart that finds no exit after it refuses to go on.
+        appendFileSync(file, JSON.stringify({ name: inv.name, dispatched: now() }) + "\n");
         const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env });
-        const after = id(TAG);
-        // The bytes the reading is made from, so a replay reads these or none.
-        end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: r.signal ?? null, before, after, artifacts: seal(out, artifactsOf(inv.target)) };
+        // Its exit first, before anything here that can fail: a halt is in the ledger whatever follows.
+        const exited = { name: inv.name, exited: now(), rc: r.status, signal: r.signal ?? null };
+        appendFileSync(file, JSON.stringify(exited) + "\n");
+        /** @type {string} */
+        let after;
+        /** @type {ReturnType<typeof seal>} */
+        let artifacts;
+        try {
+          after = id(TAG);
+          // The bytes the reading is made from, so a replay reads these or none.
+          artifacts = seal(out, artifactsOf(inv.target));
+        } catch (e) {
+          if (r.status !== HALT_EXIT) throw e;
+          log(`${inv.name}: its end was not recorded: ${e instanceof Error ? e.message : e}`);
+          throw halt(inv.name);
+        }
+        end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: r.signal ?? null, before, after, artifacts };
       }
     }
     // Seen as it ends, so an invocation that ran while the lock or the kit was lost is not valid.

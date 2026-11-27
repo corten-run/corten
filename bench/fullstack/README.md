@@ -1494,7 +1494,8 @@ three runs:
    Each count a request is over its own pass's requests, and the row records the second pass's
    requests and failures as `kernelPass`; kernel instructions are not from the load the cycles
    are, so their sum with user instructions is two loads' (counts before this change were one
-   load's). When user instructions are unusable in the first pass and its load had no failures,
+   load's; `summarize.mjs` says which, by `kernelPass`, for each key: a second load, the same
+   load, or both across its runs). When user instructions are unusable in the first pass and its load had no failures,
    it is repeated with `instructions:u` alone; the second pass is not repeated. A count is kept
    only when each load's k6 summary gives its requests, failed requests and a status check a
    request, both loads made 5,000 requests, and the second had no failure. A load that ran is
@@ -1503,10 +1504,21 @@ three runs:
    Each load is taken as counted whole on `perf`'s acknowledgments, not on a wait: `perf` starts with its events
    disabled (`--delay=-1`), the load starts only once `perf` has acknowledged `enable` on its
    control descriptor (`--control fd:3,4`), and once the load has ended `perf` must not have exited
-   and must acknowledge `disable` before it is asked to stop, each within 10 s; a `perf` that ends
-   before its load did, or does not acknowledge, fails that pass
+   and must acknowledge `disable` before it is asked to stop, each within 10 s, one
+   acknowledgment to each command in turn; a `perf` that ends before its load did, does not
+   acknowledge, or acknowledges a command it was not given (or writes anything else there), fails
+   that pass
    ([#2183 The catalog count reads a perf that ended before its load did as one that counted the whole load](https://github.com/corten-run/corten/issues/2183)).
-   `perf` is given its CPUs as `-a` or `-C` with a CPU list and nothing else.
+   `perf` is given its CPUs as `-a` or `-C` with a CPU list and nothing else, and prints each
+   CPU's count on a row of its own (`-A`), which `count.mjs` sums: `perf` 6.1 goes on past a CPU
+   whose counter it could not enable, and its own total sums the enabled and running times of every
+   CPU, so a total at 100% does not show that each CPU counted. An event is usable only when every
+   CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
+   count, a running time above zero and 100% of its enabled time, and no other CPU did. A CPU the
+   app never ran on during the load gives no running time either and cannot be told from one whose
+   counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
+   CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where
+   the app ran on every online CPU.
    On a bench host the counters are on the app's pinned cores only (`-C` with
    `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
@@ -1533,9 +1545,11 @@ three runs:
    `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
    the count as no answer. A `perf`, probe or count, whose end is not seen may still count or be
    stuck in the kernel, so the count is not retried and no further load runs: `count.mjs` exits 4,
-   whatever writing its diagnostics or removing the container does then,
+   whatever writing its diagnostics does then, and without waiting on Docker (it starts the
+   container's removal and does not wait for it),
    and `count-pairs.mjs` stops its run there and refuses to go on with it, so the rest is counted
-   on a fresh host under a new prefix. `droplet.mjs` turns off the droplet's automatic
+   on a fresh host under a new prefix. `count-pairs.mjs` writes `count.mjs`'s exit to its ledger
+   before anything else it does for that invocation, so a 4 is kept whatever fails after it. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed
    for.
 6. Browser (`browser.mjs`): every app running at once on the app core, items from the item API,
@@ -2111,7 +2125,9 @@ its imports), and the host as the count's environment reaches it (the Docker dae
 and name, `DOCKER_HOST` and `DOCKER_CONTEXT`, the `docker` and `perf` the count's PATH gives with
 their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl`, each invocation
 as it starts and as it ends, with the SHA-256 and size of the four files it is read from (its
-`instructions.json` row, the k6 summaries of its two loads and `count-images.json`); each invocation's log under
+`instructions.json` row, the k6 summaries of its two loads and `count-images.json`), and between
+those, as `count.mjs` is started and as it exits (its exit status written before the image read
+and the seals, which can fail); each invocation's log under
 `inv/`; and `report.json`. A wrapper that starts `count-pairs.mjs`, as a kit's `run.sh` does, is
 not among the files it binds; what it runs is. Each invocation's own output is
 `results/<round>/` as `count.mjs` writes it, and must not exist before it runs, since `count.mjs`
@@ -2137,7 +2153,8 @@ count failed unless exactly one answers to `fsw-corten` and it is that ID. It re
 container's endpoint by the network's name, as Docker keys it, even where `BENCH_NETWORK` gives
 the network's ID. A container that joins
 and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
-the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
+the first one not started, and refuses where `count.mjs` was started for one and its end was not
+recorded (its exit not kept may have been 4, and one kept was not sealed), or if the images' IDs, the schedule, a setting, a file the
 count runs or the host differ from `run.json`, or the host cannot be established; one
 interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
 honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a

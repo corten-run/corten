@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
-import { countRow, measurePerfCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, UnconfirmedPerf } from "./count-perf.mjs";
+import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
 import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
@@ -324,15 +324,15 @@ test("count.mjs counts user and kernel instructions in two perf sessions, never 
   // descriptor, acknowledging each, so a count knows perf counted over its whole load (#2183).
   const control = ["--delay=-1", "--control=fd:3,4"];
   assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", passEvents("main")), [
-    "stat", "-C", "1", "-x", ",", "--log-fd", "1", ...control, "-e",
+    "stat", "-C", "1", "-A", "-x", ",", "--log-fd", "1", ...control, "-e",
     "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u",
     "-G", "app.scope,app.scope,app.scope,app.scope",
   ]);
   assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", passEvents("main", true)), [
-    "stat", "-C", "1", "-x", ",", "--log-fd", "1", ...control, "-e", "instructions:u", "-G", "app.scope",
+    "stat", "-C", "1", "-A", "-x", ",", "--log-fd", "1", ...control, "-e", "instructions:u", "-G", "app.scope",
   ]);
   assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", passEvents("kernel")), [
-    "stat", "-C", "1", "-x", ",", "--log-fd", "1", ...control, "-e", "instructions:k", "-G", "app.scope",
+    "stat", "-C", "1", "-A", "-x", ",", "--log-fd", "1", ...control, "-e", "instructions:k", "-G", "app.scope",
   ]);
   // The kernel pass already counts its one event: retrying it "with instructions only" is the same set.
   assert.deepEqual(passEvents("kernel", true), ["instructions:k"]);
@@ -378,14 +378,16 @@ test("perf's CPUs are every CPU or a CPU list, so nothing else (another -e) reac
 
 const mainText = (cacheEvent = "L1-icache-load-misses:u") => [
   "# started on bench host",
-  "12345,,instructions:u,app.scope,60000,100.00,",
-  "5678,,cycles:u,app.scope,60000,100.00,",
-  "0,,cycles:k,app.scope,60000,100.00,",
-  `87,,${cacheEvent},app.scope,60000,100.00,`,
+  "CPU1,12345,,instructions:u,app.scope,60000,100.00,",
+  "CPU1,5678,,cycles:u,app.scope,60000,100.00,",
+  "CPU1,0,,cycles:k,app.scope,60000,100.00,",
+  `CPU1,87,,${cacheEvent},app.scope,60000,100.00,`,
 ].join("\n");
-const userInstructions = "12345,,instructions:u,app.scope,60000,100.00,";
-const kernelInstructions = "1234,,instructions:k,app.scope,60000,100.00,";
-const pass = (text, requests = 10, failed = 0) => ({ counts: parsePerfCounts(text), requests, failed });
+const userInstructions = "CPU1,12345,,instructions:u,app.scope,60000,100.00,";
+const kernelInstructions = "CPU1,1234,,instructions:k,app.scope,60000,100.00,";
+const pass = (text, requests = 10, failed = 0) => ({ counts: parsePerCpuCounts(text, [1]), requests, failed });
+/** measurePerfCounts over perf rows of CPU 1, the CPU these counts give perf. */
+const measure = (/** @type {any} */ collect, /** @type {any} */ warn, /** @type {any} */ expected = {}) => measurePerfCounts(collect, warn, { cpus: [1], ...expected });
 
 test("count.mjs reads each count over its own pass's load", () => {
   for (const cacheEvent of ["L1-icache-load-misses", "L1-icache-load-misses:u"]) {
@@ -401,14 +403,140 @@ test("count.mjs reads each count over its own pass's load", () => {
   assert.deepEqual([row.requests, row.failed, row.kernelPass, row.userPerRequest, row.kernelPerRequest], [10, 1, { requests: 2, failed: 0 }, 1235, 617]);
 });
 
+test("a count's events are summed over each CPU perf was given, and kept only when every one of them counted with full coverage", () => {
+  // perf 6.1's rows a CPU (`-A -x , -G`), as it printed them for a cgroup that ran on CPU 0 alone:
+  // CPU 1's counter never ran, and perf still prints 100.00 for it, as its own total read 100% too.
+  const real = [
+    "CPU0,2166251060,,instructions:u,pt,900798000,100.00,,",
+    "CPU1,<not counted>,,instructions:u,pt,0,100.00,,",
+  ].join("\n");
+  // Perf given CPU 0 alone: its one row, counted.
+  assert.deepEqual(parsePerCpuCounts(real.split("\n")[0], [0]).get("instructions:u"), { count: 2166251060, runningPct: 100, error: null });
+  assert.deepEqual(parsePerCpuCounts(real, [0, 1]).get("instructions:u"), { count: null, runningPct: 100, error: "CPU 1: <not counted>" });
+  // Each CPU's count is summed; the percentage is the lowest CPU's.
+  const two = (/** @type {string} */ second) => `CPU0,100,,instructions:k,app.scope,5000,100.00,,\n${second}`;
+  assert.deepEqual(parsePerCpuCounts(two("CPU1,23,,instructions:k,app.scope,7000,100.00,,"), [0, 1]).get("instructions:k"), { count: 123, runningPct: 100, error: null });
+  assert.deepEqual(parsePerCpuCounts(two("CPU1,23,,instructions:k,app.scope,7000,40.00,,"), [0, 1]).get("instructions:k"), { count: 123, runningPct: 40, error: null });
+  for (const [text, cpus, error] of [
+    // A CPU with a count and no running time, one with no row, one perf was not given, one twice.
+    [two("CPU1,0,,instructions:k,app.scope,0,100.00,,"), [0, 1], "CPU 1: no running time, so perf is not shown to have counted there"],
+    [two(""), [0, 1], "no row for CPU 1"],
+    [two("CPU2,23,,instructions:k,app.scope,7000,100.00,,"), [0, 1], "a row for CPU 2, which perf was not given"],
+    [two("CPU0,23,,instructions:k,app.scope,7000,100.00,,"), [0], "two rows for CPU 0"],
+    // Counts whose sum is not exact.
+    [two(`CPU1,${2 ** 53},,instructions:k,app.scope,7000,100.00,,`), [0, 1], "its CPUs' counts sum past 2^53 - 1"],
+  ]) assert.equal(parsePerCpuCounts(/** @type {string} */ (text), /** @type {number[]} */ (cpus)).get("instructions:k")?.error, error, String(text));
+  // A total (no CPU column) is not a count's row at all.
+  assert.equal(parsePerCpuCounts("123,,instructions:k,app.scope,7000,100.00,,", [1]).get("instructions:k"), undefined);
+  // The row a count keeps from such a CPU is none: the counter is unusable and named.
+  const row = countRow({ counts: parsePerCpuCounts(real.replaceAll("instructions:u", "instructions:k").replaceAll(",pt,", ",app.scope,"), [0, 1]), requests: 10, failed: 0 }, { counts: parsePerCpuCounts(real.replaceAll("instructions:u", "instructions:k"), [0, 1]), requests: 10, failed: 0 });
+  assert.equal(row.kernelPerRequest, null);
+  assert.equal(row.perfDiagnostics["instructions:k"], "CPU 1: <not counted>");
+});
+
+test("a count's CPUs are -C's list or every online CPU, and a count with none to read runs no load", async () => {
+  assert.deepEqual(selectedCpus(["-C", "1"], undefined), [1]);
+  assert.deepEqual(selectedCpus(["-C", "0,2-3,7"], undefined), [0, 2, 3, 7]);
+  assert.deepEqual(selectedCpus(["-a"], "0-3\n"), [0, 1, 2, 3]);
+  for (const [cpus, online] of [[["-a"], undefined], [["-a"], ""], [["-a"], "0-x"], [["-C", "3-1"], undefined], [["-C", "0-999999"], undefined], [["-C", "1", "-e", "x"], undefined]]) {
+    assert.throws(() => selectedCpus(cpus, online), /cannot tell which CPUs perf counts on|not -a or -C with a CPU list/, JSON.stringify([cpus, online]));
+  }
+  for (const expected of [undefined, {}, { cpus: [] }, { cpus: ["1"] }]) {
+    let ran = false;
+    await assert.rejects(measurePerfCounts(() => { ran = true; return {}; }, assert.fail, /** @type {any} */ (expected)), /not a list of CPU numbers/);
+    assert.equal(ran, false);
+  }
+});
+
+test("perf's acknowledgments are bound to its commands: one to each, in order, and no other", async () => {
+  // perf 6.1's "ack\n\0" for each command, however its bytes arrive.
+  const fine = acknowledgments(1000);
+  const enabled = fine.command();
+  fine.data("ac");
+  fine.data("k\n");
+  assert.equal(await enabled, "ack");
+  const disabled = fine.command();
+  fine.data("\0ack\n\0");
+  assert.equal(await disabled, "ack");
+  fine.end();
+  assert.equal(fine.error(), null);
+  // Two acknowledgments after enable and none after disable: a fault, whether they come together or apart.
+  for (const apart of [false, true]) {
+    const two = acknowledgments(50);
+    const first = two.command();
+    if (apart) { two.data("ack\n\0"); await new Promise((r) => setTimeout(r, 5)); two.data("ack\n\0"); } else two.data("ack\n\0ack\n\0");
+    assert.equal(await first, "ack");
+    assert.match(String(two.error()), /perf acknowledged 2 commands where it had been given 1/);
+    assert.equal(await two.command(), "fault");
+  }
+  // An acknowledgment before its command, or one too many after the last.
+  const early = acknowledgments(50);
+  early.data("ack\n\0");
+  assert.match(String(early.error()), /acknowledged 1 commands where it had been given 0/);
+  const late = acknowledgments(50);
+  const one = late.command();
+  late.data("ack\n\0");
+  assert.equal(await one, "ack");
+  late.data("ack\n\0");
+  late.end();
+  assert.match(String(late.error()), /acknowledged 2 commands where it had been given 1/);
+  // None within the bound, perf ending first, or anything else on the descriptor.
+  const silent = acknowledgments(30);
+  assert.equal(await silent.command(), "timeout");
+  const ended = acknowledgments(1000);
+  const waiting = ended.command();
+  ended.end();
+  assert.equal(await waiting, "closed");
+  assert.equal(ended.error(), null);
+  const other = acknowledgments(1000);
+  const asked = other.command();
+  other.data("nack\n");
+  assert.equal(await asked, "fault");
+  assert.match(String(other.error()), /perf wrote "nack" on its acknowledgment descriptor/);
+  const cut = acknowledgments(1000);
+  const cutAsked = cut.command();
+  cut.data("ac");
+  cut.end();
+  assert.equal(await cutAsked, "closed");
+  assert.match(String(cut.error()), /perf left "ac" on its acknowledgment descriptor/);
+  // One command at a time.
+  const busy = acknowledgments(30);
+  const pending = busy.command();
+  assert.throws(() => busy.command(), /still waiting/);
+  await pending;
+});
+
+test("the summary says which load each key's kernel instructions are from: a second load, the same load, or both across its runs", () => {
+  const here = import.meta.dirname;
+  const round = `kernel-load-test-${process.pid}-${Date.now()}`;
+  const dir = join(here, "results", round);
+  mkdirSync(dir);
+  try {
+    const run = (/** @type {boolean} */ second) => ({ requests: 5000, failed: 0, ...(second ? { kernelPass: { requests: 5000, failed: 0 } } : {}), userPerRequest: 75000, kernelPerRequest: 26000 });
+    writeFileSync(join(dir, "instructions.json"), JSON.stringify({ "corten/page": [run(true), run(true), run(true)], "corten/json": [run(false), run(false), run(false)], "corten/page/api": [run(false), run(true), run(true)] }));
+    const result = spawnSync(process.execPath, [join(here, "summarize.mjs"), round], { encoding: "utf8", windowsHide: true, timeout: 15_000, env: { ...process.env, BENCH_TIER: "defaults", BENCH_APPS: "corten" } });
+    assert.equal(result.status, 0, result.stderr);
+    const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+    assert.deepEqual(Object.fromEntries(Object.entries(summary.instructions).map(([k, v]) => [k, /** @type {any} */ (v).kernelLoad])), { "corten/page": "second", "corten/json": "same", "corten/page/api": "mixed" });
+    const lines = result.stdout.split("\n");
+    assert.ok(lines.some((l) => l.startsWith("| corten/page |") && l.includes("kernel over a second load")), result.stdout);
+    assert.ok(lines.some((l) => l.startsWith("| corten/json |") && l.includes("kernel over the same load") && !l.includes("second")), result.stdout);
+    assert.ok(lines.some((l) => l.startsWith("| corten/page/api |") && l.includes("kernel over the same load in some runs, a second in others")), result.stdout);
+    assert.ok(!result.stdout.includes("kernel over its second"), result.stdout);
+  } finally {
+    assert.equal(dirname(dir), join(here, "results"));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("count.mjs keeps instructions when optional perf events are unavailable", () => {
-  const main = pass([userInstructions, "<not supported>,,cycles:u,app.scope,0,100.00,", "<not counted>,,cycles:k,app.scope,0,100.00,"].join("\n"));
+  const main = pass([userInstructions, "CPU1,<not supported>,,cycles:u,app.scope,0,100.00,", "CPU1,<not counted>,,cycles:k,app.scope,0,100.00,"].join("\n"));
   assert.deepEqual(JSON.parse(JSON.stringify(countRow(main, pass(kernelInstructions)))), {
     requests: 10, failed: 0, kernelPass: { requests: 10, failed: 0 }, userPerRequest: 1235, kernelPerRequest: 123,
     userCyclesPerRequest: null, kernelCyclesPerRequest: null, userL1iMissesPerRequest: null,
     perfRunningPct: { "instructions:u": 100, "instructions:k": 100, "cycles:u": 100, "cycles:k": 100, "L1-icache-load-misses:u": null },
     perfDiagnostics: {
-      "cycles:u": "<not supported>", "cycles:k": "<not counted>", "L1-icache-load-misses:u": "no perf row",
+      "cycles:u": "CPU 1: <not supported>", "cycles:k": "CPU 1: <not counted>", "L1-icache-load-misses:u": "no perf row",
     },
   });
 });
@@ -423,12 +551,12 @@ function countSummary(count, failed = 0, checksFailed = 0) {
 
 test("count.mjs runs the main pass, then the kernel pass, and reads a pass's own events only", async () => {
   const calls = [];
-  const row = await measurePerfCounts((p, instructionsOnly) => {
+  const row = await measure((p, instructionsOnly) => {
     calls.push([p, instructionsOnly]);
     // A row of the other pass's event in a pass's output is not read from it.
     return p === "main"
-      ? { text: `${mainText()}\n999,,instructions:k,app.scope,60000,100.00,`, summary: countSummary(10) }
-      : { text: `${kernelInstructions}\n1,,cycles:u,app.scope,60000,100.00,`, summary: countSummary(10) };
+      ? { text: `${mainText()}\nCPU1,999,,instructions:k,app.scope,60000,100.00,`, summary: countSummary(10) }
+      : { text: `${kernelInstructions}\nCPU1,1,,cycles:u,app.scope,60000,100.00,`, summary: countSummary(10) };
   }, assert.fail);
   assert.deepEqual(calls, [["main", false], ["kernel", false]]);
   assert.equal(row.kernelPerRequest, 123);
@@ -436,13 +564,13 @@ test("count.mjs runs the main pass, then the kernel pass, and reads a pass's own
 });
 
 test("count.mjs records partial and missing optional coverage without reporting usable counts", async () => {
-  const row = await measurePerfCounts((p, instructionsOnly) => {
+  const row = await measure((p, instructionsOnly) => {
     assert.equal(instructionsOnly, false);
     return p === "kernel" ? { text: kernelInstructions, summary: countSummary(10) } : { text: [
       userInstructions,
-      "5678,,cycles:u,app.scope,60000,8.00,",
-      "1200,,cycles:k,app.scope,60000,100.00,",
-      "87,,L1-icache-load-misses:u,app.scope,60000,,",
+      "CPU1,5678,,cycles:u,app.scope,60000,8.00,",
+      "CPU1,1200,,cycles:k,app.scope,60000,100.00,",
+      "CPU1,87,,L1-icache-load-misses:u,app.scope,60000,,",
     ].join("\n"), summary: countSummary(10) };
   }, assert.fail);
   assert.equal(row.userCyclesPerRequest, null);
@@ -463,7 +591,7 @@ test("count.mjs retries partial user instruction coverage without optional event
     if (p === "kernel") return { text: kernelInstructions, summary: countSummary(10) };
     return { text: instructionsOnly ? userInstructions : partial, summary: countSummary(instructionsOnly ? 10 : 20) };
   };
-  const row = await measurePerfCounts(collect, (message) => warnings.push(message));
+  const row = await measure(collect, (message) => warnings.push(message));
   assert.deepEqual(calls, [["main", false], ["main", true], ["kernel", false]]);
   assert.equal(row.requests, 10);
   assert.equal(row.failed, 0);
@@ -474,7 +602,7 @@ test("count.mjs retries partial user instruction coverage without optional event
   assert.match(warnings[0], /instructions:u: perf ran 12\.5% .*retrying with instructions only/);
   const after = [];
   await assert.rejects(
-    measurePerfCounts((p, instructionsOnly) => { after.push([p, instructionsOnly]); return { text: instructionsOnly ? partial.split("\n")[1] : partial, summary: countSummary(10) }; }, () => {}),
+    measure((p, instructionsOnly) => { after.push([p, instructionsOnly]); return { text: instructionsOnly ? partial.split("\n")[1] : partial, summary: countSummary(10) }; }, () => {}),
     /instructions-only perf failed: instructions:u: perf ran 12\.5%/,
   );
   // A failed main pass leaves the kernel pass unrun.
@@ -485,7 +613,7 @@ test("count.mjs does not retry away failures in the first load", async () => {
   const partial = mainText().replace("60000,100.00", "60000,12.50");
   for (const [failed, checksFailed] of [[9, 9], [0, 2]]) {
     const attempts = [];
-    await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+    await assert.rejects(measure((p, instructionsOnly) => {
       attempts.push([p, instructionsOnly]);
       return {
         text: instructionsOnly ? userInstructions : partial,
@@ -505,7 +633,7 @@ test("count.mjs does not retry the kernel pass: an unusable kernel instructions 
     [{ text: "", error: "perf did not count the full load: exit 1", summary: countSummary(10, 3, 0) }, /kernel instructions' load had 3 HTTP request failures and 0 failed status checks/],
   ]) {
     const attempts = [];
-    await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+    await assert.rejects(measure((p, instructionsOnly) => {
       attempts.push([p, instructionsOnly]);
       return p === "main" ? { text: mainText(), summary: countSummary(10) } : kernel;
     }, assert.fail), error);
@@ -514,7 +642,7 @@ test("count.mjs does not retry the kernel pass: an unusable kernel instructions 
 });
 
 test("a count is returned only when both loads are whole: as many requests as the count makes, none failed in the kernel load, a status check a request, every total given", async () => {
-  const run = (/** @type {any} */ main, /** @type {any} */ kernel, expected = { requests: 10 }) => measurePerfCounts((p) => (p === "main" ? { text: mainText(), summary: main } : { text: kernelInstructions, summary: kernel }), assert.fail, expected);
+  const run = (/** @type {any} */ main, /** @type {any} */ kernel, expected = { requests: 10 }) => measure((p) => (p === "main" ? { text: mainText(), summary: main } : { text: kernelInstructions, summary: kernel }), assert.fail, expected);
   // Both whole: the row.
   assert.equal((await run(countSummary(10), countSummary(10))).kernelPerRequest, 123);
   for (const [main, kernel, why] of [
@@ -540,7 +668,7 @@ test("a first load that ran is whole before it is repeated: a counter error does
   // 4,999 requests, no failures, and user instructions crowded out: refused, not repeated.
   const partial = mainText().replace("60000,100.00", "60000,12.50");
   const attempts = [];
-  await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+  await assert.rejects(measure((p, instructionsOnly) => {
     attempts.push([p, instructionsOnly]);
     if (p === "kernel") return { text: kernelInstructions, summary: countSummary(5000) };
     return instructionsOnly ? { text: userInstructions, summary: countSummary(5000) } : { text: partial, summary: countSummary(4999) };
@@ -548,14 +676,14 @@ test("a first load that ran is whole before it is repeated: a counter error does
   assert.deepEqual(attempts, [["main", false]]);
   // A repeat that ran is whole too.
   const repeated = [];
-  await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+  await assert.rejects(measure((p, instructionsOnly) => {
     repeated.push([p, instructionsOnly]);
     return { text: instructionsOnly ? userInstructions : partial, summary: countSummary(instructionsOnly ? 4999 : 5000) };
   }, () => {}, { requests: 5000 }), /first load's repeat is not whole: 4999 requests, not 5000/);
   assert.deepEqual(repeated, [["main", false], ["main", true]]);
   // The control: a whole first load with the same counter error is repeated and kept.
   const kept = [];
-  const row = await measurePerfCounts((p, instructionsOnly) => {
+  const row = await measure((p, instructionsOnly) => {
     kept.push([p, instructionsOnly]);
     if (p === "kernel") return { text: kernelInstructions, summary: countSummary(5000) };
     return { text: instructionsOnly ? userInstructions : partial, summary: countSummary(5000) };
@@ -574,7 +702,7 @@ test("a perf not seen to end stops the count at once: no retry, no next pass, an
   ]) {
     const attempts = [];
     const warnings = [];
-    await assert.rejects(measurePerfCounts((p, instructionsOnly) => {
+    await assert.rejects(measure((p, instructionsOnly) => {
       attempts.push([p, instructionsOnly]);
       if (stuck(p, instructionsOnly)) return noAnswer;
       // The first try of the first load has unusable user instructions, so a repeat would follow.
@@ -585,7 +713,7 @@ test("a perf not seen to end stops the count at once: no retry, no next pass, an
   }
   // A collect that throws it (count.mjs's, whose perf did not exit even when killed) stops the count the same way.
   const thrown = [];
-  await assert.rejects(measurePerfCounts((p, i) => { thrown.push([p, i]); throw new UnconfirmedPerf("perf did not count the full load: no answer"); }, assert.fail), UnconfirmedPerf);
+  await assert.rejects(measure((p, i) => { thrown.push([p, i]); throw new UnconfirmedPerf("perf did not count the full load: no answer"); }, assert.fail), UnconfirmedPerf);
   assert.deepEqual(thrown, [["main", false]]);
 });
 
@@ -593,7 +721,7 @@ test("count.mjs falls back to user instructions when an optional event makes per
   for (const summary of [undefined, countSummary(0)]) {
     const attempts = [];
     const warnings = [];
-    const row = await measurePerfCounts((p, instructionsOnly) => {
+    const row = await measure((p, instructionsOnly) => {
       attempts.push([p, instructionsOnly]);
       if (p === "kernel") return { text: kernelInstructions, summary: countSummary(10) };
       return instructionsOnly
@@ -609,7 +737,7 @@ test("count.mjs falls back to user instructions when an optional event makes per
   }
   // A collect that says no load ran with no error of its own still fails that attempt, and is repeated.
   const attempts = [];
-  const row = await measurePerfCounts((p, instructionsOnly) => {
+  const row = await measure((p, instructionsOnly) => {
     attempts.push([p, instructionsOnly]);
     if (p === "kernel") return { text: kernelInstructions, summary: countSummary(10) };
     return instructionsOnly ? { text: userInstructions, summary: countSummary(10) } : { text: mainText(), ranLoad: false };
