@@ -167,7 +167,8 @@ const synthetic = (${syntheticDependencies.toString()})({
       assert.equal(source.split(entry).length, 2, "review refusal-recording seam");
       source = source.replace(entry, "async function syntheticProductionMain(") + `
 export async function productionMain(...args) {
-  const dispatch = ${JSON.stringify(dispatch ? { path: path.join(h.base, ...dispatch.path), cancel: dispatch.cancel } : undefined)};
+  const dispatch = ${JSON.stringify(dispatch ? { path: path.join(h.base, ...dispatch.path), cancel: dispatch.cancel,
+    quarantine: dispatch.quarantine, rewriteIntent: dispatch.rewriteIntent } : undefined)};
   if (dispatch) {
     const previous = args[1].interrupted;
     let afterIntent = 0;
@@ -175,7 +176,18 @@ export async function productionMain(...args) {
       const target = syntheticPath.join(syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], 'groups-r21', 'state.json');
       if (syntheticFs.existsSync(target) && JSON.parse(syntheticFs.readFileSync(target, 'utf8')).createIntentAt
           && ++afterIntent >= (dispatch.cancel || 1)) {
-        if (!syntheticFs.existsSync(dispatch.path)) syntheticFs.writeFileSync(dispatch.path, '{}', { flag: 'wx' });
+        if (dispatch.rewriteIntent && afterIntent === 1) {
+          const intent = JSON.parse(syntheticFs.readFileSync(dispatch.path, 'utf8'));
+          intent.approvalSha256 = '0'.repeat(64);
+          syntheticFs.writeFileSync(dispatch.path, JSON.stringify(intent));
+        } else if (!syntheticFs.existsSync(dispatch.path)) {
+          const contents = dispatch.quarantine ? JSON.stringify({
+            schema: 'benchmark-create-quarantine-witness/v1',
+            quarantineSha256: digest(syntheticFs.readFileSync(syntheticPath.join(syntheticPath.dirname(dispatch.path), 'create-quarantine.json'))),
+            dropletId: '123',
+          }) : '{}';
+          syntheticFs.writeFileSync(dispatch.path, contents, { flag: 'wx' });
+        }
       }
       return previous() || dispatch.cancel && syntheticFs.existsSync(dispatch.path);
     };
@@ -1181,12 +1193,15 @@ test("continuation appends authorized retries after no-create and retirement whi
 
 for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "external host sighting", "malformed name sighting", "malformed tags sighting",
   "oversized array sighting", "oversized tags sighting", "incomplete absence", "malformed absence",
-  "witnessed census", "absent census", "capacity", "historical ID"]) {
+  "witnessed census", "absent census", "capacity", "historical ID", "replacement absent", "replacement sighted", "replacement late sighting", "replacement intent changed"]) {
 test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
   const mixed = scenario === "historical ID";
   const external = scenario === "external host sighting";
-  const group = mixed ? "recoverable-live" : "json-api", other = "hardening", round = "r19", next = "r21",
-    p = fixture(t, "success", other), slot = path.join(p.h.base, group);
+  const replacement = scenario.startsWith("replacement ");
+  const group = mixed ? "recoverable-live" : replacement ? "mixed-production" : "json-api", other = "hardening", round = "r19", next = "r21",
+    dispatch = scenario === "replacement late sighting" ? { path: [group, "receipts", "create-quarantine-witness.json"], quarantine: true }
+      : scenario === "replacement intent changed" ? { path: [`${group}--${next}`, "launch-intent.json"], rewriteIntent: true } : undefined,
+    p = fixture(t, "success", replacement ? group : other, dispatch), slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("no collected evidence"); };
   // This control exercises the admission and approval bytes, not Linux actor
@@ -1202,8 +1217,8 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
   }
   if (scenario === "witnessed census") retainCatalogFixture(p);
   const args = (which, name) => [which, "--continuation-root", p.h.base, "--group", name];
-  const prepare = (which, name) => fleetMain([...args(which, name), "--prepare", "--commit", commit,
-    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const prepare = (which, name, extra = []) => fleetMain([...args(which, name), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context, ...extra], p.deps);
   assert.equal(await prepare(round, group), 3);
   assert.equal(await fleetMain([...args(round, group), "--detach", "--print-approval"], p.deps), 3);
   const approval = p.output.at(-1).approvalSha256, saved = readFleet(slot, round), fleet = saved.manifest;
@@ -1243,6 +1258,42 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
   assert.ok(!report.eligibleToRun.includes(group));
   assert.equal(report.groups.find((row) => row.group === group).outcome, "quarantined-create");
   await assert.rejects(prepare("r20", group), /never allocate again/);
+  if (replacement) {
+    const quarantineSha256 = fileHash(record), replacementSlot = `${group}--${next}`;
+    const eventsBeforePrepare = p.events();
+    await assert.rejects(prepare(next, group, ["--replace-quarantined-create", "0".repeat(64)]), /matching create quarantine/);
+    assert.deepEqual(p.events(), eventsBeforePrepare);
+    assert.ok(!fs.existsSync(path.join(p.h.base, replacementSlot)));
+    assert.equal(await prepare(next, group, ["--replace-quarantined-create", quarantineSha256]), 3);
+    const selected = readFleet(path.join(p.h.base, replacementSlot), next).manifest;
+    assert.notEqual(selected.jobs[0].token, fleet.jobs[0].token);
+    assert.equal(await fleetMain([...args(next, group), "--detach", "--print-approval"], p.deps), 3);
+    const { approvalSha256, subject } = p.output.at(-1);
+    assert.deepEqual(subject.continuation.quarantinedCreates.map(({ sha256 }) => sha256), [quarantineSha256]);
+    if (scenario === "replacement sighted") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 123, name: "renamed", tags: [pending.tag] }]));
+    const code = await fleetMain([...args(next, group), "--detach", "--approve-reviewed-merged-ready", approvalSha256], p.deps);
+    assert.ok(fs.existsSync(path.join(p.h.base, replacementSlot, group, "groups-r21", "state.json")), JSON.stringify(p.refusals()));
+    const state = p.saved(path.join(replacementSlot, group));
+    const events = p.events(), posts = events.filter((row) => row.method === "POST");
+    assert.ok(!events.some((row) => row.method === "DELETE"));
+    if (scenario === "replacement absent") {
+      assert.equal(code, 3); assert.equal(posts.length, 1); assert.ok(state.createIntentAt);
+      assert.equal(treeHash(slot), sealed);
+    } else {
+      assert.equal(posts.length, 0); assert.equal(code, 2); assert.equal(state.createIntentAt, undefined);
+      assert.equal(state.status, "reserved");
+      if (scenario === "replacement intent changed") {
+        const changed = JSON.parse(fs.readFileSync(path.join(p.h.base, replacementSlot, "launch-intent.json")));
+        assert.equal(changed.approvalSha256, "0".repeat(64));
+        assert.equal(treeHash(slot), sealed);
+      } else {
+        const witness = JSON.parse(fs.readFileSync(path.join(slot, "receipts", "create-quarantine-witness.json")));
+        assert.deepEqual(witness, { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256, dropletId: "123" });
+      }
+      assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);
+    }
+    return;
+  }
   assert.equal(await prepare(next, other), 3);
   const preview = await fleetMain([...args(next, other), "--detach", "--print-approval"], p.deps);
   assert.equal(preview, 3);

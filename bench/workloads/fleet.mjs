@@ -13,7 +13,7 @@ import { controllerPaths, productionPlan, productionSignals } from "./cloud-prod
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckCollectedGroup, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
+  recheckCollectedGroup, replacementQuarantine, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 import { acknowledgedBootstrapSeal } from "./cloud-control-runtime.mjs";
@@ -36,7 +36,7 @@ export function parseFleetArgs(args) {
   const o = { round: args[0] }, seen = new Set();
   const values = { "--fleet-root": "root", "--continuation-root": "continuationRoot", "--group": "group", "--commit": "commit",
     "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval",
-    "--load-layout": "loadLayout" };
+    "--load-layout": "loadLayout", "--replace-quarantined-create": "replacesQuarantineSha256" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
     if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval", "--offline-handoff"].includes(flag)) o[flag.slice(2)] = true;
@@ -57,6 +57,10 @@ export function parseFleetArgs(args) {
   // The opted-in layout is saved in the fleet at preparation; nothing later selects it.
   if (o.loadLayout !== undefined) assert.ok(o.prepare && o.continuationRoot
     && jsonFleetPlacementFor(o.group, o.loadLayout), "fleet-load-layout");
+  if (o.replacesQuarantineSha256 !== undefined) {
+    assert.ok(o.prepare && o.continuationRoot, "create quarantine replacement must be selected at single-group preparation");
+    full(o.replacesQuarantineSha256, /[a-f0-9]{64}/, "create quarantine replacement digest");
+  }
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -365,7 +369,11 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     if (options.prepare) {
       if (options["offline-handoff"]) assert.ok(!continuation.subject.peers?.length, "offline handoff requires no live peer");
       const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
-      assert.ok(row.outcome === "missing" || row.retryable || superseding, "group already reserved; never allocate again");
+      const quarantined = continuation.subject.quarantinedCreates ?? [];
+      const replacement = replacementQuarantine(quarantined, options.group, options.replacesQuarantineSha256);
+      const replacesLatest = replacement && slot?.root === replacement.root && row.outcome === "quarantined-create";
+      assert.ok(row.outcome === "missing" || row.retryable || superseding || replacesLatest, "group already reserved; never allocate again");
+      assert.ok(replacement || quarantined.every((earlier) => earlier.group !== options.group), "the group's create quarantine must be pinned");
       requireSetupRetryCommit(row.attempts, options.commit);
       if (slot) {
         assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
@@ -437,7 +445,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
       const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo,
-        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}), ...(options.loadLayout ? { loadLayout: options.loadLayout } : {}) };
+        ...(options["offline-handoff"] ? { offlineHandoff: true } : {}), ...(options.loadLayout ? { loadLayout: options.loadLayout } : {}),
+        ...(options.replacesQuarantineSha256 ? { replacesQuarantineSha256: options.replacesQuarantineSha256 } : {}) };
       const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group,
         ...(single?.loadLayout ? { loadLayout: single.loadLayout } : {}) });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
