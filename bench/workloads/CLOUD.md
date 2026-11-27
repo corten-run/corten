@@ -1465,8 +1465,18 @@ The v1, unused and pinned unused receipts keep their exclusive direct writes.
 
 The bytes this process wrote, not the file, are the authority for the DELETE.
 After publication the receipt is read back and must match that digest before
-the intent is saved. After the intent, every retirement kind (unused, pinned
-unused and failed-setup v1, v2 and v3) checks, as this process left them, the
+the intent is saved. Immediately before the intent the saved reservation must
+also still be, byte for byte, the one this process last left (for a v2 or v3
+receipt, the state that records its digest). For a drain proof that check follows
+the DELETE's account preflight, so a change made during that read, even to the
+recorded digest alone, refuses with `saved reservation changed before the
+deletion intent; preserve host` and is kept as made, rather than overwritten by
+the intent; no intent is saved and no DELETE is sent. The retirement is then
+verified, and its archive and extraction pinned (below), before the intent is
+saved, so evidence that changed by then refuses with no intent and leaves the
+receipt and its digest for the next collect, which recovers them on a fresh
+proof once the evidence matches again. After the intent, every retirement kind
+(unused, pinned unused and failed-setup v1, v2 and v3) checks, as this process left them, the
 receipt, the saved reservation (`state.json`, byte for byte, so including its
 retirement digest), for a v2 or v3 receipt the archived control custody its proof
 was built from (the inventory and bytes of the evidence's `control/` folder,
@@ -1481,9 +1491,9 @@ digest, receipt, history copy and intent, so a lock missing or replaced at any o
 those points refuses before the next write; replaced during that read, nothing is
 saved and no DELETE is sent. Those other inputs are `results.tgz` and the
 whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
-and `control/`). They are pinned without rereading them: the verification after
-the intent hashes each, recording `results.tgz`'s file identity (device, inode,
-size, mode, link count, birth, modification and change times) around its hash and
+and `control/`). They are pinned without rereading them: the verification just
+before the intent hashes each, recording `results.tgz`'s file identity (device,
+inode, size, mode, link count, birth, modification and change times) around its hash and
 every tree entry's identity in the same walk, and the dispatch check compares only
 those identities. Nothing else in the state root is pinned; the replay verifier
 reads nothing else. The check runs after the DELETE's account
@@ -1510,6 +1520,15 @@ interrupted receipt that differs from its recorded digest. Edited after the
 intent, it refuses with the same message before the DELETE is sent, and a later
 collect refuses with `retirement evidence changed`. Neither sends a DELETE; the
 host is handled by the operator cleanup below.
+
+The exact absence read after the DELETE is a provider read too, so `destroyedAt`
+is saved only after the lock this operation holds and the saved reservation (the
+intent state it wrote) are checked again. A lock missing or replaced during that
+read refuses with `operation.lock changed; preserve custody` and keeps the
+replacement; a changed reservation refuses with `saved retirement reservation
+changed; preserve host`. Either leaves the intent without `destroyedAt`, and a
+later collect under its own lock verifies the receipt, checks exact absence and
+sends no second DELETE.
 
 The drain proof is narrow. It can settle only a setup job whose host shows no
 Docker socket or daemon at query time (in practice one that failed before

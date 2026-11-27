@@ -460,10 +460,16 @@ for (const cancelAtProof of [false, true]) test(cancelAtProof
 });
 
 // Wraps node:fs functions for the rest of the test; the controller's named imports see them.
+// The restore runs once, from its own hook or from restoreFs(t), whichever comes first, so a
+// failing earlier hook (the Python fixture's exit check) cannot leave the wrappers installed.
+const fsRestores = new WeakMap();
+const restoreFs = (t) => { for (const restore of fsRestores.get(t) ?? []) restore(); };
 const hookFs = (t, wrappers) => {
   const mocks = Object.entries(wrappers).map(([name, wrap]) => t.mock.method(fs, name, wrap(fs[name])));
   syncBuiltinESMExports();
-  t.after(() => { for (const m of mocks) m.mock.restore(); syncBuiltinESMExports(); });
+  const restore = () => { if (!mocks.length) return; for (const m of mocks.splice(0)) m.mock.restore(); syncBuiltinESMExports(); };
+  fsRestores.set(t, [...fsRestores.get(t) ?? [], restore]);
+  t.after(restore);
 };
 // The first exclusive write of a file whose name matches is torn: 80 bytes, then an error.
 const tearWrite = (t, pattern) => {
@@ -490,7 +496,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished",
   "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn",
   "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch",
-  "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read"]) test({
+  "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read",
+  "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -520,6 +527,9 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-at-engine": "a receipt edited at the in-process provider engine's checkpoint refuses there and sends no DELETE",
   "engine-unchanged": "an unchanged receipt passes the provider engine's guard and sends exactly one DELETE",
   "lock-replaced-at-read": "an operation lock replaced during the retirement's exact host read refuses with no digest, receipt, intent or DELETE",
+  "state-edited-at-preflight": "a saved digest edited during the DELETE's account preflight refuses before the intent would overwrite it, and sends no DELETE",
+  "archive-edited-at-preflight": "a byte appended to results.tgz during the DELETE's account preflight refuses with no intent, and once restored a restart deletes once on a fresh proof",
+  "lock-replaced-at-absence": "an operation lock replaced during the absence read after the DELETE writes no destroyedAt, and a later collect confirms absence with no second DELETE",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -529,10 +539,14 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   const lines = createInterface({ input: kernel.stdout })[Symbol.asyncIterator]();
   let stderr = ""; kernel.stderr.on("data", (part) => { stderr = (stderr + part).slice(-4096); });
   const closed = new Promise((resolve) => { kernel.on("error", (e) => resolve(String(e))); kernel.on("close", resolve); });
-  t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
+  t.after(async () => {
+    try { kernel.stdin.end(); assert.equal(await closed, 0, stderr); }
+    finally { restoreFs(t); }
+  });
   const token = fleet.jobs[1].token;
   kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource, drainSource: setupDrainSource }) + "\n");
   let failed, queries = 0, offset = 0, stall, stalled = false, deleteExpiry, editAtPreflight = false, edited, replacedAtRead;
+  let changedAtPreflight, replacedAtAbsence;
   const receipt = join(h.local, "failed-setup-host.json"), lockReplacement = `${JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z" })}\n`;
   const editReceipt = () => {
     const bytes = readFileSync(receipt), record = JSON.parse(bytes); record.startedAtMs -= 1000;
@@ -545,6 +559,22 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
       const preflight = binary === "doctl" && args[0] === "account" && existsSync(receipt);
       if (stall && !stalled && preflight) { stalled = true; offset += stall; }
       if (editAtPreflight && !edited && preflight) editReceipt();
+      if (preflight && !changedAtPreflight && mode === "state-edited-at-preflight") {
+        // Only the recorded digest changes; the receipt and everything it names stay.
+        const path = join(h.local, "state.json"), s = h.saved();
+        changedAtPreflight = readFileSync(path); s.pendingRetirement.evidenceSha256 = "0".repeat(64);
+        writeFileSync(path, `${JSON.stringify(s, null, 2)}\n`);
+      }
+      if (preflight && !changedAtPreflight && mode === "archive-edited-at-preflight") {
+        const tgz = join(h.local, "results.tgz");
+        changedAtPreflight = readFileSync(tgz); appendFileSync(tgz, Buffer.from([0]));
+      }
+      // After the DELETE, the next exact host read is its absence confirmation.
+      if (mode === "lock-replaced-at-absence" && !replacedAtAbsence && h.deletes === 1 && binary === "doctl"
+        && args[0] === "compute" && args[2] === "get") {
+        const path = join(h.local, "operation.lock");
+        replacedAtAbsence = readFileSync(path); unlinkSync(path); writeFileSync(path, lockReplacement);
+      }
       // The first exact host read after the drain query is the retirement's own ownership read.
       if (mode === "lock-replaced-at-read" && !replacedAtRead && queries === 1 && binary === "doctl"
         && args[0] === "compute" && args[1] === "droplet" && args[2] === "get" && !existsSync(receipt)) {
@@ -800,6 +830,54 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(existsSync(receipt), false); assert.ok(!readdirSync(h.local).some((name) => name.startsWith("failed-setup-host")));
     assert.ok(!readdirSync(h.local).some((name) => /^state\.json\..*tmp$/.test(name)));
     assert.equal(readFileSync(lock, "utf8"), lockReplacement, "the replacement lock is kept for its owner");
+    return;
+  }
+  if (mode === "state-edited-at-preflight") {
+    await assert.rejects(h.task({ run }).collect(), /saved reservation changed before the deletion intent; preserve host/);
+    const saved = h.saved(), current = readFileSync(receipt);
+    assert.ok(changedAtPreflight); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The change stays as it was made: no intent was saved over it.
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: "0".repeat(64) });
+    assert.equal(JSON.parse(changedAtPreflight).pendingRetirement.evidenceSha256, digest(current));
+    // The receipt no longer matches the recorded digest, so a restart refuses it as well.
+    await assert.rejects(h.task({ run }).collect(), /interrupted retirement receipt differs from its recorded digest; preserve host/);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0); assert.equal(h.saved().deletionIntentAt, undefined);
+    return;
+  }
+  if (mode === "archive-edited-at-preflight") {
+    await assert.rejects(h.task({ run }).collect(), /archive changed; preserve host/);
+    const saved = h.saved(), old = readFileSync(receipt);
+    assert.ok(changedAtPreflight); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // The evidence is verified before the intent, so only the receipt and its digest remain.
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) }); assert.equal(existsSync(lock), false);
+    // With the archive restored, a restart keeps the old receipt and deletes once on a fresh proof.
+    writeFileSync(join(h.local, "results.tgz"), changedAtPreflight);
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved();
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(readFileSync(join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`)).equals(old));
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
+  if (mode === "lock-replaced-at-absence") {
+    await assert.rejects(h.task({ run }).collect(), (error) => /operation\.lock was replaced during this operation; the replacement is kept/.test(error.message)
+      && /operation\.lock changed; preserve custody/.test(error.cause?.message));
+    const saved = h.saved();
+    assert.ok(replacedAtAbsence); assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    assert.equal(saved.status, "retired"); assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
+    assert.equal(readFileSync(lock, "utf8"), lockReplacement, "the replacement lock is kept for its owner");
+    // While the replacement holds custody nothing runs; once it is gone, a collect confirms
+    // absence under its own lock and sends no second DELETE.
+    await assert.rejects(h.task({ run }).collect());
+    assert.equal(deletesSent(), 1); assert.equal(h.saved().destroyedAt, undefined);
+    unlinkSync(lock);
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved();
+    assert.ok(s.destroyedAt); assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }
   if (mode === "pending-monitor") {

@@ -1021,6 +1021,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // The provider read awaits, so the lock is checked again after it and before each
     // publication below: a lock replaced during the read refuses with nothing saved.
     await own(); check(); held.own();
+    // The saved reservation as this process last left it; the intent is saved only over these bytes.
+    let lastSaved = regular(statePath, 1024 * 1024);
     if (pinned) requireUnusedBootstrapCustody();
     requireFreshProof();
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
@@ -1058,7 +1060,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // publishCreateErrored, it goes through its own fresh exclusive stage, so a save torn
     // here leaves an unread stage rather than a state.json.tmp that blocks the next collect.
     const written = digest(bytes);
-    if (recorded) { check(); held.own(); state.pendingRetirement = { kind, evidenceSha256: written }; writeState(state, renameSync, "pending-retirement"); }
+    if (recorded) {
+      check(); held.own(); state.pendingRetirement = { kind, evidenceSha256: written }; writeState(state, renameSync, "pending-retirement");
+      lastSaved = Buffer.from(stateBytes(state));
+    }
     held.own(); (recorded ? durableNew : durable)(path, bytes);
     if (bounded) requireFreshProof();
     // The bytes this process wrote, not the file, are the authority: the published receipt
@@ -1071,9 +1076,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     let savedState;
     const publishIntent = () => {
       requirePublished(); held.own();
-      delete state.pendingRetirement;
-      Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() }); save();
-      verifyRetirement(pins);
+      // The saved reservation must still be the one this process last left: a drain proof's
+      // intent follows the DELETE's account preflight, which awaits, and the intent save
+      // would otherwise overwrite a change made during it and then guard against itself.
+      assert.ok(regular(statePath, 1024 * 1024).equals(lastSaved),
+        "saved reservation changed before the deletion intent; preserve host");
+      // The retirement is verified, and its archive and extraction pinned, before the intent
+      // is saved, so evidence that changed leaves the receipt and its digest with no intent,
+      // which the next collect recovers on a fresh proof.
+      const prior = state, intended = { ...prior, status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() };
+      delete intended.pendingRetirement;
+      state = intended;
+      try { verifyRetirement(pins); } catch (error) { state = prior; throw error; }
+      save();
       savedState = Buffer.from(stateBytes(state));
     };
     // Everything the DELETE relies on, as this process left it: the receipt, the saved
@@ -1112,6 +1127,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await execute("doctl", deletion, 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);
     }
     await confirmDeleted();
+    // The absence read awaits too: destroyedAt is published only while this operation still
+    // holds its lock and the saved reservation is still the intent it wrote.
+    held.own();
+    assert.ok(regular(statePath, 1024 * 1024).equals(savedState), "saved retirement reservation changed; preserve host");
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };
   const retireUnused = async () => {

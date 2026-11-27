@@ -30,6 +30,26 @@ test("collect retires a proved unused owned allocation without fabricating bench
   assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1, "a later collection only observes absence");
 });
 
+test("an operation lock replaced during the absence read after an unused retirement's DELETE writes no destroyedAt", async (t) => {
+  const h = harness(t, { missingUnit: true }); h.seed(); h.change((s) => { s.status = "preparing"; });
+  const lock = join(h.local, "operation.lock"), replacement = `${JSON.stringify({ pid: 1, at: "2026-01-01T00:00:00.000Z" })}\n`;
+  let replaced = false;
+  // After the DELETE, the next exact host read is its absence confirmation.
+  h.flags.hook = (binary, args) => {
+    if (!replaced && h.deletes === 1 && binary === "doctl" && args[2] === "get") { replaced = true; unlinkSync(lock); writeFileSync(lock, replacement); }
+  };
+  await assert.rejects(h.task().collect(), (error) => /operation\.lock was replaced during this operation; the replacement is kept/.test(error.message)
+    && /operation\.lock changed; preserve custody/.test(error.cause?.message));
+  const saved = h.saved();
+  assert.ok(replaced); assert.equal(h.deletes, 1); assert.equal(saved.status, "retired");
+  assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
+  assert.equal(readFileSync(lock, "utf8"), replacement, "the replacement lock is kept for its owner");
+  // Once the replacement is gone, a collect confirms absence under its own lock and sends nothing.
+  h.flags.hook = undefined; unlinkSync(lock);
+  assert.equal(await h.task().collect(), 1);
+  assert.ok(h.saved().destroyedAt); assert.equal(h.deletes, 1);
+});
+
 test("an allocated but never provisioned supervised host can be retired only with fresh unused proof", async (t) => {
   for (const valid of [true, false]) {
     const h = harness(t, { createRejected: true, missingUnit: true, ...(!valid ? { unusedProof: {} } : {}) });
