@@ -1097,7 +1097,9 @@ browser without JavaScript, a data client) is the same submission: the app answe
 it did the first time, and the user sees that and can send the change. A `data-patch` form's
 change made while its write is out waits for the answer instead, and goes under the new key
 (below). The key is the app's to store, next to the write (Corten keeps
-no store); `corten_cluster::begin` takes it as its idempotency key. A field that is not a UUID v4
+no store); `corten_cluster::begin` takes it as its idempotency key. Its keys are unique across the
+whole cluster store, not per feed: a key a write to one feed used is refused on another
+(`corten_cluster::IdempotencyKeyReused`, which the app answers with a 422), never replayed there. A field that is not a UUID v4
 (in either case; it is kept lowercase) is a 422 that names it. Make the field
 `Option<SubmitKey>` when data clients post the same form without one.
 
@@ -1143,7 +1145,9 @@ a retry, a malformed key is refused before the tool runs, and the tool gets a `S
 has no key field of its own, so the key is an argument, and a tool whose input requires one is
 marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
 when it stores it. Two differences from a form's key: the agent makes it, not the server,
-so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+so store it per caller and tool (an agent may reuse a key another sent), making it unique to that
+scope yourself, for example by prefixing the caller and tool to it, since a store such as
+`corten_cluster::begin`'s keeps one scope for every key; and answer a repeat
 whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
 and leave the field without a doc comment, which would replace the retry instruction in its
 description. A write that is idempotent already ("set the quantity to 5") needs no key and is

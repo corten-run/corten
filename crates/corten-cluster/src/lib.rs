@@ -95,6 +95,33 @@ impl std::fmt::Display for InvalidFeedKey {
 
 impl std::error::Error for InvalidFeedKey {}
 
+/// An idempotency key that already belongs to a write to another feed, refused by [`begin`]: the
+/// write is not made and is not answered as a replay. A key's scope is the whole cluster store,
+/// so a key two scopes could both send (two tools, two callers) needs the app to make it unique,
+/// for example by prefixing it. Answer it as a refusal, a 422 or 409, not a replay or a 503. It
+/// does not say which feed holds the key. It arrives inside [`Error`]: test for it with
+/// `error.is::<IdempotencyKeyReused>()`.
+///
+/// ```
+/// # async fn run(pool: sqlx::PgPool) -> Result<(), corten_cluster::Error> {
+/// if let Err(error) = corten_cluster::begin(&pool, "sellers.42", Some("7f9c0d3e")).await {
+///     if error.is::<corten_cluster::IdempotencyKeyReused>() {
+///         // Another feed's write already used "7f9c0d3e": answer a 422.
+///     }
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdempotencyKeyReused;
+
+impl std::fmt::Display for IdempotencyKeyReused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "corten-cluster: this idempotency key was already used for a write to another feed")
+    }
+}
+
+impl std::error::Error for IdempotencyKeyReused {}
+
 /// Corten's literal subject policy follows the documented token and wildcard rules, also
 /// excluding control characters (Postgres cannot store NUL) and bounding the byte length.
 fn literal(name: &str, max: usize) -> bool {

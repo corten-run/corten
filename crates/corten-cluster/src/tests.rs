@@ -1564,6 +1564,34 @@ async fn an_idempotency_key_commits_once_even_when_retries_race() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_idempotency_key_used_on_one_feed_is_refused_on_another() {
+    let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let (a, b) = (key("idema"), key("idemb"));
+    new_feed(&pool, &a).await;
+    new_feed(&pool, &b).await;
+    // A client's key names no feed.
+    let idem = key("intent");
+    let first = set(&pool, &a, 1, Some(&idem)).await;
+    assert_eq!((first.seq, first.replayed), (Some(1), false));
+    match begin(&pool, &b, Some(&idem)).await {
+        Err(error) => {
+            assert!(error.is::<IdempotencyKeyReused>(), "{error}");
+            assert!(!error.to_string().contains(&a), "the refusal names the other feed: {error}");
+        }
+        Ok(Begin::Done(written)) => panic!("the write to {b} was answered with {a}'s: {written:?}"),
+        Ok(Begin::New(_)) => panic!("a write to {b} began with a key {a} already used"),
+    }
+    assert_eq!(seq(&pool, &b).await.unwrap(), Some(0), "nothing was written to {b}");
+    let outbox: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM corten_outbox WHERE feed = $1").bind(&b).fetch_one(&pool).await.unwrap();
+    assert_eq!(outbox, 0);
+    let retry = set(&pool, &a, 99, Some(&idem)).await;
+    assert_eq!((retry.seq, retry.replayed), (Some(1), true), "a repeat on {a} is still its replay");
+    assert_eq!(seq(&pool, &a).await.unwrap(), Some(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_cluster_client_with_a_root_ca_requires_tls() {
     let Ok(tls) = std::env::var("CORTEN_TEST_NATS_TLS_URL") else {
         return eprintln!("skipped: set CORTEN_TEST_NATS_TLS_URL and CORTEN_TEST_NATS_CA_FILE for a TLS JetStream broker");
