@@ -116,9 +116,21 @@ try {
     addEventListener("click", (e) => e.target instanceof Element && e.target.closest("thead a") && cancelled.push(e.defaultPrevented));
   });
   const cancelled = () => page.evaluate(() => /** @type {boolean[]} */ (/** @type {any} */ (window).__cancelled.splice(0)));
+  // The Filter button stays drawn with JavaScript (a page whose grid module did not load needs it,
+  // below); with the module, it and Enter keep the page, the rows already filtered as typed.
   await page.press("input[type=search]", "Enter");
+  await page.fill("input[type=search]", "tidebreak");
+  const typed = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
+  const drawnWithScripts = await page.isVisible("form[role=search] button");
+  if (drawnWithScripts) await page.click("form[role=search] button");
   const submitKept = await cancelled();
-  check("with JavaScript the Filter button is not drawn, and Enter keeps the page", !(await page.isVisible("form[role=search] button")) && submitKept.join() === "true", submitKept.join());
+  const stayed = { url: page.url(), shown: await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length) };
+  check(
+    "with JavaScript Enter and the Filter button keep the page, the rows filtered in place",
+    drawnWithScripts && submitKept.join() === "true,true" && !new URL(stayed.url).searchParams.has("q") && stayed.shown === typed && typed === inSet,
+    `button drawn: ${drawnWithScripts}; ${submitKept.join()}; ${stayed.url}; ${stayed.shown} of ${typed}`,
+  );
+  await page.fill("input[type=search]", "");
   check("on a desktop the set and condition are their own columns, not repeated under the name", await page.isHidden("tbody tr td:nth-child(2) small"));
 
   await time("sort by price (moves every row)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
@@ -537,9 +549,51 @@ try {
 
   // Without JavaScript, in each engine (the `scripting` media feature is the engine's): the filter
   // is a GET form the server answers, with its Filter button drawn, and a header is a link to the
-  // grid sorted by its column, the filter kept.
+  // grid sorted by its column, the filter kept. And with JavaScript but the grid's module never
+  // loading (every request for it, the runtime's retries too, aborted): `scripting` still matches
+  // `enabled`, so the Filter button must not depend on it to be drawn.
   for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
     const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const blockedContext = await (own ?? browser).newContext();
+    const blockedCase = `${name} with JavaScript and the grid's module not loading: the Filter button is drawn and sends the GET the server filters`;
+    try {
+      const blocked = await blockedContext.newPage();
+      let aborted = 0;
+      await blocked.route((url) => url.pathname.endsWith("/inventory_grid.js"), (route) => (aborted += 1, route.abort()));
+      await blocked.goto(base);
+      // The runtime ran (it is a module of its own), and it found no grid module to hand events to.
+      const ran = await blocked.evaluate(async () => {
+        const { ready } = await import("corten");
+        await ready;
+        return document.querySelectorAll('script[type="module"][src$="/inventory_grid.js"]').length;
+      });
+      const button = "form[role=search] button";
+      await blocked.fill("input[type=search]", "tidebreak");
+      // Typing filtered nothing: no grid handler ran.
+      const before = await blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
+      const all = await blocked.$$eval("tbody tr", (rows) => rows.length);
+      if (!(await blocked.isVisible(button))) {
+        check(blockedCase, false, `aborted ${aborted}; the Filter button is not drawn`);
+      } else {
+        // The runtime still sends a GET form itself (a client navigation), so the answer may be a
+        // fetch rather than a document load: either is the server's filter.
+        const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 15_000 });
+        const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=tidebreak/), blocked.click(button)]);
+        // A client navigation draws the answer after its response; give it a moment, then read it.
+        await blocked.waitForFunction(() => Array.from(document.querySelectorAll("tbody tr:not([hidden])"), (r) => /** @type {HTMLTableRowElement} */ (r).cells[2].textContent).every((s) => s === "Tidebreak"), null, { timeout: 5_000 }).catch(() => {});
+        const sets = await blocked.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => r.cells[2].textContent));
+        check(
+          blockedCase,
+          aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 &&
+            new URL(blocked.url()).searchParams.get("q") === "tidebreak" && sets.length > 0 && sets.every((s) => s === "Tidebreak"),
+          `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ${sets.length} rows; ${blocked.url()}`,
+        );
+      }
+    } catch (error) {
+      check(blockedCase, false, String(error));
+    } finally {
+      await blockedContext.close();
+    }
     const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
     try {
       const plain = await plainContext.newPage();
