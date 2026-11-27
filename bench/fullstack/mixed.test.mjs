@@ -121,47 +121,84 @@ test("mixed-load.js sends and counts the kinds and classes this module reads", (
   assert.ok(script.includes(`const classes = ${JSON.stringify(classes).replaceAll(",", ", ")};`), "mixed-load.js's classes");
 });
 
-test("the item API answers a late item as the item, after SLOW_MS, and an unknown one at once", async () => {
+// A server that waits some other way, or forever, fails at the timeout, which ends it and its requests.
+test("the item API answers a late item as the item, after SLOW_MS, and an unknown one at once", { timeout: 10_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "mixed-api-"));
-  const items = join(dir, "items.json");
-  writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" } }));
-  // Each timer the server sets, written to its output before it is set: the late item's wait is
-  // read from the server itself, so no answer is held to a time a busy machine can cross.
-  const timers = join(dir, "timers.mjs");
-  writeFileSync(timers, 'const set = globalThis.setTimeout; globalThis.setTimeout = (f, ms, ...a) => { process.stdout.write(`timer ${ms}\\n`); return set(f, ms, ...a); };\n');
-  // A port free a moment ago, for the server to listen on.
-  const port = await new Promise((done) => {
-    const probe = createServer().listen(0, "127.0.0.1", () => {
-      const { port } = /** @type {import("node:net").AddressInfo} */ (probe.address());
-      probe.close(() => done(port));
-    });
-  });
-  const server = spawn(process.execPath, ["--import", pathToFileURL(timers).href, fileURLToPath(new URL("./item-api/server.mjs", import.meta.url)), items, String(port), "1"], { env: { ...process.env, SLOW_MS: "300" }, stdio: ["ignore", "pipe", "inherit"] });
-  let output = "";
-  server.stdout.setEncoding("utf8").on("data", (chunk) => (output += chunk));
-  /** The waits the server has set, in the order it set them. */
-  const waits = () => [...output.matchAll(/^timer (.*)$/gm)].map((m) => m[1]);
+  /** @type {import("node:child_process").ChildProcess | undefined} */
+  let server;
   try {
-    // It says how many items it serves once it listens.
-    while (!/items on/.test(output)) await new Promise((more) => server.stdout.once("data", more));
+    const items = join(dir, "items.json");
+    writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" } }));
+    // Each timer the server sets is written to its output and held until the test writes
+    // "release" to its input, so which answer waits, and for what, is read from the server, and
+    // no answer is held to a time a busy machine can cross.
+    const timers = join(dir, "timers.mjs");
+    writeFileSync(
+      timers,
+      [
+        "const held = [];",
+        "globalThis.setTimeout = (f, ms, ...a) => { held.push(() => f(...a)); process.stdout.write(`timer ${ms}\\n`); return held.length; };",
+        'process.stdin.setEncoding("utf8").on("data", (line) => { if (line.includes("release")) for (const f of held.splice(0)) f(); });',
+        "",
+      ].join("\n"),
+    );
+    // A port free a moment ago, for the server to listen on.
+    const port = await new Promise((done) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port } = /** @type {import("node:net").AddressInfo} */ (probe.address());
+        probe.close(() => done(port));
+      });
+    });
+    const child = spawn(process.execPath, ["--import", pathToFileURL(timers).href, fileURLToPath(new URL("./item-api/server.mjs", import.meta.url)), items, String(port), "1"], { env: { ...process.env, SLOW_MS: "300" }, stdio: ["pipe", "pipe", "inherit"], signal: t.signal });
+    server = child;
+    let output = "";
+    // It says how many items it serves once it listens; a server that ends first fails the test.
+    await new Promise((ready, failed) => {
+      child.stdout.setEncoding("utf8").on("data", (chunk) => {
+        output += chunk;
+        if (/items on/.test(output)) ready(undefined);
+      });
+      child.once("error", failed);
+      child.once("exit", (code, signal) => failed(new Error(`the item API ended before it listened (${code ?? signal})`)));
+    });
+    /** The waits the server has set, in the order it set them. */
+    const waits = () => [...output.matchAll(/^timer (.*)$/gm)].map((m) => m[1]);
     const at = async (/** @type {string} */ id) => {
-      const started = Date.now();
-      const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`);
-      return { status: r.status, body: await r.text(), ms: Date.now() - started };
+      const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`, { signal: t.signal });
+      return { status: r.status, body: await r.text() };
     };
-    const now = await at("item_3");
+    let lateDone = false;
+    const late = at("item_slow_3").finally(() => (lateDone = true));
+    while (waits().length === 0 && !lateDone) await Promise.race([new Promise((more) => child.stdout.once("data", more)), late]);
+    assert.deepEqual(waits(), ["300"], "the late item waits SLOW_MS, once");
+    // While the late item's wait is held, the item and an unknown one are answered, and set none:
+    // one that set a timer would be held too, so it fails as soon as the server says it set one.
+    const atOnce = async (/** @type {string} */ id) => {
+      const answer = at(id);
+      while (true) {
+        const next = await Promise.race([answer, new Promise((more) => child.stdout.once("data", () => more(undefined)))]);
+        assert.deepEqual(waits(), ["300"], `${id} is answered without waiting`);
+        if (next) return next;
+      }
+    };
+    const now = await atOnce("item_3");
     assert.equal(now.status, 200);
     assert.equal(now.body, JSON.stringify({ id: "item_3" }), "the item as the file has it");
-    const unknown = await at("item_slow_9");
+    const unknown = await atOnce("item_slow_9");
     assert.equal(unknown.status, 404);
-    assert.deepEqual(waits(), [], "neither the item nor an unknown one waits");
-    const late = await at("item_slow_3");
-    assert.equal(late.status, 200);
-    assert.equal(late.body, now.body, "the late item is the item");
-    assert.deepEqual(waits(), ["300"], "the late item waits SLOW_MS, once");
-    assert.ok(late.ms >= 290, `late ${late.ms} ms`);
+    assert.equal(lateDone, false, "the late item is answered only once its wait ends");
+    child.stdin.write("release\n");
+    // Its release answers it, with no other wait set on the way.
+    while (true) {
+      const next = await Promise.race([late, new Promise((more) => child.stdout.once("data", () => more(undefined)))]);
+      assert.deepEqual(waits(), ["300"], "the late item is answered when its one wait ends");
+      if (next) break;
+    }
+    const answered = await late;
+    assert.equal(answered.status, 200);
+    assert.equal(answered.body, now.body, "the late item is the item");
   } finally {
-    server.kill();
+    server?.kill();
     rmSync(dir, { recursive: true, force: true });
   }
 });
