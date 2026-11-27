@@ -488,6 +488,8 @@ const tearWrite = (t, pattern) => {
   });
   return () => torn;
 };
+// A deletion intent and destroyedAt are each saved through their own fresh exclusive stage.
+const intentStage = /^state\.json\.deletion-intent-[a-f0-9]{32}\.tmp$/, destroyedStage = /^state\.json\.destroyed-[a-f0-9]{32}\.tmp$/;
 const receiptName = /^failed-setup-host\.json(?:\.stage)?$/, historyName = /^failed-setup-host\.interrupted-[a-f0-9]{64}\.json(?:\.stage)?$/;
 
 // The first bootstrap session stays open until its watcher misses its deadline, so the
@@ -500,7 +502,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read",
   "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
   "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage",
-  "receipt-edited-at-dispatch-evidence", "receipt-edited-at-intent-stage", "state-edited-at-receipt-stage", "proof-expired-at-receipt-stage"]) test({
+  "receipt-edited-at-dispatch-evidence", "receipt-edited-at-intent-stage", "state-edited-at-receipt-stage", "proof-expired-at-receipt-stage",
+  "intent-save-torn", "destroyed-save-torn"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -543,6 +546,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-edited-at-intent-stage": "a receipt edited while the intent's own stage is written refuses before its rename, removes that stage and saves no intent",
   "state-edited-at-receipt-stage": "a saved digest edited while the receipt's stage is written refuses before its link, removes that stage and publishes no receipt",
   "proof-expired-at-receipt-stage": "a drain proof that expires while the receipt's stage is written publishes no receipt, and a restart deletes once on a fresh proof",
+  "intent-save-torn": "a torn deletion intent save leaves its own stage and no intent, and the next collect deletes once on a fresh proof",
+  "destroyed-save-torn": "a torn destroyedAt save after the one DELETE leaves its own stage, and the next collect records absence with no second DELETE",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -946,7 +951,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     hookFs(t, {
       renameSync: (original) => (from, to) => {
         original(from, to);
-        if (preflightSeen && basename(String(from)) === "state.json.tmp" && basename(String(to)) === "state.json") intentRenamed = true;
+        if (preflightSeen && intentStage.test(basename(String(from))) && basename(String(to)) === "state.json") intentRenamed = true;
       },
       lstatSync: (original) => (path, ...rest) => {
         if (intentRenamed && !edited && basename(String(path)) === "results.tgz") editReceipt();
@@ -964,13 +969,13 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     return;
   }
   if (mode === "receipt-edited-at-intent-stage") {
-    // After the DELETE's account preflight, the first exclusive open of state.json.tmp is the
-    // intent save's own stage; the receipt is edited while that stage is written.
+    // After the DELETE's account preflight, the first exclusive open of the intent's own
+    // stage; the receipt is edited while that stage is written.
     let stage;
     hookFs(t, {
       openSync: (original) => (path, flags, ...rest) => {
         const fd = original(path, flags, ...rest);
-        if (preflightSeen && !stage && flags === "wx" && basename(String(path)) === "state.json.tmp") { stage = String(path); editReceipt(); }
+        if (preflightSeen && !stage && flags === "wx" && intentStage.test(basename(String(path)))) { stage = String(path); editReceipt(); }
         return fd;
       },
     });
@@ -1042,13 +1047,13 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     return;
   }
   if (mode === "state-edited-at-intent-stage") {
-    // After the DELETE's account preflight, the first exclusive open of state.json.tmp is the
-    // intent save's own stage, written after the custody check that follows its verification.
+    // After the DELETE's account preflight, the first exclusive open of the intent's own
+    // stage, written after the custody check that follows its verification.
     let stage;
     hookFs(t, {
       openSync: (original) => (path, flags, ...rest) => {
         const fd = original(path, flags, ...rest);
-        if (preflightSeen && !changedAtVerification && flags === "wx" && basename(String(path)) === "state.json.tmp") {
+        if (preflightSeen && !changedAtVerification && flags === "wx" && intentStage.test(basename(String(path)))) {
           stage = String(path); changedAtVerification = editState();
         }
         return fd;
@@ -1131,6 +1136,62 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     await assert.rejects(h.task({ run }).collect(), { controllerStage: "setup-host-proof-refused" });
     assert.equal(queries, 1); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
     assert.equal(existsSync(lock), false); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+    return;
+  }
+  if (mode === "intent-save-torn" || mode === "destroyed-save-torn") {
+    // The first state save that carries the key is torn: 80 bytes, then an error.
+    const key = mode === "intent-save-torn" ? '"deletionIntentAt"' : '"destroyedAt"';
+    const fds = new Set(); let torn;
+    hookFs(t, {
+      openSync: (original) => (path, flags, ...rest) => {
+        const fd = original(path, flags, ...rest);
+        if (!torn && flags === "wx" && /^state\.json\..*tmp$/.test(basename(String(path)))) fds.add(fd);
+        return fd;
+      },
+      writeFileSync: (original) => (target, data, ...rest) => {
+        if (!fds.has(target)) return original(target, data, ...rest);
+        fds.delete(target);
+        if (torn || !String(data).includes(key)) return original(target, data, ...rest);
+        torn = true; fs.writeSync(target, Buffer.from(data).subarray(0, 80));
+        throw new Error("injected torn write");
+      },
+    });
+    await assert.rejects(h.task({ run }).collect(), /injected torn write/);
+    const interrupted = h.saved();
+    assert.ok(torn); assert.equal(queries, 1); assert.equal(existsSync(lock), false);
+    // Neither save leaves the fixed-name stage every later ordinary save would refuse on.
+    assert.equal(existsSync(join(h.local, "state.json.tmp")), false);
+    const stages = readdirSync(h.local).filter((name) => /^state\.json\..*tmp$/.test(name));
+    assert.equal(stages.length, 1); assert.match(stages[0], mode === "intent-save-torn" ? intentStage : destroyedStage);
+    const tornBytes = readFileSync(join(h.local, stages[0]));
+    assert.equal(tornBytes.length, 80);
+    const old = readFileSync(receipt);
+    if (mode === "intent-save-torn") {
+      // The previous state stays: the receipt and its digest, with no intent and no DELETE.
+      assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+      assert.equal(interrupted.status, "starting"); assert.equal(interrupted.deletionIntentAt, undefined); assert.equal(interrupted.retirement, undefined);
+      assert.deepEqual(interrupted.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(old) });
+    } else {
+      // The one DELETE was sent; the intent stays without destroyedAt.
+      assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+      assert.equal(interrupted.status, "retired"); assert.ok(interrupted.deletionIntentAt); assert.equal(interrupted.destroyedAt, undefined);
+    }
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved();
+    assert.ok(s.destroyedAt); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    if (mode === "intent-save-torn") {
+      // A fresh drain proof, with the interrupted receipt kept for archival.
+      assert.equal(queries, 2);
+      assert.ok(readFileSync(join(h.local, `failed-setup-host.interrupted-${digest(old)}.json`)).equals(old));
+      assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt)));
+    } else {
+      // Absence only: the same receipt and intent, no second query or DELETE.
+      assert.equal(queries, 1); assert.ok(readFileSync(receipt).equals(old));
+      assert.equal(s.deletionIntentAt, interrupted.deletionIntentAt);
+    }
+    // The torn stage is never read or removed; it stays for the operator.
+    assert.ok(readFileSync(join(h.local, stages[0])).equals(tornBytes));
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }
   if (mode === "delete-expired" || mode === "delete-in-time") {

@@ -153,7 +153,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       throw error;
     }
   };
-  const save = () => { check(); writeState(state); };
+  // A deletion intent and destroyedAt each go through their own fresh exclusive stage
+  // (save("deletion-intent"), save("destroyed")), like the checkpoints below: a save torn
+  // there leaves an unread stage and the previous state.json, never a fixed-name
+  // state.json.tmp that would refuse every later collect with EEXIST.
+  const save = (kind) => { check(); writeState(state, renameSync, kind); };
   // The provider-errored outcome is published through its own fresh exclusive stage,
   // like the monitor-ending publications: a fixed-name state.json.tmp left by an
   // interrupted save is never read, promoted, removed or allowed to block it.
@@ -243,7 +247,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (prepareDelete.publishIntent) prepareDelete.publishIntent();
         else {
           prepareDelete.unchanged();
-          state.deletionIntentAt = new Date().toISOString(); save();
+          state.deletionIntentAt = new Date().toISOString(); save("deletion-intent");
         }
       }
       // After the account preflight and the proof's deadline, the last local check before run().
@@ -864,7 +868,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(terminal.campaign === report.campaign, "monitor campaign changed after replay");
       assert.ok(terminal.sealSha256 === report.supervisedTerminal.sealSha256, "monitor seal changed after replay");
       original(); archiveUnchanged();
-      state.destroyedAt = new Date().toISOString(); save(); return 0;
+      state.destroyedAt = new Date().toISOString(); save("destroyed"); return 0;
     });
   async function validateEvidence(confirmedAbsent = false, start) {
     state.fullGroupQualified = false;
@@ -1152,7 +1156,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state = intended;
       try { verifyRetirement(pins); verified = true; requireCustody(); }
       catch (error) { state = prior; verified = false; pins.length = 0; throw error; }
-      saveState();
+      saveState("deletion-intent");
       trusted = Buffer.from(stateBytes(state)); intentSaved = true;
     };
     // Everything the DELETE relies on, as this process left it, through the same custody
@@ -1181,7 +1185,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // The absence read awaits too: destroyedAt is published only while this operation still
     // holds its lock and the saved reservation is still the intent it wrote.
     requireCustody();
-    state.destroyedAt = new Date().toISOString(); saveState(); return 1;
+    state.destroyedAt = new Date().toISOString(); saveState("destroyed"); return 1;
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
@@ -1368,11 +1372,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       checkHandoffDelete(false);
       assert.ok(Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
     }
-    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save("deletion-intent");
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
     await confirmDeleted();
     if (handoff) checkHandoffDelete();
-    state.destroyedAt = new Date().toISOString(); save(); return 1;
+    state.destroyedAt = new Date().toISOString(); save("destroyed"); return 1;
   }
   async function retireFailedExitOne(controllerCommit, reservationSha256, original, recovery) {
     const assertLaunch = ({ launchIntentSha256, fleetManifestSha256 }) => {
@@ -1387,7 +1391,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         checkHandoffDelete();
         if (absenceConfirmedAt !== undefined && !state.destroyedAt) {
           state.destroyedAt = absenceConfirmedAt;
-          save();
+          save("destroyed");
         }
       };
     };
@@ -1461,7 +1465,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }, pendingDeleteSha256);
         checkHandoffDelete(false);
         Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: handoffReceiptSha256 }, deletionIntentAt });
-        writeState(state);
+        writeState(state, renameSync, "deletion-intent");
       },
       onUnsent() {
         const alreadyUncertain = preserveOperationLock;
@@ -1745,7 +1749,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "bootstrap uploads require the measured checkout");
         if (state.status === "preparing") return retireUnused();
         verifyRetirement(); await confirmDeleted();
-        state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+        state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return 1;
       });
       const observed = read();
       if (observed.createPending && observed.status === "creating" && !observed.id && !observed.createErrored) return settlePendingCreate(observed);
@@ -1873,7 +1877,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
-          state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+          state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return 1;
         }
         if (state.deletionIntentAt) {
           // A prior verified, monitored collection may have timed out after DELETE.
@@ -1891,7 +1895,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           verifyArchive(); await validateEvidence();
           await confirmDeleted();
-          state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
+          state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return deletedCode();
         }
         if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
         assert.ok(offlineAck || state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
@@ -1959,11 +1963,11 @@ else ${pack}; fi` : pack, 11 * 60000);
             } });
           } else {
             assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check(); unchanged();
-            state.deletionIntentAt = new Date().toISOString(); save(); await execute("doctl", deletion, 120000);
+            state.deletionIntentAt = new Date().toISOString(); save("deletion-intent"); await execute("doctl", deletion, 120000);
           }
         });
         await confirmDeleted();
-        verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
+        verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save("destroyed"); return deletedCode();
       }, failedMonitorRecovery);
     },
     async retireFailedNative() {
@@ -1994,7 +1998,7 @@ else ${pack}; fi` : pack, 11 * 60000);
             checkHandoffDelete(false);
             await confirmDeleted();
             checkHandoffDelete();
-            if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
+            if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save("destroyed"); }
             return 1;
           }
           grouped = groupedPreplanFailure(local, state);
@@ -2018,7 +2022,7 @@ else ${pack}; fi` : pack, 11 * 60000);
           if (groupedPreplan) assert.equal(record.capture.reservationSha256, recoveryApproval.preservedReservationSha256,
             "approved preserved reservation differs from retirement");
           await confirmDeleted();
-          state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+          state.destroyedAt ??= new Date().toISOString(); save("destroyed"); return 1;
         }
         assert.ok(["starting", "running"].includes(state.status) && !state.deletionIntentAt && !state.collectedAt
           && !state.validation && !state.evidenceOutcome && state.createIntentAt, "only an unqualified failed native reservation can recover");

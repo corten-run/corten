@@ -207,9 +207,11 @@ test("interrupted receipt rehash spends no final proof window and recovery still
   for (const expire of [false, true]) {
     const flags = {}, r = await recoveryHarness(t, flags), originalOpen = fs.openSync;
     // Crash after receipt durability but before even opening the state-intent
-    // temporary file. No DELETE or durable intent exists to retry or clear.
+    // temporary file (its own fresh deletion-intent stage). No DELETE or durable
+    // intent exists to retry or clear.
     fs.openSync = (...args) => {
-      if (args[0] === `${r.h.statePath}.tmp`) throw new Error("synthetic pre-intent interruption");
+      if (typeof args[0] === "string" && args[0].startsWith(`${r.h.statePath}.deletion-intent-`) && args[0].endsWith(".tmp"))
+        throw new Error("synthetic pre-intent interruption");
       return originalOpen(...args);
     };
     syncBuiltinESMExports();

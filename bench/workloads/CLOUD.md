@@ -1491,7 +1491,21 @@ digest is saved through its own fresh exclusive staging file
 (`state.json.pending-retirement-<random>.tmp`), as `createErrored` is, so a
 save torn there leaves that stage and no digest, and the next collect retires
 on a fresh proof. The stage is never read or removed; it stays for the operator
-to archive. A v2 or
+to archive. Every deletion intent and `destroyedAt` the controller saves, for
+each retirement kind and for an ordinary deletion, goes through its own fresh
+exclusive stage the same way (`state.json.deletion-intent-<random>.tmp` and
+`state.json.destroyed-<random>.tmp`), so a torn save of either leaves only that
+unread stage and the previous `state.json`, never a fixed-name
+`state.json.tmp` that would refuse every later collect with `EEXIST`. A torn
+intent leaves the state before it, which the next collect recovers as an intent
+that was never saved (for a v2 or v3 receipt, through its recorded digest: the
+receipt is kept and a fresh proof retires). A torn `destroyedAt` leaves the
+intent after the one DELETE, so the next collect only checks exact absence and
+records `destroyedAt`, with no second DELETE. Other ordinary saves keep the
+fixed-name `state.json.tmp` stage, and one left by a torn ordinary save still
+refuses the next ordinary save with `EEXIST` until the operator archives it:
+fleet verification's external-failure check and the handoff publication check
+treat that name as an unsettled publication, so it is not bypassed. A v2 or
 v3 receipt and its history copy are published whole: each is written and synced
 as `<name>.stage` in the same directory, then hard-linked to its final name,
 which fails rather than replace an existing file, and the directory is synced
