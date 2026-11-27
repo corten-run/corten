@@ -11801,10 +11801,17 @@ rules something out.
        76 there and `main`'s within 31), and 81 and 124 of 38,400 on the multi-threaded one; an
        earlier count of the same binaries gave 168 and 169, and 110 and 127. No allocation
        more. Among the requests the rule below reads it is the one the change costs most, and
-       the cycle run reads it as a touched workload (`close`).
-    3. Every connection `serve` accepts holds 128 bytes more, whether a request of its ever
-       waits, and 240 more, in one block more, from its second request that waits until it
-       closes (DHAT's bytes live with 600 idle connections less 100, over 500, `main` at
+       the cycle run reads it as a touched workload (`close`). On `main` as it was at the
+       fourth merge the single-threaded figure read 184 and 190, and the multi-threaded one
+       is unread: its recount gave 150 and 546 where the control, the binaries of the figures
+       above built again, gave 313 more and 428 fewer, in a session whose counts of one build
+       spanned 648 on that row (below). A recount with the machine to itself would read it.
+    3. Every connection `serve` accepts asks its allocator for 128 bytes more, whether a
+       request of its ever waits, and for 240 more, in one block more, from its second request
+       that waits until it closes. Those are bytes asked for and not yet freed, as DHAT counts
+       them, on the benchmark app built with `--cfg tokio_unstable`; they are not a reading of
+       the memory a process holds (DHAT's bytes live with 600 idle connections less 100, over
+       500, `main` at
        `e2d0c464e` against `bf13f4822`: 20,158 a connection on `main` in every state, 20,286
        here after a request that does not wait or one that does, and 20,398 after two or three
        that wait; tokio 1.54.1, x86-64 Linux; under the tag `evidence/deadline-timer-4`). The
@@ -11812,7 +11819,16 @@ rules something out.
        two words taking the connection's task over a step of its allocation, which tokio
        aligns to 128 bytes on x86-64 (read in tokio 1.54.1; reasoned, since no count separates
        it). That is 128 MB for a million idle connections and 240 MB for a million that have
-       each waited twice.
+       each waited twice, of bytes asked for. The request-cost kit's reading of resident
+       memory, of its probe built as an app builds by default and run with jemalloc preloaded,
+       does not show the 128: 5,000 connections that had each answered one request held
+       8,473, 8,472 and 8,471 bytes each on `main` at `d15d3ac3a` and 8,471 in each of three
+       runs on the merge `ffc686e39` (after three of a browser's requests 12,563, 12,563 and
+       12,562 against 12,562, 12,562 and 12,534; under the tag `evidence/deadline-timer-8`),
+       and the hosted job read a median of 8,430 for both builds in each of its two runs
+       named below. So the 128 is not shown for a default build, where a connection may hold
+       less than that more, or nothing more; why was not looked for. No reading of the kit is
+       of a connection that has waited, so the 240 has none.
     4. A kept timer that is set, and that no deadline takes before its time is up, wakes the
        connection's task once, for nothing: after the connection's third request that waited, or
        a later one. A test on tokio's paused clock counts that wake under a deadline of 30 s:
@@ -11919,13 +11935,25 @@ rules something out.
        more, then 214 and 212 more. This session read worse than those before it: the machine
        ran other work beside it, and three counts of one build were up to 125 apart on the
        kept-alive rows, on levels about 50 apart, and up to 648 apart on a connection for
-       each request. Its control is as far from what the same code counted before (5 and 3
-       more; 117 and 119 fewer; 131 and 105 more; 223 and 188 more, multi-threaded) as the
-       merged pair is from the control, so it shows no row that moved, and it could not show
-       one that moved by less than about 100 on the kept-alive rows or by several hundred on
-       a connection for each request on the multi-threaded runtime, where the control's two
-       rounds are 741 apart. The row nearest to a move is the kept-alive request that waits
-       on the single-threaded runtime, whose gain read 80 and 63 less than the control's.
+       each request. It shows no row that moved, and what carries that is those spans: on
+       every row but one, in both rounds, the merged pair's figure is no farther from the
+       control's than three counts of one build were apart at the widest on that row (71,
+       106, 648 and 97 on the four rows above on the multi-threaded runtime, where the pair
+       is 32 and 3, 48 and 35, 163 and 974, and 21 and 28 from the control; 92, 85, 112 and
+       63 on the single-threaded one, where it is 30 and 7, 80 and 63, 20 and 43, and 39 and
+       4). The one is a connection for each request on the multi-threaded runtime in round
+       2, 974 against 648, and the control's own two rounds, of the same two binaries, are
+       741 apart there: the session does not read that row, so cost 2's figure for the
+       multi-threaded runtime is unread on this base. The control does not carry the
+       conclusion. It is 23 and 61, 17 and 26, 182 and 533, and 2 and 41 from what the same
+       code counted before (5 and 3 more; 117 and 119 fewer; 131 and 105 more; 223 and 188
+       more, multi-threaded), and the merged pair is farther from it than that in both
+       rounds on the kept-alive request that waits and in round 2 on a connection for each
+       request, as it is in round 1 on the other two rows. The session could not show a row
+       that moved by less than about 100 on the kept-alive rows. Of the rows it reads, the
+       nearest to a move is the kept-alive request that waits on the single-threaded
+       runtime, whose gain read 80 and 63 less than the control's, under the 85 its counts
+       spanned.
        `main` itself counts about 700 fewer than at the
        earlier base on the staged request that does not wait (673 to 731) and 937 to 999
        fewer on the one that waits.
@@ -11936,8 +11964,28 @@ rules something out.
        `d15d3ac3a` at 22 more on `get` (of 18,335, 0.12%), 30 on `unstaged` (of 12,528,
        0.24%), 31 on `pipeline` (of 10,569, 0.29%) and 21 on `text` (of 17,181, 0.12%), and
        at 16 requests at a time 5 fewer, 3 more, 2 more and 5 fewer; each is within 2 of what
-       it counted `f8934bc99` over `26ab0e37f`, and the hosted job read 23, 30, 29 and 19,
-       then 5 fewer, 3 more, 3 more and 8 fewer. And the harness
+       it counted `f8934bc99` over `26ab0e37f`. The pull request's hosted job (the
+       `Request Cost` workflow, whose log holds each count) read 23, 30, 29 and 19, then 5
+       fewer, 3 more, 3 more and 8 fewer, for `ffc686e39` over `d15d3ac3a` (run
+       45880658451), and 21, 30, 29 and 21, then 5 fewer, 2 more, 2 more and 9 fewer, for
+       `cce69b778` over `49e9a3a1f` (run 45901199943); the run of a later head is in the
+       pull request's description, not here.
+
+       The kit's sizes are not the rows' for the same kind of request, and no count here
+       says why. A staged request that does not wait is 4 and 8 more on the benchmark app's
+       single-threaded row (3.7 in its profile) and 22 on the kit's `get`; a route with no
+       deadline that does not wait is 17 and 18 more in cost 1 (this session's recount of
+       that row, 74 fewer and 18 more beside a control of 69 and 11 more, does not read it)
+       and 30 on the kit's `unstaged`. The kit's two figures for a case, one request at a
+       time and 16, solve to 28 to 31 instructions for each batch of requests the connection
+       reads, and to 7 fewer for each staged request (`get`, `text`) and 0 to 1 more for
+       each that is not (`unstaged`, `pipeline`), where the benchmark app's profile gives 17
+       a poll and 14 fewer a staged request. So either the probe's connection is polled more
+       than once for a request written alone, or a poll through the wrapper costs more in a
+       build without `tokio_unstable`, or the two apps differ some other way; nothing kept
+       says which. A count by function on the kit's probe, with the calls of the wrapper's
+       poll a request, as item 2 took it on the benchmark app, would settle it. The larger
+       figures are the kit's, and they are the ones held to the line below. And the harness
        [design Choice 60](#choice-connection-info)'s Last checked describes, a typed route's
        plain request through `corten::serve` on one single-threaded runtime, built again and
        counted in two sessions of three rounds: `d15d3ac3a` 16,972.596 and 16,974.877
@@ -11954,12 +12002,20 @@ rules something out.
        waits on a kept timer, the task's own wait for the time its connection is held to
        polls the connection within milliseconds of the deadline. A test whose connection is
        held half a deadline past the request's own time was added (`d79cbad1a`): with that
-       wake lost it fails and the earlier one passes.
+       wake lost it fails and the earlier one passes. It also asserts, by the count the
+       crate's tests keep of deadlines that took a connection's timer, that the request's
+       deadline has that timer when shutdown begins, so it cannot pass on a timer of the
+       request's own.
 
     The branch merged `main` a fifth time, at `49e9a3a1f` (the merge is `c8f710609`), for
     that Choice's line as restated: since `d15d3ac3a` that commit changes, under `crates/`,
-    the `corten` command alone, no manifest and no lock file. Since the fourth merge the crate
-    has changed in that test and in one comment of `deadline.rs`.
+    the `corten` command alone, no manifest and no lock file. And a sixth, at `cbca34579`
+    (the merge is `0aada69c3`): since `49e9a3a1f` that commit changes, under `crates/`, how
+    the crate reads the authority a request names (`security.rs`, the lines of `app.rs`,
+    `kept.rs`, `page.rs` and `upgrade.rs` that call it, and tests), no manifest and no lock
+    file, and not the function the wrapper sits in, which serves a connection; nothing under
+    a tag was counted again for it. Since the fourth merge the crate has changed, of this
+    change's own, in that test and in one comment of `deadline.rs`.
 
     Not chosen: leaving each deadline its own timer (the numbers above are against it). A pool
     of timers a thread keeps, lent to whichever request waits (as fast: 17.4% to 18.5% more
@@ -12095,11 +12151,13 @@ rules something out.
     [design Choice 60](#choice-connection-info) on `9060dfb2a`, `d15d3ac3a` and `ffc686e39`,
     with glibc's allocator and with jemalloc preloaded; those under the tag
     `evidence/deadline-timer-8`; every binary of the benchmark app
-    measured under any of the tags, which is every count of its rows and every run of
-    requests a second, was built with `--cfg tokio_unstable`, which compiles tokio's timer
-    with the branches of its second flavour, so none is the build an app makes by default,
-    and the lateness, the timer's size, the kit's probe, that harness and the crate's
-    tests, built by `cargo test`, are without it); platform
+    measured under any of the tags, which is every count of its rows, of an idle connection's
+    bytes and of a poll by function, and every run of requests a second, was built with
+    `--cfg tokio_unstable`, which compiles tokio's timer with the branches of its second
+    flavour, so none is the build an app makes by default, and the lateness, the timer's
+    size, the kit's probe with its counts and its readings of resident memory, that harness
+    and the crate's tests, built by `cargo test`, are without it; the hosted job's counts,
+    of the same kit, are in the logs of the runs the Choice names and under no tag); platform
     (hyper 1.12.0's HTTP/1
     server polls one request's future at a time, inside the connection's own poll, and reads no
     later request's head while it answers; the code does not need that to be right, since a
@@ -12156,7 +12214,13 @@ rules something out.
     [design Choice 60](#choice-connection-info) on `9060dfb2a`, `d15d3ac3a` and `ffc686e39`,
     and the shutdown tests against a lost wake on
     `d79cbad1a`, results under the tag `evidence/deadline-timer-8`; 2026-11-26, `crates/corten`,
-    `Cargo.toml` and `Cargo.lock` read as the same git objects in `49e9a3a1f` and `d15d3ac3a`.
+    `Cargo.toml` and `Cargo.lock` read as the same git objects in `49e9a3a1f` and `d15d3ac3a`;
+    2026-11-26, after that merge's second review: the rows' figures read again against the
+    spans of their counts, the kit's readings of resident memory under that tag and the
+    hosted job's runs 45880658451 and 45901199943 read for cost 3 and for the kit's counts,
+    and `Cargo.toml`, `Cargo.lock` and the crate's own manifest read as the same git objects
+    in `cbca34579` and `49e9a3a1f`, with `app.rs` differing in one line, of the request's
+    layer.
 
 ## Rules
 

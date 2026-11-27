@@ -49,10 +49,15 @@ and leaves it set ([design.md, Choice 77](../design.md#choice-deadline-timer)). 
 whose only request waits, as a proxy that opens one for each request sends them, keeps none. A
 deadline fires when it did. What an app can see of the kept timer:
 
-- Every connection holds 128 bytes more, and 240 more from its second request that waited
-  until it closes. A connection that sits idle after its third request that waited, or a later
-  one, is woken once, for nothing, when the time the last such request's deadline was set for
-  comes.
+- Every connection asks its allocator for 128 bytes more, and for 240 more from its second
+  request that waited until it closes. Those are bytes asked for, counted by DHAT on the
+  benchmark app built with `--cfg tokio_unstable`, not the memory a process holds: in a
+  default build with jemalloc, the resident memory of 5,000 connections that had each
+  answered one request read 8,471 to 8,473 bytes a connection without the kept timer and
+  8,471 with it, so a connection may hold less than 128 more, or nothing more
+  ([design.md, Choice 77](../design.md#choice-deadline-timer), cost 3). A connection that sits
+  idle after its third request that waited, or a later one, is woken once, for nothing, when
+  the time the last such request's deadline was set for comes.
 - While any connection's timer is set (from that connection's third request that waited until
   the time its last such request's deadline was set for, 30 seconds after it by default), the
   runtime that serves it works out a timeout each time the runtime's driver parks (the wait
