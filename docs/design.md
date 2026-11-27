@@ -7217,16 +7217,33 @@ rules something out.
     required or optional, with its operation in the document unchanged); value (correctness
     before speed, one way to do each thing and a small default surface, README Values).
 
-    Revisit when: a change to the connection task raises a plain HTTP request above about 17,557
-    instructions at `9060dfb2a` on the harness as Last checked built it again (two sessions of
-    three rounds read 17,552.3 to 17,556.9, and that is the baseline now: the 24,287.261 accepted
-    here was the request's whole count on 2026-11-17 on a harness that is not in the repository,
-    the one built again reads the same commit about 1,214 lower, the commits from there to `main`
-    at `8d5160be2` lowered it by 5,302 more, and the connection's wait for shutdown, polled only
-    when it was woken, by 218 more; a rise read with glibc's allocator is counted again with
-    jemalloc preloaded, where the harness read `8d5160be2` at 16,217.9 and `9060dfb2a` at
-    15,999.5, before it is believed, since in `tests::server::what_a_request_over_tcp_costs` a
-    count on one connection with glibc's allocator changed level by about 370 with no change to
+    Revisit when: a change to the connection task, whichever way it is declared, raises a plain
+    HTTP request by more than the budget [design Choice 76](#choice-counted-or-measured) holds a
+    counted change to, +0.5% of its base's instructions a request, on
+    [`bench/request-cost`](../bench/request-cost/README.md)'s `get`, `unstaged`, `pipeline` or
+    `text`, one request at a time or 16, with base and head counted the way
+    [Pull requests](../CONTRIBUTING.md#pull-requests), item 2.1, counts a counted change, which
+    the hosted `Request Cost` job does for every pull request that changes what a request is
+    built from, as a change to the connection task does (for a change declared measured the job
+    reports the counts and fails nothing, so the line is read from its summary; the line is
+    drawn from each change's own base and is not the fixed count it was until 2026-11-26, whose
+    history is in Last checked and in
+    [#2167 Choice 60's Revisit-when names a fixed count (17,557 instructions at one commit) that main has since fallen about 580 below, on a harness that is not in the repository](https://github.com/corten-run/corten/issues/2167);
+    the budget is 64 instructions on `unstaged` and about 95 on `get` by the counts of
+    [design Choice 76](#choice-counted-or-measured), and less on the cheaper rows, about 52 on
+    `pipeline` and about 41 on it at 16, so twenty to forty-five times the 2.1 accepted above
+    and on every row more than the 10 and the 30 turned down there: one change can add what was
+    refused then and not reopen this Choice, and the figure is that Choice's proposal and moves
+    with it; what changes
+    that each stay under the budget add up to this line does not see, and nothing reopens this
+    Choice for it: [design Choice 76](#choice-counted-or-measured) leans for that on
+    the trend, [`bench/placement/trend`](../bench/placement/trend/README.md), which reads
+    `main`'s cycles, not its instructions, against the last release and gates nothing, and on
+    the kit's counts a release takes of its candidate against the last release
+    ([RELEASING.md](../RELEASING.md#readiness-checkpoints)); the kit counts with jemalloc
+    preloaded, which is what a rise read with glibc's allocator was to be counted again with
+    before it was believed, since in `tests::server::what_a_request_over_tcp_costs` a count on
+    one connection with glibc's allocator changed level by about 370 with no change to
     what a request does; the 2.1 above is not a regression still to fix); a compiler or code
     change lets the one loop poll the plain task at what it cost before the metadata path, which
     removes the residual (the rerun of Last checked counts the two the same and cannot say whether
@@ -7254,7 +7271,25 @@ rules something out.
     the first session's binary of this change was built from `9060dfb2a` and the second's from
     `d289718f2`, which changes no code, and the two builds gave one binary by its digest, and in
     that second session with jemalloc preloaded 16,217.903 (range 16,217.338-16,218.822) and
-    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again.
+    15,999.468 (range 15,999.344-16,000.455), with the TLS counts not taken again; 2026-11-26,
+    that harness once more, to see where the fixed count Revisit when then named stood (the
+    24,287.261 accepted here was the request's whole count on 2026-11-17 on the harness that is
+    not in the repository, the one built again reads the same commit about 1,214 lower, the
+    commits from there to `main` at `8d5160be2` lowered it by 5,302 more, and the connection's
+    wait for shutdown, polled only when it was woken, by 218 more, which gave 17,552.8 at
+    `9060dfb2a`, and the line was put at the top of what two sessions read there, about
+    17,557, which left 0 to 5 instructions over them, so it reopened this Choice for a
+    rise of a few instructions when it was written and for none under about 580 once `main`
+    was at `d15d3ac3a`): two sessions of three rounds, `9060dfb2a` 17,554.920 (range
+    17,554.778-17,556.058) and 17,554.916 (range 17,553.216-17,555.770), inside what 2026-11-25
+    read, and `main` at `d15d3ac3a` 16,972.596 (range 16,971.613-16,975.479) and 16,974.877
+    (range 16,972.395-16,975.306), about 580 under that count, and with jemalloc preloaded
+    16,000.617 and 16,001.631 against 15,412.503 and 15,414.189, where four of those twelve
+    readings lay about 43 from their build's level and moved no median (about what
+    [the kit's page](../bench/request-cost/README.md#how-a-number-is-read) gives for a count read
+    from totals at exit, as this harness reads one, when the clock's thread ends before the
+    process). Revisit when was
+    restated that day as each change's own budget, by the maintainer's decision.
 
 61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
@@ -8137,9 +8172,11 @@ rules something out.
     each later build that names it is refused until the copy is stopped, by a refusal that
     names such a copy among what may hold the port. Nor both, the argument and
     the variable, which keeps each of those costs; `corten dev` made to read its `--port` as
-    this one is read, in the same change: the two commands read it differently (`--port=<n>`
-    is build's alone, and `dev` passes its value on to the app unchecked, a `0` included,
-    which the app binds as a free port), and that is left for a change of its own; a copy's status after `SIGTERM` read as the
+    this one is read, in the same change: the two commands read it differently then
+    (`--port=<n>` was build's alone, and `dev` passed its value on to the app unchecked, a `0`
+    included, which the app binds as a free port), and that was left for a change of its own,
+    since made: `dev` reads it with build's reader and refuses any other argument
+    ([#2046 corten dev `--port=<n>` is passed over without a word and the app starts on 3000; corten build takes both spellings](https://github.com/corten-run/corten/issues/2046)); a copy's status after `SIGTERM` read as the
     build's failure, which would stop the build in the third timing above when the copy that
     could not bind exits with an error's status, and would refuse an app that exits non-zero on
     `SIGTERM` by design with its profile written; an argument that skips the wait and leaves
@@ -9468,9 +9505,11 @@ rules something out.
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
     `Location` of a write that did not fail: RFC 9111 sections 4.2.1, 5.1 and 4.4; a recipient
-    counts an answer's lifetime less its `Age`, section 4.2.3; the connection is HTTP/1.1, so a
-    request's target is its path and query and its host is the `Host` header,
-    [Limit 14](#limit-http1)); reasoned (the inputs a kept page's handler may take read, of a whole
+    counts an answer's lifetime less its `Age`, section 4.2.3; for HTTP/1.1 an absolute-form target
+    supplies its own authority, RFC 9112 section 3.2.2); reasoned (the connection to the app
+    speaks HTTP/1.1 ([Limit 14](#limit-http1)); the store answers only origin-form requests,
+    whose target is a path and query and whose host comes from `Host`, and invalidates using the
+    authority the write requested; the inputs a kept page's handler may take read, of a whole
     document's `GET` without credentials, its URL, its `Host` and, for its language,
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
@@ -9543,7 +9582,9 @@ rules something out.
     against the sentence that a placement run declared after a single-build miss does not
     clear it.
 
-    Last checked: 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
+    Last checked: 2026-11-26 with http 1.5.0 for a write with an absolute-form target: the router test
+    `an_absolute_form_write_drops_the_page_named_by_a_matching_location` checks which `Location`
+    invalidates the kept page; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
     6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
     `evidence/0c0c599c`, and for its instructions, `149e0f5b4` against `a03547c3c` under
@@ -9983,7 +10024,7 @@ rules something out.
     Pull requests, a band that moves after a reading does not reopen it, and a plan declared
     before `main` gave a band is read without one, so nobody is held to a rule `main` did not
     show them and no reading changes what it decided. The band is the same whatever reads the
-    workload, `bench/fullstack/count.mjs` or a probe, so nothing is gained against it by
+    workload, the catalog count (`bench/fullstack/count-pairs.mjs`) or a probe, so nothing is gained against it by
     choosing one (but for the catalog's two targets, below). The test gives what it gives with a
     spread of the setup's own. A negative
     control keeps [design Choice 71](#choice-layout-floor)'s rule. Each threshold a plan
@@ -10010,9 +10051,13 @@ rules something out.
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
     (Stands on, bet).
 
-    The catalog's `page` and `json`. Pull requests (item 2.1) has a change that the catalog's
-    item page or item JSON exercises counted with `bench/fullstack/count.mjs`, targets `page`
-    and `json`: one build of each side, in the image that script starts. Under the default band
+    The catalog's `page` and `json`. When this case was decided, Pull requests (item 2.1) had a
+    change that the catalog's item page or item JSON exercises counted with
+    `bench/fullstack/count.mjs`, targets `page` and `json`: one build of each side, in the image
+    that script starts, with no A/A of the count's own and a bound outside the band binding by
+    itself. It is now counted with `bench/fullstack/count-pairs.mjs`, which runs that script on
+    one build of each side beside an A/A of its own, and binds only where that A/A resolves (The
+    count's own A/A, below). Under the default band
     a count whose bound's distance from its threshold is inside the band is not decided, does
     not pass and is to be read across placements, and nothing reads that image across
     placements: `bench/placement` reads a probe Cargo builds, and nothing else in the tree
@@ -10072,17 +10117,57 @@ rules something out.
     never added or changed after a run to clear its result already bars. The count is kept for
     what a probe is not: it
     is the only reading of the change in the catalog's own image, and outside the band it binds
-    for the margin as it did, whatever the probe read. It is declared before the plan's first
+    for the margin as it did, whatever the probe read, where the count's own A/A resolves (The
+    count's own A/A, below). It is declared before the plan's first
     turn and before it is taken, so it is not chosen by its result, and a count an earlier plan
     of the pull request took is a later plan's too, since a second count could not clear the
     first and could leave the pull request two binding readings of one target that disagree.
     A count is not taken again for its result, since one taken until it lands outside the band
     would be chosen by its result, as a placement run again for its result would be.
 
+    The count's own A/A. The count of
+    [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+    read `json` above the band, bound +7.28%; the same count with the base's image on both
+    sides, on the same host, kit and arrangement, read `json`'s bound at +9.85%, outside the
+    band, and `page`'s at +1.34% and +2.74% with its labels swapped
+    ([a comment on it](https://github.com/corten-run/corten/pull/2066#issuecomment-7193964698),
+    under a rule [posted before it started](https://github.com/corten-run/corten/pull/2066#issuecomment-7187315828)).
+    A reading that misses with nothing changed can hold a pull request for nothing, and one that
+    can do that can clear one for nothing too. So the count carries an A/A of its own in every
+    run (`bench/fullstack/count-pairs.mjs`): the base's image against itself under the two side
+    names the change uses, pair for pair beside the change's pairs, read as recorded and with its
+    labels swapped, as a placement run's A/A is. It resolves when both of its bounds, less +1%,
+    are inside the default band, the test a change's count is read by; until then the count
+    neither holds nor clears. An A/A that is complete, with both bounds, and does not resolve
+    leaves the change "not decided", outside the band or in, read as one inside the band is.
+    That changes what passes: before it, a count above the band held its pull request; now a miss
+    whose run's A/A does not resolve no longer holds by itself, and is reported as not decided,
+    since that run did not show it could tell a change from nothing. An A/A with no bound (an
+    invocation that failed, pair 0's included, too few pairs) is a failed count, as a change with no bound is: it
+    returns to the maintainer and does not pass until the maintainer decides, since a run that
+    did not take its own A/A has not shown what it can read. A plan declared before this rule
+    was on `main` is read by the rule as it then stood. That
+    asks no more of the A/A than to read nothing for nothing where the change is read, so an A/A
+    that resolves near an end of the band leaves a change just past that end decided by a
+    margin its own noise could reach (Stands on, bet). It doubles a run's time, 808 invocations
+    for both targets where the change's are 404. What spreads the count's pairs on that host is
+    not known. One image's 200 recorded A/A values of a target ran up to 1.78 (`json`) and 1.68
+    (`page`) times their least, with user instructions a request within 0.8% as the kit's
+    reports posted them (kernel work is not ruled out), and nothing in the count or its kit
+    differs by a side's name. Swapping each recorded A/A pair's labels at random (100,000 seeded
+    draws) and reading each draw by this rule, 49% of `json`'s draws and 20% of `page`'s do not
+    resolve: that host did not reliably resolve the band (the method, the other statistics and
+    what one run would locate are in [bench/fullstack](../bench/fullstack/README.md#the-catalog-count-and-its-aa);
+    [#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)
+    asks for the cause).
+
     The limit of that case: the catalog's image is never read across placements. A cost that
     only that image shows, or that it shows more of than the workload named for the target
     does, and that leaves the count's distance inside the band (for the margin, a bound up to
-    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). The
+    +4.33% today), is seen by no reading, and the change passes with it (Stands on, bet). A cost
+    whose miss is not decided because its run's own A/A did not resolve goes undetected too: the
+    count reads it as one inside the band, however far above the band its bound is, and the
+    change passes with it. The
     case is no wider than its words: the two targets alone; the default band, no spread being
     recorded for that image; and a target for which the plan names a probe workload read across
     placements. A change to code that only the catalog's image runs has no such workload until
@@ -10833,7 +10918,10 @@ rules something out.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
-    in [design Choice 70](#choice-kept-pages); the first placement run above, tag
+    in [design Choice 70](#choice-kept-pages); the count of the base's image against itself
+    and against the head's on the host of the pull request named in The count's own A/A, above,
+    100 recorded pairs of each target each, as its kit's reports posted them; the first
+    placement run above, tag
     `evidence/ee7b0b41`, its A/As on main rather than the change's base, its answers compared after
     its kit's normalization, which this Choice accepts for that receipt alone, and its `kept`
     spread both ends of the default band; and the second
@@ -10946,7 +11034,10 @@ rules something out.
     accepted and no run measured, so that what the catalog's image shows alone, or shows more
     of than that workload, is small beside +1% or large enough to leave the band: nothing has
     read a change on a probe and on that image side by side, and no tool reads the image across
-    placements);
+    placements; and a count's own A/A, run in the same run with the change's pairs interleaved,
+    resolves when the change's pairs could resolve too and not otherwise, though the two are
+    separate pairs and one A/A of 100 pairs is one draw of its bound: no run has yet read a
+    change's count beside an A/A of its own);
     value
     (Fast, and proven fast: a touched
     request's cost is read from the change, not from where one build put it; Verified, not
@@ -11014,7 +11105,12 @@ rules something out.
     counted under the turn protocol;
     [#2120 Nothing reads the catalog's page or JSON across placements, so a cost only the catalog image shows inside the default band is seen by no reading](https://github.com/corten-run/corten/issues/2120)
     asks for it), so the catalog's `page` and `json` can be read as a probe
-    workload is and need no case of their own; a count taken under that case reads above the
+    workload is and need no case of their own; the cause of the count's spread is found
+    ([#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)),
+    so the count's arrangement can change and what its A/A costs a run is asked again, or a
+    change whose count's own A/A resolved is read by another reading of the same commits past
+    the band from what its count read, so an A/A in the same run does not stand for its
+    change's pairs; a count taken under that case reads above the
     default band while every probe workload of its plan meets its margin across placements, or
     a later reading finds on either target a cost a change brought in under it, so a probe does
     not stand in for the image; the kinds of change Pull requests has measured change, or
@@ -11094,7 +11190,15 @@ rules something out.
     linker an ordering file (`symbol-ordering-file`), `bench/placement/relink.mjs` alone found,
     which runs a probe's captured link again, and `bench/fullstack/count.mjs` read for what it
     starts, each app's container from its image, at `1155bfdf8`, with the default band as the
-    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`.
+    maintainer's decision of that day gives it, -2.98% to +3.33%, read at `c6e9be955`;
+    2026-11-26, the count of
+    [#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+    and its count of the base's image against itself, read from the kit's reports as posted
+    ([the A/A](https://github.com/corten-run/corten/pull/2066#issuecomment-7193965628),
+    [the change](https://github.com/corten-run/corten/pull/2066#issuecomment-7187087634)), their
+    pairs worked again from the posted rows (the label swaps by the two-direction rule, 100,000
+    draws of a seeded generator), and `count.mjs` and that kit's `run.sh` (tag
+    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
@@ -12166,7 +12270,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     developers, or when Chromium's panel stops showing an event stream's messages.
 26. <a id="limit-origin-scheme"></a>Without `Policy::hsts`, a write or a WebSocket handshake that carries no `Sec-Fetch-Site`
     (every handshake from Chromium and Firefox, and any write from a plain-http page, to which
-    browsers send none) is held to its `Origin`'s name and port against `Host`, not its scheme: a
+    browsers send none) is checked against the request-target's authority, or `Host` when the
+    target names none. Only the `Origin`'s name and port are compared, not its scheme: a
     plain-http page on the app's host passes against the app served over HTTPS
     ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
     The app cannot tell which scheme it is served over: a proxy or CDN in front usually ends TLS

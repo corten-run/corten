@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe } from "./contract.mjs";
 import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, jsonTimingInvocation, nativeArtifactRoot } from "../registry.mjs";
-import { catalogFleetPlacement, jsonFleetPlacement } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, jsonFleetPlacementFor } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
@@ -70,7 +70,7 @@ export function bindGroupCampaign(input, mode = "dedicated") {
   assert.ok(groupNames.includes(group), "unknown registry group");
   assert.ok(mode === "dedicated" || alternateCampaignPlacements.includes(mode) && group !== "catalog-page"
     || mode === catalogFleetPlacement.loadLayout && group === "catalog-page"
-    || mode === jsonFleetPlacement.loadLayout && group === "json-api", "unknown group placement");
+    || jsonFleetPlacementFor(group, mode), "unknown group placement");
   return bindNativeCampaign(request, [group], groupCampaignSchema, mode);
 }
 function bindNativeCampaign(input, order, schema, mode) {

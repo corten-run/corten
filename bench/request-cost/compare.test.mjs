@@ -247,11 +247,11 @@ test("a change inside the budget passes as counted, and the table gives every ru
 
 test("one case over the budget does not pass as counted, and the verdict names it and the measured way", (t) => {
   const { base, head } = builds(t, (_, build) => {
-    build.count.unstaged = [20_103, 20_103, 20_104];
+    build.count.unstaged = [20_104, 20_104, 20_105];
   });
   const { markdown, status, holds } = compare(base, head, { description: counting });
   assert.deepEqual([status, holds], [1, false]);
-  assert.equal(verdict(markdown), `**Does not pass as counted:** \`unstaged\` runs 101 more instructions a request than base's 20,002, over the budget of 100 (+0.5%). ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
+  assert.equal(verdict(markdown), `**Does not pass as counted:** \`unstaged\` runs 101 more instructions a request than base's 20,003, over the budget of 100 (+0.5%). ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
   assert.equal(markdown.match(/\| over the budget \|/g)?.length, 1);
   // At a depth of 16 a case is held to the budget as well.
   const deep = builds(t, (_, build) => {
@@ -426,7 +426,7 @@ test("a probe that did not build is said once: against base it leaves the change
   assert.equal(counted.status, 1);
   assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
   assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
-  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`\.$/m);
+  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`\.$/m);
   const measured = compare(empty, head, { description: measuring });
   assert.deepEqual([measured.status, measured.holds], [0, false]);
   assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}. ${readMeasured}`);
@@ -459,7 +459,7 @@ test("a change declared measured is reported and never failed on its figures", (
   });
   const { markdown, status, holds } = compare(base, head, { description: measuring });
   assert.deepEqual([status, holds], [0, false]);
-  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,995 more instructions a request than base's 20,005, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: the median of head's growths, 45,056,000 bytes over 5,000 connections, is above base's 13,209,600 by 31,846,400, more than the 12,288 allowed (the larger of base's span and a 4,096-byte page). ${readMeasured}`);
+  assert.equal(verdict(markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: \`page\` runs 9,994 more instructions a request than base's 20,006, over the budget of 100 (+0.5%); \`page\` makes 4,000 more allocations in 1,000 requests (16,000 to 20,000); idle memory before any byte rises: the median of head's growths, 45,056,000 bytes over 5,000 connections, is above base's 13,209,600 by 31,846,400, more than the 12,288 allowed (the larger of base's span and a 4,096-byte page). ${readMeasured}`);
   const inside = builds(t);
   assert.equal(verdict(compare(inside.base, inside.head, { description: measuring }).markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would pass. ${readMeasured}`);
   // The one line is the declaration where it stands, an example's fence as well: the verdict says where it was read.

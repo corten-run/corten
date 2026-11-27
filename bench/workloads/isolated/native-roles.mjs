@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { budgets } from "../../hardening/plan.mjs";
+import { jsonFleetPlacementFor } from "../cloud-contract.mjs";
 
 export const clientActorCpus = Object.freeze({ client: "4-7" });
 export const liveActorCpus = Object.freeze({ application: "1", browser: "4-7" });
@@ -71,7 +72,12 @@ export function nativeControlPartition(binding) {
     assert.fail(group + ": native CPU partition absent");
   }
   const size = binding.host?.size;
-  if (size !== undefined) assert.ok(["c-8", "c-16"].includes(size), "unknown native CPU host size");
+  const json = jsonFleetPlacementFor("json-api", binding.campaignMode);
+  if (size === "c-32" || json?.host.size === "c-32") {
+    assert.ok(group === "json-api" && size === "c-32" && json?.host.size === size
+      && resources.requestedCpuEnv?.JSON_API_LOAD_LAYOUT === json.loadLayout, "c-32 host requires the JSON API c-32 placement");
+    for (const role of roles) assert.equal(cpus[role], json.cpuEnv[`JSON_API_${role.toUpperCase()}_CPUS`], "native CPU partition differs from the JSON API c-32 layout");
+  } else if (size !== undefined) assert.ok(["c-8", "c-16"].includes(size), "unknown native CPU host size");
   verifyNativePartition(cpus, roles, size === undefined ? undefined : Number(size.slice(2)));
   if (fixed) assert.deepEqual(cpus, fixed, "native CPU partition differs from the runner");
   if (liveGroup(group)) {

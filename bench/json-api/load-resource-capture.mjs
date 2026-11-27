@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { timestampNs } from "./fixed-stream.mjs";
-import { acquireLoadResources, LoadProcessAbsentBeforeRead, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourceInterval, loadResourcePeriodMs } from "./load-resource-proof.mjs";
+import { acquireLoadResources, LoadProcessAbsentBeforeRead, LoadProcessExitedBeforeCounters, loadResourceCaptureSchema, loadResourceFirstSlot, loadResourceInterval, loadResourcePeriodMs } from "./load-resource-proof.mjs";
 
 const maxRows = 360;
 const msNs = (ms) => BigInt(ms) * 1_000_000n;
@@ -48,6 +48,13 @@ export function startLoadResourceCapture({ id, inspect, acquire = acquireLoadRes
         return { capture, missed: { sequence, error: new Error("missing scheduled load acquisition") } };
       try { capture.rows.push(acquire({ id, pid: capture.live.pid, sequence })); }
       catch (error) {
+        if (error instanceof LoadProcessExitedBeforeCounters) {
+          const prior = capture.rows.at(-1)?.after;
+          if (!prior || prior.processObject !== error.processObject || prior.startTicks !== error.startTicks) throw error;
+          // No counters were read. The ordinary exact terminal receipt decides
+          // if this was an optional tail; every full slot is still required.
+          return { capture, missed: { sequence, error } };
+        }
         if (!(error instanceof LoadProcessAbsentBeforeRead)) throw error;
         // No resource read began. An exact clean exit corroborates the missing
         // PID independently of the relative wall-clock readings. Replay still

@@ -51,6 +51,7 @@ test("each case is its request, byte for byte, to its configuration", () => {
   const expected = {
     get: ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
     post: ["api", `POST /baseline11?a=1&b=2 HTTP/1.1\r\n${host}Content-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
+    "post-absolute": ["api", `POST http://localhost:8123/baseline11?a=1&b=2 HTTP/1.1\r\n${host}Origin: http://localhost:8123\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
     unstaged: ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
     pipeline: ["api", `GET /pipeline HTTP/1.1\r\n${host}\r\n`],
     text: ["pages", `GET /text HTTP/1.1\r\n${host}\r\n`],
@@ -105,6 +106,7 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
   for (const [name, body] of Object.entries({
     get: "3",
     post: "23",
+    "post-absolute": "23",
     unstaged: "3",
     pipeline: "ok",
     text: "ok",
