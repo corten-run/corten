@@ -4001,12 +4001,13 @@ struct Late(Waited);
 
 /// `fut`'s output, or [`Late`] once it has waited `limit`. The timer starts the first time `fut`
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
-/// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
+/// one: about 600 ns a request measured with `tokio::time::timeout`. It is the connection's where
+/// the connection keeps one ([`crate::deadline`]). Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
 async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
     use std::{pin::pin, task::Poll};
     let mut fut = pin!(fut);
-    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut timer = pin!(crate::deadline::Timer::Unset);
     std::future::poll_fn(|cx| {
         crate::extract::forget_wait();
         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
@@ -4026,7 +4027,7 @@ async fn within_late<S: crate::app::Steps>(
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
     let mut fut = pin!(Some(next.run(pending.take())));
-    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut timer = pin!(crate::deadline::Timer::Unset);
     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {
         if limit.is_some() {
@@ -4058,18 +4059,11 @@ async fn within_late<S: crate::app::Steps>(
 
 #[inline]
 fn waited_until<T>(
-    mut timer: std::pin::Pin<&mut Option<tokio::time::Sleep>>,
+    timer: std::pin::Pin<&mut crate::deadline::Timer>,
     limit: std::time::Duration,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<Result<T, Late>> {
-    use std::task::Poll;
-    if timer.is_none() {
-        timer.set(Some(tokio::time::sleep(limit)));
-    }
-    match timer.as_pin_mut().map(|timer| timer.poll(cx)) {
-        Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
-        _ => Poll::Pending,
-    }
+    timer.poll(limit, cx).map(|()| Err(Late(crate::extract::waited())))
 }
 
 thread_local! {
