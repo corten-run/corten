@@ -266,8 +266,13 @@ impl Next for Handle<'_> {
 #[inline]
 fn handle<'a>(ends: &'a Ends<'a>, mut req: Request) -> impl Future<Output = Response> + Send + 'a {
     // A whole document in an app with layout reads: the route's page is filled before the app's
-    // middleware sees it.
-    let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+    // middleware sees it. Looked for only in such an app, the one the stages start reads in
+    // (`page::render_errors`): in any other app, the look it saves pays for the signal's below.
+    let here = if ends.signal.shared().is_some_and(|shared| !shared.layout_reads.is_empty()) {
+        req.extensions().get::<crate::layout::StartHere>().cloned()
+    } else {
+        None
+    };
     // A request a middleware rebuilt, with a signal of its own or none: the signal its `Req`s
     // mark (`Req::rendered`), read as the answer comes back. The usual request carries the
     // stages' own, which `Keyed` marks.
