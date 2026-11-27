@@ -678,17 +678,20 @@ each document the tab makes: the document once the load returns and once the wai
 must both be the first, so a read again that loads the page in full, even before Playwright's load
 returns, is not taken for the load's own document. Its route and request listener are
 removed however its cases end, each removal and each read of the page bounded. Wherever a case
-leaves by the header's link and then requires no further read for a while, the press and the wait
-for News are each bounded to 30 seconds by the smoke's clock, and sending the alert until it says
+other than the check that navigating away stops the reads (below) leaves by the header's link and
+then requires no further read for a while, the press and the wait for News are each bounded to 30
+seconds by the smoke's clock, and sending the alert until it says
 `Saving...` in the patch cases shares one budget of 30 seconds, checked as each of its steps starts,
 so none starts once they have passed; a driver that never answers ends the run with its reason
 rather than keeping the case from its cleanup. Every other driver action the cases of a page reading
 itself again, of a patch's reads (its refusals included), of a write's own page and of the held slow
 part make before a check or its cleanup (a click, fill, key press or load) is bounded the same way
 to Playwright's own 30 seconds, every read of the page to five seconds, and each driver wait to its
-own time by the smoke's clock. The check that navigating away stops the reads is the exception: it
-is as it was before these bounds, its navigations, press and waits under Playwright's own timeouts
-and its 2.2 s by Playwright's timer, until [#2217 The News leave smoke case ("navigating away stops the reads") needs a deterministic press and a request-identity check](https://github.com/corten-run/corten/issues/2217) reworks it. Where a check rests on a wait, that wait must come in its time,
+own time by the smoke's clock. The check that navigating away stops the reads is the exception, with
+no bound by the smoke's clock at all: it is as it was before these bounds, its navigations, press
+and waits under Playwright's own timeouts, its 2.2 s by Playwright's timer, and its reads of the page
+(`page.evaluate()`, the write it sends among them) under no timeout, so a page that never answers one
+keeps the case from its cleanup, until [#2217 The News leave smoke case ("navigating away stops the reads") needs a deterministic press and a request-identity check](https://github.com/corten-run/corten/issues/2217) reworks it. Where a check rests on a wait, that wait must come in its time,
 so one whose answer comes late or never counts as one that did not come: each wait for `Saved.` (six
 seconds, required by every check that waits for it), the `Saving...` a submit draws
 before its `Saved.`, and a refused field's mark (five seconds), which must also still be on the
