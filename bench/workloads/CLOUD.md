@@ -974,9 +974,10 @@ uncertain, retains locks and cannot take this recovery shortcut.
 A single group whose only create has an unacknowledged response and no saved
 droplet or action ID may be isolated in its existing continuation root. This
 does not settle the POST, record deletion, release the child or fleet locks, or
-allow the failed group to retry. Its row stays `quarantined-create`, not verified
-or retryable. Other groups can continue only in the same provider account, and
-their approved create uses one fresh, account-bracketed provider response for
+allow the original reservation to issue another POST. Its row stays
+`quarantined-create`, not verified or retryable. Other groups can continue only
+in the same provider account, and their approved create uses one fresh,
+account-bracketed provider response for
 both the quarantine and historical ID checks and the ordinary pre-create
 census. Only a complete inventory with unique, checkable rows proves absence;
 there is no second read, page or retake. Nonempty pagination links, an inconsistent
@@ -996,6 +997,25 @@ custody. Read-only continuation reports show a valid witness as a blocked
 `quarantined-create-witnessed` attempt and still replay unrelated result
 evidence. Neither a sighting nor a quarantine report authorizes binding or
 cleanup.
+
+A failed group may instead prepare a distinct, higher round in the same root
+and provider account with `--replace-quarantined-create <quarantine-file-sha256>`.
+Use this only after independently checking the original custody proof and
+reviewing the risk that the unacknowledged allocation could still appear. The
+prepared fleet binds exactly one earlier, same-group quarantine. It has its own
+ownership, launch intent and approval. It takes the same account-bracketed
+census as another group: any sighting in the census is witnessed and refuses
+before the new create intent. After the intent, a final local admission check
+before hand-off to the provider worker refuses on changed custody. This
+proven-unsent refusal withdraws only the replacement's create intent, leaving
+the custody records as found. The only controller path that publishes a witness
+is the pre-create census under the shared continuation lock; another launch
+cannot publish one while that lock is held. The local check does not see
+out-of-band writes during worker hand-off. This does not prove that an earlier
+create cannot surface at the provider later.
+A replacement does not settle or edit the original
+attempt, and another replacement requires the preceding attempt to be settled
+or superseded under the ordinary rules for a never-launched reservation.
 
 The operator must stop dispatch to the root and positively account for the
 original local controller, worker and their descendants. A stale PID, a missing

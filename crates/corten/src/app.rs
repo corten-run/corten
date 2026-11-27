@@ -2291,9 +2291,18 @@ pub(crate) struct Scope {
     shell: u64,
     /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
     lines: http::HeaderMap,
+    /// What those say of an answer's tag ([`cache::tag`]).
+    beside_a_tag: cache::BesideATag,
     /// Its middleware, after the app's: each area's around it, outermost first, then its API's
     /// (with the APIs' around it).
     middleware: crate::middleware::Stack,
+}
+
+#[cfg(test)]
+impl Scope {
+    /// The offsets of `own` and `beside_a_tag`, for the router's test of a scope's layout.
+    pub(crate) const OWN_AND_BESIDE_A_TAG: (usize, usize) =
+        (std::mem::offset_of!(Scope, own), std::mem::offset_of!(Scope, beside_a_tag));
 }
 
 /// Every area's and API's scope and the app's, by path: for a request whose route cannot say
@@ -2321,16 +2330,24 @@ impl Scopes {
             around.sort_by_key(|area| area.prefix.len());
             around
         };
+        // A scope's lines, with what they say of an answer's tag: the one place both are made.
+        let scope_lines = |csp: &Csp, page| {
+            let lines = policy.lines(csp, page);
+            let beside_a_tag = cache::BesideATag::of(&lines);
+            (lines, beside_a_tag)
+        };
         let mut prefixed: Vec<(String, Arc<Scope>)> = Vec::with_capacity(areas.len() + mounts.len());
         for area in areas {
             let around = around(area.prefix);
             let (csp, shell) = policy.csp_for(area.prefix);
+            let (lines, beside_a_tag) = scope_lines(&csp, true);
             let scope = Scope {
                 own: false,
                 mount: None,
                 deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
                 body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
-                lines: policy.lines(&csp, true),
+                lines,
+                beside_a_tag,
                 csp,
                 shell,
                 middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
@@ -2347,15 +2364,26 @@ impl Scopes {
                 mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
             let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
             let prefix = mount.prefix.clone();
-            let lines = policy.lines(&csp, false);
-            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, middleware };
+            let (lines, beside_a_tag) = scope_lines(&csp, false);
+            let scope =
+                Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, beside_a_tag, middleware };
             prefixed.push((prefix, Arc::new(scope)));
         }
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         let app = |own| {
             let csp = policy.csp.clone();
-            let lines = policy.lines(&csp, true);
-            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, lines, middleware: Default::default() })
+            let (lines, beside_a_tag) = scope_lines(&csp, true);
+            Arc::new(Scope {
+                own,
+                mount: None,
+                deadline,
+                body_limit,
+                csp,
+                shell: 0,
+                lines,
+                beside_a_tag,
+                middleware: Default::default(),
+            })
         };
         Scopes { own_paths, own: app(true), app: app(false), prefixed }
     }
@@ -2780,7 +2808,7 @@ impl<S: Steps> Layer<S> {
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {
-                res = cache::tag(res, &has).await;
+                res = cache::tag(res, &has, ready.then_some(&scope.beside_a_tag)).await;
             }
         }
         if let Some(mount) = mount {
