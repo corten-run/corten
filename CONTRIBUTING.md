@@ -283,9 +283,12 @@ the method, body and other headers as they were, and a case's route that calls `
 `fetch` sends the request without them too. That route is set with the context's, or one of its
 pages', first route (the WebKit gate's one-shot route does not set it) and stays until the context
 closes, so a mark that outlives its case's route, or one on a request the route leaves out, is
-still taken off. A context with no route keeps the browser's HTTP cache; one with a route bypasses
-it from then on. The diagnostic replay of the requests still loading sends no `smoke-*` header
-either. The first area, `scripts/smoke/marks.mjs`, checks all of this against a recording server.
+still taken off. The context's `unrouteAll` takes its other routes one at a time and never that
+one, waiting for the handlers still running or ignoring their errors as Playwright's own would, so
+a request sent meanwhile, or one a removed handler still holds, loses its marks too. A context with
+no route keeps the browser's HTTP cache; one with a route bypasses it from then on. The diagnostic
+replay of the requests still loading sends no `smoke-*` header either. The first area,
+`scripts/smoke/marks.mjs`, checks all of this against a recording server.
 In Playwright 1.64.1, Firefox sometimes acknowledged a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
 form validation

@@ -673,31 +673,99 @@ function guardMarks(context) {
       guarded = undefined;
       throw error;
     }));
-  /** Each case's handler, as registered: it is given its route through `unmarking`. @type {WeakMap<Function, Function>} */
-  const handlers = new WeakMap();
-  /** @param {any} handler */
-  const wrapped = (handler) => {
-    let own = handlers.get(handler);
-    if (!own) handlers.set(handler, (own = (/** @type {import("@playwright/test").Route} */ r, /** @type {any} */ request) => handler(unmarking(r), request)));
-    return own;
+  /**
+   * A case handler running on a request, until it settles: `ignore` makes an error it throws act as
+   * Playwright's `ignoreErrors` makes it act, and `done` settles when it does.
+   * @typedef {{ ignore: boolean, done: Promise<void> }} Invocation
+   */
+  /**
+   * `watchRoutes`'s registrations on one target (the context or a page): each case's handler as
+   * registered, which is given its route through `unmarking`, and the invocations of it running now.
+   */
+  const registrations = () => {
+    /** @type {WeakMap<Function, Function>} */
+    const handlers = new WeakMap();
+    /** @type {WeakMap<Function, Set<Invocation>>} */
+    const running = new WeakMap();
+    /** @param {any} handler */
+    const wrapped = (handler) => {
+      let mine = handlers.get(handler);
+      if (mine) return mine;
+      /** @type {Set<Invocation>} */
+      const invocations = new Set();
+      mine = (/** @type {import("@playwright/test").Route} */ r, /** @type {any} */ request) => {
+        const invocation = /** @type {Invocation} */ ({ ignore: false });
+        /** @type {Promise<unknown>} */
+        let started;
+        try {
+          started = Promise.resolve(handler(unmarking(r), request));
+        } catch (error) {
+          started = Promise.reject(error);
+        }
+        const result = started.catch(async (/** @type {unknown} */ error) => {
+          if (!invocation.ignore) throw error;
+          // As Playwright's `ignoreErrors` does, the routes after this one get the request, and
+          // the guard is still among them; a route already handled refuses, which is fine.
+          await r.fallback().catch(() => {});
+        });
+        invocation.done = result.then(() => {}, () => {});
+        invocations.add(invocation);
+        invocation.done.then(() => invocations.delete(invocation));
+        return result;
+      };
+      handlers.set(handler, mine);
+      running.set(mine, invocations);
+      return mine;
+    };
+    /** @param {any} handler */
+    const registered = (handler) => (handler && handlers.get(handler)) ?? handler;
+    /** @param {any} own */
+    const runningOf = (own) => [...(running.get(own) ?? [])];
+    return { wrapped, registered, runningOf };
   };
-  /** @param {any} handler */
-  const registered = (handler) => (handler && handlers.get(handler)) ?? handler;
-  /** @param {any} target @param {(...args: any[]) => Promise<void>} add @param {(...args: any[]) => Promise<void>} remove */
+  /**
+   * @param {any} target
+   * @param {(...args: any[]) => Promise<void>} add
+   * @param {(...args: any[]) => Promise<void>} remove
+   */
   const watchRoutes = (target, add, remove) => {
+    const { wrapped, registered, runningOf } = registrations();
     target.route = async (/** @type {any} */ url, /** @type {any} */ handler, /** @type {any} */ options) => {
       if (options?.times === undefined) await guarding();
       return add(url, wrapped(handler), options);
     };
     target.unroute = (/** @type {any} */ url, /** @type {any} */ handler) => remove(url, registered(handler));
+    return { wrapped, registered, runningOf };
   };
-  watchRoutes(context, route, unroute);
-  // Removing every context route would take the guard too, so it is set again at once.
+  const { wrapped, registered, runningOf } = watchRoutes(context, route, unroute);
+  /** The routes set on the context through it (the guard is not one), for `unrouteAll`. @type {{ url: any, handler: any }[]} */
+  let own = [];
+  /** Whether `a` and `b` are the same route address, as Playwright's `unroute` compares them. @param {any} a @param {any} b */
+  const sameUrl = (a, b) => a === b || (a instanceof RegExp && b instanceof RegExp && a.source === b.source && a.flags === b.flags);
+  const contextRoute = context.route;
+  const contextUnroute = context.unroute;
+  context.route = (/** @type {any} */ url, /** @type {any} */ handler, /** @type {any} */ options) => {
+    own.push({ url, handler: wrapped(handler) });
+    return contextRoute(url, handler, options);
+  };
+  context.unroute = (/** @type {any} */ url, /** @type {any} */ handler) => {
+    own = own.filter((r) => !(sameUrl(r.url, url) && (!handler || r.handler === registered(handler))));
+    return contextUnroute(url, handler);
+  };
+  // Playwright's own `unrouteAll` takes the guard with the rest, and a handler it took that is
+  // still running then falls back past the guard: Playwright skips the routes no longer set, and
+  // sends the request on with its marks. So the context's routes are taken one by one, as
+  // `unroute` takes them, and the guard stays set throughout; `wait` then waits for the handlers
+  // that were running, and `ignoreErrors` makes an error one of them throws hand the request to
+  // the routes after it (the guard), as Playwright's own would. Routes from a HAR are not used.
   context.unrouteAll = async (options) => {
-    const had = guarded !== undefined;
-    guarded = undefined;
-    await unrouteAll(options);
-    if (had) await guarding();
+    const removed = own;
+    own = [];
+    if (guarded === undefined) return unrouteAll(options);
+    const invocations = removed.flatMap((r) => runningOf(r.handler));
+    if (options?.behavior === "ignoreErrors") for (const invocation of invocations) invocation.ignore = true;
+    await Promise.all(removed.map((r) => unroute(r.url, r.handler)));
+    if (options?.behavior === "wait") await Promise.all(invocations.map((invocation) => invocation.done));
   };
   /** The pages whose routes are watched. */
   const pages = new WeakSet();
