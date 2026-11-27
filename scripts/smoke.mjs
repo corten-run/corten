@@ -24,7 +24,7 @@ import { pageWrites } from "./smoke/page-writes.mjs";
 import { writeFailures } from "./smoke/write-failures.mjs";
 import { feedRecovery } from "./smoke/feeds.mjs";
 import { patchUploads, uploads } from "./smoke/uploads.mjs";
-import { prefetch, navAlso, navFar } from "./smoke/prefetch.mjs";
+import { prefetch, navAlso, navFar, navNul } from "./smoke/prefetch.mjs";
 import { pageRefresh } from "./smoke/page-refresh.mjs";
 import { dataClients } from "./smoke/data-clients.mjs";
 import { withoutJs } from "./smoke/without-js.mjs";
@@ -71,6 +71,7 @@ await runSmoke(async (browser) => {
   await prefetch(swaps, page, navRequests, browser, errors, noteBorder, noSwaps);
   await navAlso(browser, swaps);
   await navFar(browser, swaps);
+  await navNul(browser, swaps);
   await pageRefresh(page, swaps, noSwaps, errors, signsIn);
   await uploads(page, live, errors, signsIn);
   await dataClients(page, browser);

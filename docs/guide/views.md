@@ -583,10 +583,12 @@ markup puts them, so render every link it gives back: leave out an entry the use
 before the call. Each entry comes with its item (a label, or the row it was read from), which
 `links()` hands back beside its link. An entry is a route or a `Local` path, written as the
 browser asks for it (a link to another site is a plain link, never current). A link of `req.nav`
-or `req.nav_of` whose URL is not a path on this site, one `/` and then not `/`, `\`, a tab or a
-line break (`//host/x`, `/\host/x`, which only a route implemented by hand writes, or a full or a
-relative URL), is never current, on the server and in the runtime, which test the same `href`
-text; the browser would read its pathname as another host's.
+or `req.nav_of` whose URL is not a path on this site, one `/` and then not `/` or `\` (`//host/x`,
+`/\host/x`, which only a route implemented by hand writes, or a full or a relative URL), is never
+current, on the server and in the runtime, which test the same `href` text; the browser would read
+its pathname as another host's. A tab or a line break straight after the first `/` is refused too,
+as a syntax restriction rather than a browser's rule: browsers drop it, so `/<tab>old` is this
+site's `/old`, and only `/<tab>/host/x` is another host's.
 
 ```rust,ignore
 let nav = req.nav_of(items.iter().map(|item| (NavTo::section(&item.href), item)));
@@ -607,8 +609,10 @@ entry's own URL is compared by its key too, so a deeper entry still wins in anot
 other address that is not a path on this site (`//host/old`) is left out, and an entry whose own
 URL is not one is current at none of its addresses. A NUL in an entry's own URL, which only a
 route implemented by hand writes, is ranked as the HTML parser leaves it in the `href`, U+FFFD
-(`/old%EF%BF%BDx`, not `/old%00x`), as the runtime reads it; one in an other address is keyed
-`%00`, as the URL parser encodes it. The server makes the request's path the same
+(`/old%EF%BF%BDx`, not `/old%00x`), as the runtime reads it. An other address holding a raw NUL
+is left out and the entry is never current by it: Chromium and WebKit ask for it with `%00` and
+Firefox cuts it at the NUL, so no one key holds it in every engine. An app that means that address
+writes the escape, `%00`, which is kept. The server makes the request's path the same
 key and the runtime `location.pathname`, and each compares
 the keys as plain text, so for every address Corten writes they mark the same entry at first render
 and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these

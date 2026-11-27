@@ -325,8 +325,9 @@ fn is_current(path: &str, href: &str, section: bool) -> bool {
 }
 
 /// Whether a nav link's URL, as written, is a path on this site, the only kind a nav compares with
-/// the page: one `/` first, then neither `/` nor `\` nor a tab or line break, which a browser drops
-/// (`//host/x`, `/\host/x` and `/<tab>/host/x` name another host). Anything else (a full URL, a
+/// the page: one `/` first, then neither `/` nor `\` (`//host/x` and `/\host/x` name another
+/// host) nor a tab or line break, a syntax restriction kept for safety: a browser drops one, so
+/// `/<tab>x` is this site's `/x` and `/<tab>/host/x` another host's. Anything else (a full URL, a
 /// relative one, `?tab=2`, one that starts with a space) is never current, on the server and in the
 /// runtime (`isPath` in `corten.js`), which tests the same text, the `href` the server wrote. The
 /// start of [`crate::Local::parse`]'s rule, without its refusal of a character the URL Standard
@@ -585,16 +586,21 @@ impl<'a> NavTo<'a> {
     /// `/old%7Chome`, and marked by its runtime, whose `location.pathname` keeps `%7c`, as an entry
     /// at `/a|b` is in Chromium, which asks for and shows `/a%7Cb`.
     ///
-    /// An address that is not a path on this site, `//host/old` (or `/\host/old`, or a tab or line
-    /// break after the first `/`, which a browser drops), names another host, so it is left out,
-    /// as the runtime would read its pathname as that host's; and an entry whose own URL is one is
-    /// never current, at any of its addresses ([`Req::nav_of`]). Only a route implemented by hand
-    /// can write one.
+    /// An address that is not a path on this site, `//host/old` or `/\host/old`, names another
+    /// host, so it is left out, as the runtime would read its pathname as that host's; and an entry
+    /// whose own URL is one is never current, at any of its addresses ([`Req::nav_of`]). A tab or
+    /// line break straight after the first `/` is refused the same way, a syntax restriction kept
+    /// for safety rather than a browser's rule: a browser drops it, so `/<tab>old` is this site's
+    /// `/old`, and it names another host only when a `/` or `\` follows (`/<tab>/host/old`). Only a
+    /// route implemented by hand can write one.
     ///
     /// A NUL in the entry's own URL, which only a route implemented by hand writes, is read by the
     /// HTML parser as U+FFFD in the `href` the runtime parses, so the link to `/old<NUL>x` goes to
     /// `/old%EF%BF%BDx`, where the entry is ranked, not `/old%00x`. An other address is not an
-    /// `href`: a NUL in it is keyed `%00`, as the URL parser encodes it.
+    /// `href`, and one holding a raw NUL is not a usable address: Chromium and WebKit ask for
+    /// `/old%00x` and Firefox cuts it at the NUL and asks for `/old`, so it is left out and the
+    /// entry is never current by it, as for an address that is not a path on this site. An app that
+    /// means that address writes the escape, `/old%00x`, which is kept.
     ///
     /// A typed route or a [`crate::Local`], as the entry's own:
     ///
@@ -628,7 +634,8 @@ impl<'a> NavTo<'a> {
     /// let _ = corten::NavTo::page(&Settings).also(&"/governance");
     /// ```
     ///
-    /// Nor can a link name its other addresses by hand, in any case, which the server did not rank:
+    /// Nor can a tag write `data-nav-also` as an attribute of its own, in any case, which the server
+    /// did not rank (a spread of attribute pairs still passes it through, as it does `data-nav`):
     ///
     /// ```compile_fail
     /// use corten::prelude::*;
@@ -833,10 +840,11 @@ pub(crate) fn own_key_for_tests(url: &str) -> (Option<usize>, String) {
 /// `also`, separated by spaces, each as its comparison key ([`pathname`]), and leaves out one whose
 /// key, its `.` and `..` segments resolved, has an escaped unreserved character
 /// ([`crate::route::escapes_unreserved`]), which WebKit asks for in another spelling than its
-/// `location.pathname` shows, and one that is not a path on this site ([`is_path`]), which is never
-/// compared. An entry left with none is written as one without them. Each URL is written straight
-/// into the paths, and one that is its own key ([`own_key`]) is kept as written. Out of line, so a
-/// nav without them is drawn as it was before they existed.
+/// `location.pathname` shows, one that is not a path on this site ([`is_path`]), which is never
+/// compared, and one holding a raw NUL, which engines ask for at different addresses. An entry left
+/// with none is written as one without them. Each URL is written straight into the paths, and one
+/// that is its own key ([`own_key`]) is kept as written. Out of line, so a nav without them is drawn
+/// as it was before they existed.
 #[cold]
 #[inline(never)]
 fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Also>>) {
@@ -857,7 +865,13 @@ fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Al
             continue;
         }
         match own_key(&paths[at..]) {
+            // A raw NUL anywhere (in the query or fragment of an address that is its own key,
+            // which refuses one in its path): not a usable address. Firefox cuts the URL there and
+            // asks for what comes before it where Chromium and WebKit ask for `%00`, so no key holds
+            // it in every engine; an app that means `%00` writes it so.
+            Some(len) if paths[at + len..].contains('\0') => paths.truncate(start),
             Some(len) => paths.truncate(at + len),
+            None if paths[at..].contains('\0') => paths.truncate(start),
             None => {
                 let url = paths.split_off(at);
                 pathname(&url, paths);
@@ -2449,9 +2463,10 @@ impl Req {
     /// them; a link of [`Req::nav`] or [`Req::nav_section`] is still judged alone. An entry whose
     /// page also answers at another address is current there too with [`NavTo::also`]. Leave out an
     /// entry the user may not see before the call, not in the markup: the runtime ranks only the
-    /// links in the page. An entry whose URL is not a path on this site, one `/` and then not `/`,
-    /// `\`, a tab or a line break (`//host/x`, which only a route implemented by hand writes), is
-    /// never current, on the server and in the runtime alike.
+    /// links in the page. An entry whose URL is not a path on this site, one `/` and then not `/` or
+    /// `\` (`//host/x`, which only a route implemented by hand writes), is never current, on the
+    /// server and in the runtime alike; nor, as a syntax restriction rather than a browser's rule, is
+    /// one with a tab or a line break straight after its first `/`.
     ///
     /// ```
     /// use corten::prelude::*;

@@ -603,3 +603,96 @@ export async function navFar(browser, swaps) {
   check(name, seen.length === 0, seen.join("; ") || "server and runtime marked only the sections, and Here at its kept address");
   await context.close();
 }
+
+/**
+ * `NavTo::also` naming an older address that holds a raw NUL, `/smoke/nul/raw<NUL>x`, which is not
+ * a usable address: Chromium and WebKit ask for it as `/smoke/nul/raw%00x` and Firefox cuts it at
+ * the NUL and asks for `/smoke/nul/raw`. The server leaves it out of `data-nav-also` and never
+ * marks the entry by it, so only the section is current at every engine's own request for it (a
+ * full load from a stored link, `data-reload`) and, in the runtime, after a client navigation to it.
+ * The same address written with the escape, `/smoke/nul/esc%00x`, is kept, and there the entry is
+ * current, by the server and the runtime alike.
+ */
+export async function navNul(browser, swaps) {
+  const name = "a nav entry is never current by an older address holding a raw NUL, and is at the escaped one, by the server and the runtime alike";
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const raw = "/smoke/nul/raw\u0000x";
+  const escaped = "/smoke/nul/esc%00x";
+  /** Each link to follow, with the marks of the section and the entry there. */
+  const visits = [
+    [raw, "page -"],
+    [escaped, "- page"],
+  ];
+  /** The aria-current of the nav's section and entry links in one answer. */
+  const marks = (/** @type {string} */ html) =>
+    ["Nul", "Here"].map((label) => (new RegExp(`<a [^>]*aria-current="page"[^>]*>${label}</a>`).test(html) ? "page" : "-")).join(" ");
+  /** @type {string[]} */
+  const seen = [];
+  /** Where each engine's own request for each link went. @type {string[]} */
+  const reached = [];
+  const drawn = await (await page.request.get(`${base}/smoke/nul/here`)).text();
+  const written = drawn.match(/<a href="\/smoke\/nul\/here" data-nav data-nav-group="[0-9a-f]{8}(\+?)"(?: data-nav-also="([^"]*)")?/);
+  if (written?.[1] !== "+" || written[2] !== escaped) seen.push(`server wrote group mark "${written?.[1]}" and paths "${written?.[2]}"`);
+  // Each request an engine sends for the raw address, and the escaped one, outside the browser.
+  for (const [href, expected] of [["/smoke/nul/raw%00x", "page -"], ["/smoke/nul/raw", "page -"], [escaped, "- page"]]) {
+    const response = await page.request.get(new URL(href, base).href);
+    const at = `${response.status()} ${marks(await response.text())}`;
+    if (at !== `200 ${expected}`) seen.push(`server at ${href}: ${at}`);
+  }
+  /** Puts a link to `href` in the shell, beside unmarked copies of the nav's links; with `reload` the browser follows it with a full load. */
+  const linkTo = (/** @type {string} */ href, /** @type {boolean} */ reload) =>
+    page.evaluate(
+      ([href, reload]) => {
+        const nav = document.createElement("nav");
+        nav.id = "nul-copy";
+        for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
+          const copy = /** @type {Element} */ (link.cloneNode(true));
+          copy.removeAttribute("aria-current");
+          nav.append(copy);
+        }
+        const to = document.createElement("a");
+        to.id = "nul-visit";
+        // As a stored link carries it: set as text, so a raw NUL stays one (the HTML parser would
+        // make it U+FFFD).
+        to.setAttribute("href", /** @type {string} */ (href));
+        if (reload) to.setAttribute("data-reload", "");
+        to.textContent = "Visit";
+        document.querySelector("header")?.append(nav, to);
+      },
+      [href, reload],
+    );
+  for (const [href, expected] of visits) {
+    // The browser's own request for the link, a full load.
+    await page.goto(`${base}/smoke/nul/here`);
+    await linkTo(href, true);
+    const answer = page.waitForResponse((r) => r.request().isNavigationRequest() && r.request().frame() === page.mainFrame());
+    await page.click("#nul-visit");
+    const response = await answer;
+    const path = new URL(response.url()).pathname;
+    reached.push(path);
+    const at = `${response.status()} ${marks(await response.text())}`;
+    if (at !== `200 ${expected}`) seen.push(`server at the browser's request for ${JSON.stringify(href)} (${path}): ${at}`);
+    await page.waitForLoadState();
+  }
+  if (!swaps) {
+    check(name, seen.length === 0, seen.join("; ") || `server only, requests ${reached.join(" ")}: without swaps a client navigation loads the page in full`);
+    skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
+    await context.close();
+    return;
+  }
+  for (const [href, expected] of visits) {
+    await page.goto(`${base}/smoke/nul/here`);
+    await linkTo(href, false);
+    const before = await page.evaluate(() => location.pathname);
+    await page.click("#nul-visit");
+    await page.waitForFunction((before) => location.pathname !== before && document.title.startsWith("Nav nul"), before);
+    await page.waitForFunction(() => !!document.querySelector("#nul-copy a[aria-current]"), null, { timeout: 5000 }).catch(() => {});
+    const copies = await page.evaluate(() => Array.from(document.querySelectorAll("#nul-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
+    const at = await page.evaluate(() => location.pathname);
+    reached.push(at);
+    if (copies !== expected) seen.push(`runtime at ${at}: ${copies}`);
+  }
+  check(name, seen.length === 0, seen.join("; ") || `server and runtime marked the section at the raw address and the entry at the escaped one, at ${reached.join(" ")}`);
+  await context.close();
+}

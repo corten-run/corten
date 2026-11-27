@@ -2267,8 +2267,9 @@ function keyOf(path) {
 
 /**
  * Whether a nav link's `href`, as the server wrote it, is a path on this site, the only kind a nav
- * compares with the page: one `/` first, then neither `/` nor `\` nor a tab or line break, which
- * the browser drops (`//host/x`, `/\host/x` and `/<tab>/host/x` name another host). The server
+ * compares with the page: one `/` first, then neither `/` nor `\` (`//host/x` and `/\host/x` name
+ * another host) nor a tab or line break, a syntax restriction kept for safety: the browser drops one,
+ * so `/<tab>x` is this site's `/x` and `/<tab>/host/x` another host's. The server
  * tests the same text (`is_path`), so neither marks a link to another site, a relative URL or
  * `?tab=2`, whose pathname may be this page's. The server leaves such an address out of
  * `data-nav-also`.

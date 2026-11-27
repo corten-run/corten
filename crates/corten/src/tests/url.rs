@@ -765,8 +765,10 @@ fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
 /// parser as U+FFFD in the `href` the runtime parses, so the link goes to `/old%EF%BF%BDx`, not
 /// `/old%00x`. In a nav with other addresses the server ranks the entry at the path the runtime
 /// gets, so both mark the same entry: the entry at `/old%EF%BF%BDx` and at its other address, the
-/// section at `/old%00x`. An other address is not an `href`, so a NUL in it is keyed as the URL
-/// parser encodes it, `%00`, the path `location.pathname` shows there (#2119).
+/// section at `/old%00x`. An other address is not an `href`, and one holding a raw NUL is not a
+/// usable address: Chromium and WebKit ask for it with `%00` and Firefox cuts it at the NUL, so it
+/// is left out of `data-nav-also` and never makes the entry current, at any request an engine sends
+/// for it. One written with the escape, `%00`, is kept (#2119).
 #[test]
 fn a_nav_entry_with_a_nul_in_its_url_is_ranked_where_the_link_goes() {
     use crate::{
@@ -815,11 +817,24 @@ fn a_nav_entry_with_a_nul_in_its_url_is_ranked_where_the_link_goes() {
     let to = Hand("/old\0");
     assert_eq!(marked("/old%EF%BF%BD", NavTo::page(&to).also(&older)), ["Old"]);
     assert_eq!(marked("/old", NavTo::page(&to).also(&older)), ["Root"]);
-    // An other address with a NUL is where the URL parser puts it.
-    let (here, nul) = (Local::parse("/here").unwrap(), Hand("/older\0x"));
-    let links = drawn("/older%00x", NavTo::page(&here).also(&nul));
+    // An other address with a raw NUL is left out, alone or beside a kept one, wherever the NUL
+    // is, and no request an engine sends for it marks the entry.
+    let here = Local::parse("/here").unwrap();
+    for url in ["/older\0x", "/older\0", "/older\0x?tab=2", "/older?tab=\0", "/\0"] {
+        let nul = Hand(url);
+        for path in ["/older%00x", "/older%00", "/older", "/older%EF%BF%BDx", "/%00", "/"] {
+            assert_eq!(marked(path, NavTo::page(&here).also(&nul)), ["Root"], "{url:?} at {path:?}");
+            let links = drawn(path, NavTo::page(&here).also(&nul));
+            assert!(links.iter().all(|(_, out)| !out.contains("data-nav-also") && !out.contains(r#"+""#)), "{url:?}: {links:?}");
+        }
+        let links = drawn("/kept", NavTo::page(&here).also(&nul).also(&older));
+        assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{url:?}: {links:?}");
+    }
+    // The address written with the escape is kept, and current where every engine asks for it.
+    let escaped = Hand("/older%00x");
+    let links = drawn("/older%00x", NavTo::page(&here).also(&escaped));
     assert!(links[1].1.contains(r#" data-nav-also="/older%00x" aria-current="page""#), "{links:?}");
-    assert_eq!(marked("/older%EF%BF%BDx", NavTo::page(&here).also(&nul)), ["Root"]);
+    assert_eq!(marked("/older", NavTo::page(&here).also(&escaped)), ["Root"]);
 }
 
 /// An entry whose URL is empty ends where the entry before it does, so it is not taken for that

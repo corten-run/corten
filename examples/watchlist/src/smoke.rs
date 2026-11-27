@@ -8,7 +8,8 @@
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
 //! controls named after the members their paths read, a nav whose entry is current at an older
-//! address of its page, and navs whose entries lead off the site.
+//! address of its page, one whose entry names an older address holding a raw NUL, and navs whose
+//! entries lead off the site.
 use corten::{
     Error, LiveResponse,
     prelude::*,
@@ -118,6 +119,13 @@ pub mod url {
     pub struct FarPage<'a> {
         pub name: &'a str,
     }
+
+    /// A nav whose entry names an older address holding a raw NUL, which is not a usable address,
+    /// and the same address with the NUL escaped, which is (`NavTo::also`, #2119).
+    #[route("/smoke/nul/{name}", get = nul_page)]
+    pub struct NulPage<'a> {
+        pub name: &'a str,
+    }
 }
 
 /// An older address of the nav page, written by hand as an app's own route might write it, in a
@@ -170,6 +178,24 @@ async fn nav_team(req: Req, Params(_): Params<url::NavTeam<'_>>) -> HtmlResult {
         req.nav_of([(corten::NavTo::section(&settings).also(&team), "Settings"), (corten::NavTo::section(&people), "People")]);
     req.page(html! {
         <Layout req={&req} title="Nav team" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// The NUL nav: the section `/smoke/nul` and Here, which names `/smoke/nul/raw<NUL>x` as an older
+/// address and leaves it out, since engines ask for it at different addresses (Chromium and WebKit
+/// with `%00`, Firefox cut at the NUL, `/smoke/nul/raw`), and `/smoke/nul/esc%00x`, the address
+/// written with the escape, which it keeps. Here is current at `/smoke/nul/esc%00x` alone, the
+/// section at every other page under it.
+async fn nul_page(req: Req, Params(_): Params<url::NulPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/nul").expect("a local path");
+    let (raw, escaped) = (OlderNav("/smoke/nul/raw\0x"), OlderNav("/smoke/nul/esc%00x"));
+    let here = url::NulPage { name: "here" };
+    let nav =
+        req.nav_of([(corten::NavTo::section(&section), "Nul"), (corten::NavTo::page(&here).also(&raw).also(&escaped), "Here")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav nul" viewer={None} head="">
             <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
         </Layout>
     })
