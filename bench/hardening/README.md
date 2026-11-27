@@ -69,6 +69,20 @@ containers and native probe at the two boundaries of the probe's work, including
 the effective sets of occupied child cgroups. Setup and terminal helpers are
 checked against their Docker launch receipts, not sampled as timed participants.
 This is boundary evidence, not continuous monitoring of every process.
+When replay compares inherited execution defaults, an omitted or null image
+`Config.Entrypoint` or `Config.Cmd` must match an explicit null in the container
+receipt. Explicit image values, including empty arrays, and commands supplied by
+the runner must match exactly.
+
+The Hardening binding includes every tracked input to each application's source
+digest, even files under an app's `results/` directory if they are in its build
+context. This does not change the archive recipe or which files it selects. The
+Corten root archive still binds the full measured checkout, including its harness.
+Other groups keep the ordinary source inventory. An all-group plan keeps a shared
+source digest and records the full Hardening closure on its own binding; a dedicated
+Hardening plan records it in both places. Existing reservations replay with their
+pinned measured checkout.
+
 Offline replay checks the saved native evidence; it does not run a new measurement:
 
 ```sh

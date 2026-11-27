@@ -232,6 +232,37 @@ test("Docker's empty default user/workdir match omitted image fields, not differ
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
   receipts[2].created.Config.User = "unexpected"; assert.throws(() => verifyOwnedReceipts(receipts, summary));
 });
+
+for (const [step, key] of [["application", "Entrypoint"], ["application", "Cmd"], ["proxy", "Entrypoint"], ["proxy", "Cmd"], ["ready", "Entrypoint"]])
+test(`Docker's omitted image ${key} replays as null for ${step}, not a different value`, () => {
+  const { summary, receipts } = fixture(step === "proxy" ? "deployed-edge" : "direct");
+  const { created, terminal } = receipts.find((r) => r.intent.step === step);
+  const config = step === "application" ? summary.builds.corten.image.Config
+    : summary.tools[step === "proxy" ? "edge" : "node"].Config;
+  const preflight = step === "proxy" ? { ...summary.cells[0], failedStage: "edge-native-controls" } : undefined;
+  const replay = () => verifyOwnedReceipts(receipts, summary, undefined, preflight);
+  const setActual = (value) => { created.Config[key] = terminal.Config[key] = value; };
+  const omitActual = () => { delete created.Config[key]; delete terminal.Config[key]; };
+  const refuse = () => assert.throws(replay, { code: "ERR_ASSERTION", operator: "deepStrictEqual" });
+  const command = ["/server", "--serve"];
+  if (key === "Cmd") created.Config.Entrypoint = terminal.Config.Entrypoint = config.Entrypoint = ["/server"];
+
+  config[key] = null; setActual(null);
+  assert.doesNotThrow(replay);
+  delete config[key];
+  assert.doesNotThrow(replay);
+  for (const value of [[], command]) { setActual(value); refuse(); }
+  omitActual(); refuse();
+  config[key] = []; setActual(null); refuse();
+
+  config[key] = command;
+  for (const r of receipts) if (r.created.Image === created.Image)
+    r.created.Config[key] = r.terminal.Config[key] = [...command];
+  assert.doesNotThrow(replay);
+  for (const value of [null, ["/server", "--other"]]) { setActual(value); refuse(); }
+  omitActual(); refuse();
+});
+
 test("deployment replay accepts Docker's enabled OOM default transition, not changed limits", () => {
   const { summary, receipts } = fixture();
   const processes = [{ id: "application", role: "application" }, { id: "upstream", role: "upstream" }];

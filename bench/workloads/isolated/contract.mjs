@@ -21,7 +21,7 @@ import { browserContainers, browserCpus, parseOptions as browserOptions, setting
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
-import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { apps as hardeningApps, appSourcePath, budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
 import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
 import { catalogFleetPlacement, fleetCatalogSlugs, host, jsonFleetPlacementFor, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
@@ -64,9 +64,10 @@ export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock"
 // current untracked output. Keep the ordinary result exclusion elsewhere.
 const isSource = (path) => clientSourceRoots.some((root) => path === root || path.startsWith(`${root}/`))
   || !path.split("/").some((part) => ["results", "evidence", "work", "node_modules", "target"].includes(part));
+export const sharedSourceSha256 = (files) => deploymentSha256(files.filter(({ path }) => isSource(path)));
 
 /** Hash committed Git bytes, not platform-dependent CRLF checkouts. No network or writes. */
-export function captureSources(commit) {
+export function captureSources(commit, group) {
   const selectors = ["BENCH_APPS", "BENCH_TIER", "BENCH_EDGE", "PROFILE"].filter((key) => process.env[key]);
   assert.equal(selectors.length, 0, `unset legacy selection/profile overrides before binding: ${selectors.join(", ")}`);
   assert.match(commit ?? "", /^[a-f0-9]{40}$/, "full measured commit required");
@@ -80,7 +81,7 @@ export function captureSources(commit) {
       const [mode, type, blob] = meta.split(" ");
       assert.ok(path && !/[\r\n\\:]/.test(path), "unsafe source path");
       return { mode, type, blob, path };
-    }).filter(({ path }) => isSource(path));
+    }).filter(({ path }) => isSource(path) || group === "hardening" && hardeningApps.some((app) => appSourcePath(app, path)));
   for (const entry of entries) assert.ok(["100644", "100755"].includes(entry.mode) && entry.type === "blob", "source links/submodules are not supported");
   const paths = entries.map((e) => e.path);
   assert.ok(paths.includes("bench/workloads/isolated/contract.mjs"), "isolated contract must itself be committed");
@@ -151,7 +152,7 @@ function subjectFor(r, sources, campaignMode) {
     campaignMode, host: { ...providerCreateHost(campaignMode), allocation: "not-created", isolation: "unverified" } };
 }
 export function reviewSubject(value, campaignMode = "legacy") {
-  const r = request(value), sources = captureSources(r.commit);
+  const r = request(value), sources = captureSources(r.commit, r.group);
   return deploymentSha256(subjectFor(r, sources, campaignMode));
 }
 function reviewDeclaration(review, subjectSha256) {
@@ -332,13 +333,13 @@ function build(r, sources, review, campaignMode) {
 export function bindExecution(value, campaignMode = "legacy") {
   exact(value, ["group", "round", "commit", "recipe", "review"], "binding request");
   const { review, ...input } = value, r = request(input);
-  return build(r, captureSources(r.commit), review, campaignMode);
+  return build(r, captureSources(r.commit, r.group), review, campaignMode);
 }
 
 /** Recompute from live committed source; a self-consistent caller hash is not trusted. */
 export function validateBinding(binding) {
   assert.equal(binding?.schema, schema, "wrong isolated contract schema");
-  const r = request(binding.request), sources = captureSources(r.commit);
+  const r = request(binding.request), sources = captureSources(r.commit, r.group);
   const expected = build(r, sources, binding.review?.declaration, binding.campaignMode);
   assert.ok(isDeepStrictEqual(binding, expected), "binding differs from native source, selection, recipe or strict validation state");
   return freeze({ bindingSha256: expected.bindingSha256, binding: "verified-offline", ready: false, executionAuthorized: false });
