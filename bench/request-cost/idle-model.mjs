@@ -1,6 +1,6 @@
 // How often the idle rule reads a rise between two builds that are the same: a model, by
 // simulation. It is not a measurement and no check runs it; the kit's page (The hosted job) and
-// design Choice 76 give its figures and say what they are worth.
+// docs/design.md#choice-counted-or-measured give its figures and say what they are worth.
 //
 // A job is three comparisons, one for each idle reading. A comparison is three runs of base and
 // three of head, every run drawn independently from one normal distribution, since the builds are

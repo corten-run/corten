@@ -11911,7 +11911,8 @@ rules something out.
     `bench/request-cost/idle-model.mjs` at `3603a9856`, run on Node 24.22.1, 1,000,000 jobs
     at each of seeds 1 and 2: each earlier figure again within 0.12 of a point (the farthest
     15.18% of jobs with one page at seed 1, where the kit's page gives 15.3%), and 0.38% of
-    comparisons and 1.13% and 1.12% of jobs with four pages allowed; and with a standard
+    comparisons and 1.13% and 1.12% of jobs with four pages allowed; 2026-11-27, that script
+    at `3603a9856` run so again (Node 24.22.1, the same jobs and seeds) with a standard
     deviation of 0.81, 0.54 and 2.2 bytes a connection for the three readings, fitted to
     base's mean span of three in the nine hosted logs read for the floor (6,827 bytes after
     one request, 4,551 after three of a browser's requests, 18,660 before any byte), 0.71%
