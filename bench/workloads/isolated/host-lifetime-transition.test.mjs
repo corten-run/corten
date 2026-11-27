@@ -12,7 +12,8 @@ const scope = (container) => `/system.slice/docker-${container}.scope`;
 const zero = "0001-01-01T00:00:00Z";
 
 async function exitTransition(t, { change = () => {}, path = "stat", code = "ENOENT",
-  finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false, census, censusRace = false } = {}) {
+  finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false, census, censusRace = false,
+  censusEvents = "populated 0\nfrozen 0\n" } = {}) {
   let faults = 0, phase = 0, missingAt, pinsAfterExit, censuses = 0;
   const procReads = [], inspections = [], waits = [];
   const f = await fixture(t, [], true, () => { faults++; });
@@ -43,6 +44,10 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
     if (name === root + "/cgroup.procs") {
       if (phase === 1 && censusRace && censuses++ === 0) return "5001\n";
       return phase === 1 && census !== undefined ? census : "5000\n";
+    }
+    if (name === root + "/cgroup.events" && phase === 1 && census !== undefined) {
+      if (censusEvents === null) throw missing("ENOENT");
+      return censusEvents;
     }
     if (name === root + "/cpu.max") return "100000 100000\n";
     if (name === root + "/memory.max") return "100\n";
@@ -91,6 +96,9 @@ test("r104 exit: a stable empty census can be closed by the same Docker generati
 });
 
 for (const [label, options, n] of [
+  ["cgroup.events still reports populated 1", { censusEvents: "populated 1\nfrozen 0\n" }, 1],
+  ["cgroup.events is missing", { censusEvents: null }, 1],
+  ["cgroup.events has conflicting populated rows", { censusEvents: "populated 0\npopulated 1\n" }, 1],
   ["another process is in the census", { census: "5001\n" }, 1],
   ["a failed nonempty census retries to empty", { censusRace: true }, 1],
   ["the closing inspect reports a different generation", { finishDelay: 0, change: (c) => { c.RestartCount++; } }, 2],

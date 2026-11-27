@@ -429,10 +429,12 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     participantGroup(path, id);
     stage = "kernel-census";
     const ancestors = parents(posix.dirname(path)), observed = snapshot(path, executables, pending);
-    // The entry PID can exit after the opening stat but before the complete
-    // cgroup census. An empty retry must not erase an earlier failed census.
+    // The entry PID can exit after the opening stat. Empty PID walks alone
+    // cannot settle the exit, nor can an empty retry after a failed census.
     if (observed.processes.length === 0 && !retriedEmptyCensuses.has(observed)
       && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
+      && observed.groups.every(({ files }) => files["cgroup.events"]?.split("\n")
+        .filter((line) => /^populated(?:[ \t]|$)/.test(line)).join("\n") === "populated 0")
       && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
       const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
       if (stopped) throw new ClosingDockerExit(stopped);
