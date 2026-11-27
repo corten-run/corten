@@ -15,7 +15,7 @@ const udevExecutables = new Set(["/usr/lib/systemd/systemd-udevd", "/lib/systemd
 export const udevSettleMs = 5000;
 export const hostObservationBytes = 256 * 2 ** 20;
 export const liveWorkloadEndFile = "live-workload-end.json";
-export const liveWorkloadEndSchema = "benchmark-live-workload-end/v1";
+export const liveWorkloadEndSchema = "benchmark-live-workload-end/v2";
 
 export function processIdentity(stat) {
   const match = /^(\d+) \((.*)\) ([A-Za-z]) (.*)$/.exec(stat.trim());
@@ -237,14 +237,20 @@ export function readLiveWorkloadEnd({ binding, invocation, round, phase, result,
 }
 
 export function verifyLiveWorkloadWindows(before, offline, end, ends, count) {
-  let previous = boundaryTime(before, offline);
-  const cutoff = monotonic(end.monoNs);
-  assert.ok(count > 0 && ends.length === count && previous !== null && cutoff !== null,
+  let previousMono = boundaryTime(before, offline), previousBoot = t(before.uptime);
+  const cutoffMono = monotonic(end.monoNs), cutoffBoot = t(end.uptime);
+  assert.ok(count > 0 && ends.length === count && previousMono !== null && previousBoot !== null
+    && cutoffMono !== null && cutoffBoot !== null && end.bootId === before.bootId,
     "live workload end lacks its measured actor windows");
-  for (const value of ends) {
-    const at = monotonic(value);
-    assert.ok(at !== null && previous < at && at < cutoff, "measured actor window outside live workload boundary");
-    previous = at;
+  for (const clock of ends) {
+    const mono = monotonic(clock?.monoNs), boot = t(clock?.uptime);
+    // Linux prints both /proc/uptime and process start time in truncated
+    // boot-time ticks at USER_HZ=100. Do not convert CLOCK_MONOTONIC to that
+    // domain: it excludes time spent suspended. Equal boot buckets here are
+    // fine; every worker must start in a strictly later bucket than the end.
+    assert.ok(clock?.bootId === end.bootId && mono !== null && previousMono < mono && mono < cutoffMono
+      && boot !== null && previousBoot <= boot && boot <= cutoffBoot, "measured actor window outside live workload boundary");
+    previousMono = mono; previousBoot = boot;
   }
 }
 

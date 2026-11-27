@@ -178,7 +178,10 @@ test("an early Live Delivery cohort requires the bound same-boot workload end an
   const settledBoundary = (liveWorkloadEnd) => verifyLifetimeSettledBoundary({ binding, invocation, round, phase: "timing",
     lifetime: { status: "verified", cleanupComplete: true, terminalClock: terminal }, before: baseline, after: first, settled,
     offline: true, liveWorkloadEnd });
-  const ends = ["2081000000000", "2093040000000"];
+  const ends = [
+    { ...clock, uptime: "2081.00 10110.00\n", monoNs: "2081000000000" },
+    { ...clock, uptime: "2093.04 10199.00\n", monoNs: "2093040000000" },
+  ];
   const replay = () => settledBoundary(() => {
     const end = readLiveWorkloadEnd(args);
     if (!end) return;
@@ -186,21 +189,30 @@ test("an early Live Delivery cohort requires the bound same-boot workload end an
     return end;
   });
   assert.throws(replay, /not eligible/, "historical evidence cannot establish an early cutoff");
+  save({ ...record, schema: "benchmark-live-workload-end/v1" });
+  assert.throws(replay, /differs from native invocation/, "mono-only actor evidence cannot use the early cutoff");
   save(record);
   assert.deepEqual(replay().settledUdevWorkers, [{ pid: 62274, startTicks: "209306" }, { pid: 62275, startTicks: "209308" }]);
+  save({ ...record, clock: { ...clock, uptime: "2080.01 10100.00\n" } });
+  assert.throws(replay, /measured actor window outside/, "an early uptime cannot borrow a later monotonic timestamp");
   for (const changed of [{ ...record, pid: 3001 }, { ...record, round: "r112" }, { ...record, commit: "b".repeat(40) }]) {
     save(changed);
     assert.throws(replay, /differs from native invocation/);
   }
-  for (const changed of [{ bootId: "different-boot" }, { monoNs: terminal.monoNs }, { uptime: terminal.uptime },
+  save({ ...record, clock: { ...clock, bootId: "different-boot" } });
+  assert.throws(replay, /lacks its measured actor windows/);
+  for (const changed of [{ monoNs: terminal.monoNs }, { uptime: terminal.uptime },
     { uptime: "2093.06 10244.13\n" }, { uptime: "2093.08 10244.13\n" }]) {
     save({ ...record, clock: { ...clock, ...changed } });
     assert.throws(replay, /not eligible/);
   }
   save(record);
-  for (const invalid of [[ends[0]], [ends[0], clock.monoNs], [...ends].reverse(), [baseline.offlineMonoNs, ends[1]], [ends[0], undefined]]) {
+  for (const invalid of [[ends[0]], [ends[0], { ...ends[1], monoNs: clock.monoNs }], [...ends].reverse(),
+    [{ ...ends[0], monoNs: baseline.offlineMonoNs }, ends[1]], [ends[0], undefined], [ends[0], { ...ends[1], uptime: undefined }],
+    [ends[0], { ...ends[1], bootId: "wrong" }], [ends[0], { ...ends[1], uptime: "2093.06 10199.00\n" }]]) {
     assert.throws(() => verifyLiveWorkloadWindows(baseline, true, clock, invalid, 2), /measured actor window/);
   }
+  verifyLiveWorkloadWindows(baseline, true, clock, [ends[0], { ...ends[1], uptime: clock.uptime }], 2);
   for (const changed of [{ result: { ...result, success: false, code: 1 } }, { round: "r112" }, { phase: "prepare" },
     { invocation: { ...invocation, argv: [...invocation.argv, "--other"] } },
     { binding: { ...binding, request: { ...binding.request, group: "recoverable-live" } } },

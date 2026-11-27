@@ -448,7 +448,7 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
               console.error(`${app}/fanout-${clients}: ${error.message}`);
             }
             actor.finish(a);
-            if (retainWorkloadEnd && a.schema === "native-live-fanout/v3") a.actorWindow.endedMonoNs = String(process.hrtime.bigint());
+            if (retainWorkloadEnd && a.schema === "native-live-fanout/v3") a.actorWindow.endedClock = liveWorkloadClock();
             const file = `${app}-fanout-${clients}.json.gz`, bytes = gzipSync(JSON.stringify(a));
             await writeFile(join(out, file), bytes); measurementFiles.push({ file, sha256: hash(bytes) });
           }

@@ -347,7 +347,7 @@ export async function inspectLiveSaved(binding, folder, group) {
         if (provenance.has(app)) assert.ok(isDeepStrictEqual(p, provenance.get(app)), "native build provenance differs"); else provenance.set(app, p);
         if (actors && need(a.actorWindow?.renderer !== undefined, `native-live-actor-window-missing:${app}`)) {
           actors.windows.push(liveActorWindow(a, app));
-          if (a.schema === "native-live-fanout/v3") actors.measuredEnds.push(a.actorWindow.endedMonoNs);
+          if (a.schema === "native-live-fanout/v3") actors.measuredEnds.push(a.actorWindow.endedClock);
         }
       }
     }

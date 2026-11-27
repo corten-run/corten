@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as evidence from "./evidence.mjs";
 import * as contracts from "./campaign-contract.mjs";
-import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot, runnerFor } from "../registry.mjs";
+import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot, runnerFor, selectedApps } from "../registry.mjs";
 import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
@@ -27,7 +27,7 @@ import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { isolatedLiveCapture, isolatedLiveLifetime } from "./test-fixtures/live-campaign.mjs";
+import { isolatedLiveCapture, isolatedLiveLifetime, isolatedLiveSuccess } from "./test-fixtures/live-campaign.mjs";
 import { registration as controlRegistration } from "../test-fixtures/control-stream-fixture.mjs";
 import { streamHash } from "./control-stream.mjs";
 import { limits, supervise } from "./process.mjs";
@@ -92,6 +92,14 @@ mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
+  transferEvidence(source, destination) {
+    if (liveRoundTrip?.mutateTransfer) {
+      const marker = join(source, actualHost.liveWorkloadEndFile), record = JSON.parse(readFileSync(marker));
+      record.clock.uptime = "141.23 31337.22\n";
+      writeFileSync(marker, JSON.stringify(record));
+    }
+    return evidence.transferEvidence(source, destination);
+  },
   inspectEvidence(binding, path) {
     evidence.tree(path); assert.ok(existsSync(join(path, "summary.json")));
     return { qualification: "blocked", rawCompleteness: "not-established" };
@@ -168,6 +176,7 @@ mock.module("./host-observation.mjs", { namedExports: {
       const value = udevHost(observations, retainUdev), { capture, offlineClock } = liveRoundTrip;
       value.at = new Date(observations < 3 ? capture.start - 10 : capture.end + (observations === 4 ? 5010 : 5)).toISOString();
       if (retainUdev && offlineClock) value.offlineMonoNs = offlineClock[observations];
+      if (retainUdev && liveRoundTrip.clockAt) value.uptime = liveRoundTrip.clockAt([0, 0, 0, 45000, 50010][observations]).uptime;
       if (observations === 4) liveRoundTrip.events.push("settled-census");
       return value;
     }
@@ -641,6 +650,80 @@ for (const [group, offline, early = false] of [["live-delivery", false], ["live-
     if (offline) assert.deepEqual(saved.offlineIngress, [{ group, phase: "timing", packets: 0, bytes: 0 }]);
   });
 }
+
+const successfulLive = "isolated Live successful early settlement and clock-only mutations";
+test(successfulLive, { timeout: 125000 }, async (t) => {
+  const group = "live-delivery";
+  if (selectedApps(group).length !== 1) {
+    // Start a test-only single-app registry before loading the production
+    // readers. Keep all of their checks, including verifyRound and fan-out.
+    for (const variant of ["replay", "changed-transfer"]) {
+      const run = childProcess.execFileSync(process.execPath, ["--experimental-test-module-mocks", "--test-name-pattern", successfulLive,
+        "--input-type=module", "-", variant], { cwd: repo, encoding: "utf8", timeout: 60000, input: `
+        import { mock } from "node:test";
+        const registry = new URL("../registry.mjs", ${JSON.stringify(import.meta.url)});
+        const actual = await import(registry);
+        mock.module(registry, { exports: { ...actual, selectedApps: (group) => group === "live-delivery" ? ["express"] : actual.selectedApps(group) } });
+        await import(${JSON.stringify(import.meta.url)});
+      ` });
+      assert.match(run, /pass 1/);
+    }
+    return;
+  }
+  forbidLiveSignals(t);
+  const { campaign, plan } = setupGroup(group), proof = syntheticBootstrap(t);
+  plan.round = proof.binding.round;
+  const clockAt = (ms) => ({ bootId: proof.admission.host.bootId, uptime: `${((100000 + ms) / 1000).toFixed(2)} 0.00\n`,
+    monoNs: String(BigInt(proof.admission.closedMonoNs) + BigInt(ms + 100000) * 1000000n) });
+  const capture = await isolatedLiveSuccess(t, campaignRounds(plan.round)[group], clockAt);
+  const output = join(temporary, `native-r${round}`, "success");
+  capture.binding.validation = { artifactRoot: relative(repo, output).replaceAll("\\", "/") };
+  capture.binding.latestStable = plan.bindings[0].latestStable;
+  plan.bindings[0] = capture.binding;
+  delete plan.campaignSha256; plan.campaignSha256 = deploymentSha256(plan);
+  admittedHost = proof.admission.host; settleWorkerTicks = "14100";
+  const events = fakeOfflineFenceCommands(t, proof.binding, 0, 1);
+  const clock = { ...clockAt(44000), ticksPerSecond: 100 };
+  liveRoundTrip = { capture, output, clock, clockAt, workloadEnd: clockAt(40000), events, nativeReads: [],
+    offlineClock: [0, 0, 0, 45000, 50010].map((ms) => clockAt(ms).monoNs),
+    mutateTransfer: process.argv.includes("changed-transfer") };
+  const handle = await campaign.begin(plan, { stateRoot: "/bench/campaign", control: { ...proof, offlineHandoff: true } });
+  const phase = join(handle.directory, "00-live-delivery-timing"), native = join(phase, "native");
+  if (liveRoundTrip.mutateTransfer) {
+    await assert.rejects(campaign.advance(handle), { message: "live workload end changed during collection" });
+    const halt = readdirSync(handle.directory).find((name) => name.endsWith("-halted.json"));
+    assert.ok(halt);
+    const bytes = readFileSync(join(handle.directory, halt), "utf8");
+    assert.match(bytes, /live workload end changed during collection/);
+    assert.doesNotMatch(bytes, /31337\.22/);
+    return;
+  }
+  const status = await campaign.advance(handle);
+  assert.equal(status.outcomes[0].outcome, "native-validated", JSON.stringify(liveRoundTrip.nativeReads));
+  assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "14100" }]);
+  const collection = join(handle.directory, "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify(campaign.collect(handle)));
+  const saved = await validateSavedCampaign({ folder: root, round: plan.round, commit: plan.commit });
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.deepEqual(liveRoundTrip.nativeReads.map(({ status, resources, cleanupComplete }) => [status, resources, cleanupComplete]),
+    [["verified", "verified", true], ["verified", "verified", true]]);
+
+  const marker = join(native, actualHost.liveWorkloadEndFile), record = JSON.parse(readFileSync(marker));
+  const sealPath = join(handle.directory, readdirSync(handle.directory).find((name) => name.endsWith("-phase-sealed.json")));
+  const seal = JSON.parse(readFileSync(sealPath));
+  // Rebind the native and phase seals so the independent native reader has
+  // to judge the clock itself, not a stale hash or a different command exit.
+  record.clock.uptime = clockAt(1000).uptime;
+  writeFileSync(marker, JSON.stringify(record));
+  const manifest = evidence.tree(native);
+  writeFileSync(join(phase, "native-manifest.json"), JSON.stringify(manifest));
+  writeFileSync(sealPath, JSON.stringify({ ...seal, nativeManifestSha256: manifest.sha256, phaseManifestSha256: evidence.phaseSnapshot(phase).sha256 }));
+  const refused = await nativeReplay.inspectNative(capture.binding, native);
+  assert.deepEqual(refused.outcomes, [{ app: "express", outcome: "passed" }], "native v3 measurements must still pass");
+  assert.equal(refused.status, "invalid");
+  assert.equal(refused.resources, "invalid");
+  assert.equal(refused.cleanupComplete, false);
+});
 
 test("offline audit cannot start before the guest has closed bootstrap", async (t) => {
   const { campaign, handle, admission } = await offlineCampaign(t, "mixed-production");

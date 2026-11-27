@@ -433,12 +433,15 @@ Isolated measured Live Delivery can also settle a cohort born after measured
 work but before command exit. The successful native command records one workload
 end after every measured actor window and before the last browser and owned
 application are torn down. The phase seal binds that record to the command PID,
-round and commit. Replay checks every measured end and orders the record strictly
-between the pre-phase census and sealed terminal on the same boot, using both
-monotonic time and uptime. No baseline udev worker or child of that daemon may
-be present, and every worker in the first-after cohort must have been born strictly
-after the workload end tick. This does not establish the absence of transient
-workers outside that cohort. The ordinary post-terminal route does not require
+round and commit. Each measured end also records both clocks on that boot. Replay
+orders the measurements, workload end and sealed terminal in each clock separately.
+Linux uptime and worker start ticks share the boot-time clock, including suspend;
+the monotonic clock excludes suspend and is never converted into boot-time ticks.
+A worker in the same 10 ms bucket as the workload end is ambiguous and is refused.
+Missing boot-time readings do not establish this proof. No baseline udev worker or
+child of that daemon may be present, and every worker in the first-after cohort must
+have been born strictly after the workload end tick. This does not establish the
+absence of transient workers outside that cohort. The ordinary post-terminal route does not require
 this evidence; historical rounds cannot use wall times to reconstruct it.
 
 Both uptime and the monotonic apparatus samples must support the wait. Cancellation

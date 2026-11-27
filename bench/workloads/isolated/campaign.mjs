@@ -264,7 +264,11 @@ export function createCampaign({ authorize }) {
     if (transfer) verifyWorkingSources(c.plan.bindings[0]);
     if (!c.offlineHandoff) closeControlWindow?.();
     c.stream?.close();
-    if (workloadEnd) assert.deepEqual(readEnd(native), workloadEnd, "live workload end changed during collection");
+    if (workloadEnd) {
+      let transferred;
+      try { transferred = readEnd(native); } catch { /* A changed or unreadable marker cannot support cleanup. */ }
+      assert.ok(isDeepStrictEqual(transferred, workloadEnd), "live workload end changed during collection");
+    }
     p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy, c.offlineHandoff, () => workloadEnd)
       : verifyHostBoundary(before, after);
     p.usedLiveWorkloadEnd = workloadEnd !== undefined;
