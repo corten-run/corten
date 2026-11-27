@@ -2241,8 +2241,9 @@ redirect the address can differ from the one the form reaches without JavaScript
 `#fragment`. Corten's own redirect (`corten-location`, [Redirects](#redirects)) names its
 fragment, and is followed as a navigation (below). No entry is added: Back goes to the page before the screen,
 not to the scope before this one, as after `history.replaceState`. The entry keeps its state: its
-`history.state` (copied before the runtime checks the entry, so a getter a script put on it runs
-then), and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
+`history.state` (copied once the runtime has checked the entry, and checked again after, so a
+getter a script put on it runs then, and none runs for an answer those checks leave without the
+address), and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
 puts back on the entry once the address is in. A state a script puts in the entry as the address
 goes in is newer, and is the one kept: one a `navigate` listener puts in before the replace commits
 is put in the entry the replace makes, and one a `currententrychange` listener puts in that entry,
@@ -2309,14 +2310,16 @@ there is not sent either, whatever the call ends in, nor one made as the runtime
 state back after the call or reads what is on its way. Such a press is refused as it is made and
 changes nothing: the answer already drawn goes on as if it had not been made, and a 422's field
 marked invalid still takes focus. It ends when the browser says the navigation finished, was
-aborted or gave way to another (that navigation's own `finished` settles, which no event a script
-dispatches or stops stands in for), not when its address goes
+aborted or gave way to another, the moment `navigation.transition` no longer shows it (a press a
+script makes in its own callback on that navigation's `finished` is sent), which no event a script
+dispatches or stops changes, not when its address goes
 in, so a listener whose handler never settles keeps every press of a marked form from being sent
 until another navigation takes its place. The nav link to the address is marked current when the
 held navigation puts that address in, not as the answer draws. An answer that has drawn is never
 said to have failed (`corten:error`), whatever a script's getter throws as the runtime reads on
 after it; a patch that throws partway through its draw has not drawn, and says `corten:error` as
-any form's does. The runtime neither aborts that
+any form's does, whatever came while it drew (a press of the form its own elements made, a
+navigation they began). The runtime neither aborts that
 navigation nor puts the Navigation API state back when it commits. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page; if the Save's

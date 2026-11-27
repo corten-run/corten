@@ -3384,14 +3384,13 @@ const presses = new Map();
  * goes in (`precommitHandler`) or after, or any other the browser shows on its way as that call
  * returns and did not before it (one a listener began in the replace's place, once its address
  * went in or as its state went back), cleared as that navigation's own `finished` settles (it
- * finished, was aborted or another took its place), which no event the page dispatches or stops
- * can stand in for; and `true` from just before the runtime's `replaceState` call, which runs the page's
- * listeners and their `precommitHandler` before it returns, until the entry's state is back and that
- * navigation has been read: while it holds ({@link holding}), a marked press
+ * finished, was aborted or another took its place), so nothing of it is kept; and `true` from just
+ * before the runtime's `replaceState` call, which runs the page's listeners and their
+ * `precommitHandler` before it returns, until the entry's state is back and that navigation has
+ * been read: while it holds ({@link holding}), a marked press
  * is for the page it may yet change, and is refused as one made while a visit is on its way
  * ({@link pressed}), never sent, and a marked answer already on its way draws nothing
- * ({@link standing}), so nothing is drawn under the address it may put in. The runtime's own record:
- * nothing of the page is read to tell whether it holds, and the navigation it captured is read once.
+ * ({@link standing}), so nothing is drawn under the address it may put in.
  * @type {NavigationTransition | boolean | null | undefined}
  */
 let held;
@@ -3407,10 +3406,21 @@ let heldFor;
  * Whether the runtime's `replaceState` call is still running, or the navigation that holds the
  * runtime's replace ({@link held}) has not ended, for any press but the one whose answer it holds
  * ({@link heldFor}): until that navigation finishes, is aborted or another takes its place, not
- * merely until it commits, so a page's handler that never settles holds it for good.
+ * merely until it commits, so a page's handler that never settles holds it for good. Ended is the
+ * browser's word, the one thing read: the navigation it shows on its way is no longer that one,
+ * as from the moment it ends, before any callback on its `finished` runs (a page's before the
+ * runtime's own, which clears it); no event the page dispatches or stops changes that. A read that
+ * throws (a page's own getter) leaves no hold, as where the navigation was read as the call returned.
  * @param {Press} [press]
  */
-const holding = (press) => press !== heldFor && !!held;
+const holding = (press) => {
+  if (press === heldFor || !held) return false;
+  try {
+    return held === true || navigation?.transition === held;
+  } catch {
+    return false;
+  }
+};
 
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
@@ -3612,9 +3622,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // A read dropped by a newer press, or whose `data-address` entry was left, draws nothing and says
   // nothing, as a submit a navigation cuts off: the page it was for, and the form, are gone.
   const here = (/** @type {boolean} */ drawing = false) => !pending.here || standing(pending.here, drawing);
-  // Drawn once its draw passed this check (`drawIn`) and then returned without throwing: from then
-  // on nothing read can say it failed. A draw that throws partway (a sibling in, then a field it
-  // cannot carry the user's text into) failed, and says so.
+  // Begun once its draw passed this check (`drawIn`), after which it changes the page with nothing
+  // of the page's run first; drawn once that draw returned without throwing: from then on nothing
+  // read can say it failed. A draw begun that throws partway (a sibling in, then a field it cannot
+  // carry the user's text into) failed, and says so, whatever came while it drew.
   let passed = false;
   let drewIt = false;
   const drawIn = () => (passed = here());
@@ -3888,7 +3899,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           const swapped = await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, drawIn, done);
           drewIt = passed;
           if (swapped || here()) announce(notice);
-        } else if (await swapDocument(body, signal, notice, false, false, true, { through, write }, undefined, here)) announce(notice);
+        } else {
+          const swapped = await swapDocument(body, signal, notice, false, false, true, { through, write }, undefined, drawIn);
+          drewIt = passed;
+          if (swapped) announce(notice);
+        }
       }
       // Dropped, the visit left while it waited for its modules or stylesheets, or left as it
       // drew: nothing more.
@@ -3934,7 +3949,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
     // did not draw) may have been applied too: the next navigation reads the whole page, but not the
     // page reading itself again, which would draw away the failure shown. An answer that has drawn
     // did not fail, whatever a read after its draw threw (a page's own getter), and is not read again.
-    if (signal.aborted || drewIt || !here()) return;
+    // One whose draw began has changed the page, and says it failed whatever came as it drew (a newer
+    // press its own elements made, a navigation they began): only one that changed nothing, cut off
+    // or no longer to be drawn, goes without a word.
+    if (drewIt || (!passed && (signal.aborted || !here()))) return;
     if (pending.n) failedWrite(pending.n);
     else if (pending.went && !pending.answered && method !== "GET") failedWrite();
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without

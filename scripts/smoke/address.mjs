@@ -2553,6 +2553,29 @@ async function markedPatchVisits(browser, errors) {
         stoppedEnd.after.at === "?scope=day" && stoppedEnd.after.shown === "day",
       JSON.stringify(stoppedEnd),
     );
+  // Week's replace is held after its address goes in (a listener's `handler`), which puts a callback
+  // of the page's on the held navigation's `finished` before the runtime puts its own there. Once
+  // let go, that callback, which runs first, sees no navigation on its way and presses Day, which is
+  // sent and drawn (before, the hold lasted until the runtime's own callback ran, and Day was lost).
+  const finishedPress = await heldFinishedPress(page);
+  if (!finishedPress) skip("a marked press made in a page's own callback on the held navigation's finished is sent", "no Navigation API");
+  else
+    check(
+      "a marked press made in a page's own callback on the held navigation's finished is sent and drawn",
+      finishedPress.held && finishedPress.drawn && finishedPress.ended && finishedPress.pressed?.transition === false && finishedPress.sent === 1 &&
+        finishedPress.after.at === "?scope=day" && finishedPress.after.shown === "day",
+      JSON.stringify(finishedPress),
+    );
+  // Week's patch first replaces the panel with its form, whose drawn element presses Day from its
+  // `connectedCallback`, and then cannot carry the user's text into a field (a file input of its id).
+  // The draw changed the page before it threw, and says `corten:error`, though Day is now the form's
+  // latest press (before, the newer press made the failed draw count as superseded, and nothing was said).
+  const pressedThrown = await pressedThenThrown(page);
+  check(
+    "a marked patch that throws after its drawn form pressed again says corten:error",
+    pressedThrown.pressed && pressedThrown.sent === 1 && pressedThrown.errors.length === 1 && pressedThrown.errors[0] === 0,
+    JSON.stringify(pressedThrown),
+  );
   // A form without the mark whose patch throws as it is drawn: a field the user typed in is answered
   // with a file input of its id, which cannot take the text. The submit failed, and says so with
   // `corten:error`, whether the field comes after an element it drew or first (before, an answer
@@ -3614,6 +3637,119 @@ async function heldEndsOn(page, how, home, day) {
   await page.unroute(day);
   const stopped = await page.evaluate(() => /** @type {any} */ (window).__stopped);
   return { held, stopped, drawn, during, dayAsked, ended, after: await where() };
+}
+
+/**
+ * A `navigate` listener of the page holds the runtime's replace to Week's address once it is in, in
+ * its own `handler`, which puts a callback of the page's on that navigation's `finished` as it runs,
+ * inside the runtime's call, before the runtime puts its own there. Once the replace is let go, that
+ * callback presses Day. Says whether the replace was held, whether Week drew, whether the held
+ * navigation ended, whether the callback ran and saw a navigation on its way, how many reads of Day
+ * were sent, and where the page is and what it shows then; null where the browser has no Navigation API.
+ * @param {import("@playwright/test").Page} page
+ */
+async function heldFinishedPress(page) {
+  const home = `${base}/smoke/address`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  if (!(await page.evaluate(() => "navigation" in window))) return null;
+  let daySends = 0;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") daySends += 1;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = resolve));
+    Object.assign(w, { __release: release, __held: false, __pressed: null });
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+      event.intercept({
+        handler: () => {
+          w.navigation.transition?.finished.then(() => {
+            w.__pressed = { transition: !!w.navigation.transition };
+            const day = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+            day.form?.requestSubmit(day);
+          });
+          return held;
+        },
+      });
+      w.__held = true;
+    });
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  const held = await page.evaluate(() => /** @type {any} */ (window).__held);
+  await page.evaluate(() => /** @type {any} */ (window).__release());
+  const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(day);
+  const pressed = await page.evaluate(() => /** @type {any} */ (window).__pressed);
+  const after = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { held, drawn, ended, pressed, sent: daySends, after };
+}
+
+/**
+ * Puts a text field the user typed in on the screen, outside every form, and answers Week with its
+ * patch, whose panel holds an element that presses Day as it connects, followed by the field as a
+ * file input of the same id, which cannot take the user's text. Says whether Day was pressed, how
+ * many reads of Day were sent, the `corten:error` statuses said, and what the panel shows.
+ * @param {import("@playwright/test").Page} page
+ */
+async function pressedThenThrown(page) {
+  const home = `${base}/smoke/address`;
+  const week = `${home}?scope=week`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    // Uncompressed: Firefox's route.fetch reads a compressed body it was not sent as empty.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const body = (await res.text()).replace("</section>", "<smoke-presses-then-throws></smoke-presses-then-throws></section>") + '<input id="smoke-throw-field" type="file">';
+    await route.fulfill({ response: res, body });
+  });
+  let daySends = 0;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") daySends += 1;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    Object.assign(w, { __errors: [], __pressedDay: false });
+    document.addEventListener("corten:error", (event) => w.__errors.push(/** @type {CustomEvent} */ (event).detail?.status ?? null));
+    customElements.define(
+      "smoke-presses-then-throws",
+      class extends HTMLElement {
+        connectedCallback() {
+          if (w.__pressedDay) return;
+          w.__pressedDay = true;
+          const day = /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="day"]'));
+          day.form?.requestSubmit(day);
+        }
+      },
+    );
+    const input = document.createElement("input");
+    input.id = "smoke-throw-field";
+    document.querySelector("main")?.append(input);
+    input.value = "typed";
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await page.waitForFunction(() => /** @type {any} */ (window).__errors.length > 0, undefined, { timeout: 3000 }).catch(() => {});
+  await page.waitForFunction(() => !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(week);
+  await page.unroute(day);
+  return page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    return { pressed: w.__pressedDay, errors: w.__errors, shown: document.querySelector("#smoke-address output")?.textContent };
+  }).then((state) => ({ ...state, sent: daySends }));
 }
 
 /**
