@@ -96,7 +96,8 @@ mkdir -p "$RES/layout" "$RES/maps" && cp "$B"/layout/*.txt "$RES/layout/"
 for s in $SIDES; do
     cp "$B/record-$s.json" "$RES/"; cp "$WORK/maps/$s.map.gz" "$RES/maps/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
 done
-[ ! -f "$B/second-pads.txt" ] || { cp "$B/second-pads.txt" "$RES/"; cp "$WORK/maps/placements.sha256" "$RES/maps/"; }
+[ ! -f "$B/second-pads.txt" ] || cp "$B/second-pads.txt" "$RES/"
+[ ! -f "$WORK/maps/placements.sha256" ] || cp "$WORK/maps/placements.sha256" "$RES/maps/"
 [ "$SHUFFLE" = 0 ] || for s in $SIDES; do gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; done
 # The probe's source as build.sh built it, beside the request script and the expected answer in
 # plan/: the files the plan names by path, still what plan.mjs listed.

@@ -6,9 +6,14 @@
 // draws and the checks of a placement linked with one.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { alike, compare, entries, ordered, symbols, textFunctions, textRange, textStart } from "./layout.mjs";
-import { check, data, mapText, origin, PAD, readMap, record, refusals, RUST_NAME, SECOND_PAD, SIZES } from "./map.mjs";
+import { check, data, mapText, origin, owner, PAD, readMap, record, refusals, RUST_NAME, SECOND_PAD, SIZES } from "./map.mjs";
 import { key, names, namesProblem, order } from "./order.mjs";
 import { blob } from "./tags.mjs";
 
@@ -319,33 +324,39 @@ const adding = (s, more) => SEC(s.file, s.section, s.at, s.size, [...s.fns, ...m
 const TEXT = { start: T, size: 0xc80 }, INIT = ["_init", 0x200f00];
 const unpaddedNm = (sections) => nm([INIT, ...sections.flatMap((s) => s.fns.map(([n, off]) => [n, s.at + off]))]);
 const UNPADDED_NM = unpaddedNm(SECTIONS);
+/** A section as a map gives it: with its id. */
+const ided = (sections) => sections.map((s) => ({ ...s, id: `${s.file}:(${s.section})` }));
 /** One side of a shuffled change for alike(): its unpadded binary, a placement linked with file, and what ordered() takes. */
-const sideOf = (sections, file, o = {}) => {
-  const last = sections.reduce((x, s) => Math.max(x, s.at + s.size), T);
-  return { ea: entries(unpaddedNm(sections)), eb: entries(link(file, { sections, ...o })), text: { start: T, size: last - T }, placed: PLACED, order: lines(file), sections };
+const sideOf = (sections, file, { placed = PLACED, ...o } = {}) => {
+  const last = sections.reduce((x, s) => Math.max(x, s.at + s.size), T), l = link(file, { sections, ...o });
+  return { ea: entries(unpaddedNm(sections)), eb: entries(l.nm), text: { start: T, size: last - T }, placed, order: lines(file), sections: ided(sections), placedSections: l.map };
 };
-// Options break the layout: turn swaps two laid sections, reorder lays them in another order,
-// drop leaves out every definition of a name and dropOne its first, below links the first laid
-// section under .text, and sections links another side's.
+// A link is its nm and its map's input sections of .text: the pad's, then each laid section at its
+// place with its symbols, then the second pad's when extra names it. Options break the layout:
+// turn swaps two laid sections, reorder lays them in another order, drop leaves out every
+// definition of a name and dropOne its first (from nm, not the map), move moves a definition in
+// nm alone, below links the first laid section under .text, and sections links another side's.
 const link = (file, { pad = 320, padAt = T, turn = null, reorder = (x) => x, drop = [], dropOne = null, extra = [], move = {}, below = false, sections = SECTIONS } = {}) => {
   const pos = new Map();
   lines(file).forEach((n, k) => { if (!pos.has(n)) pos.set(n, k); });
   const laid = reorder(sections.map((s, k) => ({ s, k, p: Math.min(...s.fns.map(([n]) => pos.get(n) ?? Infinity)) })).sort((a, b) => a.p - b.p || a.k - b.k));
   if (turn) [laid[turn[0]], laid[turn[1]]] = [laid[turn[1]], laid[turn[0]]];
   let dot = T + pad, dropped = false;
-  const fns = [["corten_layout_pad", padAt], INIT];
+  const fns = [["corten_layout_pad", padAt], INIT], map = [{ file: `/w/pads/pad-${pad}.o`, section: PAD, id: `/w/pads/pad-${pad}.o:(${PAD})`, at: T, size: pad, align: 16, symbols: [{ name: "corten_layout_pad", at: padAt }] }];
   laid.forEach(({ s }, k) => {
     const at = below && k === 0 ? T - 0x800 : dot;
+    map.push({ ...s, id: `${s.file}:(${s.section})`, at, symbols: s.symbols.map((y) => ({ name: y.name, at: y.at - s.at + at })) });
     for (const [n, off] of s.fns) {
       if (drop.includes(n) || (n === dropOne && !dropped && (dropped = true))) continue;
       fns.push([n, at + off + (move[n] ?? 0)]);
     }
     if (!(below && k === 0)) dot += s.size;
   });
-  return nm([...fns, ...extra]);
+  for (const [n, at] of extra) if (n === "corten_layout_pad2") map.push({ file: "/w/pads/pad2-16.o", section: SECOND_PAD, id: `/w/pads/pad2-16.o:(${SECOND_PAD})`, at, size: 16, align: 16, symbols: [{ name: n, at }] });
+  return { nm: nm([...fns, ...extra]), map };
 };
 const PLACED = { start: T, size: 0x1000 };
-const shuffledCheck = (file, b, o = {}) => ordered(entries(UNPADDED_NM), entries(b), TEXT, { ...PLACED, ...o.placed }, lines(file), SECTIONS, o.pad ?? 320, o.second ?? false);
+const shuffledCheck = (file, b, o = {}) => ordered(entries(UNPADDED_NM), entries(b.nm), TEXT, { ...PLACED, ...o.placed }, lines(file), ided(SECTIONS), b.map, o.pad ?? 320, o.second ?? false);
 
 test("a shuffled placement: its side's functions and the pad, the pad first, in its ordering file's order", () => {
   assert.deepEqual(textRange("  [14] .text             PROGBITS        0000000000201000 001000 000c80 00  AX  0   0 64\n"), TEXT);
@@ -354,16 +365,16 @@ test("a shuffled placement: its side's functions and the pad, the pad first, in 
   assert.deepEqual(listed, ["_ZN5probe4main17h0123456789abcdefE.llvm.123", "_ZN5probe4page17hfedcba9876543210E", "_start", "crc", "flush", "flush_tail", "helper"]);
   const file = order(listed, 7, 3), ok = shuffledCheck(file, link(file));
   assert.deepEqual(ok.why, []);
-  assert.deepEqual([ok.ok, ok.shuffled, ok.functions, ok.repeated, ok.sections, ok.matched, ok.together, ok.follow, ok.listed], [true, true, 8, 1, 7, 8, 8, 7, 7]);
+  assert.deepEqual([ok.ok, ok.shuffled, ok.functions, ok.repeated, ok.sections, ok.matched, ok.together, ok.follow, ok.listed], [true, true, 8, 1, 7, 7, 8, 7, 7]);
   // Another index's file is another order: this link is not in it.
   const other = order(listed, 7, 4);
   assert.notEqual(other, file);
-  has(shuffledCheck(other, link(file)).why, "functions in the ordering file's order");
+  has(shuffledCheck(other, link(file)).why, "input sections in the ordering file's order");
   // The unshuffled link, every function moved by the pad alone, is not this file's order either.
-  has(shuffledCheck(file, link("corten_layout_pad\n" + SECTIONS.flatMap((s) => s.fns.map(([n]) => n)).join("\n"))).why, "functions in the ordering file's order");
+  has(shuffledCheck(file, link("corten_layout_pad\n" + SECTIONS.flatMap((s) => s.fns.map(([n]) => n)).join("\n"))).why, "input sections in the ordering file's order");
   const why = (o, b = link(file), f = file) => shuffledCheck(f, b, o).why;
   // Two sections in the other order.
-  has(why({}, link(file, { turn: [1, 2] })), "functions in the ordering file's order: 6 of 8 places");
+  has(why({}, link(file, { turn: [1, 2] })), "input sections in the ordering file's order: 5 of 7 places");
   // A function missing from the placement, and one only in it.
   has(why({}, link(file, { drop: ["crc"] })), "1 functions only in the unpadded binary: crc");
   has(why({}, link(file, { extra: [["ghost", 0x209000]] })), "only in the placement: corten_layout_pad, ghost");
@@ -380,7 +391,7 @@ test("a shuffled placement: its side's functions and the pad, the pad first, in 
   const ghost = `${file}ghost\n`;
   has(why({}, link(ghost), ghost), "1 names in the ordering file that are no function of the unpadded .text: ghost");
   // A function moved away from the rest of its input section.
-  has(why({}, link(file, { move: { flush_tail: 16 } })), "1 of 8 functions not as far from the rest of their input section");
+  has(why({}, link(file, { move: { flush_tail: 16 } })), "1 of 8 functions not in the placement's input section of their unpadded one");
   // With code aligned beyond 16 bytes: both pads.
   const two = link(file, { extra: [["corten_layout_pad2", T + 0xe00]] });
   assert.deepEqual(why({ second: true }, two), []);
@@ -397,7 +408,7 @@ test("a shuffled placement: a name defined more than once is checked by its inpu
     const k = laid.findIndex((u) => u.s.fns[0][0] === "helper"), [u] = laid.splice(k, 1);
     return k > 0 ? [u, ...laid] : [...laid, u];
   };
-  has(why(link(file, { reorder: moved })), "functions in the ordering file's order");
+  has(why(link(file, { reorder: moved })), "input sections in the ordering file's order");
   // Both of helper's sections in their drawn places pass, and are counted among the definitions.
   assert.deepEqual([shuffledCheck(file, link(file)).ok, shuffledCheck(file, link(file)).functions], [true, 8]);
 });
@@ -456,8 +467,8 @@ test("a shuffled change: a name defined more than once is compared definition by
   // and b, while a and b, the names defined once, keep their order. Each placement passes its own check.
   const aliased = DUPS.map((s) => (s.file === "/o/x1.o" ? adding(s, [["alias", 0x10]]) : s));
   const ahead = sideOf(aliased, file("alias", "a", "b", "dup"));
-  assert.deepEqual(ordered(base.ea, base.eb, base.text, base.placed, base.order, base.sections, 320).why, []);
-  assert.deepEqual(ordered(ahead.ea, ahead.eb, ahead.text, ahead.placed, ahead.order, ahead.sections, 320).why, []);
+  assert.deepEqual(ordered(base.ea, base.eb, base.text, base.placed, base.order, base.sections, base.placedSections, 320).why, []);
+  assert.deepEqual(ordered(ahead.ea, ahead.eb, ahead.text, ahead.placed, ahead.order, ahead.sections, ahead.placedSections, 320).why, []);
   const moved = alike(base, ahead, 320);
   assert.equal(moved.ok, false);
   has(moved.why, "the 4 functions both placements have do not lie in one order: place 1 holds a in the first and dup in x1.o:(.text.dup) in the second");
@@ -480,21 +491,183 @@ const ENDS = [SEC("/o/a.o", ".text.a", T, 0x40, [["a", 0], ["end_a", 0x40]]), SE
 test("a shuffled placement: a symbol at the end of one input section and the start of the next is the section's the map lists it in", () => {
   const check = (sections, names) => {
     const file = ["corten_layout_pad", ...names].join("\n") + "\n", x = sideOf(sections, file);
-    return ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, 320);
+    return ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, 320);
   };
   // b's section first: end_a goes with a's section, after it.
   const bFirst = check(ENDS, ["b", "a", "end_a"]);
   assert.deepEqual(bFirst.why, []);
-  assert.deepEqual([bFirst.functions, bFirst.sections, bFirst.matched, bFirst.together], [3, 2, 3, 3]);
+  assert.deepEqual([bFirst.functions, bFirst.sections, bFirst.matched, bFirst.together], [3, 2, 2, 3]);
   // a's section first: in the placement end_a and b share one address, end_a the end of a's section.
   assert.deepEqual(check(ENDS, ["a", "end_a", "b"]).why, []);
   // end_a laid elsewhere than at the end of a's section is still refused.
   const x = sideOf(ENDS, "corten_layout_pad\nb\na\nend_a\n", { move: { end_a: 16 } });
-  has(ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, 320).why, "not as far from the rest of their input section");
+  has(ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, 320).why, "not in the placement's input section of their unpadded one, as far from its start");
   // Both sections list a symbol at that address and neither by nm's name (the map writes a mangled
   // name demangled): which section holds it is not established, and the check fails.
   const mangled = [SEC("/o/a.o", ".text.a", T, 0x40, [["a", 0], ["_ZN1a3endE", 0x40]], [{ name: "a", at: T }, { name: "a::end", at: T + 0x40 }]), ENDS[1]];
-  has(check(mangled, ["b", "a", "_ZN1a3endE"]).why, "1 functions of the unpadded .text at the end of one input section and the start of the next, which its map's symbols there do not tell apart: _ZN1a3endE");
+  has(check(mangled, ["b", "a", "_ZN1a3endE"]).why, "1 functions of the unpadded .text at an address its map's symbols there do not give to one input section: _ZN1a3endE");
+});
+
+// Each placed definition is of the input section the placement's own map has it in, and the order
+// is that map's: what the four cases below hold (the third review of the shuffled path, each first
+// seen with real LLD 19.1.7 links, which the Linux test after them makes again).
+const own = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, 320);
+const named = (...n) => ["corten_layout_pad", ...n].join("\n") + "\n";
+
+test("a shuffled placement: two definitions of one name in sections of the same size are in the order the placement's map lays their sections", () => {
+  // x.o's and y.o's local dup, each 0x40 bytes: the file places both at dup's place, so LLD lays
+  // them in their unpadded order, x then y. A link that laid y first has the same nm (one name, two
+  // addresses of one spacing) and only its map tells it apart.
+  const dups = [SEC("/o/a.o", ".text.a", T, 0x40, [["a", 0]]), SEC("/o/x.o", ".text.dup", T + 0x40, 0x40, [["dup", 0]]), SEC("/o/y.o", ".text.dup", T + 0x80, 0x40, [["dup", 0]])];
+  const yFirst = (laid) => [laid[0], laid[2], laid[1]];
+  const right = sideOf(dups, named("a", "dup")), wrong = sideOf(dups, named("a", "dup"), { reorder: yFirst });
+  assert.equal(right.eb.map((e) => `${e.raw}@${e.at}`).join(), wrong.eb.map((e) => `${e.raw}@${e.at}`).join());
+  assert.deepEqual(own(right).why, []);
+  assert.deepEqual(own(right).defs.filter((d) => d.name === "dup").map((d) => d.section.file), ["/o/x.o", "/o/y.o"]);
+  has(own(wrong).why, "input sections in the ordering file's order: 1 of 3 places in the placement's .text; the first that differs, place 2, holds /o/y.o:(.text.dup) (dup), not /o/x.o:(.text.dup) (dup)");
+  // So base laid x, y and head y, x is no reading of the two: head fails its own check.
+  assert.throws(() => alike(right, wrong, 320), /head's placement does not pass its own shuffled check/);
+});
+
+test("a shuffled placement: a function in an input section of no size is of that section, where the next section begins too", () => {
+  // zero_empty, in an empty section of its own, shares its unpadded address with a_next, the start
+  // of the next section; marker follows.
+  const zero = [SEC("/o/z.o", ".text.zero_empty", T, 0, [["zero_empty", 0]]), SEC("/o/n.o", ".text.a_next", T, 0x40, [["a_next", 0]]), SEC("/o/m.o", ".text.marker", T + 0x40, 0x40, [["marker", 0]])];
+  const asked = named("zero_empty", "marker", "a_next"), other = named("zero_empty", "a_next", "marker");
+  // LLD's link for the file: zero_empty's section, then marker's, then a_next's.
+  const right = sideOf(zero, asked);
+  assert.deepEqual(right.placedSections.slice(1).map((s) => s.section), [".text.zero_empty", ".text.marker", ".text.a_next"]);
+  assert.deepEqual(own(right).why, []);
+  assert.deepEqual([own(right).functions, own(right).sections, own(right).matched], [3, 3, 3]);
+  // A link made with the other file, checked against this one, is refused.
+  has(own({ ...sideOf(zero, other), order: lines(asked) }).why, "input sections in the ordering file's order");
+});
+
+test("a shuffled change: definitions at one address are in the order of the input sections the placement's map lays", () => {
+  // Base's z_end ends .text.z where a_next begins; head adds head_only's section between them,
+  // in its unpadded order. Drawn at seed 7, index 1, both files give z's section the first place
+  // (z_end is drawn first), head_only the second, a_next the last.
+  const base = [SEC("/o/z.o", ".text.z", T, 0x40, [["z", 0], ["z_end", 0x40]]), SEC("/o/n.o", ".text.a_next", T + 0x40, 0x40, [["a_next", 0]])];
+  const head = [base[0], SEC("/o/h.o", ".text.head_only", T + 0x40, 0x40, [["head_only", 0]]), { ...base[1], at: T + 0x80, symbols: [{ name: "a_next", at: T + 0x80 }] }];
+  const fileOf = (sections) => order(textFunctions(entries(unpaddedNm(sections)), { start: T, size: sections.at(-1).at + sections.at(-1).size - T }), 7, 1);
+  assert.equal(fileOf(head), named("z_end", "head_only", "z", "a_next"));
+  const b = sideOf(base, fileOf(base)), h = sideOf(head, fileOf(head));
+  assert.deepEqual([own(b).why, own(h).why], [[], []]);
+  // In base's placement z_end and a_next share one address, z's section laid first.
+  assert.equal(b.eb.find((e) => e.raw === "z_end").at, b.eb.find((e) => e.raw === "a_next").at);
+  const r = alike(b, h, 320);
+  assert.deepEqual(r.why, []);
+  assert.deepEqual([r.shared, r.same], [3, 3]);
+});
+
+test("a shuffled placement: a function of no size at the very end of .text is of the input section the map has it in", () => {
+  // Head's alias, drawn first, puts .text.b before .text.a, so z_end, the end of .text.a, is the
+  // end of the placement's .text.
+  const head = [SEC("/o/a.o", ".text.a", T, 0x40, [["a", 0], ["z_end", 0x40]]), SEC("/o/b.o", ".text.b", T + 0x40, 0x40, [["b", 0], ["alias", 0x10]])];
+  const x = sideOf(head, named("alias", "b", "a", "z_end"), { placed: { start: T, size: 320 + 0x80 } });
+  assert.equal(x.eb.find((e) => e.raw === "z_end").at, x.placed.start + x.placed.size);
+  const r = own(x);
+  assert.deepEqual(r.why, []);
+  assert.deepEqual([r.functions, r.together], [4, 4]);
+  // A definition at that address the map gives no section of .text is not one of it.
+  const off = { ...x, placedSections: x.placedSections.map((s) => (s.section === ".text.a" ? { ...s, symbols: s.symbols.filter((y) => y.name !== "z_end") } : s)) };
+  has(own(off).why, "the placement's .text holds 3 definitions of functions besides the pad, not the unpadded .text's 4");
+});
+
+// The four cases above as real links: each function in a section of its own, kept through
+// --gc-sections as build.sh's pad is (an object's empty .text is not), assembled by clang and
+// linked by LLD, with LLD's maps, read by layout.mjs as build.sh runs it.
+const LLD = { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v clang && command -v ld.lld && command -v nm && command -v readelf"]).status === 0 ? false : "needs Linux with clang, ld.lld, nm and readelf" };
+
+test("a shuffled placement, linked by LLD: each definition by its own map's input section, in the order that map lays them", LLD, (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "placement-lld-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const run = (cmd, args) => { const r = spawnSync(cmd, args, { cwd: dir, encoding: "utf8" }); if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")}: ${r.stderr}`); return r.stdout; };
+  // An object of sections, each [section, [[name, offset], ...], size, byte, local]: every name a function there.
+  const obj = (file, sections) => {
+    const s = sections.map(([sec, fns, size, byte = 0xcc, local = false]) => [`\t.section .text.${sec},"axR",@progbits`, "\t.p2align 4",
+      ...fns.flatMap(([n, off]) => [...(local ? [] : [`\t.globl ${n}`]), `\t.type ${n},@function`, `\t.set ${n}, .Lstart_${sec} + ${off}`]),
+      `.Lstart_${sec}:`, `\t.skip ${size}, ${byte}`].join("\n"));
+    writeFileSync(join(dir, `${file}.s`), s.join("\n") + "\n");
+    run("clang", ["--target=x86_64-linux-gnu", "-c", `${file}.s`, "-o", `${file}.o`]);
+    return `${file}.o`;
+  };
+  const pad = obj("pad", [["corten_layout_pad", [["corten_layout_pad", 0]], 320]]);
+  const ld = (out, objs, file) => { if (file) writeFileSync(join(dir, `${out}.order`), file); run("ld.lld", ["-o", out, "-e", "0", "--gc-sections", "-Map", `${out}.map`, ...(file ? ["--symbol-ordering-file", `${out}.order`] : []), ...objs]); return out; };
+  const layout = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL("./layout.mjs", import.meta.url)), ...args], { cwd: dir, encoding: "utf8" });
+  const shuffled = (unpadded, placement, file) => layout(unpadded, placement, "320", "--order", `${file}.order`, "--map", `${unpadded}.map`, "--placed-map", `${placement}.map`);
+  const listed = (bin) => textFunctions(entries(run("nm", ["--defined-only", bin])), textRange(run("readelf", ["-SW", bin])));
+
+  // 1. x.o's and y.o's local dup, distinct bodies of one size: a link given y.o before x.o lays
+  // y's section first, with the nm of the right one, and is refused.
+  const a = obj("a", [["a", [["a", 0]], 0x40]]), x = obj("x", [["dup", [["dup", 0]], 0x40, 0xcc, true]]), y = obj("y", [["dup", [["dup", 0]], 0x40, 0x90, true]]);
+  ld("dups", [a, x, y]);
+  const dupFile = named("a", "dup");
+  ld("dups-p", [pad, a, x, y], dupFile); ld("dups-yx", [pad, a, y, x], dupFile);
+  assert.equal(readFileSync(join(dir, "dups-yx.map"), "utf8").indexOf("y.o:(.text.dup)") < readFileSync(join(dir, "dups-yx.map"), "utf8").indexOf("x.o:(.text.dup)"), true);
+  assert.equal(shuffled("dups", "dups-p", "dups-p").status, 0, shuffled("dups", "dups-p", "dups-p").stderr);
+  const yx = shuffled("dups", "dups-yx", "dups-yx");
+  assert.equal(yx.status, 1);
+  assert.match(yx.stderr, /input sections in the ordering file's order: 1 of 3 places/);
+
+  // 2. zero_empty in an empty section of its own, at a_next's unpadded address: LLD's link for
+  // zero_empty, marker, a_next passes; the link for zero_empty, a_next, marker does not, read for it.
+  const z = obj("z", [["zero_empty", [["zero_empty", 0]], 0]]), n = obj("n", [["a_next", [["a_next", 0]], 0x40]]), m = obj("m", [["marker", [["marker", 0]], 0x40]]);
+  ld("zero", [z, n, m]);
+  const nmZero = entries(run("nm", ["--defined-only", "zero"]));
+  assert.equal(nmZero.find((e) => e.raw === "zero_empty").at, nmZero.find((e) => e.raw === "a_next").at);
+  ld("zero-p", [pad, z, n, m], named("zero_empty", "marker", "a_next"));
+  ld("zero-q", [pad, z, n, m], named("zero_empty", "a_next", "marker"));
+  assert.equal(shuffled("zero", "zero-p", "zero-p").status, 0, shuffled("zero", "zero-p", "zero-p").stderr);
+  const wrong = shuffled("zero", "zero-q", "zero-p");
+  assert.equal(wrong.status, 1);
+  assert.match(wrong.stderr, /input sections in the ordering file's order/);
+
+  // 3. Base's z_end ends .text.z where a_next begins; head adds head_only between them. At seed 7,
+  // index 1, both lay z's section first and a_next's last: each passes, and the two are alike.
+  const zz = obj("zz", [["z", [["z", 0], ["z_end", 0x40]], 0x40]]), h = obj("h", [["head_only", [["head_only", 0]], 0x40]]);
+  ld("base", [zz, n]); ld("head", [zz, h, n]);
+  const bFile = order(listed("base"), 7, 1), hFile = order(listed("head"), 7, 1);
+  assert.equal(hFile, named("z_end", "head_only", "z", "a_next"));
+  ld("base-p", [pad, zz, n], bFile); ld("head-p", [pad, zz, h, n], hFile);
+  const nmBase = entries(run("nm", ["--defined-only", "base-p"]));
+  assert.equal(nmBase.find((e) => e.raw === "z_end").at, nmBase.find((e) => e.raw === "a_next").at);
+  for (const s of ["base", "head"]) assert.equal(shuffled(s, `${s}-p`, `${s}-p`).status, 0, shuffled(s, `${s}-p`, `${s}-p`).stderr);
+  const both = layout("--alike", "base", "base-p", "base-p.order", "base.map", "base-p.map", "head", "head-p", "head-p.order", "head.map", "head-p.map", "320");
+  assert.equal(both.status, 0, both.stderr);
+  assert.match(both.stdout, /"shared":3/);
+
+  // 4. Head's alias, named first, lays .text.b before .text.a: z_end, the end of .text.a, is the
+  // end of the placement's .text, and is one of its four definitions.
+  const ea = obj("ea", [["a", [["a", 0], ["z_end", 0x40]], 0x40]]), eb = obj("eb", [["b", [["b", 0], ["alias", 0x10]], 0x40]]);
+  ld("ends", [ea, eb]);
+  ld("ends-p", [pad, ea, eb], named("alias", "b", "a", "z_end"));
+  const placedText = textRange(run("readelf", ["-SW", "ends-p"])), zEnd = entries(run("nm", ["--defined-only", "ends-p"])).find((e) => e.raw === "z_end").at;
+  assert.equal(zEnd, placedText.start + placedText.size);
+  const ends = shuffled("ends", "ends-p", "ends-p");
+  assert.equal(ends.status, 0, ends.stderr);
+  assert.match(ends.stdout, /"functions":4,/);
+});
+
+test("owner(): a definition's input section by the map, a section of no size and the end of one included", () => {
+  const ins = [
+    { at: 0x100, size: 0x40, symbols: [{ name: "a", at: 0x100 }, { name: "a_end", at: 0x140 }] },
+    { at: 0x140, size: 0, symbols: [{ name: "empty", at: 0x140 }] },
+    { at: 0x140, size: 0x40, symbols: [{ name: "b", at: 0x140 }] },
+    { at: 0x180, size: 0x40, symbols: [{ name: "c", at: 0x180 }] },
+  ];
+  assert.deepEqual([owner(ins, 0x100, "a"), owner(ins, 0x120, "a_mid"), owner(ins, 0x140, "a_end"), owner(ins, 0x140, "empty"), owner(ins, 0x140, "b")], [0, 0, 0, 1, 2]);
+  // The end of the last section, when the map lists the symbol there.
+  assert.equal(owner([...ins.slice(0, 3), { ...ins[3], symbols: [...ins[3].symbols, { name: "c_end", at: 0x1c0 }] }], 0x1c0, "c_end"), 3);
+  // A section's end where the map lists nothing (the next output section's first function, say) is not its.
+  assert.equal(owner(ins, 0x1c0, "next"), -1);
+  assert.equal(owner(ins, 0x1c1, "past"), -1);
+  // At its end alone, a section holds a definition only by its name.
+  assert.equal(owner([...ins.slice(0, 3), { ...ins[3], symbols: [...ins[3].symbols, { name: "c::end", at: 0x1c0 }] }], 0x1c0, "_ZN1c3endE"), -2);
+  // A name the map writes otherwise (demangled), where two sections list symbols: not told apart.
+  assert.equal(owner(ins, 0x140, "_ZN1b1fE"), -2);
+  // Where only the next section lists a symbol, the definition starts it.
+  assert.equal(owner(ins, 0x180, "_ZN1c1fE"), 3);
 });
 
 test("CONTRIBUTING.md scopes the fifth point's order and fixed line phase to unshuffled placements", async () => {

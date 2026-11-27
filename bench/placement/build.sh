@@ -41,13 +41,15 @@
 # every binary (p_i and q_i alike) is linked with orders/<side>-p<n>.txt in place of
 # pads/order.txt: the pad's function and then those functions in the order order.mjs draws from
 # the workload's seed and i. Such a link fails when LLD warns that a name in the file is no symbol
-# (relink.mjs --every-name), and 4 and 5's checks of the functions are layout.mjs --order with the
-# unpadded map, which asks for them in the file's order in place of each moved by the pad with
-# its neighbours (5's map check takes --shuffled, its sections in any order). Each head placement
-# is then checked against base's at its index (layout.mjs --alike, bin/layout/head-p<n>-alike.txt,
-# from both sides' unpadded binaries, maps and ordering files): the functions both have lie in one
-# order in both, a name defined more than once by each definition's input section, or head is
-# refused (7).
+# (relink.mjs --every-name), every placement is linked with its map (maps/<side>-p<n>.map, gzipped
+# and its SHA-256 in maps/placements.sha256, as 5's kept links are), and 4 and 5's checks of the
+# functions are layout.mjs --order with the unpadded map and the placement's, which asks for the
+# placement's map's input sections in the file's order, each function in its section, in place of
+# each moved by the pad with its neighbours (5's map check takes --shuffled, its sections in any
+# order). Each head placement is then checked against base's at its index (layout.mjs --alike,
+# bin/layout/head-p<n>-alike.txt, from both sides' unpadded binaries, maps, placement maps and
+# ordering files): the functions both have lie in one order in both, a name defined more than once
+# by each definition's input section, or head is refused (7).
 # A refusal (3, 5 or 7) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
 # 5 and 7 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
@@ -139,8 +141,10 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
             node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" || fail "relink failed: $pl"
             node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions moved by its pad"
         else
-            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name || fail "relink failed: $pl"
-            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --order "$pl_order" --map "$M/$1.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and its pad in the order of orders/$pl.txt"
+            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --map "$M/$pl.map" --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name || fail "relink failed: $pl"
+            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --order "$pl_order" --map "$M/$1.map" --placed-map "$M/$pl.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and its pad in the order of orders/$pl.txt"
+            echo "$(sha256sum "$M/$pl.map" | cut -d' ' -f1)  $pl.map" >>"$M/placements.sha256"
+            gzip -9 "$M/$pl.map"
         fi
     else
         pl_kept=; pl_at=; pl_tried=
@@ -161,7 +165,7 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
             node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --second >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and the two pads"
         else
             node "$KIT/map.mjs" check "$M/$1.map" "$M/$pl.map" "$2" "$pl_kept" --shuffled >"$B/layout/$pl-map.txt" || fail "$pl fails the map check"
-            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --second --order "$pl_order" --map "$M/$1.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and the two pads in the order of orders/$pl.txt"
+            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --second --order "$pl_order" --map "$M/$1.map" --placed-map "$M/$pl.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and the two pads in the order of orders/$pl.txt"
         fi
         echo "$pl: first pad $2 (mod 64: $(( $2 % 64 ))), second pad $pl_kept, .data at $pl_at; .data's offset in a 64-byte line with each size:$pl_tried" >>"$B/second-pads.txt"
         echo "$(sha256sum "$M/$pl.map" | cut -d' ' -f1)  $pl.map" >>"$M/placements.sha256"
@@ -170,7 +174,7 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
     if [ "$SHUFFLE" = 1 ] && [ "$1" = head ]; then
         pl_second=; [ "$SECOND" = 0 ] || pl_second=--second
         # shellcheck disable=SC2086
-        if ! node "$KIT/layout.mjs" --alike "$B/base" "$B/base-p$2" "$WORK/orders/base-p$2.txt" "$M/base.map" "$B/head" "$B/$pl" "$pl_order" "$M/head.map" "$2" $pl_second >"$B/layout/$pl-alike.txt" 2>"$B/alike-$pl.txt"; then
+        if ! node "$KIT/layout.mjs" --alike "$B/base" "$B/base-p$2" "$WORK/orders/base-p$2.txt" "$M/base.map" "$M/base-p$2.map.gz" "$B/head" "$B/$pl" "$pl_order" "$M/head.map" "$M/$pl.map.gz" "$2" $pl_second >"$B/layout/$pl-alike.txt" 2>"$B/alike-$pl.txt"; then
             grep -q '^JSON {"ok":false' "$B/layout/$pl-alike.txt" || fail "$pl could not be checked against base-p$2: $(cat "$B/alike-$pl.txt")"
             refused "head has no reading against base across shuffled placements: base-p$2 and $pl, linked in one index's order, lay the functions both have in different orders ($(sed 's/^layout.mjs: //' "$B/alike-$pl.txt" | paste -sd';' -))"
         fi

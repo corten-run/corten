@@ -19,7 +19,8 @@
 //                                               --shuffled, for a placement linked with a
 //                                               shuffled ordering file (order.mjs): its input
 //                                               sections between the pads are the unpadded
-//                                               link's in any order, which layout.mjs checks
+//                                               link's in any order, which layout.mjs --order
+//                                               checks from the same placement map
 // A map line is VMA, LMA, size and alignment, then an output section at no indent, an input
 // section (`file:(name)`) at 8 spaces or a symbol at 16. LLD lays the input sections of an output
 // section in order, each at the first multiple of its own alignment at or after the end of the
@@ -106,6 +107,45 @@ export function refusals(map) {
   return why;
 }
 
+/**
+ * Which of an output section's input sections (the map's, in its order) holds a definition at
+ * address x named name. A section holds the addresses inside it and, where the map lists a symbol
+ * there, its end (a symbol of no size that ends it, or one in a section of no size). Where two
+ * hold x, the one whose symbols there include name; else, the one alone with any symbol there.
+ * One that holds x at its end alone is its section only by name. -1 when none holds it; -2 when
+ * the map's symbols there do not give it to one (a mangled name the map writes demangled, say).
+ */
+export function owner(inputs, x, name) {
+  const at = (k) => (inputs[k].symbols ?? []).filter((y) => y.at === x), inside = (k) => inputs[k].at <= x && x < inputs[k].at + inputs[k].size;
+  const c = [];
+  inputs.forEach((s, k) => { if (inside(k) || (x === s.at + s.size && at(k).length)) c.push(k); });
+  if (!c.length) return -1;
+  const named = c.filter((k) => at(k).some((y) => y.name === name));
+  if (named.length) return named.length === 1 ? named[0] : -2;
+  if (!c.some(inside)) return -2;
+  if (c.length === 1) return c[0];
+  const marked = c.filter((k) => at(k).length);
+  return marked.length === 1 ? marked[0] : -2;
+}
+
+/**
+ * A shuffled placement's input sections between its pads (rest), each paired with an unpadded
+ * link's (a): first one of its id, size, alignment and symbols, each as far from its start, then
+ * one left over of its id, size and alignment; -1 where none is. Two sections a map names alike
+ * (one file's, of one section name) are told apart by their symbols, whatever order the ordering
+ * file laid them in; two alike in all of that are interchangeable.
+ */
+export function pair(a, rest) {
+  const sig = (s) => JSON.stringify([s.id, s.size, s.align, s.symbols.map((y) => [y.name, y.at - s.at])]), k3 = (s) => `${s.id}\0${s.size}\0${s.align}`;
+  const free = new Map(), used = new Set(), pairs = rest.map(() => -1);
+  a.forEach((s, i) => free.set(sig(s), [...(free.get(sig(s)) ?? []), i]));
+  rest.forEach((b, j) => { const i = free.get(sig(b))?.shift(); if (i !== undefined) { pairs[j] = i; used.add(i); } });
+  const left = new Map();
+  a.forEach((s, i) => { if (!used.has(i)) left.set(k3(s), [...(left.get(k3(s)) ?? []), i]); });
+  rest.forEach((b, j) => { if (pairs[j] < 0) pairs[j] = left.get(k3(b))?.shift() ?? -1; });
+  return pairs;
+}
+
 const up = (x, a) => Math.ceil(x / a) * a;
 const mod = (x) => ((x % LINE) + LINE) % LINE;
 
@@ -126,7 +166,7 @@ export function data(unpadded, placed, pad) {
  * its start; and .data is where the rule says.
  * shuffled: the input sections between the pads are the unpadded link's, each of its size and
  * alignment, in the order the placement's ordering file gave them (layout.mjs --order checks
- * that order), each section's symbols compared with those of an unpadded section of its name,
+ * that order, from this same placement map), each section's symbols compared with those of an unpadded section of its name,
  * size and alignment that has them, as far from its start (two sections the map names alike are
  * told apart so; two alike in that too are interchangeable here); the counts of what moved by
  * exactly the pad are not taken.
@@ -164,16 +204,7 @@ export function check(unpadded, placed, pad, second, shuffled = false) {
   // whatever order the file laid them in. Sections that match in all of that are interchangeable
   // to this check. A placement section no unpadded one matches so is compared, symbol by symbol,
   // with an unpadded one left over of its name, size and alignment, and fails.
-  const pairs = rest.map((b, j) => j);
-  if (same && shuffled) {
-    const sig = (s) => JSON.stringify([s.id, s.size, s.align, s.symbols.map((y) => [y.name, y.at - s.at])]), k3 = (s) => `${s.id}\0${s.size}\0${s.align}`;
-    const free = new Map(), used = new Set();
-    A.inputs.forEach((a, i) => free.set(sig(a), [...(free.get(sig(a)) ?? []), i]));
-    rest.forEach((b, j) => { const i = free.get(sig(b))?.shift(); pairs[j] = i ?? -1; if (i !== undefined) used.add(i); });
-    const left = new Map();
-    A.inputs.forEach((a, i) => { if (!used.has(i)) left.set(k3(a), [...(left.get(k3(a)) ?? []), i]); });
-    rest.forEach((b, j) => { if (pairs[j] < 0) pairs[j] = left.get(k3(b)).shift(); });
-  }
+  const pairs = same && shuffled ? pair(A.inputs, rest) : rest.map((b, j) => j);
   if (same) for (let j = 0; j < rest.length; j++) {
     const i = pairs[j], a = A.inputs[i], b = rest[j];
     symbols += a.symbols.length;
