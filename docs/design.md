@@ -11793,7 +11793,16 @@ rules something out.
     are reported and decide nothing, and with neither the job fails only on a miss and names
     the line. The job reads the description from the event it was started by, and its green
     check is counts of the pull request's own tree by its own kit, for a reviewer to read, not
-    an attestation by anything apart from the change. A change goes from
+    an attestation by anything apart from the change. That check, `request-cost`, is required on
+    `main` from 2026-11-27, by the maintainer's decision: asked when the hosted job becomes a
+    required check, the maintainer answered "After the idle floor lands", and the floor landed
+    that day
+    ([#2225 Record two rulings of the maintainer: the trend's threshold settled at +2%, and the counted lane's idle-memory floor raised to four pages](https://github.com/corten-run/corten/pull/2225)).
+    A pull request then merges only once the check is green, which makes the check no more an
+    attestation than it was: it is green for a change declared measured whatever its counts
+    and for one that declares no way when the rule holds, so the way is still the author's to
+    say and the review's to accept, and a miss is still met by the line `measured`, read by
+    the next run, which a push or a reopening of the pull request starts. A change goes from
     counted to measured when a count sends it there. A pull request that declares a plan does
     not go from measured to counted, by item 2's rule that a declaration is never added or
     changed after a run to clear its result. A reading published under the rule as it stood
@@ -11977,7 +11986,14 @@ rules something out.
     base's mean span of three in the nine hosted logs read for the floor (6,827 bytes after
     one request, 4,551 after three of a browser's requests, 18,660 before any byte), 0.71%
     of comparisons and 2.14% of jobs with four pages at both seeds, and 3.35% and 9.79%, and
-    3.37% and 9.87%, with one.
+    3.37% and 9.87%, with one; 2026-11-27, for the check made required,
+    `.github/workflows/request-cost.yml`, `bench/request-cost/compare.mjs` and the kit's page
+    read at `4fd6fd348` for what the job passes and fails: it passes, uncounted, a pull request
+    that changes nothing the probe is built from, passes one declared measured whatever its
+    counts, its verdict failing that one only when the probe does not build against head, reads
+    the description from the event its run was started by, and is started by a pull request
+    opened, pushed to or reopened and not by an edit, with a token that reads and no secret, so
+    a fork's pull request runs it as any other.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

@@ -244,8 +244,10 @@ builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. Th
 (`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
 side by side on runners of their own: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
-`rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
-supported Rust floor. A new smoke step names
+`rust` and `browser` pass only when every job under them ran and passed, `msrv` checks the
+supported Rust floor, and `request-cost`, the one job of the `Request Cost` workflow
+(`.github/workflows/request-cost.yml`), is required too from 2026-11-27 (Pull requests, item
+2.1, Counted, says what it passes). A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
 The three example groups use the pinned Playwright image directly. Two more groups run the
 benchmark checks beside them: `benchmark-checks` runs the `npm-check` part, and
@@ -560,7 +562,22 @@ establish a general ranking.
       green check is evidence for a reviewer to read, not an attestation: the counts are of
       the pull request's own tree, by its own workflow, scope, kit and comparison, so a pull
       request that changes any of those has that change reviewed for what it does to the
-      verdict. On a host of one's own, build base and head with
+      verdict. The check is required on `main` (Checks), so a pull request merges only once it
+      is green, and being required makes it no more than that evidence: it passes a pull request
+      that changes nothing the probe is built from without counting it, one declared measured
+      whatever its counts (its verdict fails that one only when the probe does not build against
+      head), and one
+      that declares no way when the rule holds, so the way, its line and what the measured way
+      then gives are still the review's to accept. A run reads the description the event carried
+      when it started, and a rerun reads that again, so the line a miss calls for,
+      `Request path: measured`, is read once a push or the pull request closed and reopened
+      starts a run, and the check stays red until then; under that line the figures decide
+      nothing, so that run is not a count taken again for its result. A change the job counts
+      that is not to rendering, the runtime or the request path (the kit's page, a comment in a
+      crate) declares no way, and if its count misses, on idle memory alone between builds of
+      the same crates as much as on anything else, it declares `Request path: measured` too and
+      its description says why item 2 asks it no measurement, which the review accepts. On a
+      host of one's own, build base and head with
       [`bench/request-cost`](bench/request-cost/README.md) and take each count under
       [Running it](bench/request-cost/README.md#running-it) on both, as that page says: one
       directory, one checkout of the kit, the answers compared first. The change passes when no

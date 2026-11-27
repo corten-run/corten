@@ -412,15 +412,22 @@ above the table and fail nothing: a change may be meant to change an answer, and
 weighs a count of two different jobs.
 
 The description is the one the event carried when the run started. A line added afterwards is
-read by the next run a push starts, not by a rerun, and an edit starts no run, since it would
-count the same commits again and so draw them again. So a red check on a pull request that
-has since declared `measured` stands, with its reason in its summary, until the next push: a
-maintainer reads the summary and the description as it now is, and the check's color only for
-the commit and description it ran with.
+read by the next run a push or a reopening of the pull request starts, not by a rerun, and an
+edit starts no run, since it would count the same commits again and so draw them again. So a
+red check on a pull request that has since declared `measured` stands, with its reason in its
+summary, until such a run: a maintainer reads the summary and the description as it now is,
+and the check's color only for the commit and description it ran with. The check is required
+on `main` from 2026-11-27, so that pull request merges only once such a run has read the line;
+under `measured` the figures decide nothing, so that run is not a count taken again for its
+result.
 
 A green check is evidence for a reviewer to read, not an attestation: the counts are of the
 pull request's own tree, by its own workflow, scope, kit and comparison. A pull request that
-changes any of those has that change reviewed for what it does to the verdict.
+changes any of those has that change reviewed for what it does to the verdict. Being required
+makes the check no more than that: it is green for a pull request it did not count, for one
+declared `measured` whatever its counts, and for one that declares no way when the rule holds,
+so the way and what the measured way gives are still the review's to accept
+([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2.1, Counted).
 
 The same comparison of two builds counted on a host of one's own, each run's `--json` output in
 a file named as `--readings` names it:
@@ -502,7 +509,9 @@ once in ten with one page, not once in seven; in the 27 hosted readings the larg
 16,384 bytes, was on the reading before any byte. None of the five runs read such a rise, whose
 figures were compared, not their growths, which those runs did not print. A job that fails on
 idle memory alone is to be read with that in mind; by the rule its runs are still not taken
-again for their result.
+again for their result, and since the check is required its pull request merges once it
+declares `measured` and a run started after that reads the line, as above (CONTRIBUTING's item
+2.1 says what such a change then gives, and what one that is not to the request path says).
 
 ## The idle floor
 
