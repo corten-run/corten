@@ -1464,11 +1464,11 @@ nothing falls back to a direct write.
 Between writing and syncing the stage and the link, each runs the retirement's
 custody check below; a refusal there publishes nothing, so a saved digest changed
 or a drain proof expired while the stage was written leaves no receipt or history
-copy. The stage's name alone is not trusted: the write keeps the identity of the
-file it created (device and inode, from its own descriptor after the sync) and
-the digest of the bytes it wrote. Immediately before the link the name must still
-be that file holding those bytes, and after the link both names must be that
-file before the stage name is removed. A stage replaced or rewritten there
+copy. The stage's name alone is not trusted: the write holds the file it created
+open by its own descriptor until the link or the refusal, so a replacement cannot
+reuse its inode, and keeps the digest of the bytes it wrote. Immediately before
+the link the name must still be that file (device and inode) holding those bytes,
+and after the link both names must be that file before the stage name is removed. A stage replaced or rewritten there
 refuses with `publication stage replaced before its link; nothing published, the
 replacement is kept` and is left as found. A custody refusal removes the stage
 only while it is still the file this write created; a replaced stage is kept and
