@@ -928,11 +928,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
     full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit required");
     const exit = Number(marker.trim()); assert.ok(exit <= 255);
-    pins?.push(() => {
+    // The tree walk is the slow part, so the archive's identity is checked on both sides of
+    // it: a change made to results.tgz while the tree is walked is still seen.
+    const archiveUnchanged = () => {
       try { assert.ok(evidenceFileIdentity(archive) === archiveIdentity); }
       catch (cause) { throw new Error("setup archive changed; preserve host", { cause }); }
+    };
+    pins?.push(() => {
+      archiveUnchanged();
       try { treeUnchanged(); }
       catch (cause) { throw new Error("setup evidence changed; preserve host", { cause }); }
+      archiveUnchanged();
     });
     return exit;
   };

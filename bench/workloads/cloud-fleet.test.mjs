@@ -496,6 +496,7 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "receipt-expired-history-torn", "receipt-edited-before-intent", "receipt-edited-before-delete", "receipt-torn", "receipt-unpublished",
   "receipt-edited-at-dispatch", "dispatch-unchanged", "pending-save-torn",
   "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch",
+  "archive-edited-during-dispatch-walk", "dispatch-walk-unchanged",
   "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read",
   "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
   "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage",
@@ -526,6 +527,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "lock-replaced-at-dispatch": "an operation lock replaced during the production dispatch checkpoint refuses, sends no DELETE and keeps the replacement",
   "archive-edited-at-dispatch": "a byte appended to results.tgz during the production dispatch checkpoint refuses and sends no DELETE",
   "evidence-edited-at-dispatch": "an extracted file outside control/ edited during the production dispatch checkpoint refuses and sends no DELETE",
+  "archive-edited-during-dispatch-walk": "a byte appended to results.tgz while the production dispatch guard walks the extracted tree refuses after the walk and sends no DELETE",
+  "dispatch-walk-unchanged": "an archive left unchanged while the production dispatch guard walks the extracted tree passes and sends exactly one DELETE",
   "receipt-edited-at-engine": "a receipt edited at the in-process provider engine's checkpoint refuses there and sends no DELETE",
   "engine-unchanged": "an unchanged receipt passes the provider engine's guard and sends exactly one DELETE",
   "lock-replaced-at-read": "an operation lock replaced during the retirement's exact host read refuses with no digest, receipt, intent or DELETE",
@@ -699,6 +702,42 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
     assert.equal(saved.retirement.evidenceSha256, digest(edited)); assert.notEqual(digest(readFileSync(receipt)), digest(edited));
     await assert.rejects(h.task({ run: production }).collect(), /retirement evidence changed/);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (mode === "archive-edited-during-dispatch-walk" || mode === "dispatch-walk-unchanged") {
+    // The real production dispatch: its checkpoint, then the controller's guard, then the
+    // provider. After that checkpoint the first directory opened under an extraction is the
+    // guard's tree walk, which follows its first check of the archive's identity.
+    const tgz = join(h.local, "results.tgz");
+    let deleting = false, armed = false, walked = false, changed;
+    hookFs(t, {
+      opendirSync: (original) => (path, ...rest) => {
+        if (armed && !walked && /^evidence-/.test(basename(String(path)))) {
+          walked = true;
+          if (mode === "archive-edited-during-dispatch-walk") { changed = readFileSync(tgz); appendFileSync(tgz, Buffer.from([0])); }
+        }
+        return original(path, ...rest);
+      },
+    });
+    const dispatch = productionDispatch({ processRun: run, provider: () => (...args) => run("doctl", ...args),
+      interrupted: () => { if (deleting) armed = true; return false; } });
+    const production = (...args) => { if (args[0] === "doctl" && args[1][2] === "delete") deleting = true; return dispatch(...args); };
+    if (mode === "dispatch-walk-unchanged") {
+      assert.equal(await h.task({ run: production }).collect(), 1);
+      const s = h.saved();
+      assert.ok(walked); assert.equal(changed, undefined); assert.equal(queries, 1);
+      assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+      assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+      return;
+    }
+    await assert.rejects(h.task({ run: production }).collect(), /setup archive changed; preserve host/);
+    assert.ok(walked && changed); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    const saved = h.saved();
+    assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
+    assert.equal(readFileSync(tgz).length, changed.length + 1); assert.equal(existsSync(lock), false);
+    restoreFs(t);
+    await assert.rejects(h.task({ run: production }).collect());
     assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
     return;
   }
