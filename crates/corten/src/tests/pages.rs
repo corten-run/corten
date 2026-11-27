@@ -157,10 +157,23 @@ async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
         parts.extensions.insert(crate::Signal::for_app(Arc::new(shared), 0));
         async move { <Req as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await.unwrap() }
     };
-    let vary = |res: &Response| res.headers().get_all(http::header::VARY).iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
+    let vary = |res: &Response| {
+        res.headers().get_all(http::header::VARY).iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>()
+    };
     // Reads no locale, so only `App::messages` makes it vary on the language.
-    let page =
-        |req: &Req| req.page::<ForOne>(html! { <html><head><title>"A"</title><Corten /></head><body><main>"a"</main></body></html> }).unwrap().0;
+    let page = |req: &Req| {
+        req.page::<ForOne>(html! {
+            <html>
+                <head>
+                    <title>"A"</title>
+                    <Corten />
+                </head>
+                <body><main>"a"</main></body>
+            </html>
+        })
+            .unwrap()
+            .0
+    };
     let language = ["corten, accept, accept-language"];
     let fixed = ["corten, accept"];
     for mode in [None, Some("nav")] {
@@ -593,7 +606,9 @@ async fn a_page_in_another_layout_has_another_shell_key() {
 async fn the_header_and_the_head_carry_the_shell_key_s_same_16_digits() {
     let digits = |key: &str| key.len() == 16 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     let routes = || Table::new().route("/", get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }));
-    for router in [App::new(Routes::from(routes())).router(), App::new(Routes::from(routes())).error_page(test_error_page, ()).router()] {
+    for router in
+        [App::new(Routes::from(routes())).router(), App::new(Routes::from(routes())).error_page(test_error_page, ()).router()]
+    {
         for uri in ["/", "/nope"] {
             let (_, headers, body) = call_with(router.clone(), "GET", uri, None, Some("text/html")).await;
             let key = headers["corten-shell"].to_str().unwrap();

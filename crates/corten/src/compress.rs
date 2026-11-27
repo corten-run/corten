@@ -802,8 +802,24 @@ mod tests {
     #[test]
     fn negotiation_chooses_as_reading_every_item_did() {
         let items = [
-            "gzip", "GZIP", "x-gzip", "br", "zstd", " zstd ", "identity", "*", "deflate", "gzip;q=0", "br;q=0.5",
-            "zstd;q=0.25", "zstd;q=0.5", "gzip;q=bad", "br ; q=1.0", "zstd;Q=0.001", "br;q=0.500", "gzip;q=1.5",
+            "gzip",
+            "GZIP",
+            "x-gzip",
+            "br",
+            "zstd",
+            " zstd ",
+            "identity",
+            "*",
+            "deflate",
+            "gzip;q=0",
+            "br;q=0.5",
+            "zstd;q=0.25",
+            "zstd;q=0.5",
+            "gzip;q=bad",
+            "br ; q=1.0",
+            "zstd;Q=0.001",
+            "br;q=0.500",
+            "gzip;q=1.5",
         ];
         let mut lines: Vec<String> = BROWSER_LINES.iter().map(|(line, _)| std::str::from_utf8(line).unwrap().into()).collect();
         lines.push(String::new());

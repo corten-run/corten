@@ -206,9 +206,10 @@ impl Mode {
         // The first item's media type, without its parameters and the whitespace around it, is
         // JSON: the line starts with it after whitespace, and whitespace then ends the item or
         // starts its parameters. Read so, a line that starts otherwise is not looked at further.
-        let json = accept.trim_ascii_start().strip_prefix(crate::api::JSON).is_some_and(|rest| {
-            matches!(rest.trim_ascii_start().as_bytes().first(), None | Some(b',' | b';'))
-        });
+        let json = accept
+            .trim_ascii_start()
+            .strip_prefix(crate::api::JSON)
+            .is_some_and(|rest| matches!(rest.trim_ascii_start().as_bytes().first(), None | Some(b',' | b';')));
         let mode = if json { Mode::Data } else { Mode::Document };
         ((mode, false), accept)
     }
