@@ -2081,13 +2081,26 @@ macro_rules! tuples {
 }
 tuples!((A, B), (A, B, C), (A, B, C, D));
 
+/// The decimal digits of `n`, for the `Render` of each integer type of up to 64 bits and for such
+/// an integer as a message's argument (`u128` and `i128` are written through `Display`).
+///
+/// Always inlined: as a call, at the two `u32` render sites of the page `bench/request-cost`
+/// counts, each integer cost six registers saved and restored, and loads after it of the string's
+/// length and capacity and of the markup written next. Other callers' cost was not counted.
+#[inline(always)]
 pub(crate) fn push_u64(mut n: u64, out: &mut String) {
-    // One or two digits, most of a page's counts and quantities: pushed with no buffer.
-    if n < 100 {
-        if n >= 10 {
-            out.push(char::from(b'0' + (n / 10) as u8));
+    // Up to three digits, most of a page's counts and quantities: written with no buffer, a digit
+    // and a pair at most.
+    if n < 1_000 {
+        let n = n as u16;
+        if n >= 100 {
+            out.push(char::from(b'0' + (n / 100) as u8));
+            out.push_str(crate::ascii::pair((n % 100) as u8));
+        } else if n >= 10 {
+            out.push_str(crate::ascii::pair(n as u8));
+        } else {
+            out.push(char::from(b'0' + n as u8));
         }
-        out.push(char::from(b'0' + (n % 10) as u8));
         return;
     }
     // Two digits per division, lowest first, then written highest first as two-digit text: one
