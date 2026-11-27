@@ -8564,9 +8564,10 @@ rules something out.
     answer comes back past the middleware. The route's side of the chain (`middleware::handle`,
     which no middleware can stand in for) looks at the answer as it comes back
     (`middleware::Keyed`) and, when it has the mark, whoever put it on, marks the stages' own
-    signal before any middleware sees the answer. The stages hold the route and their signal in
-    one place (`middleware::Ends`), and each link of the chain carries a reference to it, so the
-    route goes down the chain as one pointer where it was two, and the signal with it. A
+    signal before any middleware sees the answer. The stages hold the route and a reference to
+    their signal in one place (`middleware::Ends`), and each link of the chain carries a
+    reference to it, so the route goes down the chain as one pointer where it was two, and the
+    signal with it. A
     middleware is given the rest of the chain as a `Next`, which promises no `'static`, so it
     cannot hand the route's future to a task of its own, but it may call it or poll it on a
     scoped thread of its own (a `Next` and its future are `Send`); the mark is the signal's, not
@@ -8582,9 +8583,24 @@ rules something out.
     request's signal in every watched route's future. An earlier head (`9c8cd07e7`) gave the
     stages' signal to the route's side of the chain in the futures `next` makes, a pointer
     more in each: 87 instructions a request were copies of that larger future and 66 polling the
-    one that held the signal. The thread's flag costs the usual request its read and reset around
-    each poll and a look for the mark in an answer's extensions, which the usual answer has none
-    of (measured below). Request provenance that
+    one that held the signal. Here the route's future holds the signal once, in `Keyed`, and the
+    404 for a path under an API that a route outside it matched is made as that future is
+    polled rather than held in it from the start, so the future is a few words where it held a
+    whole response: with the response held and the signal beside it, the stages' poll called
+    `memcpy` four times a request where main calls it once (87 instructions more on the settle
+    test's `Public` page, callgrind), and once again with the 404 made as it is polled. Making the
+    404 as it is polled is cheaper with or without the mark, so main given only that change is
+    the control the counts below compare with as well. The mark costs the usual request a look
+    for it in the answer's extensions, which the usual answer has none of, and a read of the
+    signal's byte before settling. The notice and the key share that byte, each set with an
+    atomic `or` where main stored the notice with a plain atomic store: the key is set on
+    whatever thread polled the answer and the notice on whatever task renders, and nothing orders
+    the two, so a store of one bit could clear the other; a byte of the key's own would make every
+    signal 8 bytes larger without `zones` (its shared state 136 bytes, 144 with one more, read
+    with `size_of` at main). So this change to the request path is measured, not counted
+    ([CONTRIBUTING](../CONTRIBUTING.md#pull-requests), item 2): the notice's store became an `or`
+    (`fetch_or`), the key's `or` is new on a request whose answer drew one, and the key's relaxed
+    read is new on every staged request. Request provenance that
     survives a rebuilt request was to come from
     [#1890 Drop CDN caching headers from answers that are one visitor's alone and from unanswered failures](https://github.com/corten-run/corten/pull/1890),
     which marks its failures on the answer instead and has none, so this is the watch's own.
@@ -8595,43 +8611,58 @@ rules something out.
     inner answer: a private answer that could have been shared, never the other way round; the
     inner request's own answer is marked through its own signal. Measured on 2026-11-26 with
     `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
-    request at main (`9b8834fcc`) and with this change (`613ced773`): a `Public` page given from
-    the store 16,044 and 16,098 (+0.34%); one made for each request (`kept_answers(0)`) 19,015 and
-    19,065 (+0.26%); a `Public` JSON body given 15,580 and 15,634 (+0.35%), made for each 54,247
-    and 54,253 (+0.01%); a `Public` text body from an unstaged route 7,736 and 7,770 (+0.44%);
-    text from an unstaged route that is not `Public` 6,439 and 6,438; a private page, whose form
-    draws a key, 17,537 and 17,676 (+0.79%); and a `Public` page with a keyed form 21,391 and
-    21,593 (+0.94%). Of the 54 of the page given from the store, 17 are the thread's flag around
-    each poll in `page::run`, 15 `middleware::handle` and 11 the stages' future, which build and
-    poll `Keyed`, 5 settling with what the stages read, and 6 comparing strings in the test
-    itself, whose source is the same in both builds; no copy of a future is counted more. The
-    page made for each request counts the same parts, 50 in all, the watch around its handler
-    adding nothing a count shows; the JSON made for each counts 6, its answer marked where the
-    watch polls it to, 47 fewer than main's mark after it. The unstaged text body's 34 are the
-    watch around its handler (28) and the same 6 of the test. The two pages that draw a key add
-    the look for the mark the stages make (`cache::unrepeatable`, 59) in place of the one
-    settling made (40 and 48 fewer there), 29 more in `page::run` where the flag is set and the
-    signal marked, and looking for a tag among the names settling already passes over (33 for
-    the private page, 37 for the keyed one; taking it out of the map whatever the
-    names were cost 86 at `9c8cd07e7`); the keyed page, whose watch marks the answer too, looks
-    for the mark once more there (59) and copies 12 more. With `Keyed`'s poll `#[inline]`
-    rather than `#[inline(always)]` the page given from the store counts 40 more, the private page
-    36 and the keyed one 35. Against the same main, `9c8cd07e7` counted 16,198 for the page given
+    request at main (`9b8834fcc`), at main with only the 404 made as it is polled (`da6420d62`,
+    the control, not for merge) and with this change (`d10bedc5f`): a `Public` page given from
+    the store 16,044, 15,991 and 16,009 (-0.22% against main, +0.11% against the control); one
+    made for each request (`kept_answers(0)`) 19,015, 18,962 and 18,976 (-0.21%, +0.07%); a
+    `Public` JSON body given 15,580, 15,527 and 15,545 (-0.22%, +0.12%), made for each 54,247,
+    54,194 and 54,163 (-0.15%, -0.06%); a `Public` text body from an unstaged route 7,736, 7,736
+    and 7,764 (+0.36%), which no stage runs, so the 404 changes nothing there and the 28 are the
+    watch around its handler (by function at `613ced773`); text from an unstaged route that is
+    not `Public` 6,439, 6,439 and 6,438; a private page, whose form draws a key, 17,537, 17,484
+    and 17,591 (+0.31%, +0.61%);
+    and a `Public` page with a keyed form 21,391, 21,338 and 21,508 (+0.55%, +0.80%). Each count
+    is the same within 1.2 in two rounds in opposite orders. By function, against the control,
+    the page given from the store counts 24 more in the stages' future, which read the signal's
+    byte and settle with it, 8 in `page::run`, which polls `Keyed`, and 5 in settling, less 18
+    polling and dropping the futures around it; the 53 by which the control is under main are
+    building, moving and dropping the route's side of the chain, which held a whole response (24
+    dropping it, 18 in `page::run`, 15 in `middleware::handle`). The private page
+    adds the look for the mark the stages make (`cache::unrepeatable`, 59), 35 in `page::run`
+    where `Keyed` finds the mark and marks the signal, 27 in the stages' future and 7 reading the
+    mark's type, with settling 7 fewer; the keyed page, whose watch marks the answer too, looks
+    for the mark once more (118 in all), and its settling and watch count the rest. At
+    `613ced773`, with `Keyed`'s poll `#[inline]` rather than `#[inline(always)]`, the page given
+    from the store counted 40 more, the private page 36 and the keyed one 35. Against the same
+    main, `cf2ea1a01`, the thread's flag in place of the signal, counted 16,098 for the page given
+    from the store, 19,065 for one made for each request, 15,633 and 54,252 for the JSON, 7,770
+    for the unstaged text body, 17,676 for the private page and 21,593 for the keyed one, and
+    `66d66c28e`, the signal without the 404 made as it is polled, 16,142, 19,109, 15,678, 54,297,
+    7,764, 17,724 and 21,641 (+0.61% for the page given from the store, the three more calls to
+    `memcpy` above); `9c8cd07e7` counted 16,198 for the page given
     from the store (+0.96%), 19,166 for one made for each request, 15,734 and 54,354 for the JSON,
     7,766 for the unstaged text body, 17,886 for the private page (+1.99%) and 21,807 for the
     keyed one (+1.94%); `7a7ac7aa8`, whose watch marked the request's signal as well, counted 34
     more than `9c8cd07e7` for the page made for each request, 20 for the JSON made for each and
     44 for the keyed page, the signal each watched route's future held, and the other cases
     within about 1. No `may_share` is left in the release build's symbols, so saying whether an
-    answer may be `Public` is not a call. These are instruction counts, not cycles. With
-    `bench/request-cost` (Last checked), instructions a request, median of three, main and this
-    change read `get` 18,335 and 18,314, `post` 22,784 and 22,762, `text` 17,180 and 17,166,
-    `page` 43,221 and 43,239 (+0.04%), `get-browser` 23,874 and 23,855, `text-browser` 25,826
-    and 25,814, `page-browser` 221,835 and 221,855, at a depth of 16 `get` 16,200 and 16,181
-    and `text` 15,056 and 15,043, and `unstaged` and `pipeline` within 2, with the same
-    allocations; `9c8cd07e7` read `get` +77 against main, `text` +90 and `page` +111. The
-    future a staged page's stages run is 2,472 bytes at main and with this change and was 2,488
-    at `9c8cd07e7`, the handler's 760 at all three (`staged_page_future_sizes`). A first
+    answer may be `Public` is not a call. These are instruction counts, not cycles, and the
+    shared byte's `or` and read are among them only as instructions: what they cost under load on
+    a quiet host is not measured here. With
+    `bench/request-cost` (Last checked), instructions a request, median of three, main, the
+    control and this change read `get` 18,335, 18,284 and 18,224 (-0.61% against main), `post`
+    22,785, 22,735 and 22,673, `text` 17,181, 17,131 and 17,073, `page` 43,222, 43,172 and 43,146
+    (-0.18%), `get-browser` 23,875, 23,825 and 23,764, `text-browser` 25,827, 25,777 and 25,721,
+    `page-browser` 221,837, 221,787 and 221,762, at a depth of 16 `get` 16,200, 16,150 and
+    16,089 and `text` 15,056, 15,007 and 14,949, and `unstaged` and `pipeline` within 2, with the
+    same allocations and answers; `cf2ea1a01` read `get` 18,316, `page` 43,240, `66d66c28e`
+    `get` 18,346 and `page` 43,271, and `9c8cd07e7` `get` +77 against main, `text` +90 and
+    `page` +111. The future a staged page's stages run is 2,472 bytes at main and the control,
+    2,480 with this change (the reference to `middleware::Ends` that `Next` carries) and was
+    2,488 at `9c8cd07e7`, the handler's 760 at all of them (`staged_page_future_sizes`); with
+    `Ends` owning the stages' hold on their signal in place of the reference (`273e27b05`) it
+    was 2,480 too, and `bench/request-cost` read 7, 5 and 8 more than `66d66c28e` for `get`,
+    `post` and `page`. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -9606,21 +9637,27 @@ rules something out.
     2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-26 for the stages' mark
-    past the middleware, the probe of `bench/request-cost` at `613ced773` (this change) and
-    `9c8cd07e7` against `9b8834fcc`, built one after another in one directory with rustc 1.100.0,
-    counted with valgrind 3.24.0 and `--cpu 2` in a `rust:1-trixie` container on a 12-CPU
-    workstation, answers compared first with no difference; 2026-11-26 for the watch for a submit
-    key, `613ced773` (this change), `9c8cd07e7` and `7a7ac7aa8` against main's `9b8834fcc`, each
-    with the same `tests::cache::what_settling_a_page_costs` (the function, its doc and its two
-    unstaged routes as at `9c8cd07e7`, which the other two have unchanged, applied to
-    `9b8834fcc`), built at one path with rustc 1.100.0 in release with all features and counted
-    under callgrind (valgrind 3.24.0, Debian's `libjemalloc2`, in a `rust:1-trixie` container),
-    each count the difference of a run of 1,200 requests and one of 200, eight cases in two rounds
-    in opposite orders of the builds (`7a7ac7aa8` in an earlier pair), every count within 1.1
-    instructions of the other round's, the counts by function read with `callgrind_annotate` for
-    seven of the cases, `613ced773` with `Keyed`'s poll `#[inline]` counted once for four, the
-    future sizes from `staged_page_future_sizes` in release with default features, and no cycles
-    under load measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    past the middleware, the probe of `bench/request-cost` at `d10bedc5f` (this change; the
+    commits after it change comments and docs only), the control `da6420d62`, `273e27b05`,
+    `66d66c28e` and `cf2ea1a01` against `9b8834fcc` (`9c8cd07e7` in an earlier run), built
+    one after another in one directory with rustc 1.100.0, counted with valgrind 3.24.0 and
+    `--cpu 2` in a `rust:1-trixie` container on a 12-CPU workstation, answers compared first
+    with no difference; 2026-11-26 for the watch for a submit key, `d10bedc5f` (this change),
+    the control `da6420d62` (kept under the tag `evidence/api-404-control-1863`), `66d66c28e` and
+    `cf2ea1a01` against main's `9b8834fcc`
+    (`613ced773`, `9c8cd07e7` and `7a7ac7aa8` in earlier rounds), each with the same
+    `tests::cache::what_settling_a_page_costs` (the function, its doc and its two unstaged routes
+    as at `9c8cd07e7`, which the others have unchanged, applied to `9b8834fcc` and the control),
+    built at one path with rustc 1.100.0 in release with all features and counted under callgrind
+    (valgrind 3.24.0, Debian's `libjemalloc2`, in a `rust:1-trixie` container), each count the
+    difference of a run of 1,200 requests and one of 200, eight cases in two rounds in opposite
+    orders of the builds (the control in a pair of its own), every count within 1.2 instructions
+    of the other round's, the counts by function read with `callgrind_annotate` for three of the
+    cases and the callers of `memcpy`
+    for one, `613ced773` with `Keyed`'s poll `#[inline]` counted once for four, the future
+    sizes from `staged_page_future_sizes` in the same builds (2,472 bytes at main with default
+    features and `log` too, where the signal's shared state was read with `size_of`), and no
+    cycles under load measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
