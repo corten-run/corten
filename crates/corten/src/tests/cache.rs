@@ -841,6 +841,39 @@ async fn a_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone_
     }
 }
 
+/// A `Public` JSON answer whose handler rendered a form's new submit key with `req.rendered` on
+/// another thread (a blocking task) marks only the request's signal: the watch around the handler
+/// polls nothing that drew it. The app's store reads that mark before it keeps the answer, so the
+/// first answer is not kept to be given to the next visitor: both go out `private, no-cache`, as
+/// the handler made them (no `Age`), each with its own key.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_public_answer_with_a_key_rendered_on_another_thread_is_not_kept() {
+    use crate::route::get as typed;
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
+    // Of a size the app keeps, so the key is what keeps it out of the store.
+    let filler = || "keyed ".repeat(200);
+    let routes = Table::new().route(
+        "/blocking",
+        typed(move |req: Req| async move {
+            let field = tokio::task::spawn_blocking(move || req.rendered(field()).into_string()).await.unwrap();
+            Public::new(minute, Ok::<_, JsonError>(Json((field, filler()))))
+        })
+        .0,
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let (status, first, body) = fetch(&router, "GET", "/blocking", &[]).await;
+    let (_, again, other) = fetch(&router, "GET", "/blocking", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    for headers in [&first, &again] {
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{headers:?}");
+        assert!(!headers.contains_key(header::AGE), "a kept answer: {headers:?}");
+    }
+    assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "a key for each");
+}
+
 /// An answer type of the app's own that is `Public` on one branch and the visitor's on the other,
 /// as an app may write one (`Answer` and `IntoResponse` are open), says nothing of which it is, so
 /// its handler is watched as a `Public` one's is: a branch that drew a form's new submit key goes

@@ -1418,6 +1418,12 @@ impl Missed {
                 return res;
             }};
         }
+        // A form's new submit key the handler rendered where its watch did not poll (`req.rendered`
+        // in a blocking task) marks only the request's signal, not the answer: it is this request's
+        // alone too, and goes out as one (`crate::cache::Unrepeatable`).
+        if signal.key_drawn() {
+            unkept!(Verdict::DrewKey);
+        }
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else {
             unkept!(Verdict::NoLifetime { status: res.status().as_u16() })
         };
