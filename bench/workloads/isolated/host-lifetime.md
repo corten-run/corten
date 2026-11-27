@@ -102,6 +102,12 @@ the start of capture; the final inspect must start before 75 ms on the monotonic
 clock. Failed confirmation retains the original gap; later proc reads and
 startup retries do not use this path.
 
+The closing Docker inspect can itself prove the same stopped transition after
+the kernel checks. The collector then discards the incomplete kernel census and
+its new executable pins, recording only the stopped row. There is no additional
+inspect. An absent participant, an unproved finish, or a changed generation is
+still a gap.
+
 Replay counts only verified kernel records as live coverage. An `exited` or
 `removing` row must have a finish between the end of the last verified running
 capture and the end of its own capture. Stopped rows for the same container

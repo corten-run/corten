@@ -12,8 +12,8 @@ const scope = (container) => `/system.slice/docker-${container}.scope`;
 const zero = "0001-01-01T00:00:00Z";
 
 async function exitTransition(t, { change = () => {}, path = "stat", code = "ENOENT",
-  finishDelay = 0, wakeOffset = 0, inspectMs = 0 } = {}) {
-  let faults = 0, phase = 0, missingAt;
+  finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false } = {}) {
+  let faults = 0, phase = 0, missingAt, pinsAfterExit;
   const procReads = [], inspections = [], waits = [];
   const f = await fixture(t, [], true, () => { faults++; });
   Atomics.wait.mock.mockImplementation((_array, _index, _value, ms) => {
@@ -46,7 +46,7 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
     if (!name.startsWith("/proc/5000/")) return;
     if (phase === 1) {
       procReads.push(name);
-      if (name === "/proc/5000/" + path) throw missing(code);
+      if (!closing && name === "/proc/5000/" + path) throw missing(code);
     }
     if (name.endsWith("/cgroup")) return "0::" + scope(id) + "\n";
     if (name.endsWith("/stat")) return stat(5000);
@@ -55,17 +55,44 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
   const live = f.samples().at(-1);
   assert.ok(live.docker.participants[0].kernel);
   phase = 1;
+  if (closing) f.nextPid = 5000;
   missingAt = f.clock += 100;
   stopped.State.FinishedAt = new Date(Date.now() + finishDelay).toISOString();
   await f.tick();
   const exit = f.samples().at(-1);
+  pinsAfterExit = f.held.size;
   phase = 2; f.clock = missingAt + 100; await f.tick();
   const removing = f.samples().at(-1);
   phase = 3; f.clock += 100; await f.tick();
   const absent = f.samples().at(-1);
   const replay = await f.finish();
-  return { f, faults, inspections, waits, procReads, live, exit, removing, absent, stopped, replay };
+  return { f, faults, inspections, waits, procReads, live, exit, removing, absent, stopped, replay, pinsAfterExit };
 }
+
+test("closing inspect can prove an exit of the same Docker generation without retaining its partial kernel census", async (t) => {
+  const { f, faults, live, exit, stopped, inspections, waits, pinsAfterExit } = await exitTransition(t, { closing: true });
+  assert.ok(live.docker.participants[0].kernel);
+  assert.deepEqual(inspections, [[0, "running"], [0, "removing"]]);
+  assert.deepEqual(waits, []);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [], participants: [{
+    startedAt: exit.at, endedAt: exit.at, container: { id, imageId: image, restartCount: 0, state: stopped.State }, kernel: null,
+  }] });
+  assert.equal(pinsAfterExit, 1, "the executable only seen in the abandoned census was not pinned");
+  assert.equal(faults, 0);
+  assert.equal(f.terminal.firstDockerGap, undefined);
+});
+
+for (const [label, change] of [
+  ["is absent", () => []],
+  ["has a different generation", (row) => { row.RestartCount++; }],
+  ["has no valid finish", (row) => { row.State.FinishedAt = zero; }],
+]) test(`closing inspect stays a gap if the Docker participant ${label}`, async (t) => {
+  const { f, faults, exit, pinsAfterExit } = await exitTransition(t, { closing: true, change });
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
+  assert.deepEqual(f.terminal.firstDockerGap, { stage: "inspect-close", code: "ERR_ASSERTION" });
+  assert.equal(pinsAfterExit, 1);
+  assert.equal(faults, 1);
+});
 
 test("r95 exit: a missing opening stat followed by the same removing container is a stopped sample", async (t) => {
   const { f, faults, inspections, waits, procReads, exit, stopped } = await exitTransition(t);

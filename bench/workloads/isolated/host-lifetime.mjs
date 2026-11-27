@@ -303,6 +303,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
       if (bound) startupRechecks.set(record, { ...bound.diagnostic, attempts });
       return record;
     } catch (error) {
+      if (error instanceof ClosingDockerExit) return error.record;
       const churn = error && typeof error === "object" ? startupChurn.get(error) : undefined;
       if (bound && error && typeof error === "object") startupAttempts.set(error, attempts);
       if (!churn || performance.now() - began >= startupRetryMs) throw error;
@@ -318,6 +319,10 @@ const startupRetryMs = 250, startupWindowMs = maximumSampleGapMs;
 const exitRecheckTargetMs = 70, exitRecheckDeadlineMs = 75;
 const dockerZeroTime = "0001-01-01T00:00:00.000000000Z";
 const startupChurn = new WeakMap(), startupAttempts = new WeakMap(), startupRechecks = new WeakMap();
+// Unwind the executable transaction before returning a Docker-only sample.
+class ClosingDockerExit extends Error {
+  constructor(record) { super(); this.record = record; }
+}
 // A changed name inside the census is already retried by the census itself
 // (`snapshot`, for every participant), so only an executable inode change reaches here.
 const startupCensusOperations = new Set(["executable-recheck-inode"]);
@@ -346,14 +351,21 @@ function stoppedDockerState(state, endedAt, earliest) {
   const at = Date.parse(finish);
   return at >= earliest && at <= endedAt;
 }
+function canConfirmDockerExit({ state, restartCount }) {
+  return state.Running === true && state.Status === "running" && state.Paused === false && state.Restarting === false
+    && state.Dead === false && Number.isSafeInteger(restartCount) && restartCount >= 0;
+}
+function sameDockerExit(running, observed, startedAt, endedAt) {
+  return observed.id === running.id && observed.imageId === running.imageId && observed.restartCount === running.restartCount
+    && observed.state.StartedAt === running.state.StartedAt && stoppedDockerState(observed.state, endedAt, startedAt);
+}
 function confirmDockerExit(inspect, running, startedAt, began) {
   const { state } = running;
   for (let attempt = 0; attempt < 2; attempt++) {
     let observed;
     try { observed = inspect(true); } catch { return; } // Keep the original proc gap.
     const endedAt = Date.now();
-    if (observed.imageId === running.imageId && observed.restartCount === running.restartCount
-      && observed.state.StartedAt === state.StartedAt && stoppedDockerState(observed.state, endedAt, startedAt))
+    if (sameDockerExit(running, observed, startedAt, endedAt))
       return { startedAt, endedAt, container: observed, kernel: null };
     if (attempt || !isDeepStrictEqual(observed, running)) return;
     const start = dockerUtcTime(state.StartedAt);
@@ -402,10 +414,7 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     catch (error) {
       // An exiting PID can vanish before Docker updates its running state.
       // Only the opening stat read can take this path, before any kernel evidence.
-      const state = container.state;
-      if (exitRecheckBegan !== undefined && error?.code === "ENOENT" && state.Running === true && state.Status === "running"
-        && state.Paused === false && state.Restarting === false && state.Dead === false
-        && Number.isSafeInteger(container.restartCount) && container.restartCount >= 0) {
+      if (exitRecheckBegan !== undefined && error?.code === "ENOENT" && canConfirmDockerExit(container)) {
         const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
         if (stopped) return stopped;
       }
@@ -427,7 +436,13 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     stage = "process-cgroup-close";
     assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
     stage = "inspect-close";
-    assert.deepEqual(inspect(), container, "Docker participant changed during kernel observation");
+    const closingContainer = inspect(true);
+    if (exitRecheckBegan !== undefined && closingContainer.state.Running === false && canConfirmDockerExit(container)) {
+      const endedAt = Date.now();
+      if (sameDockerExit(container, closingContainer, startedAt, endedAt))
+        throw new ClosingDockerExit({ startedAt, endedAt, container: closingContainer, kernel: null });
+    }
+    assert.deepEqual(closingContainer, container, "Docker participant changed during kernel observation");
     stage = "boot-id";
     return { startedAt, endedAt: Date.now(), container,
       kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
