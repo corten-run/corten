@@ -1460,8 +1460,13 @@ receipt, the saved reservation (`state.json`, byte for byte, so including its
 retirement digest), for a v2 or v3 receipt the archived control custody its proof
 was built from (the inventory and bytes of the evidence's `control/` folder,
 including every watcher failure), for every failed-setup receipt the other inputs
-its replay verifier hashes, and this process's own `operation.lock` (the file it
-created, by identity and bytes). Those other inputs are `results.tgz` and the
+its replay verifier hashes, and the lock this operation holds (the file this process
+created, by identity and bytes). That lock is `operation.lock` for an ordinary collect
+and `stream-recovery.lock` for an invalid-monitor recovery collect, which never takes
+the original `operation.lock` it finds; a retirement under any other lock refuses.
+The same lock is also checked when the retirement begins, before its receipt, digest
+or intent is written, so a missing or replaced lock refuses with nothing saved and
+no DELETE. Those other inputs are `results.tgz` and the
 whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
 and `control/`). They are pinned without rereading them: the verification after
 the intent hashes each, recording `results.tgz`'s file identity (device, inode,
@@ -1482,8 +1487,9 @@ the interval between the request leaving and the provider acting on it; a change
 made only in that uncovered interval is not detected. A mismatch found by one of
 these checks refuses with `saved retirement reservation changed; preserve host`,
 `archived control custody changed; preserve host`, `setup archive changed;
-preserve host`, `setup evidence changed; preserve host` or `operation.lock changed;
-preserve custody` and sends no DELETE. A receipt edited before the intent refuses with
+preserve host`, `setup evidence changed; preserve host`, `operation.lock changed;
+preserve custody` or `stream-recovery.lock changed; preserve custody` and sends no
+DELETE. A receipt edited before the intent refuses with
 `published retirement receipt differs from the bytes written; preserve host`,
 saving no intent; its recorded digest stays, so a later collect refuses it as an
 interrupted receipt that differs from its recorded digest. Edited after the

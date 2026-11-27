@@ -93,8 +93,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
-  // This process's own operation.lock while it holds one: the file it created, unchanged.
-  let assertOperationLock;
+  // The lock this process's current locked() operation holds, while it holds it: its name
+  // and a check that it is still the file this process created, unchanged. An ordinary
+  // operation holds operation.lock; an invalid-monitor recovery holds stream-recovery.lock
+  // and never takes the original operation.lock it finds.
+  let heldLock;
   let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -809,8 +812,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     physical(local);
     const ownLock = acquireHandoffLock(lock, Buffer.from(lockBytes), handoff ? undefined : `${name} changed; preserve custody`);
     if (handoff) assertHandoffLock = ownLock;
-    const outerOperationLock = assertOperationLock;
-    if (name === "operation.lock") assertOperationLock = ownLock;
+    const outerLock = heldLock;
+    heldLock = { name, own: ownLock };
     preserveOperationLock = false;
     let failure;
     try {
@@ -833,7 +836,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           diagnostic ? { providerDiagnostic: diagnostic } : {});
       }
       finally {
-        if (name === "operation.lock") assertOperationLock = outerOperationLock;
+        heldLock = outerLock;
         if (!preserveOperationLock) {
           if (afterSettle) afterSettle();
           else if (expectedHandoffState !== undefined) assertHandoffState();
@@ -1000,6 +1003,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return uploads;
   };
   const retire = async (kind, evidence, finishedAtMs) => {
+    // A retirement runs only under the exclusive lock this operation took, and refuses
+    // before it writes a receipt, a digest or an intent if that lock is gone or replaced.
+    const held = heldLock;
+    assert.ok(held && ["operation.lock", recoveryLock].includes(held.name), "retirement requires this process's operation lock");
+    held.own();
     const pinned = options.unusedBootstrapKnownHosts !== undefined;
     // A drain proof shows a host state that can change, so like the pinned unused proof
     // its 60-second deadline from the query's start goes with the DELETE itself.
@@ -1064,12 +1072,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // Everything the DELETE relies on, as this process left it: the receipt, the saved
     // reservation that names its digest, the archived control custody the proof was built
     // from (including any watcher failure), for a setup retirement the archive and the
-    // extracted tree its replay verifier hashes, and this process's own operation lock.
+    // extracted tree its replay verifier hashes, and the lock this operation holds.
     // The transport calls this again after its last local await before the request.
     const savedState = Buffer.from(stateBytes(state));
     const custody = recorded ? evidence.observation.control.custody : undefined;
-    const ownLock = assertOperationLock;
-    assert.ok(ownLock, "retirement requires this process's operation lock");
     const requireRetirementCustody = () => {
       requirePublished();
       assert.ok(regular(statePath, 1024 * 1024).equals(savedState), "saved retirement reservation changed; preserve host");
@@ -1084,7 +1090,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
       }
       for (const pin of pins) pin();
-      ownLock();
+      held.own();
     };
     requireRetirementCustody();
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);

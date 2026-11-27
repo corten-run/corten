@@ -1462,3 +1462,92 @@ test("failed or wrong common bootstrap leaves the first host observable without 
     assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });
+
+// An invalid-monitor recovery collect holds stream-recovery.lock and never takes the
+// crashed launcher's operation.lock. Its failed-setup retirement (a v2 receipt, from the
+// real guardian in the in-memory kernel) is held to the lock it actually holds.
+for (const mode of ["retired", "lock-replaced"]) test(mode === "retired"
+  ? "an invalid-monitor recovery collect retires a failed setup under its stream-recovery lock with one DELETE"
+  : "a stream-recovery lock replaced before a failed-setup retirement refuses with no receipt, intent or DELETE", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true });
+  const kernel = spawn(process.platform === "win32" ? "python" : "python3",
+    ["-I", fileURLToPath(new URL("./test-fixtures/control-session-kernel.py", import.meta.url)), "setup-fleet"],
+    { timeout: 25000, killSignal: "SIGKILL", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  const lines = createInterface({ input: kernel.stdout })[Symbol.asyncIterator]();
+  let stderr = ""; kernel.stderr.on("data", (part) => { stderr = (stderr + part).slice(-4096); });
+  const closed = new Promise((resolve) => { kernel.on("error", (e) => resolve(String(e))); kernel.on("close", resolve); });
+  t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
+  const recovery = join(h.local, "stream-recovery.lock");
+  let token, replaced, queries = 0;
+  const run = async (binary, args, timeout, allowFail, expiry, control) => {
+    if (!control?.request) {
+      const result = await h.run(binary, args, timeout, allowFail, expiry, control);
+      // The monitor registers, then the bootstrap seal's exact host read fails before its
+      // request enters the ledger: the monitor ends invalid with no seal.
+      if (result.monitor) h.flags.listError = true;
+      return result;
+    }
+    const s = h.saved(), script = args.at(-1), request = control.request;
+    // The launch chooses the reservation token; the guardian is bound to it on its first request.
+    if (token === undefined) {
+      token = s.token;
+      kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource }) + "\n");
+    }
+    const pack = script === "timeout 600 /bin/bash /bench/pack.sh";
+    const query = script.includes("<<'CORTEN_FAILED_SETUP_HOST'");
+    if (query) {
+      queries++;
+      if (mode === "lock-replaced") {
+        const bytes = readFileSync(recovery); unlinkSync(recovery); writeFileSync(recovery, bytes, { flag: "wx" }); replaced = bytes;
+      }
+    }
+    const expected = query && { sequence: request.sequence, requests: s.control.ledger.slice(0, -1).map((r) => r.request),
+      binding: { round: s.round, commit, token, helperSha256: guardianSha256 },
+      queryArgv: ["/usr/bin/python3", "-", s.id, s.unit, JSON.stringify(Object.fromEntries(Object.entries(remoteFiles(s)).map(([k, v]) => [k, digest(v)]))), "1"] };
+    const result = query ? null : await h.run(binary, args, timeout, allowFail);
+    kernel.stdin.write(JSON.stringify({ request, payload: binary === "ssh" ? `set -euo pipefail\n${script}\n` : "synthetic SFTP",
+      pack, code: result?.status ?? 0, ...(query ? { expected } : {}) }) + "\n");
+    const line = await lines.next(); assert.equal(line.done, false, stderr);
+    const reply = JSON.parse(line.value);
+    if (pack) h.setArchive(archive([...metadata(), { name: "control/" },
+      ...Object.entries(reply.custody).map(([k, v]) => ({ name: "control/" + k, body: Buffer.from(v, "hex") }))]));
+    if (query) return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-setup-host/v2", hostId: s.id, unit: s.unit,
+      setupFailed: true, exitCode: 1, observedAtMs: Date.now(), control: reply.proof }) };
+    return result;
+  };
+  await assert.rejects(h.launch({ run }).launch(), /bootstrap seal failed after monitor registration/);
+  h.flags.listError = false; h.flags.active = false;
+  const launched = h.saved();
+  assert.equal(launched.control.monitor.phase, "invalid"); assert.deepEqual(launched.control.sealed, []);
+  assert.ok(launched.control.ledger.every((row) => row.localTerminal && !row.request.seal));
+  assert.equal(launched.preBootstrapTerminal, undefined); assert.equal(h.deletes, 0);
+  // The launcher has exited and left both of its locks; its lease has expired.
+  const operation = join(h.local, "operation.lock"), launch = join(h.base, ".groups-launch.lock");
+  writeFileSync(operation, JSON.stringify({ ...JSON.parse(readFileSync(operation)), pid: 2147483647 }));
+  writeFileSync(launch, JSON.stringify({ ...JSON.parse(readFileSync(launch)), pid: 2147483647 }));
+  const operationBytes = readFileSync(operation);
+  const closure = join(h.local, "monitor-local-closed.json"), close = JSON.parse(readFileSync(closure));
+  close.closedAtMs = Date.now() - 30001; close.recoverAfterMs = close.closedAtMs + 30000;
+  writeFileSync(closure, JSON.stringify(close));
+  const deletesSent = () => h.calls.filter(([binary, ...args]) => binary === "doctl" && args[2] === "delete").length;
+  const task = h.task({ run, inspect: async () => { throw new Error("no native campaign began"); } });
+  if (mode === "retired") {
+    assert.equal(await task.collect(), 1);
+    const s = h.saved();
+    assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "setup-failed"); assert.ok(s.deletionIntentAt && s.destroyedAt);
+    assert.equal(s.pendingRetirement, undefined); assert.equal(s.validation, undefined); assert.equal(s.collectedAt, undefined);
+    assert.equal(JSON.parse(readFileSync(join(h.local, "failed-setup-host.json"))).schema, "benchmark-failed-setup-retirement/v2");
+    assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    // The recovery released only its own lock; the original custody stays for the operator.
+    assert.ok(!existsSync(recovery)); assert.ok(readFileSync(operation).equals(operationBytes)); assert.ok(existsSync(launch));
+    return;
+  }
+  await assert.rejects(task.collect(), (error) => /stream-recovery\.lock was replaced during this operation/.test(error.message)
+    && /stream-recovery\.lock changed; preserve custody/.test(error.cause?.message));
+  const s = h.saved();
+  assert.ok(replaced); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+  assert.equal(s.status, "running"); assert.equal(s.deletionIntentAt, undefined); assert.equal(s.retirement, undefined);
+  assert.equal(s.pendingRetirement, undefined); assert.ok(!existsSync(join(h.local, "failed-setup-host.json")));
+  assert.ok(readFileSync(recovery).equals(replaced), "the replacement lock is kept for its owner");
+  assert.ok(readFileSync(operation).equals(operationBytes));
+});
