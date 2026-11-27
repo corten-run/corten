@@ -2298,6 +2298,13 @@ pub(crate) struct Scope {
     middleware: crate::middleware::Stack,
 }
 
+#[cfg(test)]
+impl Scope {
+    /// The offsets of `own` and `beside_a_tag`, for the router's test of a scope's layout.
+    pub(crate) const OWN_AND_BESIDE_A_TAG: (usize, usize) =
+        (std::mem::offset_of!(Scope, own), std::mem::offset_of!(Scope, beside_a_tag));
+}
+
 /// Every area's and API's scope and the app's, by path: for a request whose route cannot say
 /// which it is in (an unknown URL, whose `404` belongs to the prefix it is under, and a route
 /// whose parameter or catch-all can match under another prefix, [`Scopes::of_route`]), and for a

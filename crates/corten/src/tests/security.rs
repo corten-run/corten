@@ -2357,8 +2357,9 @@ fn tag_of(sent: &LinesSent) -> Option<http::HeaderValue> {
 
 /// An answer given its scope's lines in one pass is tagged without a search of its lines
 /// ([`crate::cache::tag`]), and is tagged as it would be with one: under each policy, with each
-/// scope's lines as `Scopes::new` makes them (the app's, which are also those of Corten's own
-/// routes, an area's, an API's and those of an API in the area), every answer [`lines_answer`]
+/// scope's lines, which the test makes itself by the calls `Scopes::new` makes them by (the
+/// app's, which are also those of Corten's own routes, an area's, an API's and those of an API
+/// in the area), every answer [`lines_answer`]
 /// makes that the pass takes is the same answer, byte for byte, its `ETag` among its lines,
 /// whether its lines are searched or not, and the same as that answer given each line by the
 /// stages and searched; so is its `304` to a request that names its tag, and its answer to one

@@ -763,8 +763,8 @@ pub(crate) struct Unrepeatable;
 /// from its type alone: the answer and the tag the search would give. Any other answer is
 /// searched. It is handed over where the scope keeps it, not copied: with the byte itself for an
 /// argument the search's lookup of `Cache-Control` was a call again and a compressed page's
-/// request counted 55 instructions more (`bench/request-cost`, `page-browser`), as [`untagged`]
-/// says of the search as a function.
+/// request counted 55 instructions more (`bench/request-cost`, `page-browser`, at `dd17a6e8c`),
+/// which is why [`untagged`] is kept in line.
 pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&BesideATag>) -> Response {
     let ready = given.is_some_and(|lines| lines.0);
     if res.status() != StatusCode::OK
@@ -835,9 +835,8 @@ fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
 /// Whether a header line of an answer leaves it without a tag ([`tag`]): a tag or an encoding of
 /// its own, a part of a body, or a `Cache-Control` that keeps it out of every cache or says it
 /// never changes. In line in [`tag`], which asks it of every answer whose lines it searches: as a
-/// function `tag` called, with the lookup of `Cache-Control` a call inside it, a compressed
-/// page's request counted 59 instructions more than with it in line (`bench/request-cost`,
-/// `page-browser`).
+/// function `tag` called, the lookup of `Cache-Control` became a call inside it and a compressed
+/// page's request (`bench/request-cost`, `page-browser`) counted more than with it in line.
 #[inline(always)]
 fn untagged(headers: &HeaderMap) -> bool {
     headers.contains_key(header::ETAG)
@@ -859,11 +858,13 @@ fn counts(name: &header::HeaderName) -> bool {
 
 /// Whether a scope's lines ([`crate::security::Applied::lines`]) are beside the tag of an answer
 /// they are given to: none leaves it untagged ([`untagged`]) and none is part of its tag
-/// ([`counts`]). Made only by [`BesideATag::of`], from the lines themselves and by the two tests
+/// ([`counts`]). Made only by [`BesideATag::of`], from the lines it is given and by the two tests
 /// [`tag`] makes of an answer's lines, once for each scope when the router is built: so it is
-/// true to them whatever a later change makes them, and it is what lets `tag` make neither test
-/// of an answer whose other lines are its scope's. No line a scope has today does either, so it
-/// holds of every scope; where a line comes to, its scope's answers are searched as any other's.
+/// true to the lines it is given whatever a later change makes them (that they are the scope's
+/// own is `Scopes::new`'s, which makes both in one closure), and it is what lets `tag` make
+/// neither test of an answer whose other lines are its scope's. No line a scope has today does
+/// either, so it holds of every scope; where a line comes to, its scope's answers are searched
+/// as any other's.
 #[derive(Clone, Copy)]
 pub(crate) struct BesideATag(bool);
 

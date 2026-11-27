@@ -3218,14 +3218,12 @@ rules something out.
     neither, 33,214 to 33,215 and `page-browser`, tagged after a search as before, 211,828 to
     211,836; the unstaged cases within one; allocations a request the same in all 19 cases
     and idle memory no higher. A scope is 336 bytes before and after, with each of its other
-    fields at the offset it had and the new byte beside `own` (x86-64 Linux, rustc 1.100.0,
-    printed by a test that was not kept). How the search is compiled decides more than the
-    change does on a tagged page: with the search a function the stage calls rather than in
-    line in it, `page-browser` counted 59 more, and at `dd17a6e8c`, which handed the stage the
-    byte itself where `10bfc8a21` hands it by reference, 211,891, 55 more, the lookup of
-    `Cache-Control` a call in both; with the tag made once where the pass is taken and once
-    where it is not, so that nothing is carried, the staged cases counted 62 more. The first
-    and the last were each counted once on a build that was not kept); value
+    fields at the offset it had and the new byte beside `own` (x86-64 Linux, rustc 1.100.0;
+    `a_scope_s_layout` in `crates/corten/src/router.rs` holds the size and that the byte is in
+    `own`'s word). How the search is compiled decides more than the change does on a tagged
+    page: at `dd17a6e8c`, which handed the stage the byte itself where `10bfc8a21` hands it by
+    reference, `page-browser` counted 211,891, 55 more, the lookup of `Cache-Control` a call
+    there); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -3292,7 +3290,8 @@ rules something out.
     that `cache::tag`'s two tests of them do not read, which `cache::BesideATag` would then not
     know of; or when leaving the search out saves `text-browser` fewer than about 150
     instructions (565 at `10bfc8a21`); or when a scope comes to be larger than it was before
-    it kept what its lines say, or to keep that where a request reads nothing else.
+    it kept what its lines say, or to keep that where a request reads nothing else, which
+    `a_scope_s_layout` fails on.
 
     Last checked: 2026-11-26, the tag of an answer that took the pass at `10bfc8a21` against
     `e87ad02da`, instructions and allocations a request and idle memory by

@@ -1117,7 +1117,7 @@ of three counts, `e87ad02da` before and `10bfc8a21` after):
 | a short text from a route under an API (`get`): not tagged | 18,352 | 18,353 |
 | a 12 KB page compressed for a browser (`page-browser`): tagged, lines searched | 211,828 | 211,836 |
 
-The cost is one instruction on an answer that is not tagged, for the last stage to carry
+The cost is one or two instructions on an answer that is not tagged, for the last stage to carry
 whether the pass was taken to where the tag is made, and eight on a tagged page.
 
 ## Your own middleware

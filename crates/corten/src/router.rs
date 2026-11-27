@@ -1503,4 +1503,37 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_scope_s_layout() {
+        // A scope keeps what its lines say of an answer's tag (`beside_a_tag`, the Choice at
+        // docs/design.md#choice-fixed-stages) in a byte of room it had, in the word that holds
+        // `own`, which the last stage reads for every request before it reaches the tag. So a
+        // scope is as large as it was before it kept that, and a request that reads the byte
+        // reads no cache line it did not read.
+        //
+        // Measured on x86_64-unknown-linux-gnu with rustc 1.99.1, in a debug and a release
+        // build: 336 bytes, as before the byte was kept, `own` at 328 and the byte at 329.
+        //
+        // The layout is the compiler's, so the test can fail in two ways:
+        // - a scope grew, or the byte left `own`'s word, after a change to `Scope`: that makes
+        //   the Choice's Revisit when true. Count `text-browser`, `page-browser` and the staged
+        //   cases with `bench/request-cost` again and decide there whether a scope still keeps
+        //   the byte; a scope that only shrank needs the measurement lowered and nothing else;
+        // - another toolchain moved the layout with no such change. Measure both profiles again
+        //   and move the measurement and the version above with it.
+        const MEASURED: usize = 336;
+        let size = std::mem::size_of::<crate::app::Scope>();
+        let (own, beside_a_tag) = crate::app::Scope::OWN_AND_BESIDE_A_TAG;
+        eprintln!("scope: {size} bytes; own at {own}; beside_a_tag at {beside_a_tag}");
+        assert_eq!(
+            size, MEASURED,
+            "a scope is {size} bytes, not the {MEASURED} measured: see this test's comment before moving the measurement"
+        );
+        assert_eq!(
+            own / 8,
+            beside_a_tag / 8,
+            "`beside_a_tag` at {beside_a_tag} is not in the word of `own` at {own}: see this test's comment"
+        );
+    }
 }
