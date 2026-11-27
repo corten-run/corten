@@ -189,8 +189,9 @@ old .NET 10 live images and their captures do not qualify this patch.
 
 Checked 2026-11-26 on `e8734f929`, for
 [#1541 bench/fullstack's ASP.NET marketplace tests, a CI gate, run on xunit 2.9.3, which NuGet marks deprecated in favor of xunit.v3, with a test SDK and runner a major behind](https://github.com/corten-run/corten/issues/1541).
-Only `apps/aspnet/tests` changes; the app, its packages and its image do not, so no timing
-input changes and earlier evidence stays as recorded.
+Only `apps/aspnet/tests` changes. The app's code, its production packages and the published
+binary the timed workload runs do not; the test files are still copied into the image's build
+context, so the build input is not byte-identical. Earlier evidence stays as recorded.
 
 | Package | Before | After |
 |---|---|---|
