@@ -17,15 +17,20 @@ import { Answers, cases, masked, unexpected } from "./requests.mjs";
 const ALLOCATOR = { LD_PRELOAD: "libjemalloc.so.2", MALLOC_CONF: "background_thread:false,tcache_max:524288", PROBE_ALLOCATOR: "jemalloc" };
 
 /**
- * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`. With `callgrind`, under
- * callgrind writing its profiles to `callgrind.out`, with `callgrind.options` more.
+ * The probe, serving `configuration` on 127.0.0.1:`port` on CPU `cpu`, with `HOSTS` set to
+ * `hosts` or, without it, not set, whatever this process's environment holds. With `callgrind`,
+ * under callgrind writing its profiles to `callgrind.out`, with `callgrind.options` more.
  * @param {string} binary @param {"api" | "pages"} configuration
- * @param {{ cpu: string, port: number, callgrind?: { out: string, options?: string[] } }} how
+ * @param {{ cpu: string, port: number, hosts?: string, callgrind?: { out: string, options?: string[] } }} how
  */
-export async function start(binary, configuration, { cpu, port, callgrind }) {
+export async function start(binary, configuration, { cpu, port, hosts, callgrind }) {
   const under = callgrind ? ["valgrind", "--tool=callgrind", `--callgrind-out-file=${callgrind.out}`, ...(callgrind.options ?? [])] : [];
+  /** @type {NodeJS.ProcessEnv} */
+  const env = { ...process.env, ...ALLOCATOR };
+  delete env.HOSTS;
+  if (hosts !== undefined) env.HOSTS = hosts;
   const child = spawn("taskset", ["-c", cpu, ...under, binary, String(port), configuration], {
-    env: { ...process.env, ...ALLOCATOR },
+    env,
     stdio: ["ignore", "ignore", "pipe"],
   });
   let said = "";
@@ -185,7 +190,8 @@ export async function counted(binary, name, { cpu, port, depth, scratch }) {
   const directory = mkdtempSync(join(scratch, "run-"));
   const out = join(directory, "callgrind");
   const options = ["--separate-threads=yes", "--compress-strings=no", "--compress-pos=no"];
-  const probe = await start(binary, /** @type {typeof cases[string]} */ (cases[name]).configuration, { cpu, port, callgrind: { out, options } });
+  const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
+  const probe = await start(binary, configuration, { cpu, port, hosts, callgrind: { out, options } });
   /** The files of a dump, one a thread: `callgrind.<part>-<thread>`. */
   const written = (/** @type {number} */ part) => readdirSync(directory).filter((file) => new RegExp(`^callgrind\\.${part}-\\d+$`).test(file));
   // callgrind_control exits 0 whether or not it reached the process: a dump is known by its files.

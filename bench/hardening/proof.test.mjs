@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { budgets, parseArgs } from "./plan.mjs";
 import { nginxConf, edgeOffset } from "../fullstack/edge.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
-import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs } from "./evidence.mjs";
+import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs, proxyConfig } from "./evidence.mjs";
 import { ownedCleanupObservation, verifyOwnedCleanup, ownedContainerRecorder } from "./lifecycle.mjs";
 import { verifyFailedControl, verifySavedProof } from "./verify.mjs";
 import { assessNative } from "./native.mjs";
@@ -24,6 +24,18 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const stamp = "2026-11-13T12:00:00Z", runId = "hardening-test", budget = budgets();
 const id = (n) => n.toString(16).padStart(64, "0");
 const image = (n) => ({ Id: `sha256:${id(n)}`, Config: { Cmd: ["/server"], Entrypoint: null, Env: [], User: "", WorkingDir: "" } });
+
+test("the Hardening edge preserves the approved public Host without changing the default edge", () => {
+  assert.match(proxyConfig(), /if \(\$http_host != "localhost:8080"\) \{ return 421; \}/);
+  assert.match(proxyConfig(), /proxy_set_header Host \$http_host;/);
+  for (const name of ["Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port"])
+    assert.ok(proxyConfig().includes(`proxy_set_header ${name} "";`));
+  assert.doesNotMatch(proxyConfig(), /proxy_set_header Origin/);
+  const defaultConfig = nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
+  assert.doesNotMatch(defaultConfig, /\$http_host|Forwarded/);
+  assert.match(defaultConfig, /proxy_set_header Host fsw-target:8080;/);
+});
+
 const acknowledgeCreation = (r) => {
   r.creation.args = [r.intent.operation, "--name", r.intent.name,
     "--label", `run.corten.hardening=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...r.intent.args.slice(1)];
@@ -65,7 +77,8 @@ function fixture(mode = "direct", isolated = false) {
       mount("/etc/nginx/nginx.conf", join(root, cell.key, "nginx.conf")); mount("/cert", join(root, cell.key, "cert"));
     }
     const Env = step === "application" ? Object.entries({ MARKETPLACE_SOURCE: "fixture", MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: upstream,
-      PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }).map(([k, v]) => `${k}=${v}`)
+      PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections),
+      ...(mode === "deployed-edge" ? { MARKETPLACE_PUBLIC_ORIGIN: "https://localhost:8080" } : {}) }).map(([k, v]) => `${k}=${v}`)
       : role === "qualification" ? ["PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
         ...(step.startsWith("edge-") ? ["NODE_EXTRA_CA_CERTS=/results/cert/cert.pem", "BENCH_EDGE_CERT=/results/cert/cert.pem"] : [])] : [];
     const created = { Id: id(index + 20), Name: "/" + name, Image: step === "application" ? summary.builds.corten.imageId : summary.tools[tool].Id,
@@ -100,6 +113,19 @@ test("complete actual-configuration vectors replay every charged native step", (
   // A target exit remains compatible with complete apparatus receipts.
   receipts[1].terminal.State.ExitCode = 137; receipts[1].terminal.State.OOMKilled = true;
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
+});
+
+test("replay binds the exact public origin to the edge app, never to the direct app", () => {
+  for (const mode of ["deployed-edge", "direct"]) {
+    const { summary, receipts } = fixture(mode), app = receipts.find((r) => r.intent.step === "application");
+    const preflight = { ...summary.cells[0], failedStage: mode === "deployed-edge" ? "edge-native-controls" : "native-controls" };
+    assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary, undefined, preflight));
+    const unexpected = "MARKETPLACE_PUBLIC_ORIGIN=https://other.invalid:8080";
+    const i = app.created.Config.Env.findIndex((s) => s.startsWith("MARKETPLACE_PUBLIC_ORIGIN="));
+    if (i < 0) app.created.Config.Env.push(unexpected);
+    else app.created.Config.Env[i] = unexpected;
+    assert.throws(() => verifyOwnedReceipts(receipts, summary, undefined, preflight), /unbound native worker environment/);
+  }
 });
 
 test("owned receipts require declared options and enforce isolated launch CPU proof", () => {
@@ -149,7 +175,7 @@ test(`ordinary ${mode} preflight failure (${discovery ? "discovery" : "allowed h
   Object.assign(cell, { status: "invalid", failedStage: prefix + "native-controls", failureKind: "target-functional-failure",
     [edge ? "edgeAssessment" : "nativeAssessment"]: assessment });
   writeFileSync(join(out, "failure.json"), JSON.stringify({ stage: cell.failedStage, kind: cell.failureKind }));
-  const config = join(out, "nginx.conf"), expectedConfig = nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
+  const config = join(out, "nginx.conf"), expectedConfig = proxyConfig();
   if (edge) writeFileSync(config, expectedConfig);
   const paths = new Set(savedFiles(dir).map(f => f.path)), launches = edge ? receipts : receipts.slice(0, 5), control = launches.at(-1);
   control.start.stdout = stdout;

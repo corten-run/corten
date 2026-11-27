@@ -5,8 +5,12 @@ mod text;
 mod trace;
 mod views;
 
-use corten::i18n::Locale;
-use corten::prelude::*;
+use corten::{
+    extract::FromRequestParts,
+    http::{header, request::Parts},
+    i18n::Locale,
+    prelude::*,
+};
 use model::Record;
 use source::Source;
 use std::sync::Arc;
@@ -17,6 +21,42 @@ use trace::TraceParent;
 struct AppState {
     source: Source,
     alerts: alerts::Store,
+    hardening_edge: bool,
+}
+
+const HARDENING_ORIGIN: &str = "https://localhost:8080";
+
+fn hardening_edge(config: Option<&str>) -> bool {
+    match config {
+        None => false,
+        Some(HARDENING_ORIGIN) => true,
+        Some(_) => panic!("MARKETPLACE_PUBLIC_ORIGIN must match the Hardening TLS edge"),
+    }
+}
+
+struct PublicAlertOrigin;
+
+impl FromRequestParts<AppState> for PublicAlertOrigin {
+    type Rejection = corten::Error;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        if state.hardening_edge {
+            let mut hosts = parts.headers.get_all(header::HOST).iter();
+            let host = hosts.next();
+            if hosts.next().is_some() {
+                return Err(Refused::forbidden().into());
+            }
+            // The separate direct preflight retains Corten's native check.
+            if host.is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"localhost:8080")) {
+                let mut origin = parts.headers.get_all(header::ORIGIN).iter();
+                if !origin.next().is_some_and(|value| value.as_bytes() == HARDENING_ORIGIN.as_bytes()) || origin.next().is_some()
+                {
+                    return Err(Refused::forbidden().into());
+                }
+            }
+        }
+        Ok(Self)
+    }
 }
 
 #[corten::routes(state = AppState)]
@@ -90,6 +130,7 @@ async fn create_alert(
     req: Req,
     State(state): State<AppState>,
     Params(at): Params<routes::Marketplace<'_>>,
+    _: PublicAlertOrigin,
     session: alerts::Session,
     trace: TraceParent,
     Form(form): Form<AlertForm>,
@@ -116,8 +157,8 @@ async fn read_alerts(State(alerts): State<alerts::Store>, session: alerts::Sessi
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>, trace: TraceParent) -> JsonResult<Arc<Record>> {
     Ok(Json(source.record(&at.id, trace.0.as_deref()).await?.ok_or_else(corten::Error::not_found)?))
 }
-fn app(source: Source) -> App {
-    let state = AppState { source, alerts: Default::default() };
+fn app(source: Source, hardening_edge: bool) -> App {
+    let state = AppState { source, alerts: Default::default(), hardening_edge };
     let app = App::new(routes::router(state.clone()))
         .api(|routes| api::api(routes, state))
         .assets(views::Static)
@@ -133,7 +174,13 @@ fn app(source: Source) -> App {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let source = Source::from_env().map_err(|error| std::io::Error::other(error.to_string()))?;
-    corten::serve(app(source)).await
+    let origin = std::env::var("MARKETPLACE_PUBLIC_ORIGIN");
+    let origin = match origin {
+        Ok(origin) => Some(origin),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("MARKETPLACE_PUBLIC_ORIGIN must be valid Unicode"),
+    };
+    corten::serve(app(source, hardening_edge(origin.as_deref()))).await
 }
 
 #[cfg(test)]
@@ -144,11 +191,49 @@ mod tests {
         i18n::{Decimal, Messages, Minor},
     };
     fn client() -> corten::testing::Client {
+        client_with_edge(false)
+    }
+    fn client_with_edge(hardening_edge: bool) -> corten::testing::Client {
         let record: Record = serde_json::from_str(include_str!("../tests/marketplace.json")).unwrap();
-        app(Source::Fixture(Arc::new(std::collections::HashMap::from([(record.id.clone(), Arc::new(record))])))).test()
+        app(Source::Fixture(Arc::new(std::collections::HashMap::from([(record.id.clone(), Arc::new(record))]))), hardening_edge)
+            .test()
     }
     fn at(tag: &str) -> routes::Marketplace<'static> {
         routes::Marketplace { locale: Locale::parse(tag).unwrap(), id: "item_1", query: Default::default() }
+    }
+    #[test]
+    fn public_origin_setting_is_the_fixed_benchmark_authority() {
+        for origin in ["https://localhost:443", "https://127.1:8443", "https://Localhost:8080", "https://localhost:8080/"] {
+            assert!(std::panic::catch_unwind(|| hardening_edge(Some(origin))).is_err(), "{origin}");
+        }
+        assert!(hardening_edge(Some(HARDENING_ORIGIN)));
+        assert!(!hardening_edge(None));
+    }
+    #[tokio::test]
+    async fn public_origin_pin_preserves_direct_alerts_and_requires_https_on_the_public_host() {
+        let app = client_with_edge(true);
+        let route = at("en-US");
+        let fields = AlertForm::FIELDS;
+        let post = |host: &str, origin: &str| {
+            app.post(&route)
+                .header(header::HOST, host)
+                .header(header::ORIGIN, origin)
+                .field(fields.email, "a@example.test")
+                .field(fields.target_price, "1")
+        };
+        let accepted = post("localhost:8080", HARDENING_ORIGIN).await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let session = accepted.cookie(alerts::COOKIE).unwrap();
+        let read = || app.get(&api::Alerts).cookie(alerts::COOKIE, session);
+        let before = read().await;
+        assert_eq!(serde_json::from_str::<serde_json::Value>(before.text()).unwrap().as_array().unwrap().len(), 1);
+        let refused = post("localhost:8080", "http://localhost:8080").cookie(alerts::COOKIE, session).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert_eq!(read().await.text(), before.text());
+        let direct = post("127.0.0.1:8080", "http://127.0.0.1:8080").await;
+        assert_eq!(direct.status(), StatusCode::OK);
+        let cookie = direct.cookie(alerts::COOKIE).unwrap();
+        assert_ne!(app.get(&api::Alerts).cookie(alerts::COOKIE, cookie).await.text(), "[]");
     }
     #[tokio::test]
     async fn rich_page_is_localized_escaped_and_filtered() {
@@ -568,8 +653,8 @@ mod tests {
         const ITEM: &str = include_str!("../tests/marketplace.json");
         assert!(source::UPSTREAM_IDLE < FIXTURE_KEEP_ALIVE);
         let (fixed_upstream, old_upstream) = (ClosingUpstream::start(ITEM), ClosingUpstream::start(ITEM));
-        let fixed = app(Source::api(&fixed_upstream.at).unwrap()).test();
-        let old = app(Source::api_pooled(&old_upstream.at, None).unwrap()).test();
+        let fixed = app(Source::api(&fixed_upstream.at).unwrap(), false).test();
+        let old = app(Source::api_pooled(&old_upstream.at, None).unwrap(), false).test();
         let item = api::Record { id: "item_1" };
         assert_eq!(fixed.get(&item).await.status(), StatusCode::OK);
         assert_eq!(old.get(&item).await.status(), StatusCode::OK);

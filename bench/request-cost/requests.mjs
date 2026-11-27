@@ -14,10 +14,26 @@ const BROWSER = [
 ];
 
 const get = (path, more = []) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, `Host: localhost:${port}`, ...more, "", ""].join("\r\n"), "latin1");
+/** A GET with `Host` after the browser's lines: the last of eight. */
+const last = (path) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, ...BROWSER, `Host: localhost:${port}`, "", ""].join("\r\n"), "latin1");
+/** A GET whose `Host` is `name` and the port. */
+const hosted = (path, name) => (port) => Buffer.from([`GET ${path} HTTP/1.1`, `Host: ${name}:${port}`, "", ""].join("\r\n"), "latin1");
 const post = (path, type, body, absolute = false) => (port) => {
   const origin = `http://localhost:${port}`;
   return Buffer.from([`POST ${absolute ? origin + path : path} HTTP/1.1`, `Host: localhost:${port}`, ...(absolute ? [`Origin: ${origin}`] : []), `Content-Type: ${type}`, `Content-Length: ${body.length}`, "", body].join("\r\n"), "latin1");
 };
+
+/**
+ * A name of 40 bytes, as a site's host on a CDN is, one of 4,096 that ends in `_`, one of
+ * 4,096 that ends in a percent-encoded byte, and one of 6, shorter than the eight bytes a name
+ * must have to be read in line; and a name under `localhost`, which an app with Corten's
+ * default names answers to, whose 11 bytes before `.localhost` are read in line.
+ */
+const NAME = "shop-2.example-cdn.region-9.example.test";
+const LONG = `${"a".repeat(4095)}_`;
+const ENCODED = `${"a".repeat(4093)}%4a`;
+const SHORT = "a.test";
+const SUBDOMAIN = "seller-desk.localhost";
 
 /** The probe's page: from its doctype to its last row, 119 and 7 times 119. */
 const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as long as a row of a listing is<\/td><td>833<\/td><\/tr><\/table><\/main><\/body><\/html>$/s;
@@ -26,7 +42,9 @@ const PAGE = /^<!DOCTYPE html>.*<td>119<\/td><td>A row of the page, about as lon
  * Each case: the probe's configuration that answers it, its request for a port, and the answer
  * it must get: the body (as Latin-1 text, the whole of it or what it matches) and the
  * `Content-Encoding`, none unless given. A body sent with an encoding is the case's once decoded.
- * @type {Record<string, { configuration: "api" | "pages", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
+ * `hosts` is the `HOSTS` the probe is started with (`*`: it answers to any host); without it
+ * the probe answers to its own, `localhost` and IP addresses.
+ * @type {Record<string, { configuration: "api" | "pages", hosts?: "*", request: (port: number) => Buffer, body: string | RegExp, encoding?: "zstd" }>}
  */
 export const cases = {
   // A staged route in an API: typed query parameters in, a short String out.
@@ -43,6 +61,26 @@ export const cases = {
   "get-browser": { configuration: "api", request: get("/baseline11?a=1&b=2", BROWSER), body: "3" },
   "text-browser": { configuration: "pages", request: get("/text", BROWSER), body: "ok" },
   "page-browser": { configuration: "pages", request: get("/page", BROWSER), body: PAGE, encoding: "zstd" },
+  // `get` and `unstaged` to an app that answers to any host, which reads a `Host` by itself and
+  // not against names: with `Host` first, and last of a browser's eight lines.
+  "get-any": { configuration: "api", hosts: "*", request: get("/baseline11?a=1&b=2"), body: "3" },
+  "unstaged-any": { configuration: "api", hosts: "*", request: get("/unstaged11?a=1&b=2"), body: "3" },
+  "get-any-last": { configuration: "api", hosts: "*", request: last("/baseline11?a=1&b=2"), body: "3" },
+  "unstaged-any-last": { configuration: "api", hosts: "*", request: last("/unstaged11?a=1&b=2"), body: "3" },
+  // `unstaged-any` with a longer name than `localhost`: one of 40 bytes of letters, digits, `-`
+  // and `.`, and one of 4,095 `a` and a `_`, which a name holds but is none of those, last.
+  "unstaged-any-name": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", NAME), body: "3" },
+  "unstaged-any-long": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", LONG), body: "3" },
+  // 4,093 `a` and `%4a`: the percent-encoded byte is read from the look that found the `%`, the
+  // last 16 bytes, and a reader that read it from the name's start would read 4,080 bytes more.
+  // This counts that read; a unit test in `security.rs`, not this case, catches the longer one.
+  "unstaged-any-encoded": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", ENCODED), body: "3" },
+  // `unstaged-any` with a name shorter than `localhost` and than the eight bytes read in line:
+  // `a.test`, read by the table out of line.
+  "unstaged-any-short": { configuration: "api", hosts: "*", request: hosted("/unstaged11?a=1&b=2", SHORT), body: "3" },
+  // `unstaged` to an app that names its hosts, with a name under `localhost`: the part before
+  // `.localhost`, `seller-desk`, is read as a name, where `localhost` itself is matched alone.
+  "unstaged-subdomain": { configuration: "api", request: hosted("/unstaged11?a=1&b=2", SUBDOMAIN), body: "3" },
 };
 
 /** The cases a list names, or an error naming the one that is not a case. @param {string} list */

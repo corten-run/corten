@@ -16,7 +16,8 @@ random bytes. Only its SHA-256 `TokenHash` is held as the store key. Topcoat's n
 cookie parser/writer carries the base64 credential as host-only
 `marketplace_session`, `Path=/`, `HttpOnly`, `SameSite=Lax`, no browser expiry.
 The listener is HTTP; trusted deployment configuration
-`MARKETPLACE_PUBLIC_ORIGIN=https://...` sets `Secure`. Forwarding headers do not
+`MARKETPLACE_PUBLIC_ORIGIN=https://...` sets `Secure` on that public authority only,
+not on the separate direct HTTP preflight. Forwarding headers do not
 choose it. Topcoat's native origin policy remains authoritative. An unknown token
 never chooses a new session's identity. No global cookie/session middleware was
 added to the existing read-only paths.

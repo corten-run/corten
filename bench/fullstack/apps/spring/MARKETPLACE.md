@@ -60,6 +60,13 @@ signed 64-bit minor units are rejected. Missing/invalid inputs and missing recor
 do not append. Marketplace POST rejects cross-site Fetch Metadata or a different
 Origin using the servlet request's scheme and Host. This app has no Spring Security
 dependency; none is added or disabled. POST responses and readbacks are no-store.
+For the Hardening TLS edge only, `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080`
+requires that exact Origin on marketplace form POSTs to the configured authority,
+including its port, even over plain HTTP upstream. It does not use forwarding
+headers. Other authorities keep the original check, including the direct
+`http://127.0.0.1:8080` preflight; the edge's Host check and the form's
+cross-site Fetch Metadata refusal are separate.
+
 The existing read-only pages, record JSON, full-page marketplace forms and legacy
 htmx enhancement remain unchanged.
 

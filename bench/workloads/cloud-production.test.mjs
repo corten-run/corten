@@ -1176,12 +1176,13 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 37);
+  assert.equal(controllerPaths.length, 38);
   for (const path of ["plan.mjs", "bounded-requests.mjs", "dependency-recovery-contract.mjs"])
     assert.ok(controllerPaths.includes(`bench/hardening/${path}`), `missing pinned fleet dependency: ${path}`);
   assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-setup-drain-source.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "cloud-control-stream.mjs", "isolated/control-stream-source.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));

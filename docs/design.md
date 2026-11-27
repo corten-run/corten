@@ -2798,8 +2798,77 @@ rules something out.
     `localhost:8080`, a look at each of its 14 bytes. With `Host` last of eight it counted 235
     more: main never looked for `Host` in such an app, and a later line is found by the server's
     read of the names in turn, for its mark, and then by the hashed search. So half a percent of
-    such a request (64 of an unstaged one's 12,709) is not reached by a reader that looks at
-    every byte, and one that looked at fewer would answer a `Host` that is none.
+    such a request (64 of an unstaged one's 12,709) was not reached by that reader, which looked
+    at every byte a byte at a time, and one that looked at fewer would answer a `Host` that is
+    none. Whether any reader of every byte can reach it is not shown: the reader below spent 59
+    on the name and port in its build against 56, which is how that build spends them, not a
+    least.
+    Read again for
+    [#2115 The Host check in #2037 costs an app that answers any host 111 to 312 instructions a request, and its cycles miss is not yet told apart from code arrangement](https://github.com/corten-run/corten/issues/2115):
+    a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,
+    `shop.example`) is read in line as its first and last eight bytes, which the compiler joins
+    into one look at sixteen; a longer one is read sixteen at a look out of line, as far as the
+    first look that finds another byte, and the table reads on from the first byte no earlier
+    look read: where that look starts, or, when the last sixteen find it, which overlap the look
+    before them, the first byte after the whole sixteens (byte 32 of a name of 40, whose last
+    look starts at byte 24); any other name, one shorter than eight bytes included, is read by
+    the table as before; and the
+    check at a route that says `unstaged` decides once whether the app holds names, so the
+    reader of an app that answers to any host holds none. That came in three commits:
+    `b52f57475` read the short name in line, decided once at `unstaged`, and read a longer name
+    sixteen at a look to its end, then one with another byte by the table again from its start;
+    `ecb6e2bd6` stopped at the first look that finds another byte; and the table reads on from
+    there since `a0cd728aa`, which only the hosted job's table on #2134 (below) measures.
+    Counted with `bench/request-cost`
+    (below), whose four cases of an app that answers to any host came with this change, at
+    `ea3983d0b` against its base `3d84f7de4`, which is main with #2037: such an app's unstaged
+    request costs 27 fewer with `Host` first and 28 fewer with it last of a browser's eight
+    lines, its `GET` through the stages 17 and 18 fewer, and every other case 1 to 9 fewer.
+    Those figures are of that earlier tree, whose `security.rs` and `Cargo.lock` are not those
+    merged: it read a long name with another byte from its start again by the table, and it had
+    no case with a name other than `localhost`. The five cases that came after it,
+    `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`),
+    `unstaged-any-encoded` (4,093 `a` and `%4a`, where a table that read the percent-encoded
+    byte from the name's start would read 4,080 bytes more), `unstaged-any-short` (`a.test`,
+    6 bytes, fewer than the eight read in line) and `unstaged-subdomain`
+    (`seller-desk.localhost` in an app with the default names, whose 11 bytes before
+    `.localhost` the same reader reads in line), and the count of the head of
+    [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134)
+    against its merge base, are that pull request's hosted job's table. The encoded case counts
+    the read but does not by itself catch a reader given the name from its start again, as the
+    merge base it is counted against reads the whole name twice; the unit test
+    `a_long_names_encoded_bytes_are_read_from_the_look_that_found_them` in `security.rs` does,
+    by seeing the bytes that reader is given.
+    Measured over a socket on a bench app the repository does not hold, at `b52f57475`, so of
+    its reader with neither the stop nor the read on, against main before #2037 and against its
+    head,
+    [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)
+    (below), as the difference of two builds' medians of three runs: an unstaged request to an
+    app that answers to any host costs 84.5 more than main with `Host` first (0.75%), 226.9
+    with it second and 285.6 with it last of eight, where #2037's head cost 111.4, 254.6 and
+    311.9 more; a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with it last of
+    eight, where it cost 102.0 and 302.1 more; and a request to an app that names its hosts
+    costs 2 to 9 fewer than #2037's head. Half a percent of the unstaged request (56) is still
+    not reached. Of the 94 instructions the check ran for `localhost:8080` first in that build,
+    by callgrind's count of each instruction, 11 are the call, 3 choose the reader with no names,
+    10 find the line, 3 see that the target names no host, 8 look at the value's shape (empty,
+    `[`, its length), 35 take the port off the end, a byte at a time, and 24 read the name,
+    sixteen bytes in one look; the server's call counts 8 fewer than main's. In that build the
+    port and the name come to 59, more than the 56 on their own; that is how this build's code
+    spends them, not the least a reader of every byte must. With `Host` on
+    a later line the 140 to 200 more are the two searches for it that the check before this one
+    already made (the server's read of the names for its mark, 66 with it last of eight, and the
+    hashed one, about 130), which this change leaves as they were. Tried and not kept, each an
+    uncommitted variant counted once beside the build it changed: the check called in line where
+    the route reads the request, which took 14 more from an unstaged request (11,334 against
+    11,348) and added 38 to 39 to every request through the stages counted (16,671 against 16,633 in
+    an app that answers to any host, 16,757 against 16,718 in one that names its hosts), since
+    the compiler then called `HeaderMap::get` in the stages' handler in place of putting it in
+    line there: code arrangement, not work the check does; the stages' check deciding once as
+    well, 6 to 7 more through the stages; the port's last eight bytes read at once as one word,
+    0 to 3 fewer, which did not earn its 25 lines; and the later lines read in turn, the next
+    seven names and then the hashed search, 69 to 70 fewer with `Host` second and 15 to 16 more
+    with it last of eight, as before.
     The refusals stay. The three of `Host` are what HTTP requires, which is correctness and comes
     before the count (the README's Values), and a route that skipped them would answer a request
     with two `Host` lines that every other route refuses. The three by choice cost nothing beside
@@ -2810,7 +2879,7 @@ rules something out.
     was for a request whose first header line is `Host` in an app that names its hosts, the lane's
     and step 4's 98 and 94 still counted against it. For a request with `Host` on a later line or
     none it moves by what the refusals cost, the 19 to 60 counted, and in an app that answers to any
-    host by the 111 to 311 counted, which is the read of `Host` every other app paid already (about
+    host by the 84.5 to 285.6 measured since `b52f57475` (111 to 311 at `5c7b006dc`), which is the read of `Host` every other app paid already (about
     400 of the host check's 494) come to it for the refusals; no further in either. The harness the
     bound's counts came from is not in the repository and was not run for this change, so what an
     unstaged route counts there now is not known; by the counts that were taken it is less than it
@@ -3022,7 +3091,26 @@ rules something out.
     fewer in one count and none in the next; and the later lines read in turn for `Host` in place of
     the hashed search, which took 70 to 80 from a request with `Host` second and 18 from one with it
     last of eight and added 12 to every request with it first, or, held out of line, added about 80
-    to one with it last of eight); measured (callgrind, release, three runs each, the stages written as combinators
+    to one with it last of eight); measured (callgrind, release, jemalloc, rustc 1.100.0 and
+    valgrind 3.24.0 on Debian 13, a request counted as callgrind's collection over 1,000
+    requests on one keep-alive connection after 240 it does not count, a bench app the
+    repository does not hold, `Host: localhost:8080` first, after an `Accept` line and last of a
+    browser's eight, the any-host reader at `b52f57475` against its base `fca4ccd58`, main
+    `ba6a7fe56` and main built a second time as the control, each built from the same path, the
+    four counted one after another for each request and that three times, median, every build's
+    three runs within 2 of each other and the control within 1 of main: an unstaged route in an
+    app that answers to any host 11,352, 12,081 and 16,989 with `Host` first, second and last of
+    eight, against the base's 11,379, 12,109 and 17,015 and main's 11,267, 11,854 and 16,703;
+    in one that names its hosts 11,434, 12,163 and 17,070 against 11,443, 12,172 and 17,079 and
+    main's 11,567, 12,154 and 17,025; a `GET` through the stages in an app that answers to any
+    host 16,637, 17,507 and 22,795 against 16,655, 17,525 and 22,814 and main's 16,553, 17,281
+    and 22,511; in one that names its hosts 16,718, 17,588 and 22,876 against 16,720, 17,590 and
+    22,878 and main's 16,855, 17,583 and 22,835; allocations the same in the three builds, 13.64
+    a request at the unstaged route and 18.60 through the stages with `Host` first; in process,
+    `tests/router_cost.rs`, the run of 1,200 less the run of 200 over 1,000, the three in turn
+    three times, every run within 1: an unstaged route 5,387 against 5,392 and main's 5,332, and
+    the parameter route through the stages 11,764 against 11,764 and 11,716. No cycles were
+    counted, and no control that shares no code with Corten); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -3114,8 +3202,8 @@ rules something out.
     an API's module, whose lane runs the same `unstaged_headers` (7,003 and 7,068 through its lane,
     7,030 and 7,076 since step 4), and over what its host check has cost
     since it refuses what HTTP does not allow (`5c7b006dc`: 19 to 49 for a request whose first
-    header line is not `Host`, and in an app that answers to any host 111 with `Host` first and
-    311 with it last of eight), when a control that shares no code with
+    header line is not `Host`, and in an app that answers to any host 84.5 with `Host` first and
+    285.6 with it last of eight since `b52f57475`, measured), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -3159,7 +3247,14 @@ rules something out.
     when a stage comes to read something of an answer or its request that the pass's two tests
     cannot vary, so that nothing would hold the two paths equal.
 
-    Last checked: 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
+    Last checked: 2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
+    instructions and allocations a request by `bench/request-cost` in the hosted Request Cost job
+    ([run 45924572746](https://github.com/corten-run/corten/actions/runs/45924572746), AMD EPYC
+    9V74, valgrind 3.26.0, rustc 1.100.0; no cycles); 2026-11-25, the earlier any-host reader
+    experiment at `b52f57475` against `fca4ccd58` and main
+    `ba6a7fe56` built twice, callgrind over a socket on the same kind of bench app and in process
+    with `tests/router_cost.rs`, rustc 1.100.0, valgrind 3.24.0 (no cycles under load measured
+    here either); 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
     `c46092aeb`, against main built again and against `68057e40d`, callgrind over a socket on a
     bench app the repository does not hold (the next check writes its own: one keep-alive
     connection, a `GET` to a route that says `unstaged` and to routes through the stages, with `Host: localhost` and its port first,
@@ -9969,8 +10064,10 @@ rules something out.
     its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
     did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
-    no run has been read from it; and no run has read the image `count.mjs` starts across
-    placements, which that kit does not read either, so a catalog target the band leaves not
+    the first run read from it is the trend's of 2026-11-26, which gates no change
+    ([design Choice 76](#choice-counted-or-measured)); and no run has read the image
+    `count.mjs` starts across placements, which that kit does not read either, so a catalog
+    target the band leaves not
     decided has that to build, unless its plan names a probe workload for it that is read
     across placements (The catalog's `page` and `json`, below). The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
@@ -10938,8 +11035,12 @@ rules something out.
     takes the medians of the A/A it was sized from as independent and alike over time and the
     setup's spread as holding from one run to the next
     (in the fourth run's 100 medians no test detected drift or dependence, normality was
-    rejected, and the A/A resolved at the 100 its plan took; no run has yet been read at a K the
-    rule gave); a spread measured on one setup holds
+    rejected, and the A/A resolved at the 100 its plan took; the first run read at a K the rule
+    gave is the trend's of 2026-11-26, tag `evidence/trend-2026-11-26`, which sized K = 60 on
+    `plain` and K = 28 on `unstaged` from pilots of 100 placements, and both A/As resolved, with
+    bounds of +0.62% as recorded and +0.31% with the labels swapped on `plain` and +0.47% and
+    +0.61% on `unstaged`: one run, which does not test how often an A/A so sized fails); a
+    spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
     protocol and code;
     a second never-called function of 16 to 64 bytes laid last in `.text` costs a request
@@ -11123,7 +11224,11 @@ rules something out.
     [the change](https://github.com/corten-run/corten/pull/2066#issuecomment-7187087634)), their
     pairs worked again from the posted rows (the label swaps by the two-direction rule, 100,000
     draws of a seeded generator), and `count.mjs` and that kit's `run.sh` (tag
-    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`.
+    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`;
+    2026-11-27 (UTC), the trend's first run, read from its tag at `d4a002f34`
+    (`evidence/trend-2026-11-26`) for each pilot's K and sizing counts, each gated part's K,
+    and its A/A's bounds as recorded and with the labels swapped, from each part's
+    `results/report.json`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
@@ -11428,7 +11533,8 @@ rules something out.
     placements against the last release, is the run
     [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
     asks for: [`bench/placement`](../bench/placement/README.md#the-trend) has its plan, its
-    command and the page a run adds a row to, and no run has been made. It gates no pull
+    command and the page a run adds a row to, whose first row is the first run, of 2026-11-26
+    (The trend's first run, below). It gates no pull
     request, for the reason
     [design Choice 72](#choice-placement-runs) gives against gating a release: it reads every
     change since that release together and cannot attribute a cost to one.
@@ -11457,9 +11563,13 @@ rules something out.
     over fewer decides nothing. The figures a
     connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
-    head read 1 byte a connection above base's three equal figures, which one page or two can
-    give, and the growths in bytes were not recorded
-    ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)). No run is taken again for its
+    head's median rounded figure a connection was 1 byte above base's three equal figures. Rounding
+    keeps the order, so head's growth was above base's, and over 5,000 connections in 4,096-byte
+    pages by one or two pages: a rise, which the rule of that time, on rounded figures with no
+    allowance, failed. The growths in bytes were not recorded
+    ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)),
+    so the rule above, which allows one page, cannot decide that run (one page passes, two fail),
+    and the hosted job's growths on its head decide it. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
@@ -11478,7 +11588,8 @@ rules something out.
     the changes that sentence names, and the author says why a change is of none of its kinds,
     which the review accepts, as a negative control's declaration is accepted. The trend reads
     what is left as it adds up (twenty costs at the budget are about 10% more instructions),
-    and no run of it has been made. A release takes the kit's counts of its candidate against
+    one row a run, the first of 2026-11-26. A release takes the kit's counts of its candidate
+    against
     the last release's tag, which anyone can take in minutes and which read instructions, not
     cycles, unless a row of the trend reads the commit of `main` that candidate is made from
     against that tag with every workload read
@@ -11494,6 +11605,37 @@ rules something out.
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     ran 1.52% fewer user instructions on `kept` and read 0.07% fewer cycles across placements,
     with a bound of +0.28%, one change in a reading that gated nothing.
+
+    The trend's first run. Its first run with every workload read was a condition under Revisit
+    when (below), and that run has been made. It read `main` at `056aba61c` against `v0.2.0`
+    at `a833b4e3e`, started 2026-11-26T18:03:43Z and ended 2026-11-27T00:52:27Z with exit 0
+    (tag `evidence/trend-2026-11-26`, commit `d4a002f34`), and its row reads `pass: no rise of
+    +2.00% shown`. Cycles a request, user and kernel, `main` against the release, across
+    placements (measured, one run): `plain` -6.53% by the lower bound and -5.77% by the bound,
+    median -6.17%, at K = 60, and `unstaged` -1.84% and -0.96%, median -1.62%, at K = 28, each K
+    the smallest at which the sizing check passed from that workload's pilot of 100 placements.
+    In this run both A/As, the release against itself in the same run, resolved: bounds of
+    +0.62% as recorded and +0.31% with its labels swapped on `plain`, and +0.47% and +0.61% on
+    `unstaged`, each under the +1% the kit asks of an A/A. The Choice was read again for it on
+    2026-11-27
+    (UTC). The run bears out three of the statements it stands on: the plan, its command and
+    the placement kit make a run with every workload read, at the K the sizing rule gives; the
+    kit's example probe builds at the release's tag and at `main` on both workloads (the
+    placement kit's probe, not `bench/request-cost`'s, whose build at a release's tag for a
+    release's count is still not tried); and the
+    release and `main` answer `plain` differently, by a difference the run recorded and nobody
+    reviewed (the `corten-shell` header, the script hash in the policy and the body, 6,124 bytes
+    on each side), so part of what `plain` read can be the answer and not the path to it. It
+    leaves the rest open. The threshold is still a proposal nobody has accepted: the A/A bounds
+    are what this one run resolved, not a limit on what a run of the plan can show and not what
+    rise a release can carry, and the maintainer settles it.
+    One run of one commit says nothing of runs made weekly and before each release. A reading
+    of every change since the release together, here less on both workloads, attributes a cost
+    to none of them, so it does not show that a change that merged counted costs a request
+    under +1%, and a span that costs less as a whole can hold a change that costs more. Two
+    requests to one probe still do not take every path a counted change can cost on. So the
+    Choice decides as it did, and under Revisit when the condition the run met gives way to
+    the one that follows it, the threshold settled.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
@@ -11555,10 +11697,12 @@ rules something out.
     binary and never to be compared with another's; the kit's probe builds against the last
     release's tag often enough for a release's count to be taken, which was not tried; the
     trend is made, weekly and before a release, before counted costs add up past what a
-    release can carry, its plan, command and page being in the placement kit and no such run
-    having been made; its threshold, `main` at least +2% over the release on a workload by the
-    lower bound of its cycles, is a proposal no reading stands behind and nobody has accepted,
-    the 2% above being of instruction counts between releases; and the placement kit's example
+    release can carry, its plan, command and page being in the placement kit and one such run
+    made, of 2026-11-26, with every workload read; its threshold, `main` at least +2% over the
+    release on a workload by the lower bound of its cycles, is a proposal nobody has accepted,
+    beside which that run's A/A bounds, +0.31% to +0.62%, are what one run resolved
+    and not what rise a release can carry, the 2% above being of instruction counts between
+    releases; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
@@ -11575,7 +11719,8 @@ rules something out.
     for one row of one run, `get`'s 3 of a budget of 91, and
     the six runs a job of each idle reading 0 to 4 bytes a connection; the
     default band and the estimate of a reading across placements, which are
-    [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
+    [design Choice 72](#choice-placement-runs)'s; and the trend's first run, one run under the
+    tag `evidence/trend-2026-11-26`, every workload read and both A/As resolved); reasoned (a bound inside the default band does
     not decide, so for a change this small the only cycles reading was across placements; a
     count of one binary repeats within 4 in 18,987, so a rise of 0.5% is not the count's own
     noise, which says nothing of two commits (the bet above); callgrind counts the serving
@@ -11598,10 +11743,13 @@ rules something out.
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; the trend's first run with every workload read is
-    made, which shows what a run of its plan resolves and so informs a review of the threshold,
-    not what rise a release can carry; a run of the trend leaves a workload not read, whatever
-    its row gives as the reason (the probe does not build at the release's tag, the kit refuses
+    last release counted inside the budget; the maintainer settles the trend's threshold, at
+    +2% on the lower bound or another figure, since this Choice leans on it as a proposal nobody
+    has accepted (this entry first named the trend's first run with every workload read, which
+    the run of 2026-11-26 met, showing what a run of the plan resolves and not what rise a
+    release can carry: The trend's first run, above); a run of the trend leaves a workload not
+    read, whatever its row gives as the reason (the probe does not build at the release's tag,
+    the kit refuses
     a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
     does not resolve, a placement answers with another body), so nothing read what this Choice
     leans on the trend to read; a release is
@@ -11643,7 +11791,13 @@ rules something out.
     nothing, no run having been made; 2026-11-26, that dry run made again with `main` at
     `aa526350f` and the command as it reads after its first review: both sides built, the
     same difference on `plain` and none on `unstaged`, and each of the 36 placements answered
-    with the bodies the check had recorded for its sides, by their digests.
+    with the bodies the check had recorded for its sides, by their digests; 2026-11-27 (UTC),
+    the trend's first run, `main` at `056aba61c` against `v0.2.0`, read from its tag at
+    `d4a002f34` (`evidence/trend-2026-11-26`): `run.out`, `run.started`, `run.ended`,
+    `run.exit`, `run/row.md`, `run/plan.json` and each part's `results/report.json`, the
+    change's and the A/A's cycles, user and kernel, as recorded and with the labels swapped,
+    each K and the pilot it was sized from, and each side's aligned sections and second pads,
+    none in any part.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

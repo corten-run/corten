@@ -1,5 +1,6 @@
 import { productionServer } from "./server-profile.mjs";
 import { readFile } from "node:fs/promises";
+import "./marketplace-origin.ts";
 
 const { config } = JSON.parse(await readFile(new URL("./.next/required-server-files.json", import.meta.url), "utf8"));
 if (config.env.PROFILE !== (process.env.PROFILE === "matched" ? "matched" : "")) {

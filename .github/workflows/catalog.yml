@@ -212,7 +212,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-          node --test --test-name-pattern='^(native matched bounded production qualification:|enhanced alert POST)' production.test.mjs
+          node --test --test-name-pattern='^(native matched bounded production qualification:|enhanced alert POST|marketplace forms use the configured public origin)' production.test.mjs
       - name: Test native router alert stores and localized targets
         if: contains(fromJSON('["nextjs","nuxt","react-router","sveltekit","astro","tanstack-start"]'), matrix.app)
         run: node --test bench/fullstack/apps/${{ matrix.app }}/alerts.test.mjs

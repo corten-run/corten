@@ -1,10 +1,14 @@
 from datetime import timedelta
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.sessions.models import Session
+from django.core.exceptions import ImproperlyConfigured
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
+from .marketplace_csrf import parse_public_origin
 from .models import Alert
 from .test_marketplace import RECORDS
 
@@ -22,6 +26,50 @@ class AlertTests(TestCase):
 
     def post(self, locale="en-US", **data):
         return self.client.post(f"/marketplace/{locale}/item_1", {"email": "a@b", "target_price": "12.50", "csrfmiddlewaretoken": self.token, **data})
+
+    def test_invalid_public_origins_are_rejected(self):
+        for invalid in ("", "ftp://localhost:8080", "https://user@localhost:8080",
+                        "https://localhost:8080/", "https://localhost:8080?", "https://localhost:8080#fragment",
+                        "https://localhost:65536", "https://localhost:443"):
+            with self.subTest(invalid=invalid), self.assertRaises(ImproperlyConfigured):
+                parse_public_origin(invalid)
+
+    @override_settings(
+        MARKETPLACE_PUBLIC_ORIGIN=parse_public_origin("https://localhost:8080"),
+        ALLOWED_HOSTS=["localhost", "127.0.0.1"],
+        MIDDLEWARE=[
+            ("itempage.marketplace_csrf.MarketplaceCsrfViewMiddleware"
+             if name == "django.middleware.csrf.CsrfViewMiddleware" else name)
+            for name in settings.MIDDLEWARE
+        ],
+    )
+    def test_public_origin_keeps_direct_forms_and_native_csrf(self):
+        path = "/marketplace/en-US/item_1"
+        edge, direct = "https://localhost:8080", "http://127.0.0.1:8080"
+        for host, origin in (("localhost:8080", edge), ("127.0.0.1:8080", direct)):
+            with self.subTest(host=host):
+                client = Client(enforce_csrf_checks=True)
+                self.assertEqual(client.get(path, HTTP_HOST=host).status_code, 200)
+                form = {"email": "a@b", "target_price": "12.50",
+                        "csrfmiddlewaretoken": client.cookies["csrftoken"].value}
+                headers = {"HTTP_HOST": host, "HTTP_ORIGIN": origin, "HTTP_SEC_FETCH_SITE": "same-origin"}
+                self.assertEqual(client.post(path, form, **headers).status_code, 200)
+                other_origins = ("http://localhost:8080", "https://localhost:8081", "https://wrong.test:8080") if origin == edge else (edge,)
+                for other in other_origins:
+                    url = urlsplit(other)
+                    self.assertEqual(client.post(path, form, **(headers | {
+                        "HTTP_ORIGIN": other, "HTTP_FORWARDED": f'proto={url.scheme};host="{url.netloc}"',
+                        "HTTP_X_FORWARDED_PROTO": url.scheme, "HTTP_X_FORWARDED_HOST": url.netloc,
+                    })).status_code, 403)
+                if origin == edge:
+                    self.assertEqual(client.post(path, form, **(headers | {"HTTP_SEC_FETCH_SITE": "cross-site"})).status_code, 403)
+                    self.assertEqual(client.post(path, form, HTTP_HOST=host).status_code, 403)
+                    self.assertEqual(client.post(path, form | {"csrfmiddlewaretoken": ""}, **headers).status_code, 403)
+                    self.assertEqual(client.post("/items/item_1", form, **headers).status_code, 403)
+                    with override_settings(ALLOWED_HOSTS=["127.0.0.1"]):
+                        self.assertEqual(client.post(path, form, **headers).status_code, 400)
+                self.assertEqual(len(client.get("/api/alerts", HTTP_HOST=host).json()), 1)
+        self.assertEqual(Alert.objects.count(), 2)
 
     def test_native_rows_readback_order_and_rejections(self):
         self.assertEqual(self.client.get("/api/alerts").json(), [])

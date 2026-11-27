@@ -124,7 +124,7 @@ cargo_configs() { # the files cargo reads from the directories above the probe's
   echo "os $([ -f /etc/os-release ] && . /etc/os-release && echo "$PRETTY_NAME")"; } >"$RES/host-id.txt"
 ( cd "$KIT" && find . -type f | LC_ALL=C sort | xargs sha256sum ) >"$RES/kit-sha256.txt"
 cp "$PL/schedule.txt" "$RES/schedule.txt"
-export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN EXPECT
+export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN EXPECT PORT_A PORT_B
 export HEADERS="$PL/headers.txt" SCRIPT="$PL/request.lua" MASK="$PL/mask.sed" MASK_JSON="$PL/mask.json" WARMUP=1
 nth() { echo "$2" | cut -d' ' -f"$1"; }
 

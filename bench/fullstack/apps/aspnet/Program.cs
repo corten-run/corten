@@ -68,6 +68,7 @@ builder.Services.AddHttpClient<MarketplaceSource>(c =>
     // Do not drain a cancelled body for connection reuse after this request has ended.
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, MaxResponseDrainSize = 0, PooledConnectionIdleTimeout = upstreamIdle });
 builder.Services.AddSingleton<MarketplaceSource>();
+builder.Services.AddSingleton(new MarketplacePublicOrigin(Environment.GetEnvironmentVariable("MARKETPLACE_PUBLIC_ORIGIN")));
 builder.Services.AddSingleton<LivePrices>();
 builder.Services.AddSingleton<AlertStore>();
 if (matched)

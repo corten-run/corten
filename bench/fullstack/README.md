@@ -1385,8 +1385,96 @@ three runs:
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
    longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
-   or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
-   droplet; the unit starts again at boot and the round goes on from the next step. A droplet
+   or prints nothing for an hour (SIGTERM to its process group, SIGKILL 30 s later, neither once
+   its process has been reaped). A call ends when its process exits: output that something it
+   started holds open is released 10 s after the exit, never taken as a clean exit. A call so
+   released, or a stopped call whose process is still running 40 s after its SIGTERM (which is
+   left), ends the round in whatever step it is, the build step included, with the reason in
+   `skipped.txt`: what held its output or the process itself was not seen to end, so no clean
+   slate, later call (the next app's build), step or summary runs beside it, and the round is
+   recorded failed. A call that could
+   not be started (no process) is taken as stopped, never as an exit. A kernel lockup (r8's) panics the kernel, which reboots the
+   droplet; the unit starts again at boot and the round goes on from the next step.
+   The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
+   seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
+   does not reach the probe's process group of its own) ends the round there, with the reason in
+   `skipped.txt`: no later step, clean slate or summary runs and the round is recorded failed, so
+   it does not start again at boot. `run-all.mjs` writes the boot's ID on the count step's start
+   line, and a round that starts again while its count step had not ended goes on only where that
+   ID is another boot's: one started again in the same boot (`run-all.mjs` itself killed or
+   stopped), or with no ID to compare, ends the round the same way, before its clean slate. Each
+   progress line is written whole and synced before its step starts (a write cut short stops the
+   round there, recorded failed), and a progress file whose last line was cut short is read as a
+   count step that had not ended. That is checked before a start writes anything, and the cut file
+   is left as it is, so a start stopped part way through cannot hide it from the next.
+   `droplet.mjs` on a droplet a round of that name ran on (`--host`, with or without `--from`)
+   checks the same before it removes anything that round left (its progress file, or all of
+   `/bench`). It refuses (exit 4) unless systemd confirms, each query succeeding, that its unit is
+   either unknown to it or was disabled and stopped (both succeeding), that it cannot start at
+   boot (`is-enabled` disabled, static or masked, and no wants or requires link to it left), that
+   it is inactive (or failed) with no job queued for it, both read from one `systemctl show` (its
+   state and its queued job in one reply: a start queued for a disabled unit leaves it inactive
+   with no control group until the job runs, and a state and a job queue read in two queries can
+   tear, a start that completes between them reading as inactive with nothing queued), and that
+   nothing is left anywhere in its control group (cgroup v2 `cgroup.events` reads `populated 0`,
+   which counts child groups too, or the group is absent). A second such snapshot, taken after
+   the control group, the boot's ID and the progress file are read, must be the same as the first
+   (state, queued job, invocation and the time its state last changed); one that differs, as after
+   a start that completed meanwhile, refuses. Agreeing snapshots show the unit ended at both
+   moments, not that no run came and went between them: systemd unloads a stopped unit that is not
+   enabled, which then reads as one that never ran. The clear's second check re-reads the progress
+   file (below). A unit not confirmed stopped so is refused, as the clear's refusal is below: the
+   launch downloads nothing and leaves the droplet, even one it created.
+   It refuses the launch when the round's progress file shows a count step that started in this
+   boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a
+   count step that started in this boot, after a reboot. From that check until the round's unit
+   has started, the launch holds `/var/lib/corten-bench/launch-<round>.lock` on the droplet, a
+   link `ln -sT` makes only when nothing is at that path, and which must then read as this
+   launch's: another launch of the round refuses while it is held (or while anything else is
+   there), every later step that changes the droplet, the unit's start included, first checks it
+   is still this launch's and runs one at a time with the others (but the upload, which only writes
+   `/bench/src.tgz` for a step that does to unpack), and the clear runs in one step with a second
+   check that must read as the first did and only reads (it disables and stops nothing), so a unit
+   that started again since refuses. A step refused that way, or because another launch holds or
+   took the lock, downloads nothing (it would land beside the other launch's results) and leaves
+   the droplet, even one this launch created, with how to delete it. So does a step that checks the
+   lock whose answer never came back on its last try (no answer within its time limit, or ssh's own
+   failure such as a dropped connection), or that got no turn at the droplet's flock within its
+   wait (`flock -E` gives that its own exit status, 75, which another launch's step holding the
+   flock causes): it may have refused there, or never checked, so it is taken as refused. A step
+   that ran and failed for another reason (a build that failed) is an ordinary failure, and a
+   droplet this launch created is destroyed. The
+   start is sent once, and counts as acknowledged
+   only when `systemctl start` succeeded: it can fail having lost systemd's reply while its job
+   goes on, and nothing read afterwards ties the unit's state to that start. An acknowledged start
+   whose unit is then not read as active (the round already ended, or that check or its connection
+   failed) can no longer start anything: the launch goes on to watch the round as a started one,
+   and downloads from or destroys the droplet only once the watch has seen the round end (with
+   `--detach`, it leaves it for `--collect`, which waits for the same). A launch that fails
+   releases the lock; one interrupted (Ctrl-C), or whose unit's start was sent but not acknowledged
+   (it failed, or the connection dropped, so whether the round is starting is not known; such a
+   start is not tried again), leaves the lock and the droplet, and says how to check the
+   round read-only (`systemctl status` and `systemctl list-jobs`) and remove the lock once no
+   launch is running (`rm` it on the droplet). Do not `--collect` such a round until its unit is
+   running, or no start job for it is queued and it is inactive or failed: `--collect` waits for
+   a queued job, but a start still waiting its turn at the droplet's flock is not yet queued and
+   reads as a stopped round, and `--collect` then downloads partial results and destroys the
+   droplet. The watch (`--collect`, or a launch that waits) takes a round as ended, and downloads
+   from its droplet, only when two snapshots of its unit, each its state and queued job from one
+   query, one taken before the log is read and one after, agree and read inactive or failed with
+   no job queued; it destroys the droplet only once a snapshot after the download still reads the
+   same (otherwise it leaves it, exit 3). A unit still active, changing, or whose snapshot could not
+   be read is watched on (`--collect` leaves it, exit 3). A launch or `--attach` whose watch gives
+   up (the droplet stopped answering) downloads and destroys under the same rule: when the unit
+   cannot then be confirmed ended, nothing is downloaded and the droplet is left, with how to delete
+   it. The log's `all done` only says whether a round
+   that has ended finished or stopped short: it is printed before the unit's process exits, and a
+   round going on with `--from` keeps the earlier run's log, so one read while the unit is active
+   is not the round's end, whichever run printed it. The
+   upload leaves out the working tree's own
+   `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
+   archive that holds one, as the clear comes before the upload is unpacked.
+   A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
    only when DigitalOcean cannot be reached either). Either way the step it was in is skipped
@@ -1477,7 +1565,46 @@ three runs:
      local round uses unless `BENCH_API_CONTAINER=item-api` has none, and answers them 404.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
-   median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with
+   median of 3. User and kernel instructions come from two passes, each its own load of 5,000
+   requests: two independent loads drawn from the same request mix (`ssr-load.js` picks each
+   request's item at random), the kernel instructions' load later on the same app. The first
+   counts user instructions, user and kernel cycles and user L1i misses
+   (`cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u`, the set `bench/placement` counts),
+   the second `instructions:k` alone, since one `perf` session that counts `instructions:u` and
+   `instructions:k` together stops a Xeon Platinum 8358 guest as a whole, with `-C` or `-p`
+   ([#2151 Two bench hosts on a Xeon Platinum 8358 stopped as a whole within 30 s of the lockup settings, software watchdog and Docker setup, and did not restart](https://github.com/corten-run/corten/issues/2151)).
+   Each count a request is over its own pass's requests, and the row records the second pass's
+   requests and failures as `kernelPass`; kernel instructions are not from the load the cycles
+   are, so their sum with user instructions is two loads' (counts before this change were one
+   load's; `summarize.mjs` says which, by `kernelPass`, for each key: a second load, the same
+   load, or both across its runs). When user instructions are unusable in the first pass and its load had no failures,
+   it is repeated with `instructions:u` alone; the second pass is not repeated. A count is kept
+   only when each load's k6 summary gives its requests, failed requests and a status check a
+   request, both loads made 5,000 requests, the second had no failure, and the first no more
+   failed status checks than failed requests (its row records only the requests). A load that ran is
+   checked whole before anything else is read from it, so a first load short of
+   its requests is refused rather than repeated; the repeat is for counters, never for a load.
+   Each load is taken as counted whole on `perf`'s acknowledgments, not on a wait: `perf` starts with its events
+   disabled (`--delay=-1`), the load starts only once `perf` has acknowledged `enable` on its
+   control descriptor (`--control fd:3,4`), and once the load has ended `perf` must not have exited
+   and must acknowledge `disable` before it is asked to stop, each within 10 s, one
+   acknowledgment to each command in turn; a `perf` that ends before its load did, does not
+   acknowledge, or acknowledges a command it was not given (or writes anything else there,
+   including part of a line before the command it would answer), fails that pass
+   ([#2183 The catalog count reads a perf that ended before its load did as one that counted the whole load](https://github.com/corten-run/corten/issues/2183)).
+   `perf` is given its CPUs as `-a` or `-C` with a CPU list and nothing else, and prints each
+   CPU's count on a row of its own (`-A`), which `count.mjs` sums: `perf` 6.1 goes on past a CPU
+   whose counter it could not enable, and its own total sums the enabled and running times of every
+   CPU, so a total at 100% does not show that each CPU counted. An event is usable only when every
+   CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
+   count, a running time above zero and 100% of its enabled time (read from the digits perf
+   printed: a percentage above 100 is refused, not read as 100, and one just below 100 is not taken
+   as 100), and no other CPU did. A CPU the
+   app never ran on during the load gives no running time either and cannot be told from one whose
+   counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
+   CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where
+   the app ran on every online CPU.
+   On a bench host the counters are on the app's pinned cores only (`-C` with
    `BENCH_APP_CPUS`, not `-a`): the container runs nowhere else, so the count should be the same,
    with a counter on one core instead of one per core. Three rounds' droplets restarted as
    counting began, and the counters on the load generator's cores, switched at its every context
@@ -1489,9 +1616,29 @@ three runs:
    time; it does not see waiting (I/O, locks) or how well the instructions run.
    `node count.mjs <round> 3 <apps> page,json api` counts with items from the item API instead,
    so the count includes fetching and parsing each 55 KB response (keys `<app>/<target>/api`).
-   It first writes the running kernel (and any package waiting for a reboot) to
-   `count-kernel.txt` and has `perf` count an idle second, stopping with the reason when `perf`
-   does not fit that kernel or cannot count; `droplet.mjs` turns off the droplet's automatic
+   It first writes the running kernel (and any package waiting for a reboot) and the CPU model to
+   `count-kernel.txt` and has `perf` count an idle second on the count's CPUs with each event set
+   a count gives it, one at a time (`instructions:u`, `instructions:k`, then the first pass's
+   whole set), each in a process group of its own that is killed after 30 s (never once its
+   leader has exited, when the group's number may be another's) and given up as no answer 5 s
+   after that rather than waited out; a probe whose `perf` exits while something it started
+   holds its output open is given up 5 s after the exit, its cleanup unconfirmed. It stops with the reason when `perf` does not fit that kernel, cannot count a set's
+   required event, or does not answer; the first pass's whole set failing by itself is noted, not
+   refused, since the count then repeats that load with `instructions:u` alone. Each set is written
+   to `count-kernel.txt` before it runs, so a host that stops during one leaves its name. A host
+   that stops cannot refuse: `droplet.mjs` notices one that does not answer (`--stall`). A count's
+   `perf` that does not exit within 30 s of being asked to stop, nor 5 s after it is killed, fails
+   the count as no answer. A `perf`, probe or count, whose end is not seen may still count or be
+   stuck in the kernel, so the count is not retried and no further load runs: `count.mjs` exits 4,
+   whatever writing its diagnostics does then, and without waiting on Docker (it starts the
+   container's removal and does not wait for it),
+   and `count-pairs.mjs` stops its run there and refuses to go on with it, so the rest is counted
+   on a fresh host under a new prefix; a `count.mjs` stopped by a signal did not see its `perf`s
+   end either, and is taken the same way. `count-pairs.mjs` writes `count.mjs`'s exit to its ledger
+   before anything else it does for that invocation, so a 4 is kept whatever fails after it, and
+   past a 4 or a signal it asks Docker only to remove its lock, killed after 10 s and not waited
+   for past then, so a Docker client stuck in the kernel does not hold up the halt; run again, it
+   reads that halt from its ledger and refuses before it asks Docker anything. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed
    for.
 6. Browser (`browser.mjs`): every app running at once on the app core, items from the item API,
@@ -1686,8 +1833,8 @@ The profile:
 The tier's load phases and browser pass reach each app through the edge (`edge.mjs`), as a
 deployed app is reached: Corten's design has HTTP/2 and HTTP/3 to browsers come from a proxy or
 CDN in front of `corten::serve` ([Limit 14](../../docs/design.md#limit-http1)), which usually ends
-TLS too, and the defaults tier measures every app without one. The edge is one nginx (1.31.9,
-pinned by digest; rounds before 2026-11-20 ran 1.29.8; a round's load step records the image in `edge.json`, and its browser step, which starts its own edge, does not, and uses the image of the checkout it runs from whatever `edge.json` says) with one config for every app, the one the deploy guide checks Corten with
+TLS too, and the defaults tier measures every app without one. The edge is one nginx (1.31.10,
+pinned by digest; rounds from 2026-11-20 to 2026-11-26 ran 1.31.9 and rounds before them 1.29.8; a round's load step records the image in `edge.json`, and its browser step, which starts its own edge, does not, and uses the image of the checkout it runs from whatever `edge.json` says) with one config for every app, the one the deploy guide checks Corten with
 ([nginx](../../docs/guide/deploy.md#nginx)) less its cache and with the app's own name as Host: a
 worker a core, each with its own listening socket (`reuseport`), TLS with a P-256
 certificate made for the run, HTTP/2 to k6 and Chromium (HTTP/1.1 to a client that asks; no
@@ -2066,8 +2213,10 @@ it imports, the k6 script, `fixtures/items.json` it mounts into the app, and `co
 its imports), and the host as the count's environment reaches it (the Docker daemon's ID, version
 and name, `DOCKER_HOST` and `DOCKER_CONTEXT`, the `docker` and `perf` the count's PATH gives with
 their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl`, each invocation
-as it starts and as it ends, with the SHA-256 and size of the three files it is read from (its
-`instructions.json` row, its k6 summary and `count-images.json`); each invocation's log under
+as it starts and as it ends, with the SHA-256 and size of the four files it is read from (its
+`instructions.json` row, the k6 summaries of its two loads and `count-images.json`), and between
+those, as `count.mjs` is started and as it exits (its exit status written before the image read
+and the seals, which can fail; past an exit 4 or a signal neither is made); each invocation's log under
 `inv/`; and `report.json`. A wrapper that starts `count-pairs.mjs`, as a kit's `run.sh` does, is
 not among the files it binds; what it runs is. Each invocation's own output is
 `results/<round>/` as `count.mjs` writes it, and must not exist before it runs, since `count.mjs`
@@ -2076,9 +2225,11 @@ invocation whose path appeared since is recorded as not valid and not run. An in
 only when its tag succeeded and named the side's image before and after it, the container
 `count.mjs` counted was started from the side's image by ID (`count.mjs` records it in
 `count-images.json` before the warmup), `count.mjs` exited 0,
-and its one row has 5,000 requests, none failed, each of its five counts a whole number with
+and its one row has 5,000 requests in each of its two loads (`requests` and `kernelPass`), none
+failed, each of its five counts a whole number with
 perf's running percentage at 100% (user plus kernel cycles at most 2^53 - 1, so their sum is
-exact), all of k6's checks passed, and the three files it is read
+exact; both are from the first load), all of k6's checks passed in both loads, each load's k6
+summary gives the requests and failed requests its part of the row records, and the four files it is read
 from are the bytes sealed when it ended: one replaced, removed or never written leaves it not
 valid. The side's image is the ID `run.json` pins for the side of the invocation's slot in the
 schedule; a replay reads each record against that, not against the image the record names.
@@ -2091,7 +2242,9 @@ count failed unless exactly one answers to `fsw-corten` and it is that ID. It re
 container's endpoint by the network's name, as Docker keys it, even where `BENCH_NETWORK` gives
 the network's ID. A container that joins
 and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
-the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
+the first one not started, and refuses where `count.mjs` was started for one and its end was not
+recorded (its exit not kept may have been 4, and one kept was not sealed) or where it exited 4 or
+was stopped by a signal, or if the images' IDs, the schedule, a setting, a file the
 count runs or the host differ from `run.json`, or the host cannot be established; one
 interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
 honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a

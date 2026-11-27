@@ -12,14 +12,14 @@ export function readAlerts(req, res) {
   res.set("Cache-Control", "no-store").json(sessions.get(session(req)) ?? []);
 }
 
-export function appendAlert(req, res, alert) {
+export function appendAlert(req, res, alert, secure) {
   let id = session(req);
   let rows = sessions.get(id);
   if (!rows) {
     do { id = randomBytes(32).toString("hex"); } while (sessions.has(id));
     rows = [];
     // No Domain or persistent expiry: a host-only browser session cookie.
-    res.cookie(cookieName, id, { httpOnly: true, sameSite: "lax", secure: req.secure, path: "/" });
+    res.cookie(cookieName, id, { httpOnly: true, sameSite: "lax", secure, path: "/" });
     sessions.set(id, rows);
   }
   // No await between lookup and append: Node's event loop serializes each operation.
