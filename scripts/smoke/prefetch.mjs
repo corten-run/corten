@@ -363,9 +363,9 @@ export async function prefetch(swaps, page, navRequests, browser, errors, noteBo
  * the guide names), and it is checked in Chromium and Firefox only. Then a nav whose deeper entry's
  * own URL (`/smoke/nav/old%7c/team/people`) is under another entry's older address: it wins at a page
  * under it in either spelling of the escape, and at a page under that older address and outside
- * People (`/smoke/nav/old%7c/team/other`) the section naming it wins by that address alone, by the
- * server, by the runtime at load with the server's marks taken out, and by the runtime after a
- * client navigation.
+ * People (`/smoke/nav/old%7c/team/other`, and `/smoke/nav/old%7c/team/peopleish`, which only starts
+ * with People's URL) the section naming it wins by that address alone, by the server, by the runtime
+ * at load with the server's marks taken out, and by the runtime after a client navigation.
  */
 export async function navAlso(browser, swaps) {
   const name = "a nav entry is current at its page's older addresses, by the server and the runtime alike";
@@ -388,12 +388,15 @@ export async function navAlso(browser, swaps) {
   if (engine !== "webkit") nots.push("/smoke/nav/%73ettings");
   // Pages under the team nav's People entry, in the spelling its URL has and in another, where People
   // is current; and a page under Settings's older address that People does not hold, where only that
-  // older address, matched as a prefix, makes Settings current. Each with the Settings and People marks.
+  // older address, matched as a prefix, makes Settings current, one of them only starting with People's
+  // URL, not under it. Each with the Settings and People marks.
   const visits = [
     ["/smoke/nav/old%7c/team/people/alex", "- page"],
     ["/smoke/nav/old%7C/team/people/alex", "- page"],
     ["/smoke/nav/old%7c/team/other", "page -"],
     ["/smoke/nav/old%7C/team/other", "page -"],
+    ["/smoke/nav/old%7c/team/peopleish", "page -"],
+    ["/smoke/nav/old%7C/team/peopleish", "page -"],
   ];
   const also = cases.map(([, path]) => path).join(" ");
   /** Whether the server draws the entry marked and the section not, in one answer. */
@@ -444,10 +447,10 @@ export async function navAlso(browser, swaps) {
     const marks = response ? teamMarks(await response.text()) : "no answer";
     if (marks !== want) teamSeen.push(`server at the browser's request for ${visit}: ${marks}`);
   }
-  // A page that only Settings's older address holds, loaded with every mark taken out of the
+  // Each page that only Settings's older address holds, loaded with every mark taken out of the
   // server's answer before the runtime starts: only the runtime's ranking at load, which must match
   // that address as a prefix, can mark Settings.
-  for (const [visit, want] of visits.filter(([visit]) => visit.endsWith("/team/other"))) {
+  for (const [visit, want] of visits.filter(([, want]) => want === "page -")) {
     const unmarkedContext = await browser.newContext({ serviceWorkers: "block" });
     const unmarked = await unmarkedContext.newPage();
     /** How many marks each intercepted answer held before they were taken out. @type {number[]} */
