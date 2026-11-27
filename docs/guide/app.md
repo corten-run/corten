@@ -311,9 +311,10 @@ What it saves, counted in instructions a request over a socket (release build, j
 connection, at `568aa8d1a`): the shortest request the counting kit sends, to a route that says
 `unstaged` and answers two bytes, goes from 10,587 to 9,335, a staged API route's `GET` from
 18,354 to 17,096, and a 12 KB page from 33,220 to 32,186, each with three allocations fewer. A
-request with the header lines a browser sends costs as many instructions as it did, to a
-third of a percent either way (the same `GET` 23,894 and 23,811, a compressed page 211,835
-and 211,950), with the three allocations fewer; a request with a body costs what it did. A
+request with the header lines a browser sends costs 5.9% fewer instructions, since the names a
+browser usually sends are taken by their bytes (the same `GET` from 23,893 to 22,487 and a
+compressed page from 211,834 to 210,629, at `53c46ce23`), with six allocations fewer; a request
+with a body costs what it did. A
 request whose head is longer than 2,560 bytes costs more than it did: one with a `Host` name
 of 4,096 bytes goes from 22,503 to 24,313, since Corten's connection reads less at first than
 hyper does and takes such a head in two reads. A

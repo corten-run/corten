@@ -12399,9 +12399,12 @@ rules something out.
     and 9,335 and 8 on Corten's own, 11.8% fewer instructions; sixteen written at a time cost
     8,368 and 6,928 each, 17.2% fewer. A staged API route's `GET` goes from 18,354 to 17,096
     (6.9%) and a 12 KB page from 33,220 to 32,186 (3.1%), each with three allocations fewer.
-    With a browser's header lines nothing of that is left in instructions, though the three
-    allocations are: the same `GET` goes from 23,894 to 23,811 (0.3% fewer), a text answer from
-    25,841 to 25,877 (0.1% more) and the page, compressed, from 211,835 to 211,950 (0.05% more).
+    With a browser's header lines, since the names a browser usually sends are taken by their
+    bytes (below), the same `GET` goes from 23,893 to 22,487 (5.9% fewer), a text answer from
+    25,841 to 24,557 (5.0% fewer) and the page, compressed, from 211,834 to 210,629 (0.6% fewer),
+    each with six allocations fewer, at `53c46ce23`; before that, nothing of the saving was left
+    in instructions with those lines, though three allocations were (23,894 to 23,811, 25,841 to
+    25,877 and 211,835 to 211,950 at `568aa8d1a`).
     A request with a body costs the same on both to a tenth of a percent (22,838 and 22,815,
     19 allocations), since hyper answers it on both. One kind of request costs more here: one
     whose head is longer than this connection's first read of 2,560 bytes, where hyper's first
@@ -12441,7 +12444,9 @@ rules something out.
     request's head, calls the connection's service with it, writes the answer into one buffer and
     goes on to the next request. A head is read by `httparse`, the parser hyper reads requests
     with, given the settings hyper's server gives it and made into the same `http` types by the
-    same constructors, so what it refuses is what hyper refuses at the same byte. An unfinished
+    same constructors (but for the names a browser usually sends, taken as the value those
+    constructors make of them; below), so what it refuses is what hyper refuses at the same
+    byte. An unfinished
     head is looked through again when its end may have come, as hyper looks, and once more
     without its end where the bytes came with no wait between them, as far as hyper's first read
     of 8,192 bytes would have reached: a line that is wrong in a head that came at once is
@@ -12867,6 +12872,75 @@ rules something out.
     and not hyper with hyper's timing; the defect is recorded here and has not been reported to
     hyper.
 
+    **The names of a head's lines.** Most of a browser's head is its names, and `http` makes
+    each with `HeaderName::from_bytes`, which lowers each byte through a table, looks the name up
+    among those it has a constant for, and copies any other into an allocation of its own. A
+    navigation from Chromium has seven names of that kind (four `Sec-Fetch-` lines and three
+    client hints), and every fetch Corten's runtime makes has an eighth, `corten`. So
+    `field_name` (`crates/corten/src/h1/head.rs`) matches nineteen names by their bytes first,
+    each in all lower case and in the capitals browsers write, and gives `http`'s constant for it
+    or the same `HeaderName` made once when the crate compiles. A `HeaderName` compares and hashes
+    by its lower-case text, so each is equal to what `from_bytes` makes of the same bytes, which
+    every name in another spelling and every other name still goes to, to be read and refused as
+    it was; a name with a byte `from_bytes` refuses is equal to none of the nineteen. The names
+    that frame a request (`Content-Length`, `Transfer-Encoding`, `Expect`, `Upgrade`) are read
+    from their bytes by `scan`, in any spelling, and are not touched, and `Connection`, which
+    `build` reads for keep-alive by the `HeaderName` made of it, is the same name whichever way it
+    came. The nineteen are what the heads Playwright 1.65.1's Chromium, Firefox and WebKit sent
+    over HTTP/1.1 had on requests with no body (a navigation, a link followed, a reload, an image
+    and the runtime's fetch): `Host`, which every HTTP/1.1 request has (RFC 9112 3.2);
+    `User-Agent`, `Accept`, `Accept-Encoding`, `Connection`, `Upgrade-Insecure-Requests`,
+    `Sec-Fetch-Site`, `Sec-Fetch-Mode` and `Sec-Fetch-Dest`, from all three; `Referer` and
+    `Cookie`, from all three once there is one to send; `Accept-Language`, from Firefox and
+    WebKit (headless Chromium sent none); `Sec-Fetch-User`, from Chromium and Firefox on a
+    navigation the user made; `If-None-Match`, from Chromium and Firefox again for what came with
+    an `ETag`, which Corten writes for its assets; `sec-ch-ua`, `sec-ch-ua-mobile` and
+    `sec-ch-ua-platform`, from Chromium on every request and in lower case; `Priority`, from
+    Firefox; and `corten`, on every fetch of the runtime's, in lower case. Left out are
+    `If-Modified-Since`, which a browser sends only for an answer that had a `Last-Modified`,
+    which Corten does not write; `Cache-Control`, which Chromium sent on a reload alone; and
+    `Origin`, `Pragma` and `Content-Type`, which no browser sent on a request without a body (one
+    with a body is hyper's). Of two orders counted, this is the cheaper: the list the other way
+    round, names and spellings both (when it had four names more, those since left out), cost 10
+    to 24 instructions more on a browser's head.
+
+    Counted by `bench/request-cost` with the switch on, at `53c46ce23` against `2f8984ddc`, the
+    head of this Choice before it: the `GET` with a browser's lines goes from 23,810 instructions
+    to 22,487 (5.6% fewer) and from 16 allocations to 13, a text answer from 25,876 to 24,557
+    (5.1%) and the compressed page from 211,949 to 210,629 (0.6%), each with three allocations
+    fewer. Every other case without a body costs 70 to 76 fewer for its `Host` line, one at a
+    time and 16 at a time (`pipeline` 9,335 to 9,260, 6,929 to 6,853 at 16), with no allocation
+    fewer; a request with a body costs what it did (22,811 and 22,812); and with the switch off
+    no case moves by more than 1 instruction or by any allocation. Against hyper's connection,
+    then, a browser's `GET` costs 5.9% fewer instructions and six allocations fewer (23,893 and 19
+    with the switch off), its text answer 5.0% fewer and its page 0.6% fewer. Scratch cases of
+    the kit's shortest request with one line more, counted on the same two builds and committed
+    nowhere, read what each name is worth: a name `http` has a constant for costs 85 to 161 fewer
+    for its line, one it has none for 224 to 274 fewer and an allocation, and a name off the list,
+    or on it in a third spelling, from 6 fewer to 16 more, for the look along the list. Whole
+    heads cost 2,734 fewer from a Chromium navigation (33,191 to 30,457, and seven allocations
+    fewer), 2,264 from Firefox's (five fewer), 1,760 from WebKit's (three fewer) and 262 from
+    curl's three lines. An idle connection holds what it did on both sides: with the switch on,
+    7,340 to 7,354 bytes after one request and after three of a browser's on both builds, 3,667
+    to 3,731 before a byte (six readings of each build), and 21,373 to 21,726 after one or three
+    with a body; with it off, three readings of the head before a byte were above base's three by
+    278,528 bytes over 5,000 connections at the median, more than those three spanned, and three
+    more of each then read 17,397 to 17,469 bytes a connection on base and 17,398 to 17,492 on
+    the head, whose new code hyper's connection never runs. These idle figures are of another
+    machine than the ones above, which reads more for hyper's connection, so they compare the two
+    builds and not the two connections.
+
+    What is left of a browser's head is the map and the values. Each value is checked again by
+    `HeaderValue` after `httparse` has checked the same bytes, which only an `unsafe` constructor
+    would skip, and is not skipped here; and every line is hashed and put into a `HeaderMap`,
+    which is the type a request is. Keeping the places of a head's lines in slots from one head to
+    the next, where they are now cleared and pushed, was counted with the names and left out: 107
+    fewer on a browser's `GET` and about 240 on Chromium's whole heads, but 12 or 13 more on every
+    request without a browser's lines, the shortest included. Taking the values that recur
+    (`keep-alive`, `*/*`, `?1`, `navigate` and the other Fetch Metadata tokens) as static ones was
+    counted alone at 125 fewer on a browser's `GET`, and is not taken either: it is a second list,
+    of values, to keep beside the names, for a tenth of what they save.
+
     **What is not done, and the limit that keeps it off.** Corten's connection sends no trailers
     (an answer's are dropped, and no `Trailer` line is written) and no reason phrase but the
     status's own. And a client that pipelines requests and reads no answer holds more of the
@@ -12988,7 +13062,20 @@ rules something out.
     count from `db425e336`, `c9b910952` and `ffb331816`, with the switch on, and are committed
     nowhere;
     no cycles or times taken);
-    measured (the gate's long run, seed 20261124, at `568aa8d1a`: 252,454 streams, 252,276
+    measured (what the names a browser usually sends cost and save, by `bench/request-cost` the
+    same way at `53c46ce23` against `2f8984ddc`, with the switch off and on, every reading
+    `compare.mjs` names (after `53c46ce23` no file under `crates/` differs but in its tests and a
+    comment, so the counts were not taken again), and by scratch cases of one line more and of
+    whole heads added to the kit for the count and committed nowhere, on the same builds; the other order and the slots
+    on builds made for the count from `2f8984ddc` with the switch on and committed nowhere, and
+    the values taken alone by a search for this change on builds of the same kind; which names
+    a browser sends, from the heads Playwright 1.65.1's Chromium, Firefox and WebKit sent over
+    HTTP/1.1 to a server that printed them, one capture, committed nowhere);
+    measured (the gate's long run, seed 20261124, at `53c46ce23`, its streams now with the listed
+    names among their lines in both spellings and in some others: 252,454 streams, 252,260
+    answered alike, the app answering in 178,547 of them, 194 in the one listed class, none
+    failed, and the same figures, to the stream, on `2f8984ddc` with that gate; before the names
+    were sent, at `568aa8d1a`: 252,454 streams, 252,276
     answered alike, the app answering in 177,925 of them, 178 in the one listed class, none
     failed; one run, which the same seed repeats; before its app had a route whose body
     waits, at `553b27040`, 252,282 were answered alike and 172 listed, none failed, the same
@@ -13039,6 +13126,10 @@ rules something out.
     no public constructor for `OnUpgrade` or `Upgraded`,
     which is why a switch is handed to it; RFC 9112 6.3 ends a request with neither
     `Content-Length` nor `Transfer-Encoding` at its head);
+    platform (http 1.5.0's `HeaderName::from_bytes` lowers a name through its table and gives
+    its constant for it or the lowered bytes, refusing a byte its table has no place for, and a
+    `HeaderName` is compared and hashed by its constant or those bytes, so one made by
+    `from_static` of the same lower-case text is equal to it);
     reasoned (a header told by its name alone cannot be read differently by two servers, so the
     handoff rule cannot disagree with hyper about whether a body follows; the bytes hyper is given
     are the ones the client sent, since none is taken before the rule has decided; in a stream
@@ -13052,7 +13143,8 @@ rules something out.
     bet (an app that turns this on before the flood's memory is fixed sits behind a proxy that
     does not pipeline, or bounds connections with `App::max_connections`; its handlers for
     requests without a body are cheap enough, or bounded by the app itself, that as many as
-    16 KiB of answers allow may run for a client that reads none of them; and fewer instructions
+    16 KiB of answers allow may run for a client that reads none of them; the names browsers send
+    with a request without a body stay much those three browsers sent; and fewer instructions
     here will read as fewer cycles, which nothing has measured);
     value (fast and proven fast, with a number behind the claim and none claimed that was not
     taken, Value 1; correctness before speed, which is why bodies and switches stay hyper's and a
@@ -13067,8 +13159,11 @@ rules something out.
     tree and Corten's part versions; request bodies on this connection are proposed, which
     rewrites the handoff rule; a count with the switch off moves away from `main` by more than
     the 48 instructions it was at an earlier head; the look for a client's end is found to be more
-    than hyper's own, or a way is found to know the client's end without it; or hyper is fixed
-    where the gate met it, which lets the gate send bodies over pipes that hold little.
+    than hyper's own, or a way is found to know the client's end without it; `http` changes how
+    a `HeaderName` is made or compared, or gains a constant for a name on the list; a browser is
+    found to send a name on most requests that the list lacks, or no longer to send one it has;
+    or hyper is fixed where the gate met it, which lets the gate send bodies over pipes that hold
+    little.
 
     Last checked: 2026-11-26, the counts and idle figures with `bench/request-cost`, on
     `0e1d764fb` and on `568aa8d1a` with the switch off and on; 2026-11-26, the
@@ -13082,7 +13177,10 @@ rules something out.
     httpdate 1.0.3
     as `Cargo.lock` has them, hyper's server parse, encoder, read strategy, write queue and its
     look for a client's end read against `crates/corten/src/h1.rs` and
-    `crates/corten/src/h1/head.rs` at `68f3437a0`.
+    `crates/corten/src/h1/head.rs` at `68f3437a0`; 2026-11-27, the names' counts and idle
+    figures with `bench/request-cost` on `53c46ce23` against `2f8984ddc`, with the switch off and
+    on, the gate's long run on both, the heads of Playwright 1.65.1's three browsers, and http
+    1.5.0's `HeaderName` as `Cargo.lock` has it read against `field_name`.
 
 ## Rules
 
