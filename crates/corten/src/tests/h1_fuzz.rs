@@ -182,6 +182,7 @@ fn app() -> App {
         .route("/unread", crate::router::any(|| async { "unread" }))
         .route("/read", crate::router::any(|body: Bytes| async move { format!("read {}", body.len()) }))
         .route("/first", crate::router::any(first))
+        .route("/held", crate::router::any(held))
         .route("/echo", crate::router::any(echo))
         .route("/seen", crate::router::any(seen));
     App::new(Routes::from(table))
@@ -195,6 +196,21 @@ async fn first(req: Request<Body>) -> &'static str {
         Some(Err(_)) => "first failed",
         None => "first none",
     }
+}
+
+/// [`first`], with the body held for longer than a client leaves between two writes before it is
+/// dropped with the answer: hyper's connection, which reads a piece ahead of the app, has by
+/// then read what the client sent meanwhile, and Corten's own has read none of it.
+async fn held(req: Request<Body>) -> &'static str {
+    let mut body = req.into_body();
+    let read = match body.frame().await {
+        Some(Ok(_)) => "held",
+        Some(Err(_)) => "held failed",
+        None => "held none",
+    };
+    tokio::time::sleep(Duration::from_millis(3)).await;
+    drop(body);
+    read
 }
 
 /// The request's body for the answer's, read as the answer is written and given whole at its
@@ -579,6 +595,14 @@ fn bases() -> Vec<Vec<u8>> {
         format!("{}5\r\nhello\r\nz\r\n{get}", post("/seen", CODED)),
         "POST /seen HTTP/1.0\r\ncontent-length: 5\r\n\r\nhello".to_owned(),
         format!("{}hello world{get}", post("/echo", "content-length: 11\r\n")),
+        // An answer that waits for its request's body, and a body held past its end: a client
+        // gone by the body's end is written no more by either.
+        format!(
+            "{}5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n{get}",
+            post("/echo", "transfer-encoding: chunked\r\nexpect: 100-continue\r\n")
+        ),
+        format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/held", CODED)),
+        format!("{}hello world{get}", post("/held", "content-length: 11\r\n")),
     ];
     texts.into_iter().map(String::into_bytes).collect()
 }
@@ -610,6 +634,7 @@ const TARGETS: &[&str] = &[
     "/read",
     "/unread",
     "/first",
+    "/held",
     "/echo",
     "/seen",
     "/seen?a=1&b=2",

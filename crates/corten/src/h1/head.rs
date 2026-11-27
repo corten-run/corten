@@ -657,6 +657,7 @@ impl Dated {
 
 /// Brings the thread's `Date` text up to date: called when the connection's task has waited, so
 /// answers written in one go share it.
+#[inline]
 pub(crate) fn tick() {
     let now = SystemTime::now();
     DATED.with(|dated| {

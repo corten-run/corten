@@ -318,6 +318,7 @@ impl Inbox {
     /// nothing else holds its bytes (a request's headers share them until they are dropped), in
     /// a new one otherwise. `limit`: how long what is unread may be with what is read behind it
     /// (a head, up to the app's limit); no room is made for more.
+    #[inline]
     pub(crate) fn poll_fill<I: AsyncRead + Unpin>(
         &mut self,
         io: &mut I,
@@ -489,10 +490,6 @@ struct Conn<I> {
     /// left unread. (One that failed as the app read it closes the connection without a word, as
     /// with hyper, which stops reading there and does not note that it will close.)
     unkept: bool,
-    /// The piece the app was last given of the body ended inside a chunk, or inside a body of a
-    /// known length, where a read that filled what it was offered did: more of that piece may
-    /// wait in the socket ([`Conn::pass`]).
-    cut: bool,
 }
 
 /// What a client that waits to be told to send its body is told (`Expect: 100-continue`), as
@@ -503,6 +500,20 @@ const GO_ON: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 /// hyper reads past for a request sent whole on a new connection.
 const PASSED: usize = 8_192 + 16_384;
 
+/// What [`Conn::poll_feed`] did for the request's body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fed {
+    /// Nothing this task has to act on.
+    Nothing,
+    /// The app's end, in this task, was given what it waited for, and is to be polled again.
+    Again,
+    /// The app had dropped the body, and the body ended in the piece hyper reads ahead of the
+    /// app. hyper has known the body's end since it read that piece, and has looked for the
+    /// client's end from then on; this connection, which read nothing ahead, learns of both
+    /// only now, and the caller that is about to write looks first ([`Conn::poll_body`]).
+    EndedAhead,
+}
+
 impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     fn new(io: I, limit: usize) -> Conn<I> {
         let vectored = io.is_write_vectored();
@@ -510,7 +521,6 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             feed: None,
             ends: false,
             unkept: false,
-            cut: false,
             io,
             inbox: Inbox::new(),
             partial: None,
@@ -749,11 +759,18 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         BODIES.set(BODIES.get() + 1);
         let (feed, coming) = Feed::new(decoder, expects);
         self.feed = Some(feed);
-        self.cut = false;
         if !expects {
             self.feed(None);
         }
         Body::new(crate::extract::Arriving(coming))
+    }
+
+    /// One read for a body. Apart from the read for a head, and never inlined: a head's read is
+    /// then [`Inbox::poll_fill`]'s one other caller, compiled into it as it was when it was the
+    /// only one, so a request without a body does not pay a call for it.
+    #[inline(never)]
+    fn fill(inbox: &mut Inbox, io: &mut I, cx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        inbox.poll_fill(io, cx, usize::MAX)
     }
 
     /// Gives the app the next piece of its request's body, or the body's end: from what has been
@@ -765,27 +782,30 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// it holds of the app's again.
     fn feed(&mut self, mut cx: Option<&mut Context<'_>>) -> bool {
         loop {
-            let Some(feed) = &mut self.feed else { return false };
-            let (again, over) = match feed.decoder.step(&mut self.inbox) {
-                Step::Piece(piece) => {
-                    let whole = feed.decoder.given();
-                    self.cut = feed.decoder.partway() && self.inbox.filled;
-                    (feed.give(piece, whole, cx.as_deref_mut()), whole)
-                }
-                Step::End(trailers) => (feed.end(trailers, cx.as_deref_mut()), true),
-                Step::Wrong => {
-                    self.ends = true;
-                    (feed.fail(Broken::Reading, cx.as_deref_mut()), true)
-                }
-                Step::More => {
-                    let Some(cx) = cx.as_deref_mut() else { return false };
-                    // Nothing is unread here: all that was read was the body's, and is taken.
-                    match self.inbox.poll_fill(&mut self.io, cx, usize::MAX) {
-                        Poll::Pending => return false,
-                        Poll::Ready(Ok(count)) if count > 0 => continue,
-                        Poll::Ready(_) => {
-                            self.ends = true;
-                            (feed.fail(Broken::Reading, Some(cx)), true)
+            let Some(feed) = &self.feed else { return false };
+            let (again, over) = {
+                let mut reading = feed.reading();
+                match reading.decoder.step(&mut self.inbox) {
+                    Step::Piece(piece) => {
+                        let whole = reading.decoder.given();
+                        reading.cut = reading.decoder.partway() && self.inbox.filled;
+                        (feed.give(piece, whole, cx.as_deref_mut()), whole)
+                    }
+                    Step::End(trailers) => (feed.end(trailers, cx.as_deref_mut()), true),
+                    Step::Wrong => {
+                        self.ends = true;
+                        (feed.fail(Broken::Reading, cx.as_deref_mut()), true)
+                    }
+                    Step::More => {
+                        let Some(cx) = cx.as_deref_mut() else { return false };
+                        // Nothing is unread here: all that was read was the body's, and is taken.
+                        match Self::fill(&mut self.inbox, &mut self.io, cx) {
+                            Poll::Pending => return false,
+                            Poll::Ready(Ok(count)) if count > 0 => continue,
+                            Poll::Ready(_) => {
+                                self.ends = true;
+                                (feed.fail(Broken::Reading, Some(cx)), true)
+                            }
                         }
                     }
                 }
@@ -798,8 +818,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     }
 
     /// Does for the request's body what the app has asked of it since this was last called, and
-    /// has the task woken when it asks again from another: `true` when the app's end, in this
-    /// task, was given what it waited for, and is to be polled again.
+    /// has the task woken when it asks again from another ([`Fed`]).
     ///
     /// **The app asked for a piece and has none**: one is read ([`Conn::feed`]). A client that
     /// waits to be told to send the body is told first, once, and only if no byte of the answer
@@ -808,16 +827,20 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// **The app dropped the body unfinished**: hyper's rule ([`Conn::pass`]).
     ///
     /// Anything else (the app has a piece it has not taken, or has not asked) reads nothing.
-    fn poll_feed(&mut self, cx: &mut Context<'_>, tells: bool) -> bool {
-        let Some(feed) = &mut self.feed else { return false };
+    fn poll_feed(&mut self, cx: &mut Context<'_>, tells: bool) -> Fed {
+        let Some(feed) = &self.feed else { return Fed::Nothing };
         match feed.looks(cx) {
-            Asks::Ready | Asks::Empty { wanted: false } => false,
+            Asks::Ready | Asks::Empty { wanted: false } => Fed::Nothing,
             Asks::Empty { wanted: true } => {
-                if std::mem::take(&mut feed.expects) && tells {
+                if std::mem::take(&mut feed.reading().expects) && tells {
                     self.lend();
                     self.out.extend_from_slice(GO_ON);
                 }
-                self.feed(Some(cx))
+                if self.feed(Some(cx)) {
+                    Fed::Again
+                } else {
+                    Fed::Nothing
+                }
             }
             Asks::Dropped { ready, took } => {
                 // What hyper has taken of the body by now that this connection has not: it reads
@@ -826,9 +849,12 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 // are read now, but for a piece the app was given and did not take (which was
                 // read ahead) and one it took since this task last ran (behind which hyper has
                 // not run, and so has read nothing).
-                let pieces = if ready || took || feed.expects { 1 } else { 2 };
-                self.pass(cx, pieces);
-                false
+                let pieces = if ready || took || feed.reading().expects { 1 } else { 2 };
+                if self.pass(cx, pieces) {
+                    Fed::EndedAhead
+                } else {
+                    Fed::Nothing
+                }
             }
         }
     }
@@ -849,25 +875,29 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// A body found wrong, or cut short by its client's end, in the piece hyper would have read
     /// ahead of the app (the first of two) ends the connection without a word in the answer:
     /// hyper stops reading there and notes nothing.
+    ///
+    /// `true` when the body ended in that piece: hyper knew the body's end before the app
+    /// dropped the body ([`Fed::EndedAhead`]).
     #[cold]
     #[inline(never)]
-    fn pass(&mut self, cx: &mut Context<'_>, mut pieces: u8) {
-        let Some(mut feed) = self.feed.take() else { return };
+    fn pass(&mut self, cx: &mut Context<'_>, mut pieces: u8) -> bool {
+        let Some(feed) = self.feed.take() else { return false };
+        let mut reading = feed.reading();
         let ahead = pieces == 2;
-        let (mut rest, mut passed, mut quiet) = (self.cut, 0, false);
+        let (mut rest, mut passed, mut quiet) = (reading.cut, 0, false);
         #[cfg(test)]
         PASSES.set((PASSES.get().0 + 1, PASSES.get().1 + usize::from(rest)));
         let ended = loop {
             let had = self.inbox.len();
-            let step = feed.decoder.step(&mut self.inbox);
+            let step = reading.decoder.step(&mut self.inbox);
             passed += had - self.inbox.len();
             match step {
-                Step::Piece(_) if feed.decoder.given() => break true,
+                Step::Piece(_) if reading.decoder.given() => break true,
                 Step::Piece(_) => {
                     if !rest {
                         pieces -= 1;
                     }
-                    rest = feed.decoder.partway() && self.inbox.filled;
+                    rest = reading.decoder.partway() && self.inbox.filled;
                     #[cfg(test)]
                     PASSES.set((PASSES.get().0, PASSES.get().1 + usize::from(rest)));
                     if (pieces == 0 && !rest) || passed > PASSED {
@@ -880,7 +910,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                     break false;
                 }
                 Step::More if passed >= PASSED => break false,
-                Step::More => match self.inbox.poll_fill(&mut self.io, cx, usize::MAX) {
+                Step::More => match Self::fill(&mut self.inbox, &mut self.io, cx) {
                     Poll::Ready(Ok(count)) if count > 0 => {}
                     Poll::Ready(_) => {
                         quiet = ahead && pieces == 2;
@@ -890,10 +920,13 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
                 },
             }
         };
+        drop(reading);
         if !ended || passed > PASSED {
             self.ends = true;
             self.unkept = !quiet;
+            return false;
         }
+        ahead && pieces == 2
     }
 
     /// Behind an answer whose request's body is unfinished: the answer goes out, and the body is
@@ -901,7 +934,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     /// end. Only then is the next request read: until then what the client sends is this
     /// request's. `Err` when the answer cannot be sent.
     fn poll_behind(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.poll_feed(cx, false) {
+        if self.poll_feed(cx, false) == Fed::Again {
             // Nothing of the app's is polled by this task here; whoever was given a piece is.
             cx.waker().wake_by_ref();
         }
@@ -997,7 +1030,7 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             if let Poll::Ready(Ok(answer)) = answering.as_mut().poll(cx) {
                 return Poll::Ready(Ok(answer));
             }
-            if !self.poll_feed(cx, true) {
+            if self.poll_feed(cx, true) != Fed::Again {
                 break;
             }
             // At the body's end the client's end is looked for behind it, before the handler is
@@ -1065,27 +1098,41 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
         })
     }
 
-    /// [`Conn::poll_piece`], and what the connection does where the body waits
-    /// ([`Conn::poll_meanwhile`]). An answer's body that waits for its request's body (an echo, a
-    /// stream made from what the client sends) is given the next piece of that and asked again
-    /// ([`Conn::poll_feed`]), [`TURN`] times at the most before other tasks run; what is written
-    /// of the answer goes out first, each time, as with hyper, which flushes before it reads
-    /// on. So an answer whose body fails with its request's has begun by then, and is cut short.
-    #[inline]
-    fn poll_more(&mut self, cx: &mut Context<'_>, body: &mut Answered) -> Poll<io::Result<Option<Bytes>>> {
+    /// What the connection does where an answer's body waits ([`Conn::poll_meanwhile`]), and for
+    /// one that waits for its request's body (an echo, a stream made from what the client
+    /// sends): it is given the next piece of that and asked again ([`Conn::poll_feed`]),
+    /// [`TURN`] times at the most before other tasks run; what is written of the answer goes out
+    /// first, each time, as with hyper, which flushes before it reads on. So an answer whose
+    /// body fails with its request's has begun by then, and is cut short.
+    ///
+    /// At the request's body's end the client's end is looked for behind it, before the answer's
+    /// body is asked again, as hyper looks when it has read a body's last piece and before it
+    /// writes: a client that has closed its side by then has left, and is written no more of an
+    /// answer that waited for what it sent.
+    ///
+    /// Apart from [`Conn::poll_body`], which a body that does not wait never leaves.
+    #[inline(never)]
+    fn poll_waiting(&mut self, cx: &mut Context<'_>, body: &mut Answered) -> Poll<io::Result<Option<Bytes>>> {
         let mut turns = 0;
         loop {
-            if let Poll::Ready(next) = Self::poll_piece(cx, body)? {
-                return Poll::Ready(Ok(next));
-            }
             self.poll_meanwhile(cx)?;
-            if !self.poll_feed(cx, false) {
+            if self.feed.is_none() {
+                return Poll::Pending;
+            }
+            let fed = self.poll_feed(cx, false);
+            if self.feed.is_none() {
+                self.poll_left(cx)?;
+            }
+            if fed != Fed::Again {
                 return Poll::Pending;
             }
             turns += 1;
             if turns == TURN {
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
+            }
+            if let Poll::Ready(next) = Self::poll_piece(cx, body)? {
+                return Poll::Ready(Ok(next));
             }
         }
     }
@@ -1110,11 +1157,12 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
     ) -> Poll<io::Result<bool>> {
         use http_body::Body;
         // The request's body, if it is unfinished: read past or given up where the handler
-        // dropped it with its answer, before the client's end is looked for.
-        if self.feed.is_some() {
-            self.poll_feed(cx, false);
-        }
-        if self.waited {
+        // dropped it with its answer, before the client's end is looked for. Where that finds
+        // the body's end in the piece hyper reads ahead of the app, the client's end is looked
+        // for at once: hyper has looked since it read that piece, and a client that closed its
+        // side while its handler held a body that had ended is given no answer by either.
+        let ended_ahead = self.feed.is_some() && self.poll_feed(cx, false) == Fed::EndedAhead;
+        if self.waited || ended_ahead {
             self.poll_left(cx)?;
         }
         loop {
@@ -1126,18 +1174,24 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Conn<I> {
             // more before it flushes; and one that waits there is sent as far as it has come.
             if self.large.is_some() || self.out.len() - self.sent >= FLUSH_AT {
                 if ahead.is_none() {
-                    match self.poll_more(cx, body)? {
+                    match Self::poll_piece(cx, body)? {
                         Poll::Ready(next) => *ahead = Some(next),
-                        Poll::Pending => return Poll::Pending,
+                        Poll::Pending => match self.poll_waiting(cx, body)? {
+                            Poll::Ready(next) => *ahead = Some(next),
+                            Poll::Pending => return Poll::Pending,
+                        },
                     }
                 }
                 ready!(self.poll_deliver(cx, self.waited))?;
             }
             let next = match ahead.take() {
                 Some(next) => next,
-                None => match self.poll_more(cx, body)? {
+                None => match Self::poll_piece(cx, body)? {
                     Poll::Ready(next) => next,
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Pending => match self.poll_waiting(cx, body)? {
+                        Poll::Ready(next) => next,
+                        Poll::Pending => return Poll::Pending,
+                    },
                 },
             };
             let Some(piece) = next else { return Poll::Ready(self.end(*coding)) };
@@ -1320,9 +1374,14 @@ where
         let (request, mut asked) = {
             let Head { parts, keep_alive, framing, expects } = head;
             let asked = Asked { head: parts.method == Method::HEAD, http11: parts.version == Version::HTTP_11, keep_alive };
-            // An HTTP/1.0 client is told nothing before its answer, as with hyper.
-            let body = if framing == Framing::None { Body::empty() } else { conn.body(framing, expects && asked.http11) };
-            (http::Request::from_parts(parts, body), asked)
+            // Made with no body, as a request that has none is, and given its body where it has
+            // one: the request is then built in its place either way, not moved there.
+            let mut request = http::Request::from_parts(parts, Body::empty());
+            if framing != Framing::None {
+                // An HTTP/1.0 client is told nothing before its answer, as with hyper.
+                *request.body_mut() = conn.body(framing, expects && asked.http11);
+            }
+            (request, asked)
         };
         let answer = {
             let mut answering = pin!(service.call(request));

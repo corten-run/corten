@@ -157,6 +157,14 @@ fn app(log: &Log) -> App {
             }),
         )
         .route("/echo", any(|req: Request<Body>| async move { Body::from_stream(req.into_body().into_data_stream()) }))
+        // The request's body for the answer's, given whole at the body's end.
+        .route(
+            "/echo-whole",
+            any(|req: Request<Body>| async move {
+                let whole = async move { crate::body::to_bytes(req.into_body(), 1 << 20).await.map_err(std::io::Error::other) };
+                Body::from_stream(futures_util::stream::once(whole))
+            }),
+        )
         .route("/late", any(late))
         .route("/panic", any(panics))
         .route(
@@ -841,6 +849,51 @@ async fn a_client_that_leaves_with_a_body_unfinished_is_answered_as_hyper_answer
             }
         }
     }
+}
+
+/// What a server sends, without its dates, to a client that writes `request` and closes its side
+/// at once: the client's end is there when the server first reads.
+async fn left_at_once(connect: &Connect, request: &str) -> String {
+    let (mut client, server) = tokio::io::duplex(WIDE);
+    client.write_all(request.as_bytes()).await.unwrap();
+    client.shutdown().await.unwrap();
+    connect.send(server).expect("the server is listening");
+    let mut all = Vec::new();
+    let _ = tokio::time::timeout(QUIET, client.read_to_end(&mut all)).await;
+    dateless(&String::from_utf8_lossy(&all))
+}
+
+/// A client that has closed its side by the time its request's body has been read to its end
+/// has left, and is written nothing more, as with hyper, which looks for the client's end when
+/// it has read a body's last piece and before it writes: whatever the handler does with the
+/// body, and whether the answer was ready, waited for the body, or was being written from it.
+/// One that stays is answered in full.
+#[tokio::test(start_paused = true)]
+async fn a_client_gone_by_its_bodys_end_is_written_no_more() {
+    let pair = pair();
+    let mut wrong = Wrong::default();
+    for path in ["/read", "/unread", "/framing", "/first", "/first-held", "/drop-wait", "/echo", "/echo-whole", "/late"] {
+        for (lines, body) in
+            [("content-length: 11\r\n", "hello world"), (CHUNKED, HELLO), (CHUNKED, "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")]
+        {
+            let whole = format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}\r\n{body}");
+            let theirs = left_at_once(&pair.hyper, &whole).await;
+            let ours = left_at_once(&pair.own, &whole).await;
+            wrong.unless(ours == theirs, || format!("{path}, {lines:?}, {body:?}:\n  hyper: {theirs:?}\n  own:   {ours:?}"));
+            let (theirs, ours) = pair.send(&[&whole], false).await;
+            wrong.unless(did(&theirs).0.len() == 1, || format!("hyper's, to a client that stays, {path}, {body:?}: {theirs:?}"));
+            wrong.unless(ours == theirs, || format!("to a client that stays, {path}, {lines:?}, {body:?}"));
+        }
+    }
+    wrong.none();
+    // The answer that waited for its request's body is the one this is seen in: its head has
+    // gone, and its body, which was ready with the request's last piece, has not.
+    let whole = format!("POST /echo-whole HTTP/1.1\r\nhost: localhost\r\n{CHUNKED}\r\n{HELLO}");
+    let theirs = left_at_once(&pair.hyper, &whole).await;
+    assert!(
+        theirs.starts_with("HTTP/1.1 200 ") && theirs.ends_with("\r\n\r\n") && !theirs.contains("hello"),
+        "hyper's: {theirs:?}"
+    );
 }
 
 /// A body read by a task that outlives its handler, behind the handler's answer: the connection

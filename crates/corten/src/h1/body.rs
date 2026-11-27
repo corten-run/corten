@@ -324,7 +324,7 @@ enum End {
     Failed(Broken),
 }
 
-/// What the body the app holds and the connection that reads it share. Each end takes the lock
+/// What the body the app holds and the connection that reads it share. Each end takes its lock
 /// for a few lines and never across a call into anything else.
 struct Shared {
     /// A piece read and not yet taken: one at the most.
@@ -344,8 +344,28 @@ struct Shared {
     conn: Option<Waker>,
 }
 
-fn locked(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
-    // Nothing of an app's runs under the lock, so a panic never holds it.
+/// Where the connection is in a body it reads. The connection's alone, and kept with what the two
+/// ends share ([`Ends`]) so that it is in the allocation a body has anyway and not in the
+/// connection, which every connection holds whether its requests have bodies or not.
+pub(crate) struct Reading {
+    pub(crate) decoder: Decoder,
+    /// The client waits to be told to send the body (`Expect: 100-continue`) and has not been.
+    pub(crate) expects: bool,
+    /// The piece the app was last given ended inside a chunk, or inside a body of a known
+    /// length, where a read that filled what it was offered did: more of that piece may wait in
+    /// the socket (`super::Conn::pass`).
+    pub(crate) cut: bool,
+}
+
+/// A body's two ends, in one allocation: what they share, and the connection's own. Two locks, so
+/// the app's end never waits for the connection to read: only the connection takes `conn`.
+struct Ends {
+    app: Mutex<Shared>,
+    conn: Mutex<Reading>,
+}
+
+fn locked<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
+    // Nothing of an app's runs under either lock, so a panic never holds one.
     shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -355,7 +375,7 @@ fn locked(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
 /// `Content-Length` has been given whole, and never for a chunked body), the same frames (the
 /// body's pieces, then its trailers) and an error in the same words.
 pub(crate) struct Coming {
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<Ends>,
     /// What is left to give of a `Content-Length`; `None` for a chunked body.
     left: Option<u64>,
 }
@@ -365,7 +385,7 @@ impl http_body::Body for Coming {
     type Error = Broken;
 
     fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, Broken>>> {
-        let mut shared = locked(&self.shared);
+        let mut shared = locked(&self.shared.app);
         if let Some(piece) = shared.piece.take() {
             shared.took = true;
             drop(shared);
@@ -407,7 +427,7 @@ impl http_body::Body for Coming {
 
 impl Drop for Coming {
     fn drop(&mut self) {
-        let mut shared = locked(&self.shared);
+        let mut shared = locked(&self.shared.app);
         shared.dropped = true;
         // A piece given and not taken stays until the connection has seen that there was one.
         if shared.end == End::Open {
@@ -433,10 +453,7 @@ pub(crate) enum Asks {
 
 /// The connection's end of a body: it reads, and gives the app's end what it read.
 pub(crate) struct Feed {
-    shared: Arc<Mutex<Shared>>,
-    pub(crate) decoder: Decoder,
-    /// The client waits to be told to send the body (`Expect: 100-continue`) and has not been.
-    pub(crate) expects: bool,
+    shared: Arc<Ends>,
 }
 
 impl Feed {
@@ -446,7 +463,7 @@ impl Feed {
             Decoder::Length(length) => Some(length),
             Decoder::Chunked { .. } => None,
         };
-        let shared = Arc::new(Mutex::new(Shared {
+        let app = Mutex::new(Shared {
             piece: None,
             trailers: None,
             end: End::Open,
@@ -455,14 +472,20 @@ impl Feed {
             dropped: false,
             reader: None,
             conn: None,
-        }));
-        (Feed { shared: shared.clone(), decoder, expects }, Coming { shared, left })
+        });
+        let shared = Arc::new(Ends { app, conn: Mutex::new(Reading { decoder, expects, cut: false }) });
+        (Feed { shared: shared.clone() }, Coming { shared, left })
+    }
+
+    /// Where the connection is in the body: the connection's own, which nothing else waits for.
+    pub(crate) fn reading(&self) -> MutexGuard<'_, Reading> {
+        locked(&self.shared.conn)
     }
 
     /// What the app has done with the body, for the connection's task, which is woken by `cx`
     /// from here on when the app asks from another task or drops the body.
     pub(crate) fn looks(&self, cx: &mut Context<'_>) -> Asks {
-        let mut shared = locked(&self.shared);
+        let mut shared = locked(&self.shared.app);
         let took = std::mem::take(&mut shared.took);
         if shared.dropped {
             return Asks::Dropped { ready: shared.piece.take().is_some(), took };
@@ -505,7 +528,7 @@ impl Feed {
     /// Changes what the two ends share, and wakes the task that waits for it, unless it is this
     /// one (`cx`).
     fn put(&self, cx: Option<&mut Context<'_>>, change: impl FnOnce(&mut Shared)) -> bool {
-        let mut shared = locked(&self.shared);
+        let mut shared = locked(&self.shared.app);
         if shared.end != End::Open {
             return false;
         }
