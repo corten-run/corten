@@ -2242,9 +2242,10 @@ redirect the address can differ from the one the form reaches without JavaScript
 fragment, and is followed as a navigation (below). No entry is added: Back goes to the page before the screen,
 not to the scope before this one, as after `history.replaceState`. The entry keeps its state: its
 `history.state`, and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
-puts back on the entry once the address is in, unless a script put a state of its own in the entry, or
-cleared it, as the address went in (in a `navigate` listener before the replace, or a
-`currententrychange` listener), which stays; it puts none on an entry a script's `navigate` listener
+puts back on the entry once the address is in. A state a script puts in the entry as the address
+goes in is newer, and is the one kept: one a `navigate` listener puts in before the replace commits
+is put in the entry the replace makes, and one a `currententrychange` listener puts in that entry,
+or a state it clears there, stays. The runtime puts none on an entry a script's `navigate` listener
 pushed in place of its replace. It trusts the page's own `getState` and history methods to report
 what they did, and does not guard against a script that deliberately cancels or rewrites its own
 history call. A reload, a bookmark and a shared link then
@@ -2270,7 +2271,8 @@ it shows none at all. The runtime does not track navigations to see those. Corte
 (`corten-location`) and a layout that changed (a reload) are followed as for any `data-patch`
 form, marked or not, and take the place of a navigation on its way as they do without the mark.
 A press a script makes as it hears the page move (in a `currententrychange` or `popstate`
-listener) is on the entry the page moved to, and draws there.
+listener, one heard before the runtime's included) is on the entry the page moved to, and draws
+there; without the Navigation API that holds for Back between two entries of one address too.
 One that comes while the page reads itself again (`ReadAgain`), or after another form's answer was
 drawn in place, draws as usual, and the read starts again later at the new address. Where the
 runtime cannot tell that the screen is still the page and entry the press was made on, with no
@@ -2312,7 +2314,8 @@ while its GET is on its way, before its answer has come, takes that GET over, wh
 draws even if the page moved to another `#id` meanwhile (once the answer has come, or a
 navigation aborted the GET, the press sends its own). A form without the mark sends its GETs as
 before the mark: pressing for the same scope again
-while its GET is on its way sends nothing more, even once its answer is drawing, a submit that
+while its GET is on its way sends nothing more, even once its answer is drawing or a navigation
+has aborted it (one a script then cancels included), a submit that
 sends no field asks with no `?`, and a page answer it cannot draw in place loads the page in full
 and still says its notice. Give the form a
 `#[derive(Id)]` id, as below: `html!` refuses the mark on a form without one, and the runtime
@@ -2363,8 +2366,8 @@ form works the same way, but the runtime knows the history entry by its address 
 looks at as a press is made, as its answer draws and at each `popstate`: a script's
 `replaceState` to another address counts as leaving the entry if the address is still another
 when the runtime next looks, so an answer pressed before it draws nothing, while one the script
-puts back before then (which fires no `popstate`) is not seen, and nor is Back or Forward between
-two entries of one address. `html!` refuses `data-address` on anything but a `<form>`, on a form
+puts back before then (which fires no `popstate`) is not seen. Back or Forward is a move at its
+`popstate`, between two entries of one address too. `html!` refuses `data-address` on anything but a `<form>`, on a form
 without `data-patch` or without an `id`, and on one whose own `method` is `post` or
 `dialog`, even when a button's `formmethod="get"` would send it as a GET: a marked form is a GET
 form, and a `formmethod="post"` button in it posts as it would in any other, and leaves the

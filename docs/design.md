@@ -11648,10 +11648,13 @@ rules something out.
     on the entry the replace made, which keeps its key and `id` and begins no navigation (not on
     an entry a listener replaced inside the runtime's call, which is that listener's, nor on one a
     `navigate` listener pushed in place of the runtime's replace, nor once a listener has put a
-    state in the entry since the runtime read it, which is newer: one cleared inside the call, or
-    one a `navigate` listener put in before the replace commits, each a `currententrychange` with
-    a null `navigationType`, which the runtime counts; a state the runtime cannot read
-    leaves the address as it was). It reads the state before it checks the entry, the page and
+    state in the entry the replace made, one cleared there included, which is newer; a state the
+    runtime cannot read leaves the address as it was). A state a `navigate` listener put in the
+    entry before the replace committed is newer than the one the runtime read, and the runtime
+    puts that one in instead, read from the entry the replace took the place of (whose
+    `getState()` still answers it in all three engines). Each is a `currententrychange` with a
+    null `navigationType`, which the runtime counts, and how many came since the entry last
+    changed tells the two apart. It reads the state before it checks the entry, the page and
     the navigation on its way (below), so whatever a page's own `getState` does as it is read (a
     push of another entry, a replace) is checked as anything else is. The limit is a
     redirect (a 3xx that is not Corten's own): the runtime puts in the URL the redirect reached
@@ -11790,7 +11793,17 @@ rules something out.
     `pushState` to the same address, which fires none. Every `popstate` the browser fires is a
     move, its address changed or not, so Back and Forward between two entries of one address and
     state are seen; it is counted once, not again where a press in a page's `popstate` listener
-    heard before the runtime's counted its change of address in the same task. An
+    heard before the runtime's counted its change of address in the same task. Where the address
+    did not change, a press such a listener makes saw no move, though the browser had moved before
+    it fired the event; the runtime counts that press with the move when its time
+    (`performance.now()`, kept with each marked press) is at or after the event's `timeStamp`,
+    both on the same coarsened clock. The limit is a press made in an earlier task within the
+    clock's resolution of such a Back (1 ms in Firefox and WebKit), which is taken as made on the
+    entry Back reached; a press before `history.back()` came at least 1.5 ms before the event in
+    Chromium and 4 ms in Firefox and WebKit, measured 40 times in each (two runs of 20). A listener's registration
+    order is the page's, and capturing does not put the runtime first in Chromium (it fires a
+    window's capturing and bubbling listeners in the order they were added), so the time is all
+    the runtime has. An
     answer whose entry was left draws nothing and says nothing (`corten:error` is not fired), as
     for a submit a navigation cuts off, which the runtime aborts as it takes the navigation: the
     user has left the page it was for, and the form it would be said on with it. So does every
@@ -11798,10 +11811,12 @@ rules something out.
     does not draw, and a network failure, fire no `corten:error` either. A whole page (a
     `corten-shell` answer) is checked against its press once its modules and stylesheets have
     loaded, as a patch and a page answer are, and draws nothing for one that no longer holds; it
-    never moves the address. A submit a
+    never moves the address. A marked form's submit a
     navigation aborted is over from that moment, though its own code has not yet run to
     say so: a press of its form made then (a later listener cancelled that navigation) neither waits
-    for it nor is answered by it. A press waiting for a write of its form keeps its place as the
+    for it nor is answered by it. A form without the mark is as before the mark: a press the same
+    as its aborted read sends nothing more, and a press of it after an aborted write waits for that
+    write, which sends nothing after it. A press waiting for a write of its form keeps its place as the
     latest press and its entry whatever it was pressed as, and is sent as the form the write's answer drew sends it,
     fenced as that: a read only while its press still holds, on the entry it was pressed on, a
     post the form now sends by GET included, whose answer then puts its address in if it was
@@ -12033,13 +12048,13 @@ rules something out.
       runtime makes that replace itself, in the task the press was made in, so it is the one
       replace it can tell is its own without tracking navigations.
 
-    What it costs: the runtime every page loads is 2,402 bytes larger raw (46,502 to 48,904), 995
-    with gzip (16,718 to 17,713) and 877 with brotli (15,106 to 15,983), paid once a release by
-    every user (135, 70 and 57 larger than the build before this one, which took a push a
-    `navigate` listener made in place of its replace for that replace, put the older state back
-    over one a listener had cleared or put in before the replace committed, saw no move in a Back
-    between two entries of one address without the Navigation API, drew a whole page for a press
-    that no longer held, and sent a form's GETs without the mark as a marked form's). A
+    What it costs: the runtime every page loads is 2,587 bytes larger raw (46,502 to 49,089), 1,062
+    with gzip (16,718 to 17,780) and 938 with brotli (15,106 to 16,044), paid once a release by
+    every user (185, 67 and 61 larger than the build before this one, which, without the Navigation
+    API, took a press a page's `popstate` listener heard before the runtime's made as Back went
+    between two entries of one address as one made before that Back; left no state in the entry
+    a replace made when a `navigate` listener had put one in before it committed; and sent a
+    press of a form without the mark that a navigation's aborted submit would have taken). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12053,12 +12068,15 @@ rules something out.
     it holds one, sets it again after, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
     each `currententrychange` compares the key with the last seen and adds one to a count of
     changes, keeping its `navigationType`, or, for a change of the state alone, to a count of
-    state writes; without the Navigation API each trusted `popstate` compares the address with the
-    last seen and adds one to the count of moves, once (a flag a timer clears says a press in the
-    same task counted it first); and a visit the runtime begins adds one to a counter. A patch or
+    state writes and of those since the last change; without the Navigation API each trusted
+    `popstate` compares the address with the last seen and adds one to the count of moves, once (a
+    flag a timer clears says a press in the same task counted it first), and where the address did
+    not change looks through the kept presses (one a form id) for one made since the event's time,
+    which a marked press keeps; and a visit the runtime begins adds one to a counter. A patch or
     page drawn for a marked answer notes it as it draws, a press made then keeps that note, and
     the answer's replace compares the count of changes, the last change's type and the entry's
-    key across its call, and the count of state writes since it read the state, and keeps the
+    key across its call, and the counts of state writes since it read the state and since the
+    entry changed, keeps the entry it replaced to read a newer state from, and keeps the
     entry before and after it, in a plain object that a weak map
     holds by the answer and the press keeps, so a press of its draw compares those two readings as
     well as its own and keeps no answer or earlier press once they settle; that object is made only
@@ -12149,6 +12167,14 @@ rules something out.
 
     Last checked: 2026-11-26, the runtime's size with this change against main's runtime, unchanged
     since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-26, a press a `popstate` listener heard before the runtime's makes as Back goes between
+    two entries of one address without the Navigation API, a state a `navigate` listener puts in
+    the entry before a marked answer's replace commits, read back from the entry the replace made,
+    and a form without the mark pressed again as a navigation a listener then cancels has aborted
+    its read, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks,
+    which the build before this one fails in all three), and a press's time against the
+    `popstate` event's `timeStamp` and the order of a window's capturing and bubbling listeners in
+    the same three, 40 and 20 times each;
     2026-11-26, a `navigate` listener's push to the same address in place of a marked answer's
     replace, a state a `navigate` listener puts in the entry before that replace commits, Back
     between two entries of one address without the Navigation API, a whole page that waits for a

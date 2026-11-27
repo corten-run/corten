@@ -518,6 +518,14 @@ export async function dataAddress(browser) {
       sameBack.out && sameBack.popped && sameBack.done && sameBack.at === "" && sameBack.shown === "all",
       JSON.stringify(sameBack),
     );
+    // A press a `popstate` listener heard before the runtime's makes as that Back comes is on the
+    // entry Back reached, though its address did not change.
+    const pressedBack = await pressOnSameBack(plain);
+    check(
+      "without the Navigation API a marked patch pressed by a popstate listener put on before the runtime's as Back goes to another entry of the same address and state is sent, draws and puts its address in that entry",
+      pressedBack.popped && pressedBack.reads === 1 && pressedBack.drawn && pressedBack.at === "?scope=week" && pressedBack.shown === "week" && pressedBack.ahead,
+      JSON.stringify(pressedBack),
+    );
     const hashed = await hashThenPress(plain);
     check(
       "without the Navigation API a marked patch pressed in the task that moves the page to an #id of it draws and puts its address in that entry",
@@ -671,14 +679,14 @@ export async function dataAddress(browser) {
   // the runtime's, and the entry Week was pressed on keeps its own. One that clears the entry's
   // state inside the replace (`clear`), and one that puts a state in the entry before the replace
   // commits (`precommit`), have put a state in it since the runtime read it: the runtime puts the
-  // older one back over neither.
+  // older one back over neither, and the entry the replace makes keeps the precommit one.
   for (const how of /** @type {const} */ (["push", "clear", "precommit"])) {
     const name =
       how === "push"
         ? "a marked patch whose replacement a navigate listener cancels for a push to the same address puts the entry's state on neither entry, and the entry it was pressed on keeps it"
         : how === "clear"
           ? "a marked patch whose replace a currententrychange listener clears the entry's state in keeps that cleared state"
-          : "a marked patch whose replacement a navigate listener puts a state in the entry for, before it commits, does not put the older state back";
+          : "a marked patch whose replacement a navigate listener puts a state in the entry for, before it commits, keeps that state in the entry it makes";
     const wrote = await stateWrites(browser, how, errors);
     if (!wrote) skip(name, "no Navigation API");
     else if (typeof wrote.wrote === "string") skip(name, `updateCurrentEntry refuses an undefined state (${wrote.wrote})`);
@@ -690,7 +698,7 @@ export async function dataAddress(browser) {
             ? wrote.added === 1 && wrote.navState === "null" && wrote.before === '{"draft":"unsaved"}'
             : how === "clear"
               ? wrote.added === 0 && wrote.navState === "null"
-              : wrote.added === 0 && wrote.navState !== '{"draft":"unsaved"}'),
+              : wrote.added === 0 && wrote.navState === '"listener"'),
         JSON.stringify(wrote),
       );
   }
@@ -2107,6 +2115,44 @@ async function markedPatchVisits(browser, errors) {
     abortedOut && pressedAgainDrawn && pressedAgain.reads === 2 && pressedAgain.at === "?scope=week" && pressedAgain.shown === "week",
     JSON.stringify({ abortedOut, pressedAgainDrawn, pressedAgain }),
   );
+  // The same with the GET form without the mark, which sends as before the mark: the press asks for
+  // what the aborted read asked for, and sends nothing more, so nothing is drawn.
+  await page.goto(home);
+  const year = `${home}?scope=year`;
+  let yearReads = 0;
+  /** @type {() => void} */
+  let releaseYear = () => {};
+  const yearHeld = new Promise((resolve) => (releaseYear = () => resolve(undefined)));
+  await page.route(year, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    yearReads += 1;
+    if (yearReads === 1) await yearHeld;
+    await route.continue().catch(() => {});
+  });
+  const yearSent = page.waitForRequest((r) => r.url() === year && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await press("Year, in place");
+  const yearOut = await yearSent;
+  const yearCancelled = await page.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (new URL(event.destination.url).search === "?scope=month") event.preventDefault();
+    });
+    const next = nav.navigate(url);
+    next.committed.catch(() => {});
+    const ended = next.finished.then(() => "finished", (/** @type {Error} */ error) => error.name);
+    /** @type {HTMLButtonElement} */ (Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Year, in place")).click();
+    return ended;
+  }, month);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 500)));
+  releaseYear();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(year);
+  const unmarkedAgain = { reads: yearReads, ...(await state()) };
+  check(
+    "a GET without data-address pressed again as the read a cancelled navigation aborted sends nothing more and draws nothing, as before the mark",
+    yearOut && yearCancelled === "AbortError" && unmarkedAgain.reads === 1 && unmarkedAgain.at === "" && unmarkedAgain.shown === "all",
+    JSON.stringify({ yearOut, yearCancelled, unmarkedAgain }),
+  );
 
   const hashed = await hashThenPress(page);
   check(
@@ -3302,6 +3348,51 @@ async function sameAddressBack(page) {
   await page.unroute(week);
   const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
   return { out, popped, done, ...end };
+}
+
+/**
+ * Pushes an entry of the page at the address it is at, with a null state, and goes Back to the
+ * entry before, which has the same address and state, pressing Week from a `popstate` listener of
+ * the page put on before the runtime's (by a script in the page before it). Says whether Back fired
+ * `popstate`, how often Week was asked for, whether its answer drew, where the page is and what it
+ * shows then, and whether the entry Back left is still ahead.
+ * @param {import("@playwright/test").Page} page
+ */
+async function pressOnSameBack(page) {
+  const week = `${base}/smoke/address?scope=week`;
+  await page.addInitScript(() =>
+    addEventListener("popstate", () => {
+      const press = /** @type {any} */ (window).__pressOnSameBack;
+      Object.assign(window, { __pressOnSameBack: undefined });
+      press?.();
+    }),
+  );
+  let reads = 0;
+  await page.route(week, (route) => {
+    if (route.request().headers()["corten"] === "action") reads += 1;
+    return route.continue();
+  });
+  await page.goto(`${base}/smoke/address`);
+  const length = await page.evaluate(() => (history.pushState(null, "", location.href), history.length));
+  const popped = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        Object.assign(window, {
+          __pressOnSameBack: () => {
+            /** @type {HTMLButtonElement} */ (document.querySelector('#smoke-address-form button[value="week"]')).click();
+            resolve(true);
+          },
+        });
+        history.back();
+      }),
+  );
+  const drawn = await page
+    .waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  await page.unroute(week);
+  const end = await page.evaluate((length) => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent, ahead: history.length === length }), length);
+  return { popped, reads, drawn, ...end };
 }
 
 /**

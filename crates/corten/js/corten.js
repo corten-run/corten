@@ -2681,14 +2681,28 @@ const look = () => {
 let changes = 0;
 /** How many times the Navigation API said only the entry's state changed ({@link changes}). */
 let writes = 0;
+/**
+ * How many of those came since the entry last changed: none means each was put in the entry before
+ * it, as a `navigate` listener puts a state in the entry a replace is about to take the place of.
+ */
+let late = 0;
 /** The `navigationType` of the last change {@link changes} counted. @type {NavigationType | undefined} */
 let changed;
 navigation
-  ? navigation.addEventListener("currententrychange", (event) => (event.navigationType === null ? (writes += 1) : ((changes += 1), (changed = event.navigationType)), look()))
+  ? navigation.addEventListener("currententrychange", (event) => (event.navigationType === null ? ((writes += 1), (late += 1)) : ((changes += 1), (changed = event.navigationType), (late = 0)), look()))
   : // Every `popstate` the browser fires is a move, its address changed or not (Back between two
     // entries of one address, each with a null state), counted once: not again where its change of
     // address was counted in this task, as a press in a listener heard before the runtime's counts it.
-    addEventListener("popstate", (event) => event.isTrusted && (look(), counted ? (counted = false) : (moves += 1)));
+    // Where the address did not change, a press that listener made saw no move, though the browser
+    // had moved before it fired the event: one made since then (at or after the event's time) is on
+    // the entry the move reached, and is counted with it.
+    addEventListener("popstate", (event) => {
+      if (!event.isTrusted) return;
+      look();
+      if (counted) return void (counted = false);
+      moves += 1;
+      for (const press of presses.values()) if (press.at === moves - 1 && /** @type {number} */ (press.t) >= event.timeStamp) press.at = moves;
+    });
 /**
  * The history entry on screen and the page on it, by the moves since the page loaded
  * ({@link moves}). A page drawn in place on the entry (a form's answer, the page reading itself
@@ -3359,9 +3373,10 @@ const presses = new Map();
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
  * it was made on ({@link entry}), null while a visit of the runtime's was on its way, and that
  * entry exactly ({@link exact}), with the draw of the marked answer that made it, if one did
- * ({@link drawingFor}). A marked form without an id cannot tell its latest press from an older
- * one, and is pressed as an unmarked form is: its answer leaves the address.
- * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: Draw | null }} Press
+ * ({@link drawingFor}), and when it was made (`performance.now()`), for a move the browser made before
+ * it and says so only after it ({@link moves}). A marked form without an id cannot tell its latest
+ * press from an older one, and is pressed as an unmarked form is: its answer leaves the address.
+ * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: Draw | null, t?: number }} Press
  */
 
 /**
@@ -3375,7 +3390,7 @@ const presses = new Map();
 function pressed(form) {
   const id = idOf(form);
   const marked = id && hasAttr(form, "data-address");
-  const press = marked ? { id, at: reading.size ? null : entry(), seen: exact(), by: drawingFor } : { id };
+  const press = marked ? { id, at: reading.size ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3487,10 +3502,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   const fields = new URLSearchParams(entries);
   // A file by its size and time too: another file of the same name is a new submit.
   const key = `${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
-  // One a navigation aborted is over, though its own code has not yet run to say so: nothing waits
-  // for it or takes it over.
+  // A marked form's one a navigation aborted is over, though its own code has not yet run to say so:
+  // nothing waits for it or takes it over. An unmarked form's is as before the mark.
   let previous = submits.get(form);
-  if (previous?.controller.signal.aborted) previous = undefined;
+  if (previous?.controller.signal.aborted && press?.at !== undefined) previous = undefined;
   if (previous?.write) {
     // Sent once the write's answer is in; the same values as the write's again send nothing. A
     // button that waits is busy with the write's marks, one it replaced no longer.
@@ -3676,7 +3691,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // drops, put back once the address is in. One the runtime cannot read leaves the address.
           // It is read before everything above is checked, so what runs as it is read (a page's
           // own `getState`, which can move or replace the entry) is checked too. Each state put in
-          // the entry from then on is counted ({@link writes}), and is the page's.
+          // the entry from then on is counted ({@link writes}, {@link late}), and is the page's, newer,
+          // which is the one kept.
           /** @type {unknown} */
           let state;
           try {
@@ -3690,6 +3706,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           const before = exact();
           const seen = changes;
           const key = where();
+          const old = navigation?.currentEntry;
           try {
             history.replaceState(history.state, "", to);
           } catch {
@@ -3714,11 +3731,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // Its Navigation API state, back in the entry this replace made (`updateCurrentEntry`
           // keeps its key and id, adding no entry and beginning no navigation). Not in one a
           // listener replaced or pushed inside the call, which is that listener's, nor once a
-          // listener has put a state in the entry since the runtime read it (one cleared included),
-          // which is newer.
-          if (alone && state !== undefined && writes === wrote)
+          // listener has put a state in the entry this replace made (one cleared included), which is
+          // newer. One a listener put in the entry before this replace took its place (a `navigate`
+          // listener's, as it commits) is newer than the one the runtime read, and goes in instead.
+          if (alone && !late)
             try {
-              navigation?.updateCurrentEntry({ state });
+              const put = writes === wrote ? state : old?.getState();
+              if (put !== undefined) navigation?.updateCurrentEntry({ state: put });
             } catch {
               // A document no longer fully active, or a state the runtime cannot read: it is left.
             }
