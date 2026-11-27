@@ -111,10 +111,16 @@ function executableHash(at, executables) {
   if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
   return hash;
 }
-function scopeGroups(path, keys = fields) {
+const openingScopeMisses = new WeakSet();
+function scopeGroups(path, keys = fields, firstOpening = false) {
   const groups = [];
   function walk(current) {
-    const group = observing("cgroup-read", () => readGroup(current, keys)); groups.push(group);
+    try { groups.push(observing("cgroup-read", () => readGroup(current, keys))); }
+    catch (error) {
+      if (firstOpening && current === path && error?.code === "ENOENT" && error.path === join(root, path))
+        openingScopeMisses.add(error);
+      throw error;
+    }
     for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
       observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
       if (entry.isDirectory()) walk(posix.join(current, entry.name));
@@ -148,8 +154,8 @@ function forkAnchor(previous, stat, closingStat, identity, cgroup, ref) {
   const anchor = processIdentity(parent.stat);
   return BigInt(anchor.startTicks) <= BigInt(identity.startTicks) ? { identity: anchor, ref } : null;
 }
-function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor) {
-  const groups = scopeGroups(path), processes = [];
+function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor, firstOpening) {
+  const groups = scopeGroups(path, fields, firstOpening), processes = [];
   const before = observing("snapshot-membership", () => membership(groups));
   for (const group of groups) {
     const current = group.path;
@@ -213,7 +219,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
     attempts++;
     try {
       const attempt = () => {
-        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor);
+        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor, attempts === 1);
         if (successor) observing("executable-recheck-successor", () => {
           assert.ok(observed.processes.some((p) => p.executableRef === successor.ref && sameProcess(p, successor.identity, successor.cgroup)));
           if (successor.parent) assert.ok(observed.processes.some((p) =>
@@ -449,9 +455,9 @@ function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
     try { observed = snapshot(path, executables, pending); }
     catch (error) {
       const scope = join(root, path);
-      // A nested or unreadable cgroup is still a gap. For the exact missing
-      // scope, confirm Docker's terminal generation, then check it is still gone.
-      if (error?.code === "ENOENT" && error.path === scope && observationOperations.get(error) === "cgroup-read"
+      // Only the first opening scope miss can be confirmed as a stop. A
+      // closing or retried miss cannot erase an inconsistent census.
+      if (openingScopeMisses.has(error)
         && exitRecheckBegan !== undefined && canConfirmDockerExit(container)
         && performance.now() - exitRecheckBegan < exitRecheckDeadlineMs) {
         const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);

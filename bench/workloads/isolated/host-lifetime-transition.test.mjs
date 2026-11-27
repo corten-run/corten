@@ -14,8 +14,8 @@ const zero = "0001-01-01T00:00:00Z";
 async function exitTransition(t, { change = () => {}, path = "stat", code = "ENOENT",
   finishDelay = 0, wakeOffset = 0, inspectMs = 0, closing = false, census, censusRace = false,
   censusEvents = "populated 0\nfrozen 0\n", lostCgroup, groupReturns = false, secondLookupError = false,
-  lateAncestor, lookupMs = 0 } = {}) {
-  let faults = 0, phase = 0, missingAt, pinsAfterExit, censuses = 0, scopeRechecked = false;
+  lateAncestor, lookupMs = 0, scopeLossAfter = 0 } = {}) {
+  let faults = 0, phase = 0, missingAt, pinsAfterExit, censuses = 0, scopeRechecked = false, scopeReads = 0;
   const procReads = [], inspections = [], waits = [];
   const f = await fixture(t, [], true, () => { faults++; });
   Atomics.wait.mock.mockImplementation((_array, _index, _value, ms) => {
@@ -53,6 +53,7 @@ async function exitTransition(t, { change = () => {}, path = "stat", code = "ENO
       if (secondLookupError) throw missing("EIO");
       return groupReturns ? undefined : null;
     }
+    if (scopeReads++ < scopeLossAfter) return;
     throw Object.assign(missing(lostCgroup === "denied" ? "EACCES" : "ENOENT"), { path });
   };
   f.override = (name) => {
@@ -146,6 +147,20 @@ for (const [reason, options, expectedInspects, operation, code] of [
   assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
   assert.deepEqual(f.terminal.firstDockerGap, { stage: "kernel-census", ...(operation && { operation }), code });
   assert.equal(inspections.length, expectedInspects);
+  assert.equal(faults, 1);
+});
+
+for (const [label, options, expectedWaits] of [
+  ["the closing census loses the scope after excluding the entry PID", { census: "5001\n" }, []],
+  ["a retry loses the scope after a member stat failed", { census: "", censusRace: true }, [1]],
+]) test(`r110 exit: keeps the census gap when ${label}`, async (t) => {
+  const { f, faults, exit, inspections, procReads, waits } =
+    await exitTransition(t, { lostCgroup: "root", scopeLossAfter: 1, ...options });
+  assert.ok(procReads.includes("/proc/5001/stat"));
+  assert.deepEqual(waits, expectedWaits);
+  assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
+  assert.deepEqual(f.terminal.firstDockerGap, { stage: "kernel-census", operation: "cgroup-read", code: "ENOENT" });
+  assert.deepEqual(inspections, [[0, "running"]]);
   assert.equal(faults, 1);
 });
 
