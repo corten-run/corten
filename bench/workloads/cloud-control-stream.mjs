@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, writeSync } from "node:fs";
+import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
 import { durable, digest, fileHash, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
@@ -101,6 +101,34 @@ function* journalFrames(path, requireComplete = false, maxRowBytes = Infinity) {
   } finally { closeSync(fd); }
 }
 
+const cellFile = "monitor-native-cells.json";
+function cellCounts(value) {
+  const { started, total } = value ?? {};
+  if (Number.isSafeInteger(started) && Number.isSafeInteger(total) && started >= 1 && started <= total) return { started, total };
+}
+
+function readCellProgress(local, id) {
+  try {
+    const saved = JSON.parse(regular(join(local, cellFile), 1024));
+    if (saved.id === id) return cellCounts(saved);
+  } catch { /* A missing, busy or damaged optional status file is not a custody error. */ }
+}
+
+function saveCellProgress(local, status) {
+  const path = join(local, cellFile), stage = path + ".pending";
+  let created = false;
+  try {
+    const fd = openSync(stage, "wx", 0o600); created = true;
+    try {
+      const data = Buffer.from(JSON.stringify(status));
+      let offset = 0; while (offset < data.length) { const n = writeSync(fd, data, offset); assert.ok(n > 0); offset += n; }
+    } finally { closeSync(fd); }
+    renameSync(stage, path);
+  } catch {
+    if (created) try { unlinkSync(stage); } catch { /* Required control writes are independent. */ }
+  }
+}
+
 export function localStreamStatus(local) {
   physical(local);
   for (const kind of ["invalid", "terminal"]) {
@@ -109,7 +137,10 @@ export function localStreamStatus(local) {
   }
   const path = join(local, "monitor-journal.jsonl");
   if (!existsSync(path)) return { kind: "pending" };
-  for (const frame of journalFrames(path)) return { kind: "progress", frame };
+  for (const frame of journalFrames(path)) {
+    const nativeCellProgress = readCellProgress(local, frame.id);
+    return { kind: "progress", frame, ...(nativeCellProgress && { nativeCellProgress }) };
+  }
   return { kind: "progress", frame: null };
 }
 
@@ -261,7 +292,7 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
   physical(local); assert.ok(!existsSync(join(local, "monitor-journal.jsonl")), "monitor cannot restart/adopt a stream");
   const fd = openSync(join(local, "monitor-journal.jsonl"), "wx", 0o600);
   let bytes = 0, sequence = 0, buffer = Buffer.alloc(0), registration, terminal, child, timer, file, audit, auditBytes = 0;
-  let nativeEntered = false, lastPeerLease = 0;
+  let nativeEntered = false, lastPeerLease = 0, nativeCells;
   let readyResolve, readyReject, doneResolve, doneReject, settled = false, closing = false, last = Date.now(), deadline = last + streamLimits.maximumMs;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const done = new Promise((resolve, reject) => { doneResolve = resolve; doneReject = reject; });
@@ -293,11 +324,6 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
     readyReject(uncertain());
     timer = setTimeout(() => { if (!settled) { closeSync(fd); settled = true; doneReject(uncertain()); } }, streamLimits.leaseMs);
   }
-  const replaceProgress = (frame) => {
-    // Progress is append-only in the journal; a separate exclusive latest frame
-    // is not used, avoiding mutable snapshots racing independent collectors.
-    append(frame);
-  };
   function accept(frame) {
     assert.deepEqual(Object.keys(frame).sort(), ["id", "kind", "payload", "schema", "sequence"]);
     assert.equal(frame.schema, "benchmark-control-frame/v1"); assert.equal(frame.id, expected.id);
@@ -320,8 +346,21 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
           lastPeerLease = last;
         }
       } else if (kind === "progress") {
-        if (payload.state === "active") nativeEntered = true;
-        replaceProgress(frame);
+        const { nativeCellProgress, ...status } = payload;
+        if (Object.hasOwn(payload, "nativeCellProgress")) {
+          const counts = cellCounts(nativeCellProgress);
+          if (!counts || status.round !== expected.binding.round || status.state !== "active" || status.nextGroup !== "hardening") return;
+          // The remote slot can coalesce the first active state with the first
+          // count. Preserve exactly that required state, not the telemetry.
+          if (!nativeEntered) { append({ ...frame, payload: status }); nativeEntered = true; }
+          if (!nativeCells || counts.total === nativeCells.total && counts.started > nativeCells.started) {
+            nativeCells = counts;
+            saveCellProgress(local, { id: expected.id, round: status.round, ...counts });
+          }
+        } else {
+          if (status.state === "active") nativeEntered = true;
+          append(frame);
+        }
       }
       else if (kind === "audit-begin") {
         assert.equal(audit, undefined); assert.ok(["json-api", "mixed-production"].includes(payload.group));
