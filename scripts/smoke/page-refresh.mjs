@@ -8,6 +8,10 @@ import { base, shadowing, skip, check, within, readWithin, actWithin, cameWithin
  */
 const AGAIN_SECONDS = 1;
 
+/** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
+const savedLine = '<p id="alert-status" role="status">Saved.</p>';
+const savingLine = '<p id="alert-status" role="status">Saving...</p>';
+
 /**
  * The seconds the leave-before-read case's page waits before its part's first read: the wait its
  * navigation's stand-in answer asks for (`seeds` in `pageRefresh`), longer than the part's own so
@@ -299,9 +303,6 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           ? `Saving... drawn by the navigation ${nav.lateBy} ms after its 5 s (the page at ${nav.at} says ${nav.status})`
           : nav.sameDocument ? `no Saving... drawn by the navigation (the page at ${nav.at} says ${nav.status})` : `a new document loaded (at ${nav.at}, saying ${nav.status})`;
     const saved = () => page.textContent("#alert-status");
-    /** The alerts page's status line once its write is in, and while it lands, as the server writes them. */
-    const savedLine = '<p id="alert-status" role="status">Saved.</p>';
-    const savingLine = '<p id="alert-status" role="status">Saving...</p>';
     /**
      * The head's read-again tag of a page as the server writes it (`ReadAgain` in the head), and a
      * part's below: the stand-in takes them out of an answer saying `Saved.` before it puts in its
@@ -1485,11 +1486,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // store says by then (`fullLoadAnswer`), as the fragment case's is, so a write that landed
       // before the load cannot pass or fail the case. An init script, added before the load, notes in
       // the page's session storage (which a full load keeps) the first status line the page draws
-      // (its text and its place in `fullReads`), and the first of those answers the page draws `Saved.`
-      // from, each the moment it is drawn: the check that the load drew `Saving...` reads that note,
-      // not the page once `goto` returns, by when a read again may have drawn `Saved.`. The check that
-      // it stops then requires the note of `Saved.` once the wait for it has seen it within its 6 s,
-      // from an answer to a read after the case's load (not the load's own), and no read of the
+      // (its text and its place in `fullReads`), and the first `Saved.` it draws with the place of the
+      // answer that drew it (none for an unmarked answer), each the moment it is drawn: the check that
+      // the load drew `Saving...` reads that note, not the page once `goto` returns, by when a read
+      // again may have drawn `Saved.`. The wait for `Saved.` is a wait for that note, within 6 s of the
+      // load, and returns it, so a first `Saved.` from an unmarked answer fails the case however a
+      // later answer draws. The checks then require that first `Saved.` to come from an answer to a
+      // read after the case's load (not the load's own), and the one that it stops no read of the
       // alerts page after that answer's own request in the log, as the log stands once 2.2 s have
       // passed by the smoke's monotonic clock since the check read the note: a read sent between the
       // draw and the check seeing it counts against it, as the part case's check counts one (above).
@@ -1516,8 +1519,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               const text = status?.textContent;
               if (read != null && (text === "Saving..." || text === "Saved.") && sessionStorage.getItem(initialKey) === null) sessionStorage.setItem(initialKey, JSON.stringify({ text, read }));
               if (sessionStorage.getItem(key) !== null) return true;
-              if (read == null || text !== "Saved.") return false;
-              sessionStorage.setItem(key, read);
+              if (text !== "Saved.") return false;
+              // The first `Saved.` drawn, with the mark its answer carried (null for none), so a later
+              // marked draw cannot take its place.
+              sessionStorage.setItem(key, JSON.stringify({ read: read ?? null }));
               return true;
             } catch {
               return true;
@@ -1568,13 +1573,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           ).catch(() => null);
           const drewSaving = !!fullLoadAnswer?.saving && initial?.text === "Saving..." && loadAt >= 0 && Number(initial.read) === loadAt;
           const waiting = initial === null ? "no status line noted" : `${initial.text} (drawn from answer ${initial.read}, the load's ${loadAt})`;
-          const came = await savedSoon(loadFrom);
+          // The page's note of the first `Saved.` it drew, as it drew it, with the mark of the answer
+          // that drew it (null for an answer with none), seen within 6 s of the load: the wait
+          // returns that note, so the identity is the first `Saved.`'s, never a later draw's.
+          const noted = /** @type {string | null} */ (await seenWithin(6000, "the page's note of the first Saved. it drew", (key) => sessionStorage.getItem(key), firstKey, loadFrom));
+          const came = noted !== null;
           const endedAs = await documentNumber();
-          // The first answer the page drew `Saved.` from, noted as it drew it: before the wait above
-          // saw `Saved.`, so within its 6 s when the wait came in time.
-          const first = came
-            ? await readWithin("the page's note of what it drew Saved. from", page.evaluate((key) => sessionStorage.getItem(key), firstKey)).catch(() => null)
-            : null;
+          /** The mark of the answer that first drew `Saved.` (its place in `fullReads`), or null. @type {string | null} */
+          const first = noted === null ? null : (/** @type {{ read: string | null }} */ (JSON.parse(noted))).read;
+          const unmarked = came && first === null;
           const read = await readWithin("the status line after the wait for Saved.", saved());
           /** The request whose answer first drew `Saved.`, if the page noted one. */
           const drewFrom = first === null ? undefined : fullReads[Number(first)];
@@ -1582,7 +1589,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           const readsPage = (r) => r.method() === "GET" && !isPrefetch(r) && (r.isNavigationRequest() || ["page", "nav"].includes(r.headers()["corten"] ?? ""));
           const drawn = drewFrom !== undefined && loadAt >= 0 && Number(first) > loadAt && readsPage(drewFrom) ? first : null;
           /** Why no answer counts as the one that first drew `Saved.`, for a check's detail. */
-          const notDrawn = `no answer to a read of the receipt after its load (${loadAt}) drew Saved. within 6 s (${JSON.stringify(first)}${drewFrom === undefined || readsPage(drewFrom) ? "" : `, from a ${isPrefetch(drewFrom) ? "prefetch" : "request that is no read of the page"}`})`;
+          const notDrawn = unmarked
+            ? `the first Saved. drawn within 6 s of the load came from an answer with no mark, not one of the case's answers to a read of the receipt (noted ${noted})`
+            : `no answer to a read of the receipt after its load (${loadAt}) drew Saved. within 6 s (${JSON.stringify(first)}${drewFrom === undefined || readsPage(drewFrom) ? "" : `, from a ${isPrefetch(drewFrom) ? "prefetch" : "request that is no read of the page"}`})`;
           check(
             "a page waiting for a write reads itself again after a full load",
             drewSaving && came && drawn !== null && read === "Saved." && wholeAnswerFaults.length === faultsFrom,
@@ -2214,11 +2223,37 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // A data-patch write answered in place while its read catches up (ReadAgain::from): the
     // status line is patched, then read again from its route (`corten: action`) until the write
     // is in, with no navigation; the button keeps focus, and a navigation away stops the reads.
-    /** @type {string[]} */
+    /**
+     * Each part read of a receipt the page sends from here on (a GET of `/alerts?saved=..` with
+     * `corten: action`), in the order the check heard them sent.
+     * @type {import("@playwright/test").Request[]}
+     */
     const again = [];
-    const onAgain = (/** @type {import("@playwright/test").Request} */ r) =>
-      r.method() === "GET" && r.url().includes("/alerts?saved=") && r.headers()["corten"] === "action" && again.push(r.url());
+    /**
+     * By each read in `again`, whether its own answer was a terminal patch: `Saved.` with no tag
+     * asking to be read again, after which the page asks nothing more (false for a read with no
+     * answer). @type {Map<import("@playwright/test").Request, Promise<boolean>>}
+     */
+    const terminal = new Map();
+    const onAgain = (/** @type {import("@playwright/test").Request} */ r) => {
+      if (r.method() !== "GET" || !r.url().includes("/alerts?saved=") || r.headers()["corten"] !== "action") return;
+      again.push(r);
+      const answered = r.response().then((res) => (res === null ? "" : res.text()));
+      terminal.set(r, answered.then((body) => body.includes(savedLine) && !body.includes("data-corten-read-again"), () => false));
+    };
     page.on("request", onAgain);
+    /** The length of `again` just before the latest press that sends a write. */
+    let writeFrom = 0;
+    /**
+     * The place in `again` of the first read from `writeFrom` on whose answer was a terminal patch
+     * (`terminal`), its answers each read within 5 s, or -1.
+     */
+    const terminalAt = async () => {
+      const reads = again.slice(writeFrom);
+      const verdicts = await within(5000, "the answers to the patch's reads were not read within 5 s", Promise.all(reads.map((r) => terminal.get(r) ?? false))).catch(() => []);
+      const at = verdicts.indexOf(true);
+      return at < 0 ? -1 : writeFrom + at;
+    };
     const save = 'form[action="/alerts"] button';
     /** When `submit` last asked for the key press that sends the alert, by the smoke's clock (`performance.now()`). */
     let pressedAt = 0;
@@ -2258,6 +2293,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       await sending.step(noteSaving);
       await sending.step(() => {
         pressedAt = performance.now();
+        writeFrom = again.length;
         return page.keyboard.press("Enter");
       });
       await sending.poll(notedSaving);
@@ -2402,6 +2438,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           }, { id: removed, token: pressToken }),
         );
         const removedAt = performance.now();
+        writeFrom = again.length;
         await actWithin("the press of the last alert's remove button", page.click("#alert-list li:last-child button"));
         pressedIn = await readWithin("the page's note of the press", page.evaluate(() => /** @type {number | null} */ ((/** @type {any} */ (window)).__smokePressed))).catch(() => null);
         savingAt =
@@ -2442,14 +2479,64 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
     // The save after the refusal above answered the whole form, so the field is no longer marked.
     const cleared = await readWithin("the field's error", page.evaluate(() => !document.querySelector("#alert-form [aria-invalid]") && !document.getElementById("alert-form-above-error")));
     check("a save after a refusal clears the field's error", cleared);
-    const done = again.length;
+    // Quiet once the terminal patch is in: no part read after that patch's own request in the log
+    // (`terminalAt`, the first read since the last write's press whose answer said `Saved.` with no
+    // tag asking again), as the log stands 2.2 s after the wait above saw `Saved.`, so a read sent
+    // between the terminal patch and the check counts against it.
+    const ended = await terminalAt();
     await pause(2200);
-    check("it stops once the patch no longer asks", again.length === done, `${again.length - done} more reads`);
-    await submit();
-    await leaveForNews();
-    const away = again.length;
+    const afterEnd = ended < 0 ? [] : again.slice(ended + 1);
+    check(
+      "it stops once the patch no longer asks",
+      ended >= 0 && afterEnd.length === 0,
+      ended < 0
+        ? `none of the ${again.length - writeFrom} reads since the last write's press was answered with Saved. and no tag asking again`
+        : `${afterEnd.length} reads after the terminal patch's own (read ${ended - writeFrom + 1} since the press)`,
+    );
+    // Away with a read under way: the first part read after the write's press is held at the route,
+    // unanswered, until the page has left for News, so the page leaves while it waits for that read
+    // and what the check sees is the reads' cancellation, not polling that had already ended. The
+    // hold must be taken within 5 s of the press, before the page leaves; once News is drawn it is
+    // let go, and no part read may come after the held one's own request in the log, as the log
+    // stands 2.2 s later. The route is removed however the case ends.
+    /** @type {import("@playwright/test").Request | null} */
+    let held = null;
+    /** @type {(r: import("@playwright/test").Request) => void} */
+    let heldIn = () => {};
+    const heldCame = new Promise((resolve) => (heldIn = resolve));
+    /** @type {() => void} */
+    let letGo = () => {};
+    const going = new Promise((resolve) => (letGo = () => resolve(undefined)));
+    let holdOver = false;
+    const holdRead = async (/** @type {import("@playwright/test").Route} */ route) => {
+      const r = route.request();
+      if (holdOver || held !== null || r.method() !== "GET" || r.headers()["corten"] !== "action") return letThrough(route);
+      held = r;
+      heldIn(r);
+      await going;
+      await letThrough(route);
+    };
+    let heldSoon = false;
+    try {
+      await within(5000, "the held-read route was not set within 5 s", page.route("**/alerts?saved=*", holdRead));
+      await submit();
+      heldSoon = await cameWithin(leftOf(pressedAt, 5000), heldCame);
+      await leaveForNews();
+    } finally {
+      await cleanUp(
+        () => letGo(),
+        () => (holdOver = true),
+        () => within(5000, "the held-read route was not removed within 5 s", page.unroute("**/alerts?saved=*", holdRead)),
+      );
+    }
     await pause(2200);
-    check("navigating away stops a patch's reads", again.length === away, `${again.length - away} more reads`);
+    const heldAt = held === null ? -1 : again.indexOf(held);
+    const afterHeld = heldAt < 0 ? [] : again.slice(heldAt + 1);
+    check(
+      "navigating away stops a patch's reads",
+      heldSoon && heldAt >= writeFrom && afterHeld.length === 0,
+      heldSoon && heldAt >= writeFrom ? `${afterHeld.length} reads after the read held as the page left` : "no part read held within 5 s of the press, so the page did not leave with one under way",
+    );
     // A read the server fails (its error page, not a patch) stops the reads without a console
     // error: the server logged the failure, and the part stays as it was. The press's read is the
     // first part read the check hears after the alert's own POST, itself heard from just before the
