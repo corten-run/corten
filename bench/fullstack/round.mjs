@@ -376,10 +376,10 @@ export const parseSnapshot = (line) => {
  * and no job queued, so the unit was ended when each was taken. That does not show that no run
  * came and went between them (a stopped unit that is not enabled is unloaded and reads as one that
  * never ran; unitProperties). What is relied on is the unit ended at the moment it matters:
- * droplet.mjs destroys a droplet only on snapshots taken after its download, and the clear re-reads
- * the progress file and the unit (clearAfterCustody). Nothing is collected, cleared or destroyed on
- * less: a single snapshot, or a state and a queue read apart, may be a moment a start was
- * completing.
+ * droplet.mjs destroys a droplet whose round started only on snapshots taken after its download,
+ * and the clear re-reads the progress file and the unit (clearAfterCustody). Nothing is collected,
+ * cleared or destroyed on less: a single snapshot, or a state and a queue read apart, may be a
+ * moment a start was completing.
  * @param {string} before
  * @param {string} after
  */

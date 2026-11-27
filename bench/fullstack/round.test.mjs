@@ -1168,7 +1168,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     // droplet is left (the check after the download), with how to delete it.
     const lostLate = launch({ progress: unfinished(other), extra: ["--stall", "0.00001"], fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_DROP_WATCH: "1", FAKE_DOCTL_ACCOUNT: "1", FAKE_START_IN_DOWNLOAD: join(root, "download-start") }, create: true, detach: false, fast: true });
     assert.notEqual(lostLate.status, 0, lostLate.stdout);
-    assert.match(lostLate.stdout, /downloading what it has/, `${lostLate.stdout}${lostLate.stderr}`);
+    assert.match(lostLate.stdout, /reads ended, so downloading what it has/, `${lostLate.stdout}${lostLate.stderr}`);
     assert.ok(lostLate.downloaded, lostLate.calls.join("\n---\n").slice(0, 2000));
     assert.ok(!lostLate.deleted, "a unit that started during the download after the watch gave up had its droplet deleted");
     assert.match(lostLate.stdout, /corten-bench-r1 on the droplet at 203\.0\.113\.9 could not be confirmed ended after the download/);
