@@ -242,7 +242,9 @@ impl Decoder {
                             inbox.skip(at);
                             return match trailers.take() {
                                 None => Step::End(None),
-                                Some(lined) => parsed(&lined, usize::from(*lines)).map_or(Step::Wrong, |map| Step::End(Some(map))),
+                                Some(lined) => {
+                                    parsed(&lined, usize::from(*lines)).map_or(Step::Wrong, |map| Step::End(Some(map)))
+                                }
                             };
                         }
                         _ => return Step::Wrong,

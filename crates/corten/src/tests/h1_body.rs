@@ -42,7 +42,8 @@ async fn frames(mut body: Body, hints: bool) -> (String, bool) {
                 }
                 Err(frame) => {
                     let map = frame.into_trailers().unwrap_or_default();
-                    trailers.extend(map.iter().map(|(name, value)| format!("{name}={}", String::from_utf8_lossy(value.as_bytes()))));
+                    trailers
+                        .extend(map.iter().map(|(name, value)| format!("{name}={}", String::from_utf8_lossy(value.as_bytes()))));
                 }
             },
         }
@@ -184,11 +185,7 @@ struct Pair {
 
 fn pair_of(change: impl Fn(App) -> App, head: usize) -> Pair {
     let logs = [Log::default(), Log::default()];
-    Pair {
-        hyper: serve_app(change(app(&logs[0])), false, head),
-        own: serve_app(change(app(&logs[1])), true, head),
-        logs,
-    }
+    Pair { hyper: serve_app(change(app(&logs[0])), false, head), own: serve_app(change(app(&logs[1])), true, head), logs }
 }
 
 fn pair() -> Pair {
@@ -199,7 +196,8 @@ impl Pair {
     /// What each does with `writes`, sent a millisecond apart, and then with one more request if
     /// it has not closed: hyper's, then Corten's own.
     async fn send(&self, writes: &[&str], closes: bool) -> (Outcome, Outcome) {
-        let stream = Stream { index: 0, writes: writes.iter().map(|write| write.as_bytes().to_vec()).collect(), closes, pipe: WIDE };
+        let stream =
+            Stream { index: 0, writes: writes.iter().map(|write| write.as_bytes().to_vec()).collect(), closes, pipe: WIDE };
         (exchange(&self.hyper, &stream).await, exchange(&self.own, &stream).await)
     }
 
@@ -330,7 +328,12 @@ async fn a_bodys_framing_is_read_from_its_head_as_hyper_reads_it() {
         ("a length with zeros before it", length("005"), Does::Answers, "cl=[\"005\"] te=[] body=5"),
         // The same length twice is one length, and the app is given one line.
         ("a length twice", format!("{POST}content-length: 5\r\ncontent-length: 5\r\n\r\nhello"), Does::Answers, "cl=[\"5\"]"),
-        ("a length twice, written two ways", format!("{POST}content-length: 5\r\ncontent-length: 05\r\n\r\nhello"), Does::Answers, "cl=[\"5\"]"),
+        (
+            "a length twice, written two ways",
+            format!("{POST}content-length: 5\r\ncontent-length: 05\r\n\r\nhello"),
+            Does::Answers,
+            "cl=[\"5\"]",
+        ),
         ("two lengths", format!("{POST}content-length: 5\r\ncontent-length: 6\r\n\r\nhello"), Does::Refuses(400), ""),
         ("a list of lengths", length("5, 5"), Does::Refuses(400), ""),
         ("a list of lengths without a space", length("5,5"), Does::Refuses(400), ""),
@@ -360,13 +363,33 @@ async fn a_bodys_framing_is_read_from_its_head_as_hyper_reads_it() {
             Does::AnswersAndCloses,
             "cl=[] te=[\"chunked\"] body=5",
         ),
-        ("chunked, then a length that is no number", coded("transfer-encoding: chunked\r\ncontent-length: x\r\n"), Does::AnswersAndCloses, "cl=[]"),
-        ("a length that is no number, then chunked", coded("content-length: x\r\ntransfer-encoding: chunked\r\n"), Does::Refuses(400), ""),
+        (
+            "chunked, then a length that is no number",
+            coded("transfer-encoding: chunked\r\ncontent-length: x\r\n"),
+            Does::AnswersAndCloses,
+            "cl=[]",
+        ),
+        (
+            "a length that is no number, then chunked",
+            coded("content-length: x\r\ntransfer-encoding: chunked\r\n"),
+            Does::Refuses(400),
+            "",
+        ),
         // A coding before `chunked` is not undone: the app is given the chunks' bytes as sent.
         ("gzip, then chunked", coded("transfer-encoding: gzip, chunked\r\n"), Does::Answers, "te=[\"gzip, chunked\"] body=5"),
         ("chunked twice", coded("transfer-encoding: chunked, chunked\r\n"), Does::Answers, "body=5"),
-        ("gzip and chunked on two lines", coded("transfer-encoding: gzip\r\ntransfer-encoding: chunked\r\n"), Does::Answers, "body=5"),
-        ("chunked and gzip on two lines", coded("transfer-encoding: chunked\r\ntransfer-encoding: gzip\r\n"), Does::Refuses(400), ""),
+        (
+            "gzip and chunked on two lines",
+            coded("transfer-encoding: gzip\r\ntransfer-encoding: chunked\r\n"),
+            Does::Answers,
+            "body=5",
+        ),
+        (
+            "chunked and gzip on two lines",
+            coded("transfer-encoding: chunked\r\ntransfer-encoding: gzip\r\n"),
+            Does::Refuses(400),
+            "",
+        ),
         ("gzip alone", coded("transfer-encoding: gzip\r\n"), Does::Refuses(400), ""),
         ("chunked, then gzip", coded("transfer-encoding: chunked, gzip\r\n"), Does::Refuses(400), ""),
         ("identity", coded("transfer-encoding: identity\r\n"), Does::Refuses(400), ""),
@@ -433,9 +456,19 @@ async fn a_chunked_body_is_read_and_refused_as_hyper_does() {
         ("zeros before a size", "00000000000000000005\r\nhello\r\n00\r\n\r\n".to_owned(), Does::Answers, "body=5"),
         // A size line has no limit of its own on either: neither counts these, and neither keeps
         // them (`what_a_body_makes_the_connection_hold_is_bounded`).
-        ("more zeros before a size than extensions may be", format!("{}5\r\nhello\r\n0\r\n\r\n", "0".repeat(20_000)), Does::Answers, "body=5"),
-        ("more spaces behind a size than extensions may be", format!("5{}\r\nhello\r\n0\r\n\r\n", " ".repeat(20_000)), Does::Answers, "body=5"),
-        ("a trailer","5\r\nhello\r\n0\r\nx-t: 1\r\n\r\n".to_owned(), Does::Answers, "body=5 trailers=[\"x-t=1\"]"),
+        (
+            "more zeros before a size than extensions may be",
+            format!("{}5\r\nhello\r\n0\r\n\r\n", "0".repeat(20_000)),
+            Does::Answers,
+            "body=5",
+        ),
+        (
+            "more spaces behind a size than extensions may be",
+            format!("5{}\r\nhello\r\n0\r\n\r\n", " ".repeat(20_000)),
+            Does::Answers,
+            "body=5",
+        ),
+        ("a trailer", "5\r\nhello\r\n0\r\nx-t: 1\r\n\r\n".to_owned(), Does::Answers, "body=5 trailers=[\"x-t=1\"]"),
         // A trailer is not a header of the request: one named as a framing line frames nothing.
         (
             "trailers named as headers that frame",
@@ -464,7 +497,12 @@ async fn a_chunked_body_is_read_and_refused_as_hyper_does() {
         ("a bare LF behind the last chunk's size", "5\r\nhello\r\n0\n\r\n".to_owned(), Does::Fails, "failed after 5"),
         ("a bare CR for the last line", "5\r\nhello\r\n0\r\n\rX".to_owned(), Does::Fails, "failed after 5"),
         ("a bare CR in a trailer", "5\r\nhello\r\n0\r\na: b\rc: d\r\n\r\n".to_owned(), Does::Fails, "failed after 5"),
-        ("a trailer with a space before its colon", "5\r\nhello\r\n0\r\nx-t : 1\r\n\r\n".to_owned(), Does::Fails, "failed after 5"),
+        (
+            "a trailer with a space before its colon",
+            "5\r\nhello\r\n0\r\nx-t : 1\r\n\r\n".to_owned(),
+            Does::Fails,
+            "failed after 5",
+        ),
         ("a trailer that is folded", "5\r\nhello\r\n0\r\nx-t: 1\r\n more\r\n\r\n".to_owned(), Does::Fails, "failed after 5"),
         ("a trailer with no colon", "5\r\nhello\r\n0\r\nx-t\r\n\r\n".to_owned(), Does::Fails, "failed after 5"),
         ("extensions at the limit", extended(16 * 1024), Does::Fails, "failed after 0"),
@@ -525,7 +563,8 @@ async fn a_bare_lf_among_the_trailers_fails_the_body_where_hyper_reads_on() {
 #[tokio::test(start_paused = true)]
 async fn a_client_that_expects_to_be_told_is_told_when_the_app_asks_for_the_body() {
     let pair = pair();
-    let head = |path: &str, lines: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}expect: 100-continue\r\n\r\n");
+    let head =
+        |path: &str, lines: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}expect: 100-continue\r\n\r\n");
     let get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
     const GO_ON: &str = "HTTP/1.1 100 Continue\r\n\r\n";
 
@@ -613,7 +652,12 @@ async fn a_body_left_unread_keeps_its_connection_only_where_its_next_piece_ends_
         ("a length, all of it there", vec![post("/unread", "content-length: 5\r\n") + "hello"], true, false),
         ("a length, some of it there", vec![post("/unread", "content-length: 10\r\n") + "hello"], false, false),
         ("a length, none of it there", vec![post("/unread", "content-length: 5\r\n")], false, false),
-        ("a length, the rest a moment later", vec![post("/unread", "content-length: 10\r\n") + "hello", "world".to_owned()], false, false),
+        (
+            "a length, the rest a moment later",
+            vec![post("/unread", "content-length: 10\r\n") + "hello", "world".to_owned()],
+            false,
+            false,
+        ),
         ("one chunk, all there", vec![post("/unread", CHUNKED) + HELLO], true, false),
         ("one chunk, its last line not there", vec![post("/unread", CHUNKED) + "5\r\nhello\r\n"], false, false),
         ("two chunks, all there", vec![post("/unread", CHUNKED) + TWO], false, false),
@@ -629,10 +673,25 @@ async fn a_body_left_unread_keeps_its_connection_only_where_its_next_piece_ends_
         // It took one piece, dropped the body, and answered a moment later.
         ("one chunk, taken a moment before", vec![post("/first-wait", CHUNKED) + HELLO], true, false),
         ("two chunks, one taken a moment before", vec![post("/first-wait", CHUNKED) + TWO], false, true),
-        ("a length, half of it taken a moment before", vec![post("/first-wait", "content-length: 10\r\n") + "hello"], false, true),
+        (
+            "a length, half of it taken a moment before",
+            vec![post("/first-wait", "content-length: 10\r\n") + "hello"],
+            false,
+            true,
+        ),
         // It dropped the body and answered a moment later.
-        ("a length, all there, dropped a moment before", vec![post("/drop-wait", "content-length: 5\r\n") + "hello"], true, false),
-        ("a length, some there, dropped a moment before", vec![post("/drop-wait", "content-length: 10\r\n") + "hello"], false, true),
+        (
+            "a length, all there, dropped a moment before",
+            vec![post("/drop-wait", "content-length: 5\r\n") + "hello"],
+            true,
+            false,
+        ),
+        (
+            "a length, some there, dropped a moment before",
+            vec![post("/drop-wait", "content-length: 10\r\n") + "hello"],
+            false,
+            true,
+        ),
         ("two chunks, dropped a moment before", vec![post("/drop-wait", CHUNKED) + TWO], false, true),
         // No route: the app answers 404 without a look at the body.
         ("a length, to no route", vec![post("/nowhere", "content-length: 5\r\n") + "hello"], true, false),
@@ -767,7 +826,9 @@ async fn a_client_that_leaves_with_a_body_unfinished_is_answered_as_hyper_answer
     let pair = pair();
     let post = |path: &str, lines: &str, body: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}\r\n{body}");
     for path in ["/framing", "/unread", "/first"] {
-        for (lines, body) in [("content-length: 11\r\n", "hello world"), (CHUNKED, "5;x\r\nhello\r\n6\r\n world\r\n0\r\nx-t: 1\r\n\r\n")] {
+        for (lines, body) in
+            [("content-length: 11\r\n", "hello world"), (CHUNKED, "5;x\r\nhello\r\n6\r\n world\r\n0\r\nx-t: 1\r\n\r\n")]
+        {
             let head = post(path, lines, "").len();
             let whole = post(path, lines, body);
             for cut in head..whole.len() {
@@ -802,7 +863,8 @@ async fn a_body_is_read_behind_its_answer_by_a_task_that_holds_it() {
     assert!(theirs.0[2].is_empty() && theirs.1, "hyper's: {theirs:?}");
     assert_eq!(ours, theirs);
     let read = |log: &Log| log.lock().unwrap().clone();
-    let expected = ["body=10 trailers=[]", "body=11 trailers=[\"x-t=1\"]", "failed after 5: error reading a body from connection"];
+    let expected =
+        ["body=10 trailers=[]", "body=11 trailers=[\"x-t=1\"]", "failed after 5: error reading a body from connection"];
     assert_eq!(read(&pair.logs[0]), expected, "hyper's");
     assert_eq!(read(&pair.logs[1]), expected);
 }
@@ -927,12 +989,18 @@ async fn a_body_its_handler_does_not_read_stays_in_the_socket() {
     // More than either connection reads at once, so a read is as long as the connection asks.
     const PIPE: usize = 64 * 1024;
     let pair = pair();
-    let head = |path: &str, lines: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4000000\r\n{lines}\r\n");
+    let head =
+        |path: &str, lines: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\ncontent-length: 4000000\r\n{lines}\r\n");
     const FIRST: usize = crate::h1::FIRST;
     // The most Corten's connection may take, and the most room its read buffer may have had.
     for (name, head, most, room) in [
         ("a handler that holds the body", head("/hold", ""), FIRST, FIRST),
-        ("a handler that holds the body, and a client that expects to be told", head("/hold", "expect: 100-continue\r\n"), FIRST, FIRST),
+        (
+            "a handler that holds the body, and a client that expects to be told",
+            head("/hold", "expect: 100-continue\r\n"),
+            FIRST,
+            FIRST,
+        ),
         ("a handler that took one piece and waits", head("/first-long", ""), FIRST + 4096, 4096),
         ("a handler that dropped the body and waits", head("/wait", ""), FIRST + 24 * 1024 + 16 * 1024, 16 * 1024),
     ] {
@@ -962,7 +1030,8 @@ async fn what_a_body_makes_the_connection_hold_is_bounded() {
     // What is sent, the most room the read buffer may have had, and the most trailers held.
     let fast = post("content-length: 8388608\r\n") + &"x".repeat(8 << 20);
     let tiny = post(CHUNKED) + &"1\r\nx\r\n".repeat(100_000) + "0\r\n\r\n";
-    let extended = post(CHUNKED) + &format!("1;{}\r\nx\r\n", "e".repeat(16 * 1024 - 2)) + &"1\r\nx\r\n".repeat(1000) + "0\r\n\r\n";
+    let extended =
+        post(CHUNKED) + &format!("1;{}\r\nx\r\n", "e".repeat(16 * 1024 - 2)) + &"1\r\nx\r\n".repeat(1000) + "0\r\n\r\n";
     let trailed = post(CHUNKED) + "1\r\nx\r\n0\r\n" + &"a: b\r\n".repeat(99) + &format!("c: {}\r\n\r\n", "v".repeat(30_000));
     let over = post(CHUNKED) + "1\r\nx\r\n0\r\n" + &format!("c: {}\r\n\r\n", "v".repeat(64 * 1024));
     // A size line of 4 MiB: zeros before the size and spaces behind it, which nothing counts.

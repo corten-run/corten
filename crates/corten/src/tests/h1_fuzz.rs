@@ -483,11 +483,12 @@ fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool, bare_lf: bool) -> 
         // The second class: never where Corten's connection is the laxer one, and only where it
         // closed the connection (at the request whose body it refused, which is so the last it
         // answered) and answered the requests before that one as hyper's did.
-        Verdict::Unlisted(_) if bare_lf && own.closed && {
-            let (theirs, ours) = (all(hyper), all(own));
-            let before = ours.len().saturating_sub(1);
-            theirs.len() >= before && theirs[..before] == ours[..before]
-        } =>
+        Verdict::Unlisted(_)
+            if bare_lf && own.closed && {
+                let (theirs, ours) = (all(hyper), all(own));
+                let before = ours.len().saturating_sub(1);
+                theirs.len() >= before && theirs[..before] == ours[..before]
+            } =>
         {
             Verdict::Listed(BARE_LF)
         }
