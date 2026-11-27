@@ -609,8 +609,9 @@ export async function navFar(browser, swaps) {
  * browser keeps in a path as written. The parsed `data-nav-also` holds that address literally (an
  * unescaped `&copy;` would parse as the copyright sign), the group says the nav has other addresses, and the
  * entry is current there: in the server's answer to the browser's own request, in that page once the
- * runtime has ranked its links, and, on copies of the links it never saw marked, after a client
- * navigation.
+ * runtime has ranked its links (also when the server's mark is taken out of the answer before the
+ * runtime starts, so the runtime's own ranking at load must put it back), and, on copies of the links
+ * it never saw marked, after a client navigation.
  */
 export async function navAmp(browser, swaps) {
   const name = "a nav entry is current at an older address with a character HTML escapes, by the server and the runtime alike";
@@ -636,8 +637,34 @@ export async function navAmp(browser, swaps) {
   // The runtime ranks the links again once the page has loaded, by the parsed attribute.
   const loaded = await page.evaluate(() => Array.from(document.querySelectorAll("main a[data-nav-group]")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
   if (loaded !== "- page") seen.push(`page loaded at ${older}: ${loaded}`);
+  // That page's links came marked by the server. Load it again with every mark taken out of the
+  // server's answer before the runtime starts: only the runtime's ranking at load can put it back.
+  const unmarkedContext = await browser.newContext({ serviceWorkers: "block" });
+  const unmarked = await unmarkedContext.newPage();
+  /** How many marks each intercepted answer for the older address held before they were taken out. @type {number[]} */
+  const removed = [];
+  await unmarked.route(
+    (url) => url.origin === new URL(base).origin && url.pathname === older,
+    async (route) => {
+      if (route.request().resourceType() !== "document") return route.continue();
+      // Uncompressed, since Playwright's Firefox hands a zstd body over undecoded.
+      const answer = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+      const html = await answer.text();
+      removed.push((html.match(/\saria-current="page"/g) ?? []).length);
+      return route.fulfill({ response: answer, body: html.replace(/\saria-current="page"/g, "") });
+    },
+  );
+  await unmarked.goto(new URL(older, base).href);
+  await unmarked.waitForFunction(() => !!document.querySelector("main a[data-nav-group][aria-current]"), null, { timeout: 5000 }).catch(() => {});
+  const reranked = await unmarked.evaluate(() => ({
+    at: location.pathname,
+    marks: Array.from(document.querySelectorAll("main a[data-nav-group]")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "),
+  }));
+  await unmarkedContext.close();
+  if (removed.length !== 1 || removed[0] < 1) seen.push(`marks taken out of the intercepted answers for ${older}: ${JSON.stringify(removed)}`);
+  if (reranked.at !== older || reranked.marks !== "- page") seen.push(`runtime at load of ${reranked.at} with the server's marks taken out: ${reranked.marks}`);
   if (!swaps) {
-    check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
+    check(name, seen.length === 0, seen.join("; ") || "server and the runtime's ranking at load only: without swaps a client navigation loads the page in full");
     skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
     await context.close();
     return;

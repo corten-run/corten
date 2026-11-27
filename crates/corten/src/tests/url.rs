@@ -966,8 +966,9 @@ fn an_empty_nav_url_does_not_write_the_entry_before_its_other_addresses() {
 /// costs: `NAV_PAGES` (200) requests in process, one at a time; with `NAV_TARGET=local` the
 /// entries are `Local` paths read from data, otherwise typed routes. With `NAV_ALSO=primary` or
 /// `NAV_ALSO=alias` the same nav's fourth entry, `/n/3`, is current at `/old/3` too, and the page is
-/// asked for at `/n/3` or at `/old/3`. Counting it under callgrind at two numbers of requests gives
-/// the instructions per request. Run in release:
+/// asked for at `/n/3` or at `/old/3`. With `NAV_ALSO=escaped` that other address is the `Local`
+/// `/old/a&copy;`, which `data-nav-also` writes escaped, and the page is asked for there. Counting it
+/// under callgrind at two numbers of requests gives the instructions per request. Run in release:
 /// `NAV_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_a_nav_of_costs`
 #[test]
 #[ignore]
@@ -1007,18 +1008,36 @@ fn what_a_page_with_a_nav_of_costs() {
         );
         req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
     }
+    async fn typed_escaped(req: Req) -> HtmlResult {
+        let to: Vec<N> = (0..8).map(|n| N { n }).collect();
+        let old = Local::parse("/old/a&copy;").expect("a local path");
+        let nav = req.nav_of(to.iter().map(|to| (if to.n == 3 { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")));
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
+    async fn local_escaped(req: Req) -> HtmlResult {
+        let to: Vec<Local> = (0..8).map(|n| Local::parse(&format!("/n/{n}")).expect("a local path")).collect();
+        let old = Local::parse("/old/a&copy;").expect("a local path");
+        let nav = req.nav_of(
+            to.iter().map(|to| (if to.path() == "/n/3" { NavTo::page(to).also(&old) } else { NavTo::page(to) }, "Entry")),
+        );
+        req.test_page("Nav", html! { <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav> })
+    }
     let pages: usize = std::env::var("NAV_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let local_target = std::env::var("NAV_TARGET").is_ok_and(|v| v == "local");
     let also = std::env::var("NAV_ALSO").ok();
     let (routes, at) = match (also.as_deref(), local_target) {
         (None, false) => (Table::new().route("/n/{n}", get(typed)), "/n/3"),
         (None, true) => (Table::new().route("/n/{n}", get(local)), "/n/3"),
+        (Some("escaped"), local_target) => {
+            let handler = if local_target { get(local_escaped) } else { get(typed_escaped) };
+            (Table::new().route("/n/{n}", handler.clone()).route("/old/{n}", handler), "/old/a&copy;")
+        }
         (Some(at), local_target) => {
             let handler = if local_target { get(local_also) } else { get(typed_also) };
             let at = match at {
                 "primary" => "/n/3",
                 "alias" => "/old/3",
-                other => panic!("NAV_ALSO is primary or alias, not {other}"),
+                other => panic!("NAV_ALSO is primary, alias or escaped, not {other}"),
             };
             (Table::new().route("/n/{n}", handler.clone()).route("/old/{n}", handler), at)
         }
