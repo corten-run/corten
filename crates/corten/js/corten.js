@@ -3377,20 +3377,21 @@ const sentFrom = new WeakSet();
 const presses = new Map();
 
 /**
- * The navigation a page's `navigate` listener holds the runtime's own replace in before its address
- * goes in (`precommitHandler`), or one it began in that replace's place, and `true` while the
- * runtime's `replaceState` call runs, which runs the page's listeners and their `precommitHandler`
- * before it returns: while it holds ({@link holding}), a marked press is for the page it may yet
- * change, and is taken as one made while a visit is on its way ({@link pressed}), never sent, and a
- * marked answer already on its way draws nothing ({@link standing}), so nothing is drawn under the
- * address it may put in.
+ * The navigation a page's `navigate` listener holds the runtime's own replace in, before its address
+ * goes in (`precommitHandler`) or after, or any other the browser shows on its way as that call
+ * returns and did not before it (one a listener began in the replace's place or once its address
+ * went in), and `true` while the runtime's `replaceState` call runs, which runs the page's listeners
+ * and their `precommitHandler` before it returns: while it holds ({@link holding}), a marked press
+ * is for the page it may yet change, and is taken as one made while a visit is on its way
+ * ({@link pressed}), never sent, and a marked answer already on its way draws nothing
+ * ({@link standing}), so nothing is drawn under the address it may put in.
  * @type {NavigationTransition | boolean | null | undefined}
  */
 let held;
 
 /**
- * The press whose answer's replace is held ({@link held}), set with it: that answer has drawn, and
- * goes on as any drawn answer does.
+ * The press whose answer's replace is held ({@link held}), set with it and cleared when no hold is
+ * left as the call returns: that answer has drawn, and goes on as any drawn answer does.
  * @type {Press | undefined}
  */
 let heldFor;
@@ -3772,10 +3773,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
           // address stays as it was, the answer drawn under it, as an unmarked form's is: the
           // runtime neither guesses which nor reads the page again over what it cannot see.
-          // A listener that holds it (`precommitHandler`), or began a navigation in its place,
-          // leaves a navigation on its way, which may yet put this address in: until it ends, no
-          // marked press is sent ({@link held}), so no answer is drawn under it.
-          held = location.href !== to && navigation?.transition !== transition && navigation?.transition;
+          // A listener that holds it (`precommitHandler`), or began a navigation in its place or
+          // after it went in (its address the same or not), leaves a navigation on its way, which
+          // may yet put an address in: until it ends, no marked press is sent ({@link held}),
+          // so no answer is drawn under it. The address being in says nothing of that. The hold
+          // the call ran under ends first, so a read of the page's that throws leaves none.
+          held = heldFor = undefined;
+          if ((held = navigation?.transition !== transition && navigation?.transition)) heldFor = pending.here;
           if (location.href !== to) return;
           // The entry the answer was drawn on, at its new address, by this replace.
           entrySeen = where();

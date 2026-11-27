@@ -2367,6 +2367,32 @@ async function markedPatchVisits(browser, errors) {
       inside.held && inside.pressedInCall === true && inside.drawn && inside.sent === 0 && inside.ended && inside.after.at === "?scope=week" && inside.after.shown === "week",
       JSON.stringify(inside),
     );
+  // Week's replace commits its address, and a `currententrychange` listener begins a replace of
+  // its own to that same address inside the call, which a `navigate` listener holds
+  // (`precommitHandler`) and, let go, sends to `?scope=third`: the address is Week's as the call
+  // returns, but a navigation is on its way. Day pressed then is not sent (before, the address
+  // being Week's lifted the hold, Day drew, and the held replace then put `?scope=third` over
+  // Day's panel).
+  const committedHeld = await heldAfterCommit(page);
+  if (!committedHeld) skip("a marked GET pressed while a navigation begun inside the runtime's committed replace is held is not sent", "no precommitHandler");
+  else
+    check(
+      "a marked GET pressed while a navigation begun inside the runtime's committed replace is held is not sent, and the screen keeps Week's panel",
+      committedHeld.begun && committedHeld.held && committedHeld.drawn && committedHeld.during.at === "?scope=week" && committedHeld.during.transition && committedHeld.sent === 0 && committedHeld.ended &&
+        committedHeld.after.shown === "week",
+      JSON.stringify(committedHeld),
+    );
+  // A `navigate` listener that cancels the runtime's replace and makes the next read of
+  // `navigation.transition` throw: the runtime holds no longer once the call has returned, so the
+  // next marked press is sent and drawn (before, the throw left the hold on for good).
+  const throwHeld = await heldReadThrows(page);
+  if (!throwHeld) skip("a marked GET pressed after a cancelled replace whose transition read threw is sent", "no Navigation API");
+  else
+    check(
+      "a marked GET pressed after a cancelled replace whose transition read threw is sent and puts in its address",
+      throwHeld.vetoed && throwHeld.thrown && throwHeld.drawn && throwHeld.during === "" && throwHeld.sent === 1 && throwHeld.again.drawn && throwHeld.again.at === "?scope=day",
+      JSON.stringify(throwHeld),
+    );
   const ended = /** @type {const} */ ({ finish: "has finished", abort: "was aborted", supersede: "gave way to another navigation" });
   for (const end of /** @type {const} */ (["finish", "abort", "supersede"])) {
     const name = `a marked GET pressed once a navigate listener's held replace ${ended[end]} is sent and puts in its address`;
@@ -2655,6 +2681,130 @@ async function heldInside(page) {
   await page.unroute(day);
   const after = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent }));
   return { ...begun, drawn, sent: daySends, ended, after };
+}
+
+/**
+ * Week's replace commits its address; a `currententrychange` listener of the page then begins a
+ * replace of its own to the same address (`history.replaceState`) inside the runtime's call,
+ * which a `navigate` listener holds (`precommitHandler`) and, let go, sends to `?scope=third`
+ * (`redirect`, where the browser has it). Presses Week, then Day while that replace is held, then
+ * lets it go. Says whether the listener's replace was begun and held, whether Week drew, where the
+ * page was while it was held, how many reads of Day were sent, whether it ended, and where the page
+ * is then; null where the browser has no `precommitHandler`.
+ * @param {import("@playwright/test").Page} page
+ */
+async function heldAfterCommit(page) {
+  const home = `${base}/smoke/address`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  if (!(await page.evaluate(() => "NavigationPrecommitController" in window))) return null;
+  let daySends = 0;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") daySends += 1;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = resolve));
+    Object.assign(w, { __release: release, __begun: false, __held: false, __redirected: null });
+    w.navigation.addEventListener("currententrychange", () => {
+      if (w.__begun || location.search !== "?scope=week") return;
+      w.__begun = true;
+      history.replaceState(history.state, "", location.href);
+    });
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (!w.__begun || w.__held || event.navigationType !== "replace") return;
+      w.__held = true;
+      event.intercept({
+        precommitHandler: async (/** @type {any} */ controller) => {
+          await held;
+          try {
+            controller.redirect(`${location.pathname}?scope=third`);
+            w.__redirected = true;
+          } catch {
+            w.__redirected = false;
+          }
+        },
+      });
+    });
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  const during = await page.evaluate(() => ({ at: location.search, transition: !!(/** @type {any} */ (window).navigation.transition) }));
+  await page.getByRole("button", { name: "Day", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 500)));
+  await page.waitForFunction(() => !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
+  const begun = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    return { begun: w.__begun, held: w.__held };
+  });
+  await page.evaluate(() => /** @type {any} */ (window).__release());
+  const ended = await page.waitForFunction(() => !(/** @type {any} */ (window).navigation.transition), undefined, { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(day);
+  const after = await page.evaluate(() => ({
+    at: location.search,
+    shown: document.querySelector("#smoke-address output")?.textContent,
+    redirected: /** @type {any} */ (window).__redirected,
+  }));
+  return { ...begun, drawn, during, sent: daySends, ended, after };
+}
+
+/**
+ * A `navigate` listener of the page cancels the runtime's replace to Week's address and makes the
+ * next read of `navigation.transition` throw, once. Presses Week, then Day once Week has drawn.
+ * Says whether the replace was cancelled and the read threw, whether Week drew, where the page was
+ * then, how many reads of Day were sent, and whether Day's answer drew and where the page is then;
+ * null where the browser has no Navigation API.
+ * @param {import("@playwright/test").Page} page
+ */
+async function heldReadThrows(page) {
+  const home = `${base}/smoke/address`;
+  const day = `${home}?scope=day`;
+  await page.goto(home);
+  if (!(await page.evaluate(() => "navigation" in window))) return null;
+  let daySends = 0;
+  await page.route(day, (route) => {
+    if (route.request().headers()["corten"] === "action") daySends += 1;
+    return route.continue();
+  });
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    Object.assign(w, { __vetoed: false, __thrown: false });
+    w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+      if (w.__vetoed || event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+      w.__vetoed = true;
+      event.preventDefault();
+      Object.defineProperty(w.navigation, "transition", {
+        configurable: true,
+        get() {
+          delete w.navigation.transition;
+          w.__thrown = true;
+          throw new Error("smoke: a one-shot transition getter");
+        },
+      });
+    });
+  });
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  const state = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    return { vetoed: w.__vetoed, thrown: w.__thrown, during: location.search };
+  });
+  await page.getByRole("button", { name: "Day", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const againDrawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "day" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  await page.unroute(day);
+  const at = await page.evaluate(() => location.search);
+  return { ...state, drawn, sent: daySends, again: { drawn: againDrawn, at } };
 }
 
 /**

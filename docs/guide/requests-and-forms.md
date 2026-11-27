@@ -2296,9 +2296,11 @@ exception (WebKit past its limit of history updates) or without a word (Chromium
 leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
 cancels: that script has taken the address over, so it puts the address it means in itself, or
 begins the navigation it means, which the runtime leaves to finish. A listener that holds the
-replace before its address goes in (`precommitHandler`), or begins a navigation in its place,
-leaves a navigation on its way that may yet put the address in: until it ends, a press of a
-marked form is not sent, as one pressed while a visit is on its way, and an answer already on its
+replace before its address goes in (`precommitHandler`) or after (`handler`), or begins a
+navigation in its place or once the address is in (a `currententrychange` listener's own replace
+that a `navigate` listener holds), leaves a navigation on its way that may yet put an address in,
+whether or not the replace's is in already: until it ends, a press of a marked form is not sent,
+as one pressed while a visit is on its way, and an answer already on its
 way (to a press the held answer's own draw made) draws nothing, as one does that would draw while a
 visit is on its way, so nothing is drawn under that address. The browser runs that listener, and
 its `precommitHandler`, inside the runtime's `replaceState` call, so a press of a marked form made
