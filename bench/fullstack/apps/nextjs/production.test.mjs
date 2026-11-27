@@ -178,10 +178,10 @@ test("marketplace forms use the configured public origin only on its exact Host"
           ...(status !== 200 && forged), "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(form) }, form);
         assert.equal(res.status, status, `${path}: ${host} from ${origin} (${site})`);
         if (status !== 200) {
-          assert.equal(res.cookie, undefined, "rejected form created a session");
+          assert.ok(res.cookie === undefined, "rejected form created a session");
           continue;
         }
-        assert.match(res.cookie, /^marketplace_session=/);
+        assert.ok(res.cookie?.startsWith("nextjs_alerts="), "accepted form did not set the Next.js alert cookie");
         assert.equal(/;\s*secure\b/i.test(res.cookie), secure);
         const read = await send("/api/alerts", { Host: host, Cookie: res.cookie.split(";")[0] });
         assert.equal(read.status, 200);
