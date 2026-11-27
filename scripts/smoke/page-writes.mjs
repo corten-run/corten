@@ -421,6 +421,7 @@ export async function pageWrites(page, browser) {
       own,
       by,
       (at) => ({
+        origin: performance.timeOrigin,
         now: performance.now(),
         value: /** @type {{ time: number, failed: string | null, mark: string | null } | undefined} */ ((/** @type {any} */ (window)).__marks[String(at)]),
       }),
@@ -519,7 +520,7 @@ export async function pageWrites(page, browser) {
   const writtenSeen = async (own, pressed) => {
     if (pressed === null) return false;
     const by = pressed + 5000;
-    const drawn = await lookUntil(own, by, () => ({ now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__writtenSeen ?? false) }));
+    const drawn = await lookUntil(own, by, () => ({ origin: performance.timeOrigin, now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__writtenSeen ?? false) }));
     return typeof drawn === "number" && drawn >= pressed && drawn <= by;
   };
   /**
@@ -1095,7 +1096,9 @@ export async function pageWrites(page, browser) {
       const by = (records.releasedAt ?? start) + 5000;
       last = { ...records, by };
       if (records.failedAt !== null || now >= by) return last;
-      await pause(Math.max(0, Math.min(50, by - now, until - performance.now())));
+      const wait = Math.min(50, by - now, until - performance.now());
+      if (!(wait > 0)) return last;
+      await pause(wait);
     }
   };
   // A write's body fails after its headers, optionally after another form's whole page has

@@ -178,23 +178,39 @@ const notedBy = async (by, at, came) => {
 };
 
 /**
- * What `look` (a page function, run with `arg`) saw in the page, `{ now, value }` from one page task
- * (`now` the page's `performance.now()` there), looked at every 50 ms until its `value` is truthy
- * or the page's own monotonic clock has reached `by` (a time by that same clock, a press or a read
- * the page recorded as it made it): the value then, or undefined if a look failed or was not
- * answered within 5 s. A look whose `now` is at or after `by` saw every record the page made by
- * then, as `now` and `value` are read in one task, so the page's clock alone decides what came by
- * `by` and a look that runs late neither loses a record made in time nor waits past `by` for one.
- * A `by` that is not a number ends after the first look.
+ * What `look` (a page function, run with `arg`) saw in the page, `{ origin, now, value }` from one
+ * page task (`origin` the page's `performance.timeOrigin` and `now` its `performance.now()` there),
+ * looked at every 50 ms until its `value` is truthy or the page's own monotonic clock has reached
+ * `by` (a time by that same clock, a press or a read the page recorded as it made it): the value
+ * then, or undefined if a look failed or was not answered in its time. A look whose `now` is at or
+ * after `by` saw every record the page made by then, as `now` and `value` are read in one task, so
+ * the page's clock alone decides what came by `by` and a look that runs late neither loses a record
+ * made in time nor waits past `by` for one. A `by` that is not a number ends after the first look.
+ * Every look must come from the document the first look saw (the same `origin`, its clock never
+ * going back): another document's clock is not the one `by` was taken by, so a changed document
+ * ends the looks with undefined. The looks as a whole are bounded by the smoke's own monotonic clock
+ * (`performance.now()` here) too: what was left to `by` at the first look, counted from when that
+ * look was answered, and 5 s more for the look that finds the page's clock past it. Each look has
+ * what is left of that, at most 5 s, none starts once it is over, and the pause between looks ends
+ * with it; a page whose clock does not reach `by` in that time ends the looks with undefined.
  * @template A, V @param {import("@playwright/test").Page} page @param {number} by
- * @param {(arg: A) => { now: number, value: V }} look @param {A} [arg] @returns {Promise<V | undefined>}
+ * @param {(arg: A) => { origin: number, now: number, value: V }} look @param {A} [arg] @returns {Promise<V | undefined>}
  */
 const lookUntil = async (page, by, look, arg) => {
+  /** The first look's document and its clock, and the smoke's time by which the looks end. */
+  let first = /** @type {{ origin: number, now: number, until: number } | null} */ (null);
   for (;;) {
-    const seen = await within(5000, "the page did not answer a look within 5 s", page.evaluate(look, /** @type {A} */ (arg))).catch(() => null);
-    if (seen === null || typeof seen.now !== "number") return undefined;
+    const left = first === null ? 5000 : Math.min(5000, first.until - performance.now());
+    if (left <= 0) return undefined;
+    const seen = await within(left, "the page did not answer a look in time", page.evaluate(look, /** @type {A} */ (arg))).catch(() => null);
+    if (seen === null || typeof seen.now !== "number" || typeof seen.origin !== "number") return undefined;
+    if (first === null) first = { origin: seen.origin, now: seen.now, until: performance.now() + Math.max(0, by - seen.now) + 5000 };
+    else if (seen.origin !== first.origin || seen.now < first.now) return undefined;
+    else first.now = seen.now;
     if (seen.value || !(seen.now < by)) return seen.value;
-    await pause(Math.min(50, by - seen.now));
+    const wait = Math.min(50, by - seen.now, first.until - performance.now());
+    if (!(wait > 0)) return undefined;
+    await pause(wait);
   }
 };
 

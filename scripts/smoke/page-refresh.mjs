@@ -2222,36 +2222,38 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           // still on its way, is told from one started after it, however late the check hears either,
           // and one started in the same instant as the press is after it, not lost; a load of `/alerts`
           // heard after the press counts too, as does a document that was replaced, which leaves no
-          // notes. The notes are read 2.2 s after News is drawn, and the page's fetch is put back and its
-          // press listener removed however the check ends.
+          // notes. The notes are read 2.2 s after News is drawn. The page's fetch is put back and its press
+          // listener removed however the check ends, from the moment the check asks the page to install
+          // them (an install the page made but did not acknowledge in time included), and a removal not
+          // confirmed within 5 s fails the case rather than leave the shared page instrumented.
           if (armed && leave) {
             const hold = leave;
             const pressFrom = pageLog.length;
-            await readWithin(
-              "the page's notes of its press and reads",
-              page.evaluate(() => {
-                const w = /** @type {any} */ (window);
-                const notes = { count: 0, pressedAt: /** @type {number | null} */ (null), reads: /** @type {{ at: number, url: string, prefetch: boolean }[]} */ ([]) };
-                w.__smokeLeave = notes;
-                w.__smokeFetch ??= window.fetch;
-                const original = w.__smokeFetch;
-                window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
-                  try {
-                    const at = new URL(input instanceof Request ? input.url : String(input), location.href);
-                    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-                    if (at.origin === location.origin && at.pathname === "/alerts")
-                      notes.reads.push({ at: ++notes.count, url: at.pathname + at.search, prefetch: headers.get("purpose") === "prefetch" });
-                  } catch {}
-                  return original.apply(this, /** @type {any} */ (arguments));
-                };
-                // Kept by name, so the check's cleanup removes it with the wrapper.
-                w.__smokeLeaveClick = (/** @type {Event} */ e) => {
-                  if (notes.pressedAt === null && /** @type {Element} */ (e.target)?.closest?.('a[href="/news"]')) notes.pressedAt = ++notes.count;
-                };
-                document.addEventListener("click", w.__smokeLeaveClick, true);
-              }),
-            );
             try {
+              await readWithin(
+                "the page's notes of its press and reads",
+                page.evaluate(() => {
+                  const w = /** @type {any} */ (window);
+                  const notes = { count: 0, pressedAt: /** @type {number | null} */ (null), reads: /** @type {{ at: number, url: string, prefetch: boolean }[]} */ ([]) };
+                  w.__smokeLeave = notes;
+                  w.__smokeFetch ??= window.fetch;
+                  const original = w.__smokeFetch;
+                  window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
+                    try {
+                      const at = new URL(input instanceof Request ? input.url : String(input), location.href);
+                      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+                      if (at.origin === location.origin && at.pathname === "/alerts")
+                        notes.reads.push({ at: ++notes.count, url: at.pathname + at.search, prefetch: headers.get("purpose") === "prefetch" });
+                    } catch {}
+                    return original.apply(this, /** @type {any} */ (arguments));
+                  };
+                  // Kept by name, so the check's cleanup removes it with the wrapper.
+                  w.__smokeLeaveClick = (/** @type {Event} */ e) => {
+                    if (notes.pressedAt === null && /** @type {Element} */ (e.target)?.closest?.('a[href="/news"]')) notes.pressedAt = ++notes.count;
+                  };
+                  document.addEventListener("click", w.__smokeLeaveClick, true);
+                }),
+              );
               const pressAt = performance.now();
               await leaveForNews();
               // Let go only once News is drawn: a read the press did not cut off fails after this, not
@@ -2285,7 +2287,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
                   delete w.__smokeLeaveClick;
                   delete w.__smokeLeave;
                 }),
-              ).catch(() => {});
+              );
             }
           }
         } finally {
@@ -2501,7 +2503,7 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         savingAt =
           typeof pressedIn !== "number"
             ? undefined
-            : await lookUntil(page, pressedIn + 5000, () => ({ now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
+            : await lookUntil(page, pressedIn + 5000, () => ({ origin: performance.timeOrigin, now: performance.now(), value: /** @type {number | false} */ ((/** @type {any} */ (window)).__smokeSaving) }));
         removedSoon = await savedSoon(removedAt);
       } finally {
         await within(

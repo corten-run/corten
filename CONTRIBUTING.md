@@ -658,9 +658,9 @@ seconds of the load's start the same way: with the Navigation API, the runtime's
 the receipt, drawn in a document the tab made after the case's own by the count below (`Saved.` a
 fetch drew in place does not pass for it). That document is told by an init script added before the load, which numbers each
 document the tab makes from then on in the order they are made (a count in the page's session
-storage, which a reload keeps): the document once the load returns and once the wait ends must both
-be the first, so a full load at any moment after the case's own, even one before Playwright's load
-returns, fails it. The init script and its count are removed however the case ends, each bounded to
+storage, which a reload keeps). With the Navigation API, the document once the load returns and once
+the wait ends must both be the first, so a full load at any moment after the case's own, even one
+before Playwright's load returns, fails it. The init script and its count are removed however the case ends, each bounded to
 five seconds. The check that a page waiting for a write stops once it no longer asks, after a full
 load, marks each answer to a load or read of the receipt with its place, and answers its first load
 still saving whatever the store says by then, as the place case's is, so a write that landed before
