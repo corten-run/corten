@@ -253,8 +253,9 @@ struct Written {
     replayed: bool,
 }
 
-/// `n` listings get a new market low, committed as one patch. Send an `Idempotency-Key` header and
-/// a retry of the same request commits at most once; a key another seller's write used is a 422.
+/// `n` listings get a new market low, committed as one patch. Send an `Idempotency-Key` header and,
+/// while the store keeps the key, a retry of the same request commits at most once and a key another
+/// seller's write used is a 422.
 async fn market(
     State(pool): State<PgPool>,
     State(market): State<Market>,

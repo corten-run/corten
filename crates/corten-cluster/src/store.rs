@@ -137,11 +137,11 @@ pub enum Begin {
 }
 
 /// Starts a write to feed `key`. With an idempotency key (from the client, one per user intent),
-/// a retry of a write that already committed gets [`Begin::Done`] instead of writing twice, and
-/// a retry that races the original waits for it. An idempotency key is unique across the whole
-/// cluster store, not per feed: while it is kept (until [`prune`] drops it), one already used for
-/// a write to another feed is [`IdempotencyKeyReused`](crate::IdempotencyKeyReused) and nothing is
-/// written. A feed key that breaks Corten's subject rules is
+/// a retry that races the original waits for it, and while the store keeps the key (until
+/// [`prune`] drops it) a retry of a write that already committed gets [`Begin::Done`] instead of
+/// writing twice. An idempotency key is unique across the whole cluster store, not per feed: while
+/// it is kept, one already used for a write to another feed is
+/// [`IdempotencyKeyReused`](crate::IdempotencyKeyReused) and nothing is written. A feed key that breaks Corten's subject rules is
 /// [`InvalidFeedKey`](crate::InvalidFeedKey), refused before a transaction starts.
 pub async fn begin(pool: &PgPool, key: &str, idempotency_key: Option<&str>) -> Result<Begin, Error> {
     check_key(key)?;
