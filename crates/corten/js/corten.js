@@ -1996,9 +1996,10 @@ function drawLayout(old, fresh, before, said, inside = false) {
  * @param {boolean} own the write's own answer, not a page at an address
  * @param {Covers} covers the writes whose change to the layout the page draws
  * @param {string} [drew] the address a navigation drew the page for ({@link swapPage})
+ * @param {() => boolean} [here] a read draws only while it is still to be drawn ({@link pressed})
  * @returns {Promise<boolean>}
  */
-async function swapDocument(html, signal, notice, again, stay, own, covers, drew) {
+async function swapDocument(html, signal, notice, again, stay, own, covers, drew, here) {
   const doc = new DOMParser().parseFromString(trustedHTML(html), "text/html");
   // Parsed with scripting off, as `parse` does, so a `<noscript>`'s content would be live.
   for (const noscript of Array.from(doc.querySelectorAll("noscript"))) noscript.replaceChildren();
@@ -2043,7 +2044,7 @@ async function swapDocument(html, signal, notice, again, stay, own, covers, drew
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
   content.append(...head, ...parts, ...Array.from(childNodesOf(main)));
-  const swappedIn = await swapPage(text, signal, stay, notice, layout, content, again, drew);
+  const swappedIn = await swapPage(text, signal, stay, notice, layout, content, again, drew, here);
   // The layout not drawn, the write's own page among the writes it has not drawn: the next
   // navigation reads the page whole, as after a write that redirected.
   if (swappedIn && layout) swappedWhole = text;
@@ -2655,21 +2656,39 @@ let entrySeen = where();
  */
 let moves = 0;
 /**
+ * Without the Navigation API, whether the runtime counted a change of the address in this task
+ * ({@link look}): as a press a page's `popstate` listener heard before the runtime's makes does.
+ */
+let counted = false;
+/**
  * Looks at the entry on screen: as a press reads it, as its answer draws, and on every move the
  * browser says it made (`currententrychange`, else `popstate`), so a move there and back is counted
  * twice. The entry has changed before the browser says so to any page's listener, so a press made
  * in a listener heard before the runtime's is counted on the entry it is made on.
  */
-const look = () => void (where() !== entrySeen && ((entrySeen = where()), (moves += 1)));
+const look = () => {
+  if (where() === entrySeen) return;
+  entrySeen = where();
+  moves += 1;
+  if (!navigation) (counted = true), setTimeout(() => (counted = false));
+};
 /**
  * How many times the Navigation API said another entry took the screen or the entry was replaced:
  * not a change of its state alone (`updateCurrentEntry`, whose `navigationType` is null), which
- * keeps the entry.
+ * keeps the entry and is counted on its own ({@link writes}). The last one's `navigationType` is
+ * {@link changed}.
  */
 let changes = 0;
+/** How many times the Navigation API said only the entry's state changed ({@link changes}). */
+let writes = 0;
+/** The `navigationType` of the last change {@link changes} counted. @type {NavigationType | undefined} */
+let changed;
 navigation
-  ? navigation.addEventListener("currententrychange", (event) => (event.navigationType !== null && (changes += 1), look()))
-  : addEventListener("popstate", look);
+  ? navigation.addEventListener("currententrychange", (event) => (event.navigationType === null ? (writes += 1) : ((changes += 1), (changed = event.navigationType)), look()))
+  : // Every `popstate` the browser fires is a move, its address changed or not (Back between two
+    // entries of one address, each with a null state), counted once: not again where its change of
+    // address was counted in this task, as a press in a listener heard before the runtime's counts it.
+    addEventListener("popstate", (event) => event.isTrusted && (look(), counted ? (counted = false) : (moves += 1)));
 /**
  * The history entry on screen and the page on it, by the moves since the page loaded
  * ({@link moves}). A page drawn in place on the entry (a form's answer, the page reading itself
@@ -3369,15 +3388,16 @@ function pressed(form) {
 const settled = (press) => void (press?.id && presses.get(press.id) === press && presses.delete(press.id));
 
 /**
- * Whether a read of `press` is still to be sent or drawn: until it draws, only while it is the
- * latest press of a form with its id (a newer one, of this form or the one drawn in its place,
- * drops it wherever it is), not once it is `drawing`, which a press its draw makes (a
- * `connectedCallback`) does not stop. A `data-address` form's only on the entry and page it was
- * pressed on and while no visit of the runtime's is on its way, whose navigation its replace would
- * cancel: never one pressed while a visit is on its way, for the page it leaves.
+ * Whether a read of `press` is still to be sent or drawn: always for one of a form without the
+ * mark (or without an id), as before the mark. A `data-address` form's, until it draws, only while
+ * it is the latest press of a form with its id (a newer one, of this form or the one drawn in its
+ * place, marked or not, drops it wherever it is), not once it is `drawing`, which a press its draw
+ * makes (a `connectedCallback`) does not stop; and only on the entry and page it was pressed on
+ * and while no visit of the runtime's is on its way, whose navigation its replace would cancel:
+ * never one pressed while a visit is on its way, for the page it leaves.
  * @param {Press} press @param {boolean} [drawing]
  */
-const standing = (press, drawing) => (drawing || !press.id || presses.get(press.id) === press) && (press.at === undefined || (!reading.size && press.at === entry()));
+const standing = (press, drawing) => press.at === undefined || ((drawing || presses.get(/** @type {string} */ (press.id)) === press) && !reading.size && press.at === entry());
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
 const DRAWS_WHOLE = "corten-draws=whole";
@@ -3486,8 +3506,9 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   }
   // The same read as one on its way is that one, which this press takes over while no answer has
   // come: it is drawn as this press's, on the entry this press is on. Once one has come, what may be
-  // drawing keeps its own press, and this one is sent anew.
-  if (previous?.key === key && !previous.answered) {
+  // drawing keeps its own press, and a marked form's press is sent anew; an unmarked one's is that
+  // read still, as before the mark.
+  if (previous?.key === key && (!previous.answered || read?.at === undefined)) {
     // The press it took over from draws nothing now: let go, as its form's id may have changed since.
     if (previous.here !== read) settled(previous.here);
     return void (previous.here = read ?? undefined);
@@ -3523,8 +3544,10 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // an HTTP preference (RFC 7240): a runtime from before gets `<main>`, and a server from before
   // ignores a preference it does not know.
   const init = { method, headers: { corten: "action", prefer: DRAWS_WHOLE }, signal };
-  // The query as the browser's own GET writes it, `?` kept for none (Chromium's `search` setter drops it).
-  if (method === "GET") url.href = `${url.href.replace(/[?#].*/, "")}?${fields}${url.href.replace(/^[^#]*/, "")}`;
+  // A marked form's query as the browser's own GET writes it, `?` kept for none (the `search`
+  // setter drops it), for the address its answer puts in.
+  if (method === "GET")
+    read?.at === undefined ? (url.search = `${fields}`) : (url.href = `${url.href.replace(/[?#].*/, "")}?${fields}${url.href.replace(/^[^#]*/, "")}`);
   else if (sends.enctype === "multipart/form-data") init.body = data;
   else {
     // The browser's content types, which name no charset (fetch adds one to a URLSearchParams).
@@ -3652,7 +3675,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // `history.state`, and the Navigation API's own (`getState()`), which `replaceState`
           // drops, put back once the address is in. One the runtime cannot read leaves the address.
           // It is read before everything above is checked, so what runs as it is read (a page's
-          // own `getState`, which can move or replace the entry) is checked too.
+          // own `getState`, which can move or replace the entry) is checked too. Each state put in
+          // the entry from then on is counted ({@link writes}), and is the page's.
           /** @type {unknown} */
           let state;
           try {
@@ -3660,10 +3684,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           } catch {
             return;
           }
+          const wrote = writes;
           const transition = navigation?.transition;
           if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
           const before = exact();
           const seen = changes;
+          const key = where();
           try {
             history.replaceState(history.state, "", to);
           } catch {
@@ -3676,22 +3702,23 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           if (location.href !== to) return;
           // The entry the answer was drawn on, at its new address, by this replace.
           entrySeen = where();
-          // What it left, for a press this draw made: only when the Navigation API saw no other
-          // change of the entry inside the call (a listener's own `replaceState`), which would
-          // be another's replace. A state a listener puts in the entry there changes no entry.
-          const alone = !navigation || changes === seen + 1;
+          // What it left, for a press this draw made: only when the Navigation API saw one change
+          // of the entry inside the call, a replace that kept its key (not a listener's own
+          // `replaceState` there, another's replace, nor a push a `navigate` listener made in its
+          // place to the same address). A state a listener puts in the entry there changes no entry.
+          const alone = !navigation || (changes === seen + 1 && changed === "replace" && where() === key);
           if (alone) {
             draw.found = before;
             draw.left = exact();
           }
           // Its Navigation API state, back in the entry this replace made (`updateCurrentEntry`
           // keeps its key and id, adding no entry and beginning no navigation). Not in one a
-          // listener replaced inside the call, which is that listener's, nor over a state a
-          // listener put in it there (the entry no longer has none, as the replace left it), nor
-          // in another entry that reading it made the screen's.
-          if (alone && state !== undefined)
+          // listener replaced or pushed inside the call, which is that listener's, nor once a
+          // listener has put a state in the entry since the runtime read it (one cleared included),
+          // which is newer.
+          if (alone && state !== undefined && writes === wrote)
             try {
-              if (navigation?.currentEntry?.getState() === undefined && unreplaced(draw.left)) navigation?.updateCurrentEntry({ state });
+              navigation?.updateCurrentEntry({ state });
             } catch {
               // A document no longer fully active, or a state the runtime cannot read: it is left.
             }
@@ -3702,8 +3729,6 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       }
       if (res.headers.has("corten-patch")) {
         await apply(body, signal, sent, res.ok, undefined, undefined, within, here, done);
-        // Dropped, the visit left while it waited for its modules, or left as it drew: nothing more.
-        if (!here()) return;
         // In: what it drew is current until a page made before it is drawn over it.
         if (!signal.aborted) undrawn.delete(write);
       } else {
@@ -3711,11 +3736,14 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
         // A page: a `GET` form's is `<main>` alone (`corten-page`), as a navigation's is. A write's
         // own page is whole, as the page a write redirects to is, so what the write changed around
         // `<main>` (a count the layout reads) is drawn as a browser without JavaScript draws it.
+        // Its notice is said unless it was dropped (one loaded in full instead is said too).
         if (res.headers.has("corten-page")) {
-          if (!(await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, here, done)) && pending.here) return;
-          announce(notice);
-        } else if (await swapDocument(body, signal, notice, false, false, true, { through, write })) announce(notice);
+          if ((await swapPage(body, signal, false, notice, null, undefined, undefined, undefined, here, done)) || here()) announce(notice);
+        } else if (await swapDocument(body, signal, notice, false, false, true, { through, write }, undefined, here)) announce(notice);
       }
+      // Dropped, the visit left while it waited for its modules or stylesheets, or left as it
+      // drew: nothing more.
+      if (!here()) return;
       signal.throwIfAborted();
       if (!write && pending.n) failedWrite(pending.n);
       if (res.status === 422) focusInvalid(form);

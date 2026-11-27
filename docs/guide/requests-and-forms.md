@@ -2242,8 +2242,12 @@ redirect the address can differ from the one the form reaches without JavaScript
 fragment, and is followed as a navigation (below). No entry is added: Back goes to the page before the screen,
 not to the scope before this one, as after `history.replaceState`. The entry keeps its state: its
 `history.state`, and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
-puts back on the entry once the address is in, unless a script put a state of its own in the entry as
-the address went in (in a `currententrychange` listener), which stays. A reload, a bookmark and a shared link then
+puts back on the entry once the address is in, unless a script put a state of its own in the entry, or
+cleared it, as the address went in (in a `navigate` listener before the replace, or a
+`currententrychange` listener), which stays; it puts none on an entry a script's `navigate` listener
+pushed in place of its replace. It trusts the page's own `getState` and history methods to report
+what they did, and does not guard against a script that deliberately cancels or rewrites its own
+history call. A reload, a bookmark and a shared link then
 reach what the screen shows, and a form that posts without an `action` sends to it. Only an
 answer that draws whole moves the address: a 204, an empty patch, a patch with an element that
 finds no place and a 5xx (which may still draw) leave it, while removing an element the page no
@@ -2279,7 +2283,9 @@ address and `history.state`, compared as `Object.is` does), and the answer puts 
 only if the entry is still that one; it is drawn under the address the entry has, which an older
 answer does not take back. So of two marked forms pressed before either answers, the first answer
 puts its address in and the second leaves it. (Without the Navigation API, a `replaceState` to
-another address is a move to another entry, and the answer draws nothing.) The runtime
+another address is a move to another entry, and the answer draws nothing; so is Back or Forward,
+between two entries of one address too, while a script's `pushState` to the same address is not
+seen.) The runtime
 never reads the page again to repair the address. So a replace the browser refuses, with an
 exception (WebKit past its limit of history updates) or without a word (Chromium past its limit),
 leaves the answer drawn under the entry's address, and so does one a script's `navigate` listener
@@ -2292,8 +2298,8 @@ newer press drops; and a post that waited, sent from a form the answer draws wit
 `method="get"`, is a GET, sent and drawn, with its address, only on the page and entry it was
 pressed on, as any press of the marked form; one pressed on a form without the mark draws but never moves the
 address. A newer press
-of the form, or of the one a patch drew in its place (found by the form's id), drops an older
-GET wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
+of the form, or of the one a patch drew in its place (found by the form's id, marked or not), drops an older
+GET of a marked form wherever it is: on its way, waiting for a Save, or about to be sent once the Save's answer is
 drawn, and a GET a `formdata` listener made stale is not sent at all, nor one the page's code
 made stale as the runtime marked the form busy (a customized button's
 `attributeChangedCallback` that moves the page), nor one pressed as a visit marks its link busy or, abandoned, clears that mark. Presses count as the
@@ -2304,7 +2310,11 @@ drawn with its address; once an answer is drawing, a press its draw makes (an el
 into, so that press's own answer, drawn, puts its address in over it; and pressing for the same scope again
 while its GET is on its way, before its answer has come, takes that GET over, whose answer then
 draws even if the page moved to another `#id` meanwhile (once the answer has come, or a
-navigation aborted the GET, the press sends its own). Give the form a
+navigation aborted the GET, the press sends its own). A form without the mark sends its GETs as
+before the mark: pressing for the same scope again
+while its GET is on its way sends nothing more, even once its answer is drawing, a submit that
+sends no field asks with no `?`, and a page answer it cannot draw in place loads the page in full
+and still says its notice. Give the form a
 `#[derive(Id)]` id, as below: `html!` refuses the mark on a form without one, and the runtime
 leaves the address for a press of a marked form that has none (a spread that writes none), whose
 presses it cannot tell apart. Two marked forms are not ordered against each other: their answers

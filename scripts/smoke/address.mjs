@@ -447,9 +447,9 @@ export async function dataAddress(browser) {
       browserGet.at === "/smoke/address?#" && browserGet.shown === "all" && runtimeGet.at === browserGet.at && runtimeGet.shown === "all",
       JSON.stringify({ browserGet, runtimeGet }),
     );
-    // So for a form without the mark: the browser's own GET of a submit with no field asks for the
-    // action with an empty query, `?` and all, and so does the runtime's request for its patch,
-    // which leaves the address.
+    // A form without the mark is as it was before the mark: the browser's own GET of a submit with
+    // no field asks for the action with an empty query, `?` and all, while the runtime's request for
+    // its patch asks for the action with no query, and leaves the address.
     const unmarkedAsked = async (/** @type {import("@playwright/test").Page} */ page, /** @type {boolean} */ script) => {
       await page.goto(home);
       await page.evaluate(() => document.querySelector('main form:not([id]) button[value="year"]')?.removeAttribute("name"));
@@ -470,8 +470,8 @@ export async function dataAddress(browser) {
     const runtimeAsked = await unmarkedAsked(scriptedUnmarked, true);
     await scriptedUnmarked.close();
     check(
-      "a form without the mark whose submit sends no field asks for its action with the empty query the browser's own GET sends, and leaves the address",
-      browserAsked.target === "/smoke/address?" && browserAsked.at === "/smoke/address?" && runtimeAsked.target === browserAsked.target && runtimeAsked.at === "/smoke/address",
+      "a form without the mark whose submit sends no field asks for its action with no query, as before the mark, and leaves the address",
+      browserAsked.target === "/smoke/address?" && browserAsked.at === "/smoke/address?" && runtimeAsked.target === "/smoke/address" && runtimeAsked.at === "/smoke/address",
       JSON.stringify({ browserAsked, runtimeAsked }),
     );
     await noScript.close();
@@ -509,6 +509,14 @@ export async function dataAddress(browser) {
       "without the Navigation API a marked patch on its way while Back and Forward go to another #id of the page and back draws nothing",
       trip.out && trip.trip.join() === ",#smoke-address" && trip.done && trip.at === "#smoke-address" && trip.shown === "all",
       JSON.stringify(trip),
+    );
+    // Back between two entries of one address, each with a null state (a script's `pushState` to
+    // the address it is at), is a move all the same: the browser fires `popstate`.
+    const sameBack = await sameAddressBack(plain);
+    check(
+      "without the Navigation API a marked patch on its way while Back goes to another entry of the same address and state draws nothing",
+      sameBack.out && sameBack.popped && sameBack.done && sameBack.at === "" && sameBack.shown === "all",
+      JSON.stringify(sameBack),
     );
     const hashed = await hashThenPress(plain);
     check(
@@ -656,6 +664,34 @@ export async function dataAddress(browser) {
         kept.api === !plain && kept.drawn && kept.at === "?scope=week" && kept.added === 0 && kept.state === '{"page":"own"}' &&
           (plain || (kept.sameKey && kept.navState === '{"draft":"unsaved"}' && kept.navigates.join() === "replace" && kept.changes.join() === "replace,null" && !kept.transition)),
         JSON.stringify(kept),
+      );
+  }
+  // A page's listener that, as the runtime puts the address in, cancels its replace and pushes an
+  // entry to the same address in its place (`push`): that entry is another, which keeps no state of
+  // the runtime's, and the entry Week was pressed on keeps its own. One that clears the entry's
+  // state inside the replace (`clear`), and one that puts a state in the entry before the replace
+  // commits (`precommit`), have put a state in it since the runtime read it: the runtime puts the
+  // older one back over neither.
+  for (const how of /** @type {const} */ (["push", "clear", "precommit"])) {
+    const name =
+      how === "push"
+        ? "a marked patch whose replacement a navigate listener cancels for a push to the same address puts the entry's state on neither entry, and the entry it was pressed on keeps it"
+        : how === "clear"
+          ? "a marked patch whose replace a currententrychange listener clears the entry's state in keeps that cleared state"
+          : "a marked patch whose replacement a navigate listener puts a state in the entry for, before it commits, does not put the older state back";
+    const wrote = await stateWrites(browser, how, errors);
+    if (!wrote) skip(name, "no Navigation API");
+    else if (typeof wrote.wrote === "string") skip(name, `updateCurrentEntry refuses an undefined state (${wrote.wrote})`);
+    else
+      check(
+        name,
+        wrote.wrote && wrote.drawn && wrote.at === "?scope=week" &&
+          (how === "push"
+            ? wrote.added === 1 && wrote.navState === "null" && wrote.before === '{"draft":"unsaved"}'
+            : how === "clear"
+              ? wrote.added === 0 && wrote.navState === "null"
+              : wrote.added === 0 && wrote.navState !== '{"draft":"unsaved"}'),
+        JSON.stringify(wrote),
       );
   }
   const kept = await pressesKept(browser);
@@ -1482,6 +1518,34 @@ async function markedPatchVisits(browser, errors) {
     JSON.stringify({ pageHeaders, pageDone, pageStart, pageEnd }),
   );
 
+  // A page answer to a form without the mark that cannot be drawn in place (a stylesheet it links
+  // fails to load) loads the page in full instead, and its notice is said as the runtime gives the
+  // swap up, as before the mark.
+  await page.goto(home);
+  await page.evaluate(() => {
+    document.getElementById("smoke-address-form")?.removeAttribute("data-address");
+    sessionStorage.removeItem("smoke-notice-said");
+    document.addEventListener("corten:notice", (event) => sessionStorage.setItem("smoke-notice-said", /** @type {CustomEvent} */ (event).detail.message));
+  });
+  const missingStyle = `${base}/smoke/address-missing.css`;
+  await page.route(missingStyle, (route) => route.fulfill({ status: 404, body: "" }));
+  await page.route(week, (route) =>
+    route.request().headers()["corten"] === "action"
+      ? route.fulfill({ headers: { ...pageHeaders, "corten-notice": "m=Saved" }, body: `<link rel="stylesheet" data-corten-style href="${missingStyle}">${weekMarkup}` })
+      : route.continue(),
+  );
+  const noticeLoad = page.waitForEvent("load", { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const noticeLoaded = await noticeLoad;
+  await page.unroute(week);
+  await page.unroute(missingStyle);
+  const noticeSaid = await page.evaluate(() => sessionStorage.getItem("smoke-notice-said"));
+  check(
+    "a page answer to a form without the mark that loads the page in full instead says its notice, as before the mark",
+    noticeLoaded && noticeSaid === "Saved",
+    JSON.stringify({ noticeLoaded, noticeSaid }),
+  );
+
   const failed = await patch(500, '<section id="smoke-address"><output>Failed</output></section>');
   const invalid = await patch(422, '<section id="smoke-address"><output>Invalid</output></section>');
   check(
@@ -1577,6 +1641,83 @@ async function markedPatchVisits(browser, errors) {
     "a press of a marked form the same as a read whose answer is already drawing sends its own read, and that answer is drawn and puts its address in the entry",
     styleWaits && drawingHash === "#smoke-address" && drawingDrawn && drawingEnd.answers === 2 && drawingEnd.at === "?scope=week" && drawingEnd.shown === "week 2",
     JSON.stringify({ styleWaits, drawingHash, drawingDrawn, drawingEnd }),
+  );
+
+  // The same for a form without the mark, as before the mark: the second press is the read whose
+  // answer is drawing, and nothing more is sent.
+  await page.goto(home);
+  await page.evaluate(() => document.getElementById("smoke-address-form")?.removeAttribute("data-address"));
+  const plainStyle = `${base}/smoke/address-held-unmarked.css`;
+  /** @type {() => void} */
+  let releasePlain = () => {};
+  const plainHeld = new Promise((resolve) => (releasePlain = () => resolve(undefined)));
+  let plainAnswers = 0;
+  await page.route(plainStyle, async (route) => {
+    await plainHeld;
+    await route.fulfill({ headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+  });
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    plainAnswers += 1;
+    await route.fulfill({
+      headers: { "corten-patch": "1", "content-type": "text/html" },
+      body: `<link rel="stylesheet" data-corten-style href="${plainStyle}"><section id="smoke-address"><output>week ${plainAnswers}</output></section>`,
+    });
+  });
+  const plainAsked = page.waitForRequest(plainStyle, { timeout: 5000 }).then(() => true, () => false);
+  await press("Week");
+  const plainWaits = await plainAsked;
+  await press("Week");
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  releasePlain();
+  const plainDrawn = await wait(() => document.querySelector("#smoke-address output")?.textContent?.startsWith("week"));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(week);
+  await page.unroute(plainStyle);
+  const plainEnd = { answers: plainAnswers, ...(await state()) };
+  check(
+    "a press of a form without the mark the same as a read whose answer is already drawing sends nothing more, as before the mark",
+    plainWaits && plainDrawn && plainEnd.answers === 1 && plainEnd.at === "" && plainEnd.shown === "week 1",
+    JSON.stringify({ plainWaits, plainDrawn, plainEnd }),
+  );
+
+  // Week's answer is the whole page (`corten-shell`, as a write's own page is), and waits for a
+  // stylesheet it links (held here) before it draws when the page moves to an #id of it: the
+  // press was made on the entry the page left, so the answer draws nothing on the one it is on.
+  await page.goto(home);
+  const wholeStyle = `${base}/smoke/address-held-whole.css`;
+  /** @type {() => void} */
+  let releaseWhole = () => {};
+  const wholeHeld = new Promise((resolve) => (releaseWhole = () => resolve(undefined)));
+  await page.route(wholeStyle, async (route) => {
+    await wholeHeld;
+    await route.fulfill({ headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+  });
+  const wholePage = await fetch(week);
+  const wholeHeaders = Object.fromEntries(["corten-shell", "content-type"].flatMap((name) => (wholePage.headers.has(name) ? [[name, wholePage.headers.get(name) ?? ""]] : [])));
+  const wholeMarkup = (await wholePage.text()).replace("</head>", `<link rel="stylesheet" data-corten-style href="${wholeStyle}"></head>`);
+  await page.route(week, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill({ headers: wholeHeaders, body: wholeMarkup }) : route.continue()));
+  const wholeAsked = page.waitForRequest(wholeStyle, { timeout: 5000 }).then(() => true, () => false);
+  await trackForm();
+  await press("Week");
+  const wholeWaits = await wholeAsked;
+  const wholeHash = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        addEventListener("hashchange", () => resolve(location.hash), { once: true });
+        location.hash = "smoke-address";
+      }),
+  );
+  releaseWhole();
+  const wholeDone = await finished();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 300)));
+  await page.unroute(week);
+  await page.unroute(wholeStyle);
+  const wholeEnd = await state();
+  check(
+    "a marked GET answered with the whole page that waits for a stylesheet as the page moves to an #id of it draws nothing on the entry it moved to",
+    "corten-shell" in wholeHeaders && wholeWaits && wholeHash === "#smoke-address" && wholeDone && wholeEnd.at === "" && wholeEnd.shown === "all",
+    JSON.stringify({ wholeHeaders, wholeWaits, wholeHash, wholeDone, wholeEnd }),
   );
 
   // A `formdata` listener of the page that, as Week's press reads the form, draws the form again
@@ -3121,4 +3262,113 @@ async function fragmentRoundTrip(page) {
   await page.unroute(week);
   const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
   return { out, trip, done, ...end };
+}
+
+/**
+ * Pushes an entry of the page at the address it is at, with a null state, as a script can, then
+ * presses Week, held, and goes Back to the entry before, which has the same address and state;
+ * then lets Week's answer come. Says whether Week was sent, whether Back fired `popstate`, whether
+ * the submit ended, and where the page is and what it shows then.
+ * @param {import("@playwright/test").Page} page
+ */
+async function sameAddressBack(page) {
+  const week = `${base}/smoke/address?scope=week`;
+  await page.goto(`${base}/smoke/address`);
+  await page.evaluate(() => history.pushState(null, "", location.href));
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => (release = () => resolve(undefined)));
+  await page.route(week, async (route) => {
+    if (route.request().headers()["corten"] !== "action") return route.continue();
+    await held;
+    await route.continue().catch(() => {});
+  });
+  const sent = page.waitForRequest((r) => r.url() === week && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+  await page.evaluate(() => Object.assign(window, { __form: document.getElementById("smoke-address-form") }));
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const out = await sent;
+  const popped = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        addEventListener("popstate", () => resolve(true), { once: true });
+        history.back();
+      }),
+  );
+  release();
+  const done = await page
+    .waitForFunction(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  await page.unroute(week);
+  const end = await page.evaluate(() => ({ at: location.search + location.hash, shown: document.querySelector("#smoke-address output")?.textContent }));
+  return { out, popped, done, ...end };
+}
+
+/**
+ * Presses Week once the entry holds a Navigation API state of the page's, with a listener of the
+ * page that, as the runtime puts Week's address in, does as `how` says: "push" cancels the
+ * runtime's replace (`navigate`) and pushes an entry to the same address in its place; "clear"
+ * clears the state of the entry the replace made (`currententrychange`, `updateCurrentEntry`);
+ * "precommit" puts a state in the entry before the replace commits (`navigate`). Says whether the
+ * listener ran, whether Week's answer drew, where the page is, the entries added, and the states
+ * of the screen's entry and of the entry Week was pressed on. Null without the Navigation API.
+ * @param {import("@playwright/test").Browser} browser @param {"push" | "clear" | "precommit"} how @param {string[]} errors
+ */
+async function stateWrites(browser, how, errors) {
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => errors.push(`state writes ${how}: ${e.message}`));
+  await page.goto(`${base}/smoke/address`);
+  const first = await page.evaluate((how) => {
+    const w = /** @type {any} */ (window);
+    const nav = w.navigation;
+    if (!nav) return null;
+    nav.updateCurrentEntry({ state: { draft: "unsaved" } });
+    Object.assign(window, { __wrote: false, __pressedOn: nav.currentEntry });
+    const week = (/** @type {string} */ url) => new URL(url).search === "?scope=week";
+    if (how === "clear")
+      nav.addEventListener("currententrychange", (/** @type {any} */ event) => {
+        if (w.__wrote || event.navigationType !== "replace" || !week(location.href)) return;
+        // Chromium refuses an undefined state (a required member).
+        try {
+          nav.updateCurrentEntry({ state: undefined });
+          w.__wrote = true;
+        } catch (/** @type {any} */ error) {
+          w.__wrote = error.name;
+        }
+      });
+    else
+      nav.addEventListener("navigate", (/** @type {any} */ event) => {
+        if (w.__wrote || event.navigationType !== "replace" || !week(event.destination.url)) return;
+        w.__wrote = true;
+        if (how === "precommit") return void nav.updateCurrentEntry({ state: "listener" });
+        event.preventDefault();
+        history.pushState(null, "", event.destination.url);
+      });
+    return { length: history.length };
+  }, how);
+  if (!first) {
+    await page.close();
+    return null;
+  }
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(
+      () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+      undefined,
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  const end = await page.evaluate((first) => {
+    const w = /** @type {any} */ (window);
+    return {
+      wrote: w.__wrote,
+      at: location.search,
+      added: history.length - first.length,
+      navState: JSON.stringify(w.navigation.currentEntry.getState() ?? null),
+      before: JSON.stringify(w.__pressedOn.getState() ?? null),
+    };
+  }, first);
+  await page.close();
+  return { drawn, ...end };
 }
