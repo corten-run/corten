@@ -2298,9 +2298,13 @@ cancels: that script has taken the address over, so it puts the address it means
 begins the navigation it means, which the runtime leaves to finish. A listener that holds the
 replace before its address goes in (`precommitHandler`), or begins a navigation in its place,
 leaves a navigation on its way that may yet put the address in: until it ends, a press of a
-marked form is not sent, as one pressed while a visit is on its way, so nothing is drawn under
-that address. The runtime neither aborts that navigation nor puts the Navigation API state back
-when it commits. A GET pressed
+marked form is not sent, as one pressed while a visit is on its way, and an answer already on its
+way (to a press the held answer's own draw made) draws nothing, as one does that would draw while a
+visit is on its way, so nothing is drawn under that address. It ends when the browser says the
+navigation finished, was aborted or gave way to another (`navigation.transition` no longer shows
+it), not when its address goes in, so a listener whose handler never settles keeps every press of
+a marked form from being sent until another navigation takes its place. The runtime neither aborts that
+navigation nor puts the Navigation API state back when it commits. A GET pressed
 while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer, as
 any submit of the form does, and is sent only if the user is still on that page; if the Save's
 answer draws the form with `method="post"`, the GET is sent from it as a post, a write, which no

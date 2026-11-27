@@ -3379,12 +3379,28 @@ const presses = new Map();
 /**
  * The navigation a page's `navigate` listener holds the runtime's own replace in before its address
  * goes in (`precommitHandler`), or one it began in that replace's place: while the browser shows it
- * on its way, a marked press is for the page it may yet change, and is taken as one made while a
- * visit is on its way ({@link pressed}), never sent, so nothing is drawn under the address it may
- * put in.
+ * on its way ({@link holding}), a marked press is for the page it may yet change, and is taken as
+ * one made while a visit is on its way ({@link pressed}), never sent, and a marked answer already
+ * on its way draws nothing ({@link standing}), so nothing is drawn under the address it may put in.
  * @type {NavigationTransition | null | undefined}
  */
 let held;
+
+/**
+ * The press whose answer's replace is held ({@link held}), set with it: that answer has drawn, and
+ * goes on as any drawn answer does.
+ * @type {Press | undefined}
+ */
+let heldFor;
+
+/**
+ * Whether the browser still shows the navigation that holds the runtime's replace ({@link held}),
+ * for any press but the one whose answer it holds ({@link heldFor}): until that navigation
+ * finishes, is aborted or another takes its place, not merely until it commits, so a page's handler
+ * that never settles holds it for good.
+ * @param {Press} [press]
+ */
+const holding = (press) => !!held && held === navigation?.transition && press !== heldFor;
 
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
@@ -3408,7 +3424,7 @@ let held;
 function pressed(form) {
   const id = idOf(form);
   const marked = id && hasAttr(form, "data-address");
-  const press = marked ? { id, at: reading.size || (held && held === navigation?.transition) ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
+  const press = marked ? { id, at: reading.size || holding() ? null : entry(), seen: exact(), by: drawingFor, t: performance.now() } : { id };
   if (id) presses.set(id, press);
   return press;
 }
@@ -3428,10 +3444,13 @@ const settled = (press) => void (press?.id && presses.get(press.id) === press &&
  * makes (a `connectedCallback`) does not stop; and only on the entry and page it was pressed on
  * and while no visit of the runtime's is on its way, whose navigation its replace would cancel:
  * never one pressed while a visit is on its way, for the page it leaves, or while a page's listener
- * holds the runtime's replace ({@link held}).
+ * holds the runtime's replace ({@link held}); nor one that would draw while that replace is held,
+ * though pressed before (a press the held answer's own draw made), as one that would draw while a
+ * visit is on its way does not.
  * @param {Press} press @param {boolean} [drawing]
  */
-const standing = (press, drawing) => press.at === undefined || ((drawing || presses.get(/** @type {string} */ (press.id)) === press) && !reading.size && press.at === entry());
+const standing = (press, drawing) =>
+  press.at === undefined || ((drawing || presses.get(/** @type {string} */ (press.id)) === press) && !reading.size && !holding(press) && press.at === entry());
 
 /** The preference (`Prefer`, RFC 7240) by which a submit says this runtime draws a write's own page whole. */
 const DRAWS_WHOLE = "corten-draws=whole";
@@ -3710,12 +3729,15 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // The entry's state is kept, as the browser's own GET leaves it with no new entry: its
           // `history.state`, and the Navigation API's own (`getState()`), which `replaceState`
           // drops, put back once the address is in. One the runtime cannot read leaves the address.
-          // It is read before everything above is checked, so what runs as it is read (a page's
-          // own `getState`, which can move or replace the entry) is checked too. Each state put in
-          // an entry from then on is counted on that entry ({@link writes}), and is the page's, newer,
-          // which is the one kept. The `history.state` it passes is a copy taken then too (which
-          // runs a getter of the page's on it), so the browser runs no page code as it takes it for
-          // the replace, after the checks.
+          // It is read once everything above has been checked, which reads no page code, so an
+          // answer that would leave the address copies nothing; and everything is checked again
+          // after it, so what runs as it is read (a page's own `getState`, which can move or replace
+          // the entry) is checked too. Each state put in an entry from then on is counted on that
+          // entry ({@link writes}), and is the page's, newer, which is the one kept. The
+          // `history.state` it passes is a copy taken then too (which runs a getter of the page's on
+          // it), so the browser runs no page code as it takes it for the replace, after the checks.
+          const goes = () => here(true) && to !== location.href && (!navigation?.transition || navigation.transition === readAgainTransition) && onEntry(pending.here);
+          if (!goes()) return;
           /** @type {unknown} */
           let state;
           /** @type {unknown} */
@@ -3729,7 +3751,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           }
           const wrote = written(old);
           const transition = navigation?.transition;
-          if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
+          if (!goes()) return;
           const before = exact();
           const seen = changes;
           const key = where();
@@ -3746,7 +3768,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // leaves a navigation on its way, which may yet put this address in: until it ends, no
           // marked press is sent ({@link held}), so no answer is drawn under it.
           if (location.href !== to) {
-            if (navigation?.transition && navigation.transition !== transition) held = navigation.transition;
+            if (navigation?.transition && navigation.transition !== transition) (held = navigation.transition), (heldFor = pending.here);
             return;
           }
           // The entry the answer was drawn on, at its new address, by this replace.
