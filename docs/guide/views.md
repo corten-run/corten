@@ -597,8 +597,9 @@ html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</
 
 A page that also answers at another address, such as an older one that stored links still carry,
 names it with `also`, a route or a `Local` as the entry is: `NavTo::page(&Settings).also(&Governance)`
-is current at `/governance` as at `/settings`, by the same rule and depth, and its link still goes to
-`/settings`. The other paths are written in `data-nav-also` as comparison keys, not as any one
+is current at `/governance` as at `/settings`, by the same rule, and its link still goes to
+`/settings`. The entry is as deep as the deepest of its addresses that holds the page, so an older
+address deeper than its own URL wins over an entry whose URL is between the two. The other paths are written in `data-nav-also` as comparison keys, not as any one
 engine spells them: the path `location.pathname` shows at that address, by the URL Standard (the
 query and fragment left out, the end trimmed, `.` and `..` segments resolved, and a space or a
 character beyond ASCII percent-encoded: `/old/./café ` as `/old/caf%C3%A9`), with the spellings

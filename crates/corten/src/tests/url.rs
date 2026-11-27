@@ -206,8 +206,8 @@ fn a_nav_marks_the_deepest_entry_that_holds_the_page() {
 }
 
 /// An entry whose page also answers at another address (an older one stored links still carry) is
-/// current there by the same rule and depth as at its own URL, its link still going to its own,
-/// and the other addresses name its group (#2119).
+/// current there by the same rule as at its own URL, its link still going to its own, and the
+/// other addresses name its group (#2119).
 #[test]
 fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
     use crate::{
@@ -603,6 +603,67 @@ fn a_url_is_its_own_key_only_when_the_key_is_the_url() {
         }
         assert_eq!(end.is_some(), own.contains(&url) || (typed.iter().any(|t| t == url) && !url.contains('%')), "{url:?}");
     }
+}
+
+/// A link of a nav with other addresses carries them in the group text it already writes, so a
+/// link of any nav is as large as before they existed: its URL, its group and three flags (#2119).
+#[test]
+fn a_nav_link_is_no_larger_than_before_other_addresses() {
+    assert_eq!(std::mem::size_of::<crate::page::NavLink<'_>>(), std::mem::size_of::<(&str, &str, [bool; 3])>());
+}
+
+/// An entry is as deep as the deepest of its addresses that holds the page, not as its own URL: an
+/// other address deeper than the entry's URL wins over an entry whose URL is between the two, and
+/// one shallower does not make it deeper (#2119).
+#[test]
+fn a_nav_entry_is_as_deep_as_the_address_that_holds_the_page() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    let catalog = Local::parse("/catalog").unwrap();
+    let integrations = Local::parse("/catalog/integrations").unwrap();
+    let legacy = Local::parse("/catalog/integrations/legacy").unwrap();
+    let old = Local::parse("/c").unwrap();
+    let marked = |path: &str, entries: [(NavTo<'_>, &'static str); 2]| {
+        nav_links(path, entries)
+            .links()
+            .filter(|(link, _)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                out.contains(r#" aria-current="page""#)
+            })
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>()
+    };
+    // `/catalog` (depth 8) holds the page at its other address (28), deeper than
+    // `/catalog/integrations` (21), in either order.
+    for path in ["/catalog/integrations/legacy", "/catalog/integrations/legacy/x"] {
+        let catalog = || (NavTo::section(&catalog).also(&legacy), "Catalog");
+        let integrations = || (NavTo::section(&integrations), "Integrations");
+        assert_eq!(marked(path, [catalog(), integrations()]), ["Catalog"], "{path}");
+        assert_eq!(marked(path, [integrations(), catalog()]), ["Catalog"], "{path}");
+    }
+    // Under the other entry but not under the deeper address, the other entry is deeper.
+    let path = "/catalog/integrations/x";
+    assert_eq!(
+        marked(path, [(NavTo::section(&catalog).also(&legacy), "Catalog"), (NavTo::section(&integrations), "Integrations")]),
+        ["Integrations"]
+    );
+    // A shallower other address (`/c`, 2) does not make the entry deeper than its own URL.
+    assert_eq!(
+        marked(path, [(NavTo::section(&catalog).also(&old), "Catalog"), (NavTo::section(&integrations), "Integrations")]),
+        ["Integrations"]
+    );
+    // Without the other address, the deeper URL wins at the older path.
+    assert_eq!(
+        marked(
+            "/catalog/integrations/legacy",
+            [(NavTo::section(&catalog), "Catalog"), (NavTo::section(&integrations), "Integrations")]
+        ),
+        ["Integrations"]
+    );
 }
 
 /// In a nav with other addresses the entries' own URLs are compared by the same key as the other
