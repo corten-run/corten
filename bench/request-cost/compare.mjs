@@ -39,7 +39,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { COUNTED, idleRise, median, sent } from "./figures.mjs";
+import { COUNTED, FLOOR_WORD, idleRise, median, sent } from "./figures.mjs";
 import { Answers, cases, unexpected } from "./requests.mjs";
 
 /** Idle readings taken on each build, and the counts of a case `count.mjs` takes in a run. */
@@ -261,7 +261,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
       return [what, whole(low), whole(high), signed(high - low), percent(low, high), "", shown(bases), shown(heads), "not decided"];
     }
     const { rise, allowed, rose } = decided;
-    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and four ${whole(/** @type {number} */ (pages[0]))}-byte pages)`);
+    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and ${FLOOR_WORD} ${whole(/** @type {number} */ (pages[0]))}-byte pages)`);
     return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
   });
 
@@ -334,7 +334,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory idle connections hold",
-    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and four pages.`,
+    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and ${FLOOR_WORD} pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
     "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
     ["```text", ...records, "```"].join("\n"),

@@ -84,8 +84,13 @@ export function held({ connections, before, after, closed, accepted }) {
  * The pages a rise of idle memory is allowed whatever base's runs span: the floor of the rule,
  * in pages of the size the runs were read in. It was one page, the least a reading can show,
  * until the maintainer raised it to four on 2026-11-27 (docs/design.md#choice-counted-or-measured).
+ * The ruling spoke of 16,384 bytes over 5,000 connections, which are four 4,096-byte pages; that
+ * it is four pages of whatever size the runs print is this rule's reading of it.
  */
 const FLOOR_PAGES = 4;
+
+/** The floor as the messages say it ("four"), so that their words follow `FLOOR_PAGES`. */
+export const FLOOR_WORD = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight"][FLOOR_PAGES] ?? String(FLOOR_PAGES);
 
 /**
  * Whether head's idle memory rose past base's, read from each run's growth of resident memory in
@@ -104,7 +109,7 @@ const FLOOR_PAGES = 4;
 export function idleRise({ base, head, page, connections }) {
   if (!Number.isSafeInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
   if (!Number.isSafeInteger(connections) || connections <= 0) throw new Error(`${connections} connections are not a count of them`);
-  if (connections < page) throw new Error(`not a gate reading: four ${page}-byte pages over ${connections} connections are more than four bytes a connection; open at least ${page}`);
+  if (connections < page) throw new Error(`not a gate reading: ${FLOOR_WORD} ${page}-byte pages over ${connections} connections are more than ${FLOOR_WORD} bytes a connection; open at least ${page}`);
   for (const [side, growths] of /** @type {const} */ ([["base", base], ["head", head]])) {
     if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
     for (const growth of growths) {
