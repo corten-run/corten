@@ -278,6 +278,10 @@ setup deadline remains active until both the bootstrap and observer are ready. R
 initial/final populated=0 and empty recursive membership must agree with terminal flags.
 Observations add driver work; they are not a claim of zero observer overhead or a benchmark
 timing result. Source-bound observation code is part of the campaign's evidence conditions.
+The [storage FIFO](host-lifetime.md#ordered-asynchronous-storage) can write already queued
+sample-only frames together (up to 16 frames and 256 KiB), without waiting to fill a batch.
+Record frames stay separate. Each frame still counts toward the queue bounds until its
+append finishes, and the append uses the existing storage deadline.
 
 The fresh IPC-gated bootstrap's real executable is hashed before the initial empty-scope
 sample. For commands using deferred hashing, attachment independently pins the live
