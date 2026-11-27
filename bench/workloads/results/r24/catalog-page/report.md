@@ -4,7 +4,8 @@ All seven contenders completed the official attempt. Five passed every timed pha
 
 Measured commit: `30b39d455ad4c9840e1a4206cbd716f519448f1a`.
 
-Per phase: duration 60 s; warmup 30 s; fixed rate 150 req/s; encoding identity.
+Each contender and source had one 30 s warmup per pass, followed by three 60 s
+phases: fixed rate (150 req/s), 64 users and 256 users. Encoding: identity.
 Started: 2026-11-21T12:29:09.247Z; finished: 2026-11-21T15:14:40.533Z.
 Fixture SHA-256: `f76eecaecb5af637b524d8f518e0341bde9bcbafd81e2ff14001972966fad8c5`.
 
@@ -122,7 +123,7 @@ with timeouts is shown and marked beside the affected phase.
 | drogon | 229 [226, 284] | 6.95 [6.94, 6.98] | 9.15 [8.71, 9.16] | 15.35 [14.25, 15.41] |
 | gin | 207 [199, 219] | 14.67 [14.59, 14.82] | 13.15 [12.91, 13.15] | 29.21 [29.10, 29.43] |
 
-## Corten efficiency
+## Corten efficiency at 64 users
 
 Median and [minimum, maximum] across available passes. Memory is each pass's peak sample under load; p95 is the median of per-pass p95s, not a pooled percentile.
 

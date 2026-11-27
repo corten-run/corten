@@ -273,7 +273,8 @@ before readiness/warmup, not process-exec or browser-interactive time.
 
 Round r24 is the lean catalog group of the workload-group campaign: Corten, ASP.NET Core,
 Express, FastAPI, axum + Maud, Drogon and Gin + templ, of which five passed every timed phase.
-Each phase ran 60s after 30s of warmup, with identity encoding. It is a saved measurement of
+For each contender and data source, each pass ran one 30s warmup followed by three 60s
+phases, with identity encoding. It is a saved measurement of
 r24's commit, not today's code, and a comparison within that group, not the historical
 twenty-app catalog baseline; it claims no change against an earlier round. Its ranges are the
 spread of three passes, not confidence intervals. At 256 users Corten's median stays ahead from
