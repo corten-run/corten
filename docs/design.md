@@ -11751,7 +11751,12 @@ rules something out.
     press refused as before. A page's `navigate` listener that cancels the runtime's replace and
     replaces the entry itself, to the same address, inside it, is taken for the runtime's replace;
     the address is then the one the runtime meant to put in, and the press's answer puts its own
-    in over it. So of two marked forms pressed before either
+    in over it. So is page code that replaces the entry to the same address inside the runtime's
+    replace and hides that from it (a `currententrychange` listener that replaces it with another
+    state and stops the nested event's propagation; without the Navigation API, a wrapper of
+    `history.replaceState` that replaces it again), and the press's answer then puts its address
+    in over the page's replace: the runtime does not defend against page code that hides history
+    events from it. So of two marked forms pressed before either
     answers, the answer that draws first puts its address in and the second leaves that address.
     Tracking which replaces were the runtime's would let the second move it too, but a listener
     that replaces the entry, or presses a form, inside the runtime's `replaceState` makes any such
@@ -11996,10 +12001,10 @@ rules something out.
       runtime makes that replace itself, in the task the press was made in, so it is the one
       replace it can tell is its own without tracking navigations.
 
-    What it costs: the runtime every page loads is 2,021 bytes larger raw (46,502 to 48,523), 835
-    with gzip (16,718 to 17,553) and 743 with brotli (15,106 to 15,849), paid once a release by
-    every user (267, 129 and 117 larger than the build before this one, which refused the answer
-    to a press an earlier marked answer's draw made). A
+    What it costs: the runtime every page loads is 2,061 bytes larger raw (46,502 to 48,563), 853
+    with gzip (16,718 to 17,571) and 747 with brotli (15,106 to 15,853), paid once a release by
+    every user (40, 18 and 4 larger than the build before this one, whose press kept the answer
+    whose draw made it, and with it each press and answer before, until the last settled). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12014,8 +12019,9 @@ rules something out.
     address) with the last seen, and adds one to a count of changes, and a visit the runtime
     begins adds one to a counter. A patch or page drawn for a marked answer notes it as it draws,
     a press made then keeps that note, and the answer's replace compares the count of changes
-    across its call and keeps the entry before and after it, in a weak map by the answer, so a
-    press of its draw compares those two readings as well as its own. On the
+    across its call and keeps the entry before and after it, in a plain object that a weak map
+    holds by the answer and the press keeps, so a press of its draw compares those two readings as
+    well as its own and keeps no answer or earlier press once they settle. On the
     server nothing runs that did not: `html!` writes the mark as an attribute and refuses a
     misplaced one when the markup compiles.
 

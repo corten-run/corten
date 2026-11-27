@@ -1108,7 +1108,7 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   // A press made by what it draws is this answer's ({@link drawingFor}).
-  drawingFor = done ?? null;
+  drawingFor = (done && draws.get(done)) ?? null;
   patching = 1;
   try {
     for (const el of Array.from(content.children)) {
@@ -1639,7 +1639,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     }
   }
   // A press made by what it draws is this answer's ({@link drawingFor}).
-  drawingFor = done ?? null;
+  drawingFor = (done && draws.get(done)) ?? null;
   const title = content.querySelector("title");
   if (title) {
     document.title = textOf(title) ?? "";
@@ -2690,18 +2690,22 @@ const same = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i) => 
  */
 const unreplaced = (seen) => same(seen, exact());
 /**
- * The marked answer drawing now, by the call that puts its address in ({@link apply},
+ * A marked answer's draw, which a press made by it keeps ({@link drawingFor}): the entry the
+ * answer's own replace found and the one it left ({@link exact}), set only where nothing else
+ * changed the entry inside that `replaceState`. A plain object, so a press keeps neither the
+ * answer nor the press it answered, and a chain of presses each made by the last one's draw keeps
+ * no answer that has settled.
+ * @typedef {{ found?: unknown[], left?: unknown[] }} Draw
+ */
+/**
+ * The draw of the marked answer drawing now, by the call that puts its address in ({@link apply},
  * {@link swapPage}): a press made by what it draws (a `connectedCallback` that presses the form it
  * drew) is taken in that draw, before the address goes in, and keeps it ({@link Press}).
- * @type {(() => void) | null}
+ * @type {Draw | null}
  */
 let drawingFor = null;
-/**
- * The entry each marked answer's own replace found and the one it left ({@link exact}), by the
- * call that made it, kept only where nothing else changed the entry inside that `replaceState`.
- * @type {WeakMap<() => void, [unknown[], unknown[]]>}
- */
-const replacedBy = new WeakMap();
+/** Each marked answer's draw, by the call that puts its address in ({@link send}). @type {WeakMap<() => void, Draw>} */
+const draws = new WeakMap();
 /**
  * Whether a press's answer may put its address in the entry on screen: the entry is exactly the
  * one the press was made on, or the press was made by the draw of a marked answer (`by`) on the
@@ -2710,8 +2714,8 @@ const replacedBy = new WeakMap();
  * @param {Press | undefined} press
  */
 const onEntry = (press) => {
-  const by = press?.by ? replacedBy.get(press.by) : undefined;
-  return unreplaced(press?.seen) || (!!by && same(press?.seen, by[0]) && unreplaced(by[1]));
+  const by = press?.by;
+  return unreplaced(press?.seen) || (!!by?.left && same(press?.seen, by.found) && unreplaced(by.left));
 };
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
@@ -3329,10 +3333,10 @@ const presses = new Map();
 /**
  * A press of a form: its id ({@link presses}), and for a `data-address` form with an id the entry
  * it was made on ({@link entry}), null while a visit of the runtime's was on its way, and that
- * entry exactly ({@link exact}), with the marked answer whose draw made it, if one did
+ * entry exactly ({@link exact}), with the draw of the marked answer that made it, if one did
  * ({@link drawingFor}). A marked form without an id cannot tell its latest press from an older
  * one, and is pressed as an unmarked form is: its answer leaves the address.
- * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: (() => void) | null }} Press
+ * @typedef {{ id: string | null, at?: number | null, seen?: unknown[], by?: Draw | null }} Press
  */
 
 /**
@@ -3618,6 +3622,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // does not guess.
       // Only for a press made on a marked form, which knows its entry: one sent again from a form an
       // answer marked draws as an unmarked form's does, and leaves the address.
+      /** @type {Draw} */
+      const draw = {};
       const done =
         pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500
           ? function replace() {
@@ -3653,11 +3659,15 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               // What it left, for a press this draw made: only when the Navigation API saw no other
               // change of the entry inside the call (a listener's own `replaceState`), which would
               // be another's replace.
-              if (!navigation || changes === seen + 1) replacedBy.set(replace, [before, exact()]);
+              if (!navigation || changes === seen + 1) {
+                draw.found = before;
+                draw.left = exact();
+              }
               // Read again at the new address, which without the Navigation API goes by the path.
               if (location.pathname !== path) readAgainLater();
             }
           : undefined;
+      if (done) draws.set(done, draw);
       if (res.headers.has("corten-patch")) {
         await apply(body, signal, sent, res.ok, undefined, undefined, within, here, done);
         // Dropped, the visit left while it waited for its modules, or left as it drew: nothing more.
