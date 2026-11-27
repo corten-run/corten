@@ -253,6 +253,7 @@ export function queueStreamAudit(local, state, options, approvedDeliverySha256) 
   const target = join(local, "monitor-delivery-" + intent.group + ".json"), pending = target + ".pending";
   assert.equal(lstatSync(target, { throwIfNoEntry: false }), undefined, "audit delivery already queued; never repeat");
   durable(pending, bytes);
+  durable(target + ".approved-sha256", approvedDeliverySha256 + "\n");
   assert.ok(!existsSync(join(local, "monitor-invalid.json")) && !existsSync(join(local, "monitor-terminal.json")));
   renameSync(pending, target); syncDirectory(local);
 }
@@ -441,10 +442,12 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
         if (!delivery) for (const group of ["json-api", "mixed-production"]) {
           const path = join(local, `monitor-delivery-${group}.json`);
           if (!delivered.has(group) && existsSync(path)) {
-            const bytes = regular(path, streamLimits.deliveryBytes), value = JSON.parse(bytes), ready = JSON.parse(regular(join(local, `monitor-audit-${group}-ready.json`)));
+            const bytes = regular(path, streamLimits.deliveryBytes), sha256 = digest(bytes);
+            assert.ok(regular(path + ".approved-sha256", 65).toString("utf8") === sha256 + "\n", "queued audit differs from approval");
+            const value = JSON.parse(bytes), ready = JSON.parse(regular(join(local, `monitor-audit-${group}-ready.json`)));
             assert.equal(value.subjectSha256, ready.subjectSha256);
             delivery = { group, bytes, offset: 0 }; delivered.add(group);
-            send("delivery-begin", { ...ready, sha256: digest(bytes), bytes: bytes.length }); break;
+            send("delivery-begin", { ...ready, sha256, bytes: bytes.length }); break;
           }
         }
         if (delivery) {

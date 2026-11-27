@@ -3021,7 +3021,11 @@ audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROO
 
 Delivery still rechecks live ownership, waiting group/inbox, nonce-bound state and
 exact canonical subject, records its single durable attempt and cannot overwrite
-an inbox. The live process, not the exported JSON, accepts the full native receipt
+an inbox. The local publisher records the approved SHA-256 before exposing the
+queued delivery. The live sender requires that digest to match the bytes it is
+about to send. A missing or different digest stops publication; preserve the
+queue and monitor records instead of recreating the approval file by hand. The
+live process, not the exported JSON, accepts the full native receipt
 and advances. A delivery result of 3 is not qualification; a failed/uncertain
 attempt is not automatic retry authority. Observe normally, then use the existing
 separately approved `--collect` only after the exact unit is terminal. Terminal
