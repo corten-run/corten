@@ -10271,16 +10271,27 @@ rules something out.
     side's unpadded `.text` in the order of a keyed hash of the workload's seed, i and each
     name, the same order for every binary at i, so base and head lay the functions they share
     alike and differ by the change's own, and another order at each i, so the placements sample
-    inner layouts as well as offsets. LLD places an input section by the first of its names the
-    file lists, so a symbol one side alone has in a section both have can give the functions in
-    it another place; the run refuses a change whose base and head at one index lay the
-    functions both have in different orders. The run checks each placement holds the unpadded
+    inner layouts as well as offsets. The order is partial where neither the draw nor LLD gives
+    one: input sections the file gives one key (local copies of one function in several
+    objects) lie in any order among themselves, since LLD sorts by the key alone, not stably;
+    and between base and head, sections whose keys are one name less a ThinLTO suffix, which
+    the draw orders by the name as written, a suffix number a rebuild of the same code can
+    change, lie in any order against each other, but for two copies both sides write alike,
+    which keep the draw's order. Within those ties two links can lay base's and head's copies
+    of one function at other addresses, and the run reads them as alike. LLD places an input
+    section by the first of its names the file lists, so a symbol one side alone has in a
+    section both have can give the functions in it another place; the run refuses a change
+    whose base and head at one index lay the functions both have in different orders outside
+    those ties, and one where it cannot tell which of a name's copies on one side is which on
+    the other (by what a rebuild keeps of their objects, never by a section's size, which a
+    change to the code changes). The run checks each placement holds the unpadded
     functions and the pad, the pad first, in that order, every definition of a name defined
     more than once included, after the whole pad and inside `.text`, in place of the shift and
     the neighbours. That is not the pinned layout turned away below, which gates one layout; it
     samples many. Its cost is that each placement is a link no app builds, which may cost every
     placement cycles a default order does not, both sides alike, as the first version's shuffle
-    could; unlike that one it gives base and head one order. Whether shuffled placements spread
+    could; unlike that one it gives base and head one order, partial only within those ties.
+    Whether shuffled placements spread
     wider or narrower than unshuffled ones has not been measured, so a shuffled plan is sized
     from a shuffled A/A alone.
 
@@ -11256,7 +11267,16 @@ rules something out.
     layout and map checks run in a Debian 13 container on a small C program linked by Debian
     LLD 19.1.7 with a pad, three shuffled orders and a second pad, and rustc 1.99.1's LLD
     23.1.1 given an ordering file with a name no symbol has, with no probe built and nothing
-    turned.
+    turned; 2026-11-27 (UTC), the shuffled run's check of base's and head's order as changed
+    after `83bc9d93b`, on links made by Debian LLD 19.1.7 in a Debian 13 container: copies of
+    one name in two objects named alike whose sections trade sizes, ICF folding the copies of
+    four objects whose file symbols all read `util.c`, and a ThinLTO copy of head's own that
+    gives one of two copies' sections the earlier key, each passed by `83bc9d93b`'s check and
+    refused by the changed one; 2026-11-27 (UTC), the example plan's probe built at
+    `c6e9be955` and `9a79ad877`, rustc 1.100.0's ThinLTO release link captured from its LLD
+    23.1.5 and relinked by Debian LLD 19.1.7 with six shuffled orders, 3,538 functions both
+    have, 105 of them of names defined more than once: each placement passed its order, each
+    relinked again passed as alike, and base against head passed at every index, by both checks.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at

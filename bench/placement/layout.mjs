@@ -47,14 +47,18 @@
 // defined once on each side is one function of both; a name defined more than once in either
 // (local copies) is matched copy by copy by what a rebuild of the same code keeps of its object
 // (stable(): its file symbol's and its input section's object, less directories, link-capture's
-// ordinal and Cargo's and rustc's hashes), then its section's name and size, and the same as
-// written; copies at one place of one object are ICF's folded copies, counted. Sections of one key
-// are one place, in any order among themselves, and so are sections whose keys are one name less a
-// ThinLTO suffix (order.mjs keys them alike and orders them by the suffix alone, whether a copy has
-// one and its number, which a rebuild of the same code can change). A name nothing tells apart,
-// copies with no one-to-one match between the sides, copies folded to one place that no object's
-// file symbol tells apart, and places holding different definitions (ICF folding A with B in one
-// and A with D in the other) refuse the change, so no definition both have is left out of the
+// ordinal and Cargo's and rustc's hashes), then its section's name, and the same as written, never
+// its section's size, which a change to the code changes; copies at one place that follow one file
+// symbol of the placement's symbol table (one object) are ICF's folded copies, counted. Sections of
+// one key are one place, in any order among themselves, and so are sections whose keys are one
+// name less a ThinLTO suffix (order.mjs keys them alike and orders them by the suffix alone,
+// whether a copy has one and its number, which a rebuild of the same code can change), but for two
+// copies both sides write alike, which keep the order the draw gives them. A name nothing tells
+// apart (copies in objects named alike that only their sizes would), copies with no one-to-one
+// match between the sides, copies folded to one place that no object's file symbol tells apart
+// (none, or one written alike for several objects), two copies written alike in both that lie the
+// other way round, and places holding different definitions (ICF folding A with B in one and A
+// with D in the other) refuse the change, so no definition both have is left out of the
 // comparison or compared by where it landed instead of what it is.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -108,21 +112,25 @@ export function textRange(readelf) {
  * or one at the address where the next section begins. A local symbol also has the name of the
  * file symbol (STT_FILE) before it (file), which names the object it was compiled as: LLD writes
  * each object's local symbols together, after that object's file symbol, so a local copy of a
- * name keeps its own object even where ICF folded its body into another object's section. A
- * global or weak symbol, and a local one with no file symbol before it, has null. .dynsym is not
- * read. A binary without a .symtab (stripped) has none to read and is refused.
+ * name keeps its own object even where ICF folded its body into another object's section. It
+ * also has that file symbol's ordinal among the table's file symbols (object), which tells two
+ * objects apart within one binary where their file symbols are written alike (four objects
+ * compiled from files named util.c), and means nothing across two binaries. A global or weak
+ * symbol, and a local one with no file symbol before it, has null for both. .dynsym is not read.
+ * A binary without a .symtab (stripped) has none to read and is refused.
  */
 export function elfSymbols(readelf) {
   const out = [];
-  let table = null, symtab = false, file = null;
+  let table = null, symtab = false, file = null, object = null, files = 0;
   for (const l of readelf.split("\n")) {
     const h = /^Symbol table '([^']*)'/.exec(l);
-    if (h) { table = h[1]; symtab ||= table === ".symtab"; file = null; continue; }
+    if (h) { table = h[1]; symtab ||= table === ".symtab"; file = null; object = null; continue; }
     if (table !== ".symtab") continue;
     const m = /^\s*\d+:\s+([0-9a-f]+)\s+(0x[0-9a-f]+|\d+)\s+(\S+)\s+(\S+)\s+\S+(?:\s+\[[^\]]*\])?\s+(\S+)\s+(\S.*?)\s*$/.exec(l.replace(/\r$/, ""));
-    if (m?.[3] === "FILE") { file = m[6]; continue; }
+    if (m?.[3] === "FILE") { file = m[6]; object = files++; continue; }
     if (!m || m[3] !== "FUNC" || !/^\d+$/.test(m[5])) continue;
-    out.push({ raw: m[6], name: m[6].replace(/\.llvm\.\d+$/, ""), at: parseInt(m[1], 16), size: Number(m[2]), shndx: Number(m[5]), file: m[4] === "LOCAL" ? file : null });
+    const local = m[4] === "LOCAL";
+    out.push({ raw: m[6], name: m[6].replace(/\.llvm\.\d+$/, ""), at: parseInt(m[1], 16), size: Number(m[2]), shndx: Number(m[5]), file: local ? file : null, object: local ? object : null });
   }
   if (!symtab) throw new Error("no .symtab in readelf's symbols: a stripped binary has no function symbols to read");
   return out;
@@ -291,8 +299,9 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
   const repeated = [...unique(oa.out.map((d) => d.e))].filter(([, at]) => at == null).length;
   // Each placed definition with the input section the placement's map has it in, that section's
   // place there, the group of one key the file puts there, that group's place in the draw and the
-  // definition's object by its file symbol, for alike().
-  const defs = pairs ? got.map((d) => ({ raw: d.e.raw, name: d.e.name, at: d.e.at, file: d.e.file ?? null, section: B[d.k], slot: mid.get(d.k), group: expected[mid.get(d.k)], draw: groups[expected[mid.get(d.k)]].draw, off: d.off })) : null;
+  // name less a ThinLTO suffix its key has, and the definition's object by its file symbol (its
+  // text and its ordinal in the placement's symbol table), for alike().
+  const defs = pairs ? got.map((d) => { const g = expected[mid.get(d.k)]; return { raw: d.e.raw, name: d.e.name, at: d.e.at, file: d.e.file ?? null, object: d.e.object ?? null, section: B[d.k], slot: mid.get(d.k), group: g, draw: groups[g].draw, drawName: groups[g].name, off: d.off }; }) : null;
   return { ok: why.length === 0, why, pad, second, shuffled: true, functions, repeated, sections: A.length, groups: groups.length, tied: tied.reduce((t, g) => t + g.members.length, 0), matched, placedSections: placedSectionsAt, together, follow, listed: listed.length, onlyA, onlyB, defs };
 }
 
@@ -308,12 +317,16 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
  * it is. A name defined once on each side is one function of both. A name defined more than once
  * (local copies in several objects) is matched definition by definition by what a rebuild of the
  * same code keeps (stable()): first its object by its file symbol and its input section's object
- * in the placement's map, then with that section's name, then its size, then all of those as
- * written (where two objects differ only by a hash both sides keep), then its file symbol's object
- * alone, its section's object alone, and last its name alone; the first of those that tells each
- * side's definitions apart (definitions that share one are at one place and of one object's file
- * symbol: copies ICF folded, with their count) and leaves no definition of either side without a
- * match where the other has one without a match too is taken. A name none tells apart, one whose
+ * in the placement's map, then with that section's name, then both as written (where two objects
+ * differ only by a hash both sides keep), then its file symbol's object alone, its section's
+ * object alone, and last its name alone; never by its section's size, which a change to the code
+ * changes, so two copies whose objects are named alike and trade sizes are not told apart by it.
+ * The first of those that tells each side's definitions apart (definitions that share one are at
+ * one place and follow one file symbol of the placement's symbol table, one object: copies ICF
+ * folded, with their count) and leaves no definition of either side without a match where the
+ * other has one without a match too is taken. Copies at one place that follow two file symbols
+ * written alike (objects compiled from files of one name) are of objects nothing names apart, so
+ * no key that puts them together tells them apart. A name none tells apart, one whose
  * definitions have no one-to-one match, and copies both have folded to one place a different
  * number of times refuse the change, so no definition both have is left out. Then each
  * placement's places in the draw, in its map's order: a group of input sections its ordering file
@@ -325,7 +338,12 @@ export function ordered(ea, eb, text, placed, order, sections, placedSections, p
  * same, so every definition both have lies in one order, where the files order it, and shares its
  * section and address with the same others (ICF folding A with B on one side and A with D on the
  * other is no reading). Sections one side ties in one place and the other orders in two are two
- * places in one and one in the other, and refuse.
+ * places in one and one in the other, and refuse. Within a place of keys that are one name less a
+ * ThinLTO suffix, the draw orders the names as written, so two of its copies both sides write
+ * alike (f.llvm.1 and f.llvm.2 in each) keep the order of the groups that hold them: a copy one
+ * side alone has that gives one of those sections an earlier key (head's new f.llvm.0 in f.llvm.2's
+ * section) lays them the other way round, and refuses. Copies whose suffixes differ between the
+ * sides, as a rebuild of the same code can number them, give no such order.
  */
 export function alike(base, head, pad, second = false) {
   const check = (x) => ordered(x.ea, x.eb, x.text, x.placed, x.order, x.sections, x.placedSections, pad, second);
@@ -335,22 +353,24 @@ export function alike(base, head, pad, second = false) {
     const o = origin(d.section.file ?? "");
     return {
       sym: d.file ?? "", symS: d.file == null ? "" : stable(d.file), map: o.object != null ? bare(o.object) : `${bare(o.archive)}(${o.member})`,
-      mapS: o.object != null ? stable(o.object) : `${stable(o.archive)}(${stable(o.member)})`, sect: d.section.section ?? "", size: String(d.section.size),
+      mapS: o.object != null ? stable(o.object) : `${stable(o.archive)}(${stable(o.member)})`, sect: d.section.section ?? "",
     };
   };
-  const KEYS = [(m) => [m.symS, m.mapS], (m) => [m.symS, m.mapS, m.sect], (m) => [m.symS, m.mapS, m.sect, m.size], (m) => [m.sym, m.map, m.sect, m.size], (m) => [m.symS], (m) => [m.mapS], () => []];
+  const KEYS = [(m) => [m.symS, m.mapS], (m) => [m.symS, m.mapS, m.sect], (m) => [m.sym, m.map, m.sect], (m) => [m.symS], (m) => [m.mapS], () => []];
   const byName = (defs) => { const m = new Map(); for (const d of defs) m.set(d.name, [...(m.get(d.name) ?? []), { ...d, m: marks(d), place: `${d.slot}\0${d.off}` }]); return m; };
   const na = byName(ra.defs), nb = byName(rb.defs);
   // A name's definitions by one key: each key's definitions at one place, with their count, or null.
   // Definitions that share a key at one place are copies ICF folded there, counted, but only where
-  // they share one object's file symbol: copies of other objects, or with none (a folded section's
-  // object is its kept copy's, whatever object a symbol was compiled in), are not one copy.
+  // they follow one file symbol of the placement's table, one object: copies of other objects,
+  // with file symbols written alike or not, or with none (a folded section's object is its kept
+  // copy's, whatever object a symbol was compiled in), are not one copy, and which object each of
+  // them is cannot be read where its file symbol does not name it apart.
   const told = (ds, K) => {
     const m = new Map();
     for (const d of ds) {
       const k = JSON.stringify(K(d.m)), t = m.get(k);
       if (!t) m.set(k, { d, n: 1 });
-      else if (t.d.place !== d.place || !d.m.sym || d.m.sym !== t.d.m.sym) return null;
+      else if (t.d.place !== d.place || !d.m.sym || d.m.sym !== t.d.m.sym || d.object == null || d.object !== t.d.object) return null;
       else t.n++;
     }
     return m;
@@ -386,8 +406,20 @@ export function alike(base, head, pad, second = false) {
       items.push({ id: plain ? name : `${name}\n${k}`, labels: { a: plain ? name : label(name, t.d), b: plain ? name : label(name, u.d) }, plain, n: t.n, a: t.d, b: u.d });
     }
   }
-  if (untold.length) why.push(`${untold.length} functions both placements have are each defined more than once at places nothing tells apart (their objects, input sections, names and sizes, as written and less hashes), or folded to one place with no file symbol to tell the copies apart, so their order cannot be established: ${some(untold)}`);
+  if (untold.length) why.push(`${untold.length} functions both placements have are each defined more than once at places nothing tells apart (their objects, input sections and names, as written and less hashes; a section's size is no identity), or folded to one place with no file symbol to tell the copies apart (none, or the same name written for several objects), so their order cannot be established: ${some(untold)}`);
   if (unmatched.length) why.push(`${unmatched.length} functions both placements have are defined more than once, and their definitions cannot be matched one to one across the two, so their order cannot be established: ${some(unmatched)}`);
+  // Within a place of keys that are one name less a ThinLTO suffix, the order of the groups that
+  // hold two copies of that name both sides write alike: the draw orders the two names as written
+  // on both sides, so their groups lie in one order, or one group holds both, alike on both.
+  const sign = (x, y) => Math.sign(x.group - y.group), turned = [], byPlace = new Map();
+  for (const it of items) if (it.a.raw === it.b.raw && it.a.drawName === it.a.name && it.b.drawName === it.b.name) byPlace.set(it.a.draw, [...(byPlace.get(it.a.draw) ?? []), it]);
+  const rel = (s) => (s < 0 ? "before" : s > 0 ? "after" : "in one group with");
+  for (const kept of byPlace.values()) for (let i = 0; i < kept.length; i++) for (let j = i + 1; j < kept.length; j++) {
+    const u = kept[i], v = kept[j];
+    if (u.b.draw !== v.b.draw || sign(u.a, v.a) === sign(u.b, v.b)) continue;
+    turned.push(`${u.a.raw} in ${where(u.a)} ${rel(sign(u.a, v.a))} ${v.a.raw} in ${where(v.a)} in the first, ${rel(sign(u.b, v.b))} it in the second`);
+  }
+  if (turned.length) why.push(`${turned.length} pairs of copies of one name less a ThinLTO suffix, written alike in both placements, which the draw orders alike, lie in another order: ${some(turned)}`);
   // Each placement's definitions both have, by where its ordering file puts them: its places in
   // the draw in its map's order (ordered(): a group of one key, or the groups of keys that are one
   // name less a ThinLTO suffix), each place's input sections in any order among themselves, as LLD
@@ -411,7 +443,7 @@ export function alike(base, head, pad, second = false) {
   for (let k = 0; k < n && first < 0; k++) if (pa[k]?.key !== pb[k]?.key) first = k;
   const shown = (x) => (x ? `${x.show}${x.size > 1 ? ` (${x.size} sections of one place)` : ""}` : "nothing");
   if (first >= 0) why.push(`the ${items.length} functions both placements have do not lie in one order, each place holding the same of them: place ${first + 1} holds ${shown(pa[first])} in the first and ${shown(pb[first])} in the second`);
-  return { ok: why.length === 0, why, pad, shuffled: true, shared: items.length, repeated: items.filter((x) => !x.plain).length, tied: items.filter((x) => x.n > 1).length, untold: untold.length, unmatched: unmatched.length, places: pa.length, same: first < 0 ? pa.length : first };
+  return { ok: why.length === 0, why, pad, shuffled: true, shared: items.length, repeated: items.filter((x) => !x.plain).length, tied: items.filter((x) => x.n > 1).length, untold: untold.length, unmatched: unmatched.length, places: pa.length, same: first < 0 ? pa.length : first, turned: turned.length };
 }
 
 /** fa, fb: symbols() of the unpadded binary and of the placement; text: the placement's .text start. */
@@ -456,7 +488,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const side = ([unpadded, placement, order, map, placedMap]) => ({ ea: elf(unpadded), eb: elf(placement), text: textRange(readelf(unpadded)), placed: textRange(readelf(placement)), order: lines(order), sections: mapOf(map).inputs, placedSections: mapOf(placedMap).inputs });
     let r;
     try { r = alike(side(rest.slice(0, 5)), side(rest.slice(5, 10)), pad, second); } catch (e) { console.error(`layout.mjs: ${e.message}`); process.exit(2); }
-    console.log(`function definitions both placements have: ${r.shared}, ${r.repeated} of them of a name defined more than once, matched by what a rebuild keeps of their objects and input sections, ${r.tied} of them copies folded to one place; places holding them: ${r.places}, in one order and each holding the same of them: ${r.same}; defined more than once at places nothing tells apart: ${r.untold}; defined more than once with no one-to-one match: ${r.unmatched}`);
+    console.log(`function definitions both placements have: ${r.shared}, ${r.repeated} of them of a name defined more than once, matched by what a rebuild keeps of their objects and input sections, ${r.tied} of them copies folded to one place; places holding them: ${r.places}, in one order and each holding the same of them: ${r.same}; defined more than once at places nothing tells apart: ${r.untold}; defined more than once with no one-to-one match: ${r.unmatched}; pairs of copies of one name less a ThinLTO suffix, written alike in both, in another order: ${r.turned}`);
     console.log("JSON " + JSON.stringify(r));
     for (const w of r.why) console.error(`layout.mjs: ${w}`);
     process.exit(r.ok ? 0 : 1);

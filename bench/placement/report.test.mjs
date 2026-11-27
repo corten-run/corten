@@ -388,7 +388,7 @@ test("a shuffled run says so in its header and reads only placements linked in t
   const r = report(res);
   assert.equal(r.exit, 0, r.json.refused?.join(" | "));
   assert.equal(r.json.shuffle, true);
-  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
+  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first", "That order is partial: input sections the file gives one key", "but for two copies both write alike", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
   assert.ok(!r.md.includes("every function moved by exactly its pad"));
   assert.equal(report(shuffledRun({ align: 32 })).exit, 0);
   const refused = (opts, word) => { const x = report(shuffledRun(opts)); assert.equal(x.exit, 2, word); has(x.json.refused, word); };

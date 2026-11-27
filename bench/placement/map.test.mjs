@@ -328,11 +328,12 @@ const TEXT = { index: 14, start: T, size: 0xc80 }, INIT = ["_init", 0x200f00, 12
  * readelf -sW's two tables for functions [name, address, section index (14, .text's, unless
  * given), size, file]: .dynsym, which is not read, then .symtab, its local symbols first, as LLD
  * writes them: those given a file (a local copy compiled in that object) after that file's symbol
- * (STT_FILE), each object's together; the rest global.
+ * (STT_FILE), each object's together; the rest global. A file `util.c@a` is object a's, its file
+ * symbol written `util.c`: objects compiled from files of one name, each with a file symbol of its own.
  */
 const elf = (fns) => {
   const fn = ([name, at, shndx = 14, size = 0], bind) => `${at.toString(16).padStart(16, "0")} ${String(size).padStart(5)} FUNC    ${bind} DEFAULT ${String(shndx).padStart(4)} ${name}`;
-  const file = (name) => `0000000000000000     0 FILE    LOCAL  DEFAULT  ABS ${name}`;
+  const file = (name) => `0000000000000000     0 FILE    LOCAL  DEFAULT  ABS ${name.replace(/@.*$/, "")}`;
   const rows = ["0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND ", file("probe.o")];
   for (const f of new Set(fns.filter((x) => x[4] != null).map((x) => x[4]))) rows.push(file(f), ...fns.filter((x) => x[4] === f).map((x) => fn(x, "LOCAL ")));
   rows.push(...fns.filter((x) => x[4] == null).map((x) => fn(x, "GLOBAL")), "0000000000300000     8 OBJECT  GLOBAL DEFAULT   20 some_data");
@@ -500,7 +501,7 @@ test("a shuffled change: a name defined more than once is compared definition by
   const same = DUPS.map((s, k) => (k === 2 ? { ...s, file: "/p/libu.a(u.o)" } : k === 3 ? { ...s, file: "/q/libu.a(u.o)" } : s));
   const untold = alike(sideOf(same, file("a", "b", "dup")), sideOf(same, file("a", "b", "dup")), 320);
   assert.deepEqual([untold.ok, untold.untold], [false, 1]);
-  has(untold.why, "1 functions both placements have are each defined more than once at places nothing tells apart (their objects, input sections, names and sizes, as written and less hashes), or folded to one place with no file symbol to tell the copies apart, so their order cannot be established: dup in libu.a(u.o):(.text.dup)");
+  has(untold.why, "1 functions both placements have are each defined more than once at places nothing tells apart (their objects, input sections and names, as written and less hashes; a section's size is no identity), or folded to one place with no file symbol to tell the copies apart (none, or the same name written for several objects), so their order cannot be established: dup in libu.a(u.o):(.text.dup)");
 });
 
 // A function symbol of no size at the end of .text.a, where .text.b begins: the map lists it under
@@ -730,7 +731,7 @@ test("a shuffled change: copies ICF folded to one place are compared by which de
   has(alike(sideOf(twice, named("dup", "middle")), sideOf(once, named("dup", "middle")), 320).why, "cannot be matched one to one across the two");
   // Copies with no file symbol, folded to one place: which copy is which is not established.
   const blind = [folded[0], SEC("/o/x.o", ".text.dup", T + 0x40, 0x40, [["dup", 0], ["dup", 0]])];
-  has(alike(sideOf(blind, named("dup", "middle")), sideOf(blind, named("dup", "middle")), 320).why, "or folded to one place with no file symbol to tell the copies apart, so their order cannot be established: dup in x.o:(.text.dup)");
+  has(alike(sideOf(blind, named("dup", "middle")), sideOf(blind, named("dup", "middle")), 320).why, "or folded to one place with no file symbol to tell the copies apart (none, or the same name written for several objects), so their order cannot be established: dup in x.o:(.text.dup)");
 });
 
 // Base folds A with B and C with D, head A with D and C with B: the same kept sections, each with
@@ -776,6 +777,59 @@ test("a shuffled change: a repeated name's copies are matched across a Cargo reb
   assert.deepEqual(alike(sideOf(b2, named("middle", "dup")), sideOf(two(15, ["80a519a4f0b14295", "2876a78816aebac3", "0123456789abcdef", "1a2b3c4d5e6f7a8b"]), named("middle", "dup")), 320).why, []);
 });
 
+// The sixth review's cases, each first seen with real LLD 19.1.7 links (made again after the LLD
+// tests below): a section's size is no identity, copies at one place whose file symbols are
+// written alike are of objects nothing names apart, and a place of keys one name less a ThinLTO
+// suffix keeps the order of the copies both sides write alike.
+test("a shuffled change: copies of one name in objects named alike are not told apart by their sections' sizes", () => {
+  // a/same.o's and b/same.o's local dup, both compiled from same.c: base's a holds first and is
+  // 0x40 bytes, b holds last and is 0x80; head trades both, so the one file lays b, middle, a
+  // where base lays a, middle, b. Only the size would pair base's a with head's b, and a size is
+  // what a change to the code changes.
+  const two = (sa, sb, [na, nb]) => [SEC("/s/a/same.o", ".text.dup", T, sa, [["dup", 0, 14, "same.c@a"], [na, 0x10]]), SEC("/o/m.o", ".text.middle", T + sa, 0x40, [["middle", 0]]), SEC("/s/b/same.o", ".text.dup", T + sa + 0x40, sb, [["dup", 0, 14, "same.c@b"], [nb, 0x10]])];
+  const file = named("first", "middle", "last", "dup"), base = sideOf(two(0x40, 0x80, ["first", "last"]), file), head = sideOf(two(0x80, 0x40, ["last", "first"]), file);
+  assert.deepEqual([own(base).why, own(head).why], [[], []]);
+  const r = alike(base, head, 320);
+  assert.deepEqual([r.ok, r.untold], [false, 1]);
+  has(r.why, "1 functions both placements have are each defined more than once at places nothing tells apart (their objects, input sections and names, as written and less hashes; a section's size is no identity), or folded to one place with no file symbol to tell the copies apart (none, or the same name written for several objects), so their order cannot be established: dup in same.o:(.text.dup)");
+  // Objects named apart are still matched, whatever their sizes do.
+  const apart = (sa, sb, n) => two(sa, sb, n).map((s) => (s.file === "/s/b/same.o" ? { ...s, file: "/s/b/other.o" } : s));
+  assert.deepEqual(alike(sideOf(apart(0x40, 0x80, ["first", "last"]), file), sideOf(apart(0x80, 0x40, ["first", "last"]), file), 320).why, []);
+});
+
+test("a shuffled change: copies ICF folded to one place from objects whose file symbols are written alike are refused", () => {
+  // FOLDS's four objects, each compiled from a file named util.c: base folds A with B and C with
+  // D, head A with D and C with B. Each copy's file symbol says util.c, so nothing says which
+  // object a copy folded into a.o's section is, and the folds are not counted as one object's.
+  const util = (pairs) => FOLDS(pairs).map((s) => ({ ...s, fns: s.fns.map(([n, off, shndx, f]) => (f ? [n, off, shndx, `util.c@${f}`] : [n, off])) }));
+  const base = sideOf(util(["b.o", "d.o"]), named("middle", "dup")), head = sideOf(util(["d.o", "b.o"]), named("middle", "dup"));
+  assert.deepEqual([own(base).why, own(head).why], [[], []]);
+  const r = alike(base, head, 320);
+  assert.deepEqual([r.ok, r.untold], [false, 1]);
+  has(r.why, "or folded to one place with no file symbol to tell the copies apart (none, or the same name written for several objects), so their order cannot be established: dup in a.o:(.text.dup)");
+  // So is the same placement against itself: which object each copy is cannot be read in either.
+  assert.equal(alike(base, base, 320).untold, 1);
+  // Two copies that follow one file symbol, one object's, are counted as before.
+  const one = [FOLDS(["b.o", "d.o"])[0], SEC("/o/x.o", ".text.dup", T + 0x40, 0x40, [["dup", 0, 14, "util.c@x"], ["dup", 0, 14, "util.c@x"]])];
+  assert.deepEqual(alike(sideOf(one, named("dup", "middle")), sideOf(one, named("dup", "middle")), 320).why, []);
+});
+
+test("a shuffled change: a place of keys one name less a ThinLTO suffix keeps the order of copies both sides write alike", () => {
+  // x.o's local f.llvm.1 with hot_a, y.o's local f.llvm.2 with hot_b, on both sides: the draw lays
+  // f.llvm.1 before f.llvm.2 in both. Head's f.llvm.0 in y.o's section gives that section the
+  // earlier key, so head lays hot_b before hot_a: the two copies both write alike lie the other way round.
+  const secs = (more = []) => [SEC("/o/a.o", ".text.a", T, 0x40, [["a", 0]]), SEC("/o/x.o", ".text.f", T + 0x40, 0x40, [["f.llvm.1", 0, 14, "x.c"], ["hot_a", 0x10]]), SEC("/o/y.o", ".text.f", T + 0x80, 0x40, [["f.llvm.2", 0, 14, "y.c"], ["hot_b", 0x10], ...more])];
+  const base = sideOf(secs(), named("a", "f.llvm.1", "f.llvm.2", "hot_a", "hot_b"));
+  const head = sideOf(secs([["f.llvm.0", 0x20]]), named("a", "f.llvm.0", "f.llvm.1", "f.llvm.2", "hot_a", "hot_b"));
+  assert.deepEqual([own(base).why, own(head).why], [[], []]);
+  assert.deepEqual(own(head).defs.filter((d) => d.name === "hot_a" || d.name === "hot_b").sort((u, v) => u.at - v.at).map((d) => d.name), ["hot_b", "hot_a"]);
+  const r = alike(base, head, 320);
+  assert.deepEqual([r.ok, r.turned], [false, 1]);
+  has(r.why, "1 pairs of copies of one name less a ThinLTO suffix, written alike in both placements, which the draw orders alike, lie in another order: f.llvm.1 in x.o:(.text.f) before f.llvm.2 in y.o:(.text.f) in the first, after it in the second");
+  // A copy head alone has, drawn after f.llvm.2, leaves both sections their keys: alike.
+  const late = alike(base, sideOf(secs([["f.llvm.3", 0x20]]), named("a", "f.llvm.1", "f.llvm.2", "f.llvm.3", "hot_a", "hot_b")), 320);
+  assert.deepEqual([late.why, late.turned], [[], 0]);
+});
 test("a shuffled run writes every map with --no-demangle, and an unshuffled run's maps as before", () => {
   const here = (f) => readFileSync(fileURLToPath(new URL(`./${f}`, import.meta.url)), "utf8");
   const build = here("build.sh").split("\n").filter((l) => !/^\s*#/.test(l)), relinks = build.filter((l) => l.includes('"$KIT/relink.mjs"'));
@@ -1001,7 +1055,7 @@ const fifth = (t) => {
   const ld = (out, objs, file, more = []) => { if (file) writeFileSync(join(dir, `${out}.order`), file); run("ld.lld", ["-o", out, "-e", "0", "--gc-sections", "--no-demangle", "-Map", `${out}.map`, ...more, ...(file ? ["--symbol-ordering-file", `${out}.order`] : []), ...objs]); return out; };
   const kit = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL("./layout.mjs", import.meta.url)), ...args], { cwd: dir, encoding: "utf8" });
   return {
-    dir, obj, ld,
+    dir, run, obj, ld,
     pad: obj("pad", [".text.corten_layout_pad", "corten_layout_pad", 320, 0xcc], "pad.s", true), m: obj("m", [".text.middle", "middle", 0x40, 0xcc], "m.c", true),
     shuffled: (unpadded, placement) => kit(unpadded, placement, "320", "--order", `${placement}.order`, "--map", `${unpadded}.map`, "--placed-map", `${placement}.map`),
     alikeOf: (b, bp, h, hp) => kit("--alike", b, bp, `${bp}.order`, `${b}.map`, `${bp}.map`, h, hp, `${hp}.order`, `${h}.map`, `${hp}.map`, "320"),
@@ -1070,6 +1124,79 @@ test("a shuffled change, linked by LLD: copies whose names differ by a ThinLTO s
   assert.match(split.stderr, /do not lie in one order, each place holding the same of them: place 2 holds f in x\.o:\(\.text\.f\) \(compiled in x\.c\) and f in y\.o:\(\.text\.f\) \(compiled in y\.c\) \(2 sections of one place\) in the first and f in ya\.o:\(\.text\.f\) \(compiled in y\.c\) in the second/);
 });
 
+// The sixth review's cases as real links. An object of one section [name, size, byte] with the
+// file symbol source and its functions [name, offset, global] (local unless global).
+const sixth = (t) => {
+  const f = fifth(t);
+  const objOf = (file, [sec, size, byte], source, fns) => {
+    mkdirSync(dirname(join(f.dir, file)), { recursive: true });
+    const body = [];
+    let at = 0;
+    for (const [name, off, global] of [...fns].sort((x, y) => x[1] - y[1])) {
+      if (off > at) body.push(`\t.skip ${off - at}, ${byte}`);
+      body.push(...(global ? [`\t.globl ${name}`] : []), `\t.type ${name},@function`, `${name}:`);
+      at = off;
+    }
+    body.push(`\t.skip ${size - at}, ${byte}`);
+    writeFileSync(join(f.dir, `${file}.s`), [`\t.file "${source}"`, `\t.section ${sec},"axR",@progbits`, "\t.p2align 4", ...body].join("\n") + "\n");
+    f.run("clang", ["--target=x86_64-linux-gnu", "-c", `${file}.s`, "-o", `${file}.o`]);
+    return `${file}.o`;
+  };
+  return { ...f, objOf };
+};
+
+test("a shuffled change, linked by LLD: copies of one name in objects named alike are not told apart by their sections' sizes", LLD, (t) => {
+  const { ld, pad, m, objOf, shuffled, alikeOf } = sixth(t), file = named("first", "middle", "last", "dup");
+  // a/same.o's and b/same.o's local dup, both from same.c: base's a holds first in 0x40 bytes and
+  // b last in 0x80; head trades them, so the one file lays b, middle, a where base lays a, middle, b.
+  const same = (side, d, size, byte, name) => objOf(`${side}/${d}/same`, [".text.dup", size, byte], "same.c", [["dup", 0], [name, 0x10, true]]);
+  const b = [same("b", "a", 0x40, 0x90, "first"), same("b", "b", 0x80, 0x91, "last")], h = [same("h", "a", 0x80, 0x90, "last"), same("h", "b", 0x40, 0x91, "first")];
+  ld("ub", [m, ...b]); ld("ub-p", [pad, m, ...b], file); ld("uh", [m, ...h]); ld("uh-p", [pad, m, ...h], file);
+  for (const [u, p] of [["ub", "ub-p"], ["uh", "uh-p"]]) assert.equal(shuffled(u, p).status, 0, shuffled(u, p).stderr);
+  const r = alikeOf("ub", "ub-p", "uh", "uh-p");
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /each defined more than once at places nothing tells apart \(their objects, input sections and names, as written and less hashes; a section's size is no identity\).*: dup in same\.o:\(\.text\.dup\)/);
+  assert.match(r.stdout, /"untold":1,/);
+});
+
+test("a shuffled change, linked by LLD: copies ICF folded to one place from objects whose file symbols are written alike are refused", LLD, (t) => {
+  const { dir, run, obj, ld, pad, m, shuffled, alikeOf } = sixth(t), file = named("middle", "dup");
+  // The ICF case above with every object compiled from a file named util.c: base folds a with b
+  // and c with d, head a with d and c with b, and each copy's file symbol says util.c.
+  const copy = (side, n, byte) => obj(`${side}/${n}`, [".text.dup", "dup", 0x40, byte], "util.c");
+  const fb = [copy("fb", "a", 0x90), copy("fb", "c", 0xa0), copy("fb", "b", 0x90), copy("fb", "d", 0xa0)];
+  const fh = [copy("fh", "a", 0x90), copy("fh", "c", 0xa0), copy("fh", "b", 0xa0), copy("fh", "d", 0x90)];
+  const icf = ["--icf=all"];
+  ld("ib", [m, ...fb], null, icf); ld("ib-p", [pad, m, ...fb], file, icf); ld("ih", [m, ...fh], null, icf); ld("ih-p", [pad, m, ...fh], file, icf);
+  for (const [u, p] of [["ib", "ib-p"], ["ih", "ih-p"]]) assert.equal(shuffled(u, p).status, 0, shuffled(u, p).stderr);
+  for (const p of ["ib-p", "ih-p"]) assert.deepEqual(readMap(readFileSync(join(dir, `${p}.map`), "utf8")).find((o) => o.name === ".text").inputs.filter((x) => x.section === ".text.dup").map((x) => x.file.replace(/^.*\//, "")), ["a.o", "c.o"]);
+  const swapped = alikeOf("ib", "ib-p", "ih", "ih-p");
+  assert.equal(swapped.status, 1, swapped.stdout);
+  assert.match(swapped.stderr, /or folded to one place with no file symbol to tell the copies apart \(none, or the same name written for several objects\), so their order cannot be established: dup in a\.o:\(\.text\.dup\)/);
+  // Four file symbols written util.c, each with its object's local dup after it, two at each kept section.
+  const syms = elfSymbols(run("readelf", ["-sW", "ih-p"])).filter((e) => e.name === "dup");
+  assert.deepEqual([syms.map((e) => e.file), new Set(syms.map((e) => e.object)).size, new Set(syms.map((e) => e.at)).size], [["util.c", "util.c", "util.c", "util.c"], 4, 2]);
+});
+
+test("a shuffled change, linked by LLD: a place of keys one name less a ThinLTO suffix keeps the order of copies both sides write alike", LLD, (t) => {
+  const { ld, pad, m, objOf, shuffled, alikeOf } = sixth(t);
+  // x's local f.llvm.1 with hot_a, y's local f.llvm.2 with hot_b, alike on both sides; head's y
+  // also has f.llvm.0, drawn first, so LLD lays y's section, and hot_b, before x's and hot_a.
+  const x = (side) => objOf(`${side}/x`, [".text.f", 0x40, 0x90], "x.c", [["f.llvm.1", 0], ["hot_a", 0x10, true]]);
+  const y = (side, more = []) => objOf(`${side}/y`, [".text.f", 0x40, 0x91], "y.c", [["f.llvm.2", 0], ["hot_b", 0x10, true], ...more]);
+  const b = [x("ob"), y("ob")], h = [x("oh"), y("oh", [["f.llvm.0", 0x20, true]])], l = [x("ol"), y("ol", [["f.llvm.3", 0x20, true]])];
+  ld("tb", [m, ...b]); ld("tb-p", [pad, m, ...b], named("middle", "f.llvm.1", "f.llvm.2", "hot_a", "hot_b"));
+  ld("th", [m, ...h]); ld("th-p", [pad, m, ...h], named("middle", "f.llvm.0", "f.llvm.1", "f.llvm.2", "hot_a", "hot_b"));
+  ld("tl", [m, ...l]); ld("tl-p", [pad, m, ...l], named("middle", "f.llvm.1", "f.llvm.2", "f.llvm.3", "hot_a", "hot_b"));
+  for (const [u, p] of [["tb", "tb-p"], ["th", "th-p"], ["tl", "tl-p"]]) assert.equal(shuffled(u, p).status, 0, shuffled(u, p).stderr);
+  const r = alikeOf("tb", "tb-p", "th", "th-p");
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /1 pairs of copies of one name less a ThinLTO suffix, written alike in both placements, which the draw orders alike, lie in another order: f\.llvm\.1 in x\.o:\(\.text\.f\) before f\.llvm\.2 in y\.o:\(\.text\.f\) in the first, after it in the second/);
+  // Head's own copy drawn after f.llvm.2 leaves both sections their keys: alike.
+  const late = alikeOf("tb", "tb-p", "tl", "tl-p");
+  assert.equal(late.status, 0, late.stderr);
+  assert.match(late.stdout, /"turned":0\}/);
+});
 test("owner(): a definition's input section by the map, a section of no size and the end of one included", () => {
   const ins = [
     { at: 0x100, size: 0x40, symbols: [{ name: "a", at: 0x100 }, { name: "a_end", at: 0x140 }] },
