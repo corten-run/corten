@@ -591,6 +591,11 @@ impl<'a> NavTo<'a> {
     /// never current, at any of its addresses ([`Req::nav_of`]). Only a route implemented by hand
     /// can write one.
     ///
+    /// A NUL in the entry's own URL, which only a route implemented by hand writes, is read by the
+    /// HTML parser as U+FFFD in the `href` the runtime parses, so the link to `/old<NUL>x` goes to
+    /// `/old%EF%BF%BDx`, where the entry is ranked, not `/old%00x`. An other address is not an
+    /// `href`: a NUL in it is keyed `%00`, as the URL parser encodes it.
+    ///
     /// A typed route or a [`crate::Local`], as the entry's own:
     ///
     /// ```
@@ -887,8 +892,10 @@ fn key(path: &str) -> std::borrow::Cow<'_, str> {
 /// same entry whether an engine asks for and shows a `|` or an escape's hex digits in one case or
 /// another. An entry whose URL is its own key ([`own_key`]) on a page whose path is its own keeps
 /// the depth it was ranked with as written, which is the same; one whose URL is not a path on this
-/// site ([`is_path`]) holds no page and has no other addresses. Out of line, so a nav without them
-/// is ranked as it was before they existed, by the request path as written.
+/// site ([`is_path`]) holds no page and has no other addresses. An entry's own URL is keyed as the
+/// runtime reads it from the `href` the server wrote, where the HTML parser has made each NUL
+/// U+FFFD, so the link goes to `/a%EF%BF%BD` rather than `/a%00`. Out of line, so a nav without
+/// them is ranked as it was before they existed, by the request path as written.
 #[cold]
 #[inline(never)]
 fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<usize>, T, bool)], also: &Also) {
@@ -906,7 +913,12 @@ fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<u
             Some(end) => holds_path(&page, &url[..end], entry.1),
             None => {
                 own.clear();
-                pathname(url, &mut own);
+                // `own_key` refuses a NUL, so only a URL keyed here can hold one.
+                if url.contains('\0') {
+                    pathname(&url.replace('\0', "\u{FFFD}"), &mut own);
+                } else {
+                    pathname(url, &mut own);
+                }
                 holds_path(&page, &own, entry.1)
             }
         };

@@ -761,6 +761,67 @@ fn a_nav_url_that_is_not_a_path_on_this_site_is_never_current() {
     }
 }
 
+/// A NUL in an entry's own URL, which only a route implemented by hand writes, is read by the HTML
+/// parser as U+FFFD in the `href` the runtime parses, so the link goes to `/old%EF%BF%BDx`, not
+/// `/old%00x`. In a nav with other addresses the server ranks the entry at the path the runtime
+/// gets, so both mark the same entry: the entry at `/old%EF%BF%BDx` and at its other address, the
+/// section at `/old%00x`. An other address is not an `href`, so a NUL in it is keyed as the URL
+/// parser encodes it, `%00`, the path `location.pathname` shows there (#2119).
+#[test]
+fn a_nav_entry_with_a_nul_in_its_url_is_ranked_where_the_link_goes() {
+    use crate::{
+        page::{nav_links, NavTo},
+        view::Attrs,
+        Local,
+    };
+    /// A URL as a route implemented by hand writes it.
+    struct Hand(&'static str);
+    impl crate::Route for Hand {
+        type Data = crate::route::NoData;
+        const PATH: &'static str = "/old";
+        fn write_href(&self, out: &mut String, _: bool) {
+            out.push_str(self.0);
+        }
+    }
+    let (root, older) = (Local::parse("/").unwrap(), Local::parse("/older").unwrap());
+    let drawn = |path: &str, entry: NavTo| {
+        nav_links(path, [(NavTo::section(&root), "Root"), (entry, "Old")])
+            .links()
+            .map(|(link, label)| {
+                let mut out = String::new();
+                link.render_attrs(&mut out);
+                (*label, out)
+            })
+            .collect::<Vec<_>>()
+    };
+    let marked = |path: &str, entry: NavTo| {
+        drawn(path, entry)
+            .into_iter()
+            .filter(|(_, out)| out.contains(r#" aria-current="page""#))
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>()
+    };
+    for url in ["/old\0x", "/old\0x?tab=2"] {
+        let to = Hand(url);
+        assert_eq!(marked("/old%EF%BF%BDx", NavTo::page(&to).also(&older)), ["Old"], "{url:?}");
+        assert_eq!(marked("/older", NavTo::page(&to).also(&older)), ["Old"], "{url:?}");
+        assert_eq!(marked("/old%00x", NavTo::page(&to).also(&older)), ["Root"], "{url:?}");
+        assert_eq!(marked("/old%EF%BF%BDx/more", NavTo::section(&to).also(&older)), ["Old"], "{url:?}");
+        assert_eq!(marked("/old%00x/more", NavTo::section(&to).also(&older)), ["Root"], "{url:?}");
+        let links = drawn("/older", NavTo::page(&to).also(&older));
+        assert!(links[1].1.contains(r#" data-nav-also="/older""#), "{url:?}: {links:?}");
+    }
+    // A NUL at the end is not trimmed as a control character is: the parser has made it U+FFFD.
+    let to = Hand("/old\0");
+    assert_eq!(marked("/old%EF%BF%BD", NavTo::page(&to).also(&older)), ["Old"]);
+    assert_eq!(marked("/old", NavTo::page(&to).also(&older)), ["Root"]);
+    // An other address with a NUL is where the URL parser puts it.
+    let (here, nul) = (Local::parse("/here").unwrap(), Hand("/older\0x"));
+    let links = drawn("/older%00x", NavTo::page(&here).also(&nul));
+    assert!(links[1].1.contains(r#" data-nav-also="/older%00x" aria-current="page""#), "{links:?}");
+    assert_eq!(marked("/older%EF%BF%BDx", NavTo::page(&here).also(&nul)), ["Root"]);
+}
+
 /// An entry whose URL is empty ends where the entry before it does, so it is not taken for that
 /// entry when its other addresses (`NavTo::also`) are written: only the entry that has them writes
 /// `data-nav-also` (#2119).

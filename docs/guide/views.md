@@ -605,7 +605,10 @@ it, and an escape's hex digits are uppercase, as WebKit asks for `/old%7chome` a
 its `location.pathname` keeps `%7c`; no escape is decoded. In a nav with other addresses every
 entry's own URL is compared by its key too, so a deeper entry still wins in another spelling. An
 other address that is not a path on this site (`//host/old`) is left out, and an entry whose own
-URL is not one is current at none of its addresses. The server makes the request's path the same
+URL is not one is current at none of its addresses. A NUL in an entry's own URL, which only a
+route implemented by hand writes, is ranked as the HTML parser leaves it in the `href`, U+FFFD
+(`/old%EF%BF%BDx`, not `/old%00x`), as the runtime reads it; one in an other address is keyed
+`%00`, as the URL parser encodes it. The server makes the request's path the same
 key and the runtime `location.pathname`, and each compares
 the keys as plain text, so for every address Corten writes they mark the same entry at first render
 and after a client navigation in Playwright's Chromium, Firefox and WebKit builds, where these
