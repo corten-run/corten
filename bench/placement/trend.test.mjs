@@ -1050,9 +1050,11 @@ require("node:http").createServer((q, s) => { if (${mute} || q.url === "/hang") 
  * the work directory's file when holds a line. Returns as soon as turns.sh has exited, with what
  * still runs at that moment; the test then waits, past LIFE, for the servers to have ended.
  * servers: a script for a side (base or head) in place of stubborn(its body); before: run with
- * the work directory once the kit's ports are found free, before turns.sh is started.
+ * the work directory once the kit's ports are found free, before turns.sh is started. first: a
+ * directory put first on turns.sh's PATH, of stand-ins for tools it runs; closing: how long, after
+ * turns.sh has exited, to wait for its output to close before returning.
  */
-async function stopping(t, name, { base, head, path = "/page", signal = null, when = null, servers = {}, before = null }) {
+async function stopping(t, name, { base, head, path = "/page", signal = null, when = null, servers = {}, before = null, first = null, closing = 12000 }) {
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   for (const port of [18081, 18082]) assert.ok(!taken(port), `port ${port} is in use, and the kit's ports are fixed: this test needs 18081 and 18082 free`);
@@ -1069,7 +1071,7 @@ async function stopping(t, name, { base, head, path = "/page", signal = null, wh
     }
   });
   if (before !== null) await before(work);
-  const env = { ...process.env, KIT: here, START: "$BIN $PORT", REQ_PATH: path, STATUS: "200", EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, WRK_T: "1", WRK_C: "1", TURN: "1", WARMUP: "0", EXPECT: "", HEADERS: join(plan, "headers.txt"), SCRIPT: join(plan, "request.lua"), MASK: join(plan, "mask.sed"), MASK_JSON: join(plan, "mask.json") };
+  const env = { ...process.env, KIT: here, START: "$BIN $PORT", REQ_PATH: path, STATUS: "200", EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, WRK_T: "1", WRK_C: "1", TURN: "1", WARMUP: "0", EXPECT: "", HEADERS: join(plan, "headers.txt"), SCRIPT: join(plan, "request.lua"), MASK: join(plan, "mask.sed"), MASK_JSON: join(plan, "mask.json"), ...(first ? { PATH: `${first}:${process.env.PATH}` } : {}) };
   const began = Date.now(), child = spawn("sh", [join(here, "turns.sh"), join(work, "compare"), "plain", "0", join(work, "bin", "base"), join(work, "bin", "head")], { stdio: ["ignore", "pipe", "pipe"], env });
   let said = "";
   child.stdout.on("data", (d) => { said += d; });
@@ -1085,7 +1087,7 @@ async function stopping(t, name, { base, head, path = "/page", signal = null, wh
   const end = await exited, ended = Date.now(), now = await left(work);
   clearTimeout(limit);
   // What turns.sh said, once its output has closed (at most a few seconds more: a curl it started may hold it).
-  await Promise.race([closed, wait(12000)]);
+  await Promise.race([closed, wait(closing)]);
   return { ...end, said, work, sent, sentTime, endedTime: ended, seconds: (ended - began) / 1000, ...now };
 }
 
@@ -1164,6 +1166,26 @@ test("turns.sh, killed outright while its servers run, still has them stopped wi
   assert.equal(noted(join(r.work, "pids")).length, 2, r.said);
   assert.deepEqual(now.running, [], `a server turns.sh started was still running ${ms} ms after turns.sh was killed`);
   assert.deepEqual(now.busy, [], `something still answered on the kit's ports ${ms} ms after turns.sh was killed`);
+});
+
+// cmp a plain command, sha256sum one in a command substitution: both run while the two servers do.
+for (const tool of ["cmp", "sha256sum"]) test(`turns.sh, killed outright while a ${tool} it runs on the answers stalls, still has its servers stopped within the same bound`, LINUX, async (t) => {
+  // A stand-in for ${tool} notes that it runs and then stalls, as a paused mask.mjs does, holding
+  // every descriptor it was given, and fails 15 s on (and at once if run again, so what turns.sh
+  // left running ends then). turns.sh is killed while it stalls: a helper given the shell's ends of
+  // the servers' inputs would keep both servers running. That helper also holds turns.sh's output
+  // open, so the servers are looked at from the KILL on, not once that output has closed.
+  const bound = 9000, name = `stop-killed-${tool}`, work = join(tmp, name), stalled = join(work, "stalled");
+  const first = stand(`stall-${tool}`, tool, `[ ! -e '${stalled}' ] || exit 2\necho $$ >>'${stalled}'\nsleep 15\necho $$ >>'${join(work, "unstalled")}'\nexit 2`);
+  t.after(async () => { for (const until = Date.now() + 20000; noted(join(work, "unstalled")).length === 0 && Date.now() < until;) await wait(200); await wait(500); });
+  const r = await stopping(t, name, { base: "aaaa", head: "aaaa", signal: "SIGKILL", when: "stalled", first, closing: 0 });
+  assert.ok(r.sent, `${tool} never ran, or turns.sh ended before it could be killed: ${r.said}`);
+  let now = { running: r.running, busy: r.busy };
+  while ((now.running.length > 0 || now.busy.length > 0) && Date.now() - r.sentTime < bound) { await wait(100); now = await left(r.work); }
+  const ms = Date.now() - r.sentTime;
+  assert.equal(noted(join(r.work, "pids")).length, 2, r.said);
+  assert.deepEqual(now.running, [], `a server turns.sh started was still running ${ms} ms after turns.sh was killed in ${tool}`);
+  assert.deepEqual(now.busy, [], `something still answered on the kit's ports ${ms} ms after turns.sh was killed in ${tool}`);
 });
 
 /**

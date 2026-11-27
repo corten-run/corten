@@ -90,11 +90,14 @@ done
 # trend's check) signals turns.sh's whole process group, so the servers get its TERM (and its
 # KILL 30 s on) as serve.mjs and this shell do, and serve.mjs then stops its server as above and exits 1.
 # A server's standard input is a FIFO whose one writer is this shell's descriptor 5 (A's) or 6
-# (B's), opened read and write so neither end waits for the other. serve.mjs and every curl, perf
-# and wrk get both closed, so closing one stops that server, and so does this shell's end, however
-# it ends, KILL included. Starting a server and stopping servers hold off HUP, INT, PIPE and TERM
-# (late) until they are done, a stop until serve.mjs has ended, and the shell then exits 1 for the
-# signal: the placement's deadline TERM in a stop cannot cut it short and leave a server running.
+# (B's), opened read and write so neither end waits for the other. No command this shell runs while
+# either is open has them: serve.mjs gets both closed, and so does every other one that is not a
+# builtin, on the command itself or by running in a subshell that closes them first (the answers'
+# comparison, and the reading of each turn's output). So closing one stops that server, and so
+# does this shell's end, however it ends, KILL included, even while a command it ran still runs.
+# Starting a server and stopping servers hold off HUP, INT, PIPE and TERM (late) until they are
+# done, a stop until serve.mjs has ended, and the shell then exits 1 for the signal: the
+# placement's deadline TERM in a stop cannot cut it short and leave a server running.
 # A trapped signal ends a wait early, with a status above 128, so a wait it woke is made again.
 # serve.mjs is run with an environment of PATH and HOME alone, and the wait for it is bounded:
 # about 15 s, more than its own 10 s at most. If it has not ended by then, turns.sh fails, saying
@@ -106,9 +109,9 @@ release() { trap 'exit 1' HUP INT PIPE TERM; [ -z "$late" ] || exit 1; }
 start() { # <A|B> <port> <binary>. Its environment is PATH, HOME, PORT and BIN and what the plan's start command sets, none of the caller's; its error output goes to serve-<A|B>.log.
     hold
     fifo=$out/serve-$1.fifo
-    rm -f "$fifo" "$out/serve-$1.pid"; mkfifo "$fifo"
+    rm -f "$fifo" "$out/serve-$1.pid" 5>&- 6>&-; mkfifo "$fifo" 5>&- 6>&-
     if [ "$1" = A ]; then exec 5<>"$fifo" 7<"$fifo"; else exec 6<>"$fifo" 7<"$fifo"; fi
-    rm -f "$fifo"
+    rm -f "$fifo" 5>&- 6>&-
     env -i PATH="$PATH" HOME="$HOME" node "$KIT/serve.mjs" --pid="$out/serve-$1.pid" \
         sh -c 'exec 2>>"$0"; exec "$@"' "$out/serve-$1.log" env -i PATH="$PATH" HOME="$HOME" PORT="$2" BIN="$3" taskset -c "$cpu" sh -c "exec $START" \
         <&7 >/dev/null 2>>"$out/serve-$1.log" 5>&- 6>&- 7>&- &
@@ -123,12 +126,12 @@ halt() { # <A|B>...: stops those servers that run, together, within about 15 s
     for v; do
         if [ "$v" = A ]; then s=$sup_A; sup_A=; a=; else s=$sup_B; sup_B=; b=; fi
         [ -n "$s" ] || continue
-        rm -f "$out/serve-$v.pid"
+        rm -f "$out/serve-$v.pid" 5>&- 6>&-
         # kill -0 sends no signal: it asks whether the shell's own child, serve.mjs, is still
         # there. Its number cannot name another process until the shell reaps it, which the
         # shell does while it waits for a sleep below (or in wait), and then kill -0 finds
         # nothing. A number taken again since would read as still running, and the bound ends that.
-        while kill -0 "$s" 2>/dev/null && [ $n -lt 150 ]; do n=$((n + 1)); sleep 0.1; done
+        while kill -0 "$s" 2>/dev/null && [ $n -lt 150 ]; do n=$((n + 1)); sleep 0.1 5>&- 6>&-; done
         if kill -0 "$s" 2>/dev/null; then
             echo "turns: $workload: serve.mjs, stopping $v's server, has not ended 15 s after its input closed: cleanup unconfirmed" >&2
             st=1; continue
@@ -147,7 +150,7 @@ halt() { # <A|B>...: stops those servers that run, together, within about 15 s
     # something its START forked, say, and turns.sh end with it listening.
     for v in $probe; do
         if [ "$v" = A ]; then hport=$aport; else hport=$bport; fi
-        cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$hport/" </dev/null || cst=$?
+        cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$hport/" </dev/null 5>&- 6>&- || cst=$?
         [ $cst = 7 ] || { echo "turns: $workload: something still accepts on $hport after $v's server was stopped (curl status $cst): START must be, or exec, the server that listens, not start it and leave it" >&2; st=1; }
     done
     release
@@ -158,11 +161,12 @@ trap 'exit 1' HUP INT PIPE TERM
 ready() { # <A|B> <port>: that server answers, its process number from serve.mjs is then in $a or $b, and it is on the server's CPU
     i=0
     until [ -f "$out/serve-$1.pid" ] && curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$2/" </dev/null 5>&- 6>&-; do
-        i=$((i + 1)); [ $i -lt 100 ] || fail "nothing answers on $2"; sleep 0.1
+        i=$((i + 1)); [ $i -lt 100 ] || fail "nothing answers on $2"; sleep 0.1 5>&- 6>&-
     done
-    p=$(cat "$out/serve-$1.pid")
+    # A command substitution is a subshell of this one, with its descriptors: it closes them first.
+    p=$(exec 5>&- 6>&-; cat "$out/serve-$1.pid")
     case $p in ''|*[!0-9]*) fail "serve.mjs gave no process number for $1's server: $p";; esac
-    [ "$(taskset -cp "$p" | sed 's/.*: //')" = "$cpu" ] || fail "pid $p is not on cpu $cpu"
+    [ "$(exec 5>&- 6>&-; taskset -cp "$p" | sed 's/.*: //')" = "$cpu" ] || fail "pid $p is not on cpu $cpu"
     if [ "$1" = A ]; then a=$p; else b=$p; fi
 }
 fresh() { # <A|B>: (re)starts that binary; its server's process number is then in $a or $b
@@ -182,87 +186,96 @@ answer() { # <port> <out prefix>: writes <prefix>.raw-headers, .headers (masked)
     curl --disable --noproxy '*' -sS --max-time 10 -D "$to.raw-headers" -o "$to.body" "$@" "http://127.0.0.1:$port$path" </dev/null 5>&- 6>&-
     tr -d '\r' <"$to.raw-headers" | grep -iv '^date:' | sed -f "$mask" >"$to.headers"
 }
-answer $aport "$ans/A"
-answer $aport "$ans/A-again"
-answer $bport "$ans/B"
-for f in "$ans/A.headers" "$ans/B.headers"; do
-    head -1 "$f" | grep -q "^HTTP/[0-9.]* $status " || fail "$(head -1 "$f") in $f, not status $status"
-done
-node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not within the range the plan states"
-cmp -s "$ans/A.headers" "$ans/A-again.headers" || fail "two answers of A differ in their headers after the mask: $ans/A*.headers"
-cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in their bodies: $ans/A*.body"
-# diff.txt is created before anything is compared, so a file that cannot be is a failure and not
-# an empty difference (printf, since a redirection that fails on the special builtin : would end
-# the shell without the reason); diff and cmp say 0 for the same, 1 for different and 2 for trouble.
-# answers/ is this check's own, made afresh above, so anything already at diff.txt is not one it
-# made: a link to the expected difference, say, which a write would truncate and the check then
-# compare with itself. It is refused, and diff.txt is created with noclobber (in a subshell, so
-# the option goes no further), which makes a new file and follows no link to a regular one.
-diffs=$ans/diff.txt
-[ ! -e "$diffs" ] && [ ! -L "$diffs" ] || fail "$diffs cannot be written as a new file: something is there before the check made it"
-(set -C; printf '' >"$diffs") || fail "$diffs cannot be written"
-hst=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || hst=$?
-[ $hst -le 1 ] || fail "diff could not compare the two answers' headers (status $hst)"
-na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
-da=$(sha256sum <"$ans/A.body"); da=${da%% *}; db=$(sha256sum <"$ans/B.body"); db=${db%% *}
-bst=0; cmp -s "$ans/A.body" "$ans/B.body" || bst=$?
-case $bst in
-    0) line="bodies same: $na bytes, sha256 $da" ;;
-    1) line="bodies differ: $na and $nb bytes, sha256 $da and $db" ;;
-    *) fail "cmp could not compare the two answers' bodies (status $bst)" ;;
-esac
-# Whether the two differ is what diff and cmp said, not what diff.txt holds: a difference either
-# reported must be in diff.txt, which then ends with the bodies line (so an expected one names
-# the bodies as well) and holds the headers' diff before it when the headers differ, and when
-# neither reported one diff.txt is an empty regular file of its own that can be read. A diff.txt
-# that does not hold what they said (one that took no writes, say), one that is not there
-# (unlinked after diff wrote it) or not a regular file (a link, to /dev/null or the expected
-# difference say), or, when they said the same, one that cannot be read, is missing evidence,
-# and fails the placement rather than reading as the same.
-if [ $hst = 1 ] || [ $bst = 1 ]; then
-    # The bodies line is added only to a regular file of the check's own, not through a link.
-    [ -f "$diffs" ] && [ ! -L "$diffs" ] \
-        || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence ($diffs is not there, not a regular file, or a link)"
-    echo "$line" >>"$diffs" || fail "$diffs cannot be written"
-    n=$(wc -l <"$diffs")
-    { if [ $hst = 1 ]; then [ "$n" -gt 1 ]; else [ "$n" -eq 1 ]; fi; } && [ "$(tail -n 1 "$diffs")" = "$line" ] \
-        || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence"
-else
-    [ -f "$diffs" ] && [ ! -L "$diffs" ] && [ -r "$diffs" ] \
-        || fail "$diffs is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence"
-    [ ! -s "$diffs" ] || fail "$diffs holds a difference that neither diff nor cmp reported"
-fi
-echo "body $na bytes as received, sha256 $(printf %.16s "$da") A and $(printf %.16s "$db") B" >"$ans/bodies.txt"
-if [ -n "${EXPECT:-}" ]; then
-    cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
-    verdict="answers: differ only as the plan's expected difference says"
-else
-    # A difference that is not expected is said only after a stop that passed: serve.mjs said both
-    # servers ended and their ports refused a connection when checked, so the line and status 4
-    # do not stand for answers compared on servers that were then left running.
-    if [ $hst != 0 ] || [ $bst != 0 ]; then
+# The comparison runs in a subshell of its own, a command substitution, which closes descriptors 5
+# and 6 before it runs anything, so no command it runs (curl, mask.mjs, cmp, diff, sha256sum and
+# the rest) holds the servers' inputs open, and a KILL of this shell while one of them stalls still
+# stops both servers. Its output says how the answers compare: same, expected (they differ only as
+# the plan's expected difference says) or differ. A failure in it says why and ends it with the
+# failing status, which ends this shell with that status too (set -e).
+compare() {
+    answer $aport "$ans/A"
+    answer $aport "$ans/A-again"
+    answer $bport "$ans/B"
+    for f in "$ans/A.headers" "$ans/B.headers"; do
+        head -1 "$f" | grep -q "^HTTP/[0-9.]* $status " || fail "$(head -1 "$f") in $f, not status $status"
+    done
+    node "$KIT/mask.mjs" stated "$MASK_JSON" "$ans/A.raw-headers" "$ans/A-again.raw-headers" "$ans/B.raw-headers" || fail "a masked header is not within the range the plan states"
+    cmp -s "$ans/A.headers" "$ans/A-again.headers" || fail "two answers of A differ in their headers after the mask: $ans/A*.headers"
+    cmp -s "$ans/A.body" "$ans/A-again.body" || fail "two answers of A differ in their bodies: $ans/A*.body"
+    # diff.txt is created before anything is compared, so a file that cannot be is a failure and not
+    # an empty difference (printf, since a redirection that fails on the special builtin : would end
+    # the shell without the reason); diff and cmp say 0 for the same, 1 for different and 2 for trouble.
+    # answers/ is this check's own, made afresh above, so anything already at diff.txt is not one it
+    # made: a link to the expected difference, say, which a write would truncate and the check then
+    # compare with itself. It is refused, and diff.txt is created with noclobber (in a subshell, so
+    # the option goes no further), which makes a new file and follows no link to a regular one.
+    diffs=$ans/diff.txt
+    [ ! -e "$diffs" ] && [ ! -L "$diffs" ] || fail "$diffs cannot be written as a new file: something is there before the check made it"
+    (set -C; printf '' >"$diffs") || fail "$diffs cannot be written"
+    hst=0; diff "$ans/A.headers" "$ans/B.headers" >"$diffs" || hst=$?
+    [ $hst -le 1 ] || fail "diff could not compare the two answers' headers (status $hst)"
+    na=$(wc -c <"$ans/A.body"); nb=$(wc -c <"$ans/B.body")
+    da=$(sha256sum <"$ans/A.body"); da=${da%% *}; db=$(sha256sum <"$ans/B.body"); db=${db%% *}
+    bst=0; cmp -s "$ans/A.body" "$ans/B.body" || bst=$?
+    case $bst in
+        0) line="bodies same: $na bytes, sha256 $da" ;;
+        1) line="bodies differ: $na and $nb bytes, sha256 $da and $db" ;;
+        *) fail "cmp could not compare the two answers' bodies (status $bst)" ;;
+    esac
+    # Whether the two differ is what diff and cmp said, not what diff.txt holds: a difference either
+    # reported must be in diff.txt, which then ends with the bodies line (so an expected one names
+    # the bodies as well) and holds the headers' diff before it when the headers differ, and when
+    # neither reported one diff.txt is an empty regular file of its own that can be read. A diff.txt
+    # that does not hold what they said (one that took no writes, say), one that is not there
+    # (unlinked after diff wrote it) or not a regular file (a link, to /dev/null or the expected
+    # difference say), or, when they said the same, one that cannot be read, is missing evidence,
+    # and fails the placement rather than reading as the same.
+    if [ $hst = 1 ] || [ $bst = 1 ]; then
+        # The bodies line is added only to a regular file of the check's own, not through a link.
+        [ -f "$diffs" ] && [ ! -L "$diffs" ] \
+            || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence ($diffs is not there, not a regular file, or a link)"
+        echo "$line" >>"$diffs" || fail "$diffs cannot be written"
+        n=$(wc -l <"$diffs")
+        { if [ $hst = 1 ]; then [ "$n" -gt 1 ]; else [ "$n" -eq 1 ]; fi; } && [ "$(tail -n 1 "$diffs")" = "$line" ] \
+            || fail "diff (status $hst) or cmp (status $bst) reported a difference that $diffs does not hold: missing evidence"
+    else
+        [ -f "$diffs" ] && [ ! -L "$diffs" ] && [ -r "$diffs" ] \
+            || fail "$diffs is not there, not a regular file or not readable, though neither diff nor cmp reported a difference: missing evidence"
+        [ ! -s "$diffs" ] || fail "$diffs holds a difference that neither diff nor cmp reported"
+    fi
+    echo "body $na bytes as received, sha256 $(printf %.16s "$da") A and $(printf %.16s "$db") B" >"$ans/bodies.txt"
+    if [ -n "${EXPECT:-}" ]; then
+        cmp -s "$diffs" "$EXPECT" || { diff "$EXPECT" "$diffs" >&2 || true; fail "the answers differ other than as the plan's expected difference says"; }
+        echo expected
+    elif [ $hst != 0 ] || [ $bst != 0 ]; then
         cat "$diffs" >&2
+        echo differ
+    else
+        echo same
+    fi
+}
+outcome=$(set -e; exec 5>&- 6>&-; compare)
+case $outcome in
+    same) verdict="answers: same" ;;
+    expected) verdict="answers: differ only as the plan's expected difference says" ;;
+    differ)
+        # A difference that is not expected is said only after a stop that passed: serve.mjs said both
+        # servers ended and their ports refused a connection when checked, so the line and status 4
+        # do not stand for answers compared on servers that were then left running.
         halt A B || fail "A and B's answers differ, and stopping their servers after the check failed or is unconfirmed: not read as a difference"
         echo "turns: $workload: A and B answer differently; both servers ended and nothing accepted on either port when checked" >&2
         exit 4
-    fi
-    verdict="answers: same"
-fi
+        ;;
+    *) fail "the answers' comparison said neither same, expected nor differ: $outcome" ;;
+esac
 
 # Both stopped after the check, so neither holds memory while the other is measured. The verdict
 # is published only once that stop has passed, as a difference is: a stop that fails leaves no
 # verdict.txt, and no passing line, for answers compared on servers that were then left running.
 halt A B || fail "stopping the two servers after their answers were compared failed or is unconfirmed: no verdict"
 echo "$verdict" | tee "$ans/verdict.txt"
-turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows
-    if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
-    perf stat -x, -e "$events" -p "$pid" -o "$out/turn.perf" -- sleep "$secs.4" 5>&- 6>&- &
-    perfpid=$!
-    sleep 0.1
-    set --
-    while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
-    taskset -c "$load" wrk -t"$WRK_T" -c"$WRK_C" -d"${secs}s" "$@" -s "$SCRIPT" "http://127.0.0.1:$port$path" >"$out/turn.wrk" 5>&- 6>&-
-    wait $perfpid
+# A turn's output is read in a subshell that closes descriptors 5 and 6 first, as the comparison is.
+record() { # writes the turn's perf and wrk output to the raw log, and its CSV row
     { echo "## pair $pair_ $version_"; cat "$out/turn.perf" "$out/turn.wrk"; } >>"$raw"
     set -- $(sed -n 's/^RESULT //p' "$out/turn.wrk")
     [ $# -eq 6 ] || fail "no RESULT line from wrk in pair $pair_ $version_"
@@ -281,6 +294,17 @@ turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head r
         values="$values,$v"
     done
     echo "$pair_,$version_,$requests$values" >>"$csv"
+}
+turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows
+    if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
+    perf stat -x, -e "$events" -p "$pid" -o "$out/turn.perf" -- sleep "$secs.4" 5>&- 6>&- &
+    perfpid=$!
+    sleep 0.1 5>&- 6>&-
+    set --
+    while IFS= read -r h; do [ -z "$h" ] || set -- "$@" -H "$h"; done <"$HEADERS"
+    taskset -c "$load" wrk -t"$WRK_T" -c"$WRK_C" -d"${secs}s" "$@" -s "$SCRIPT" "http://127.0.0.1:$port$path" >"$out/turn.wrk" 5>&- 6>&-
+    wait $perfpid
+    (set -e; exec 5>&- 6>&-; record)
     if [ "$version_" = base ]; then halt A || exit 1; else halt B || exit 1; fi
 }
 one() { pair_=$1; version_=$2; turn "$1" "$2"; }
