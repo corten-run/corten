@@ -6,8 +6,8 @@
 //   node stand-in.mjs [valgrind's options] [<binary>] <port> <configuration>   the probe, or valgrind running it
 //   node stand-in.mjs control -d <pid>                                         callgrind_control
 //
-// Both keep their notes in the directory $STAND_IN: `started.json` (the options and the
-// allocator's settings the server was last started with), `control-<pid>` (the port a dump is
+// Both keep their notes in the directory $STAND_IN: `started.json` (the options, the
+// allocator's settings and the `HOSTS` the server was last started with), `control-<pid>` (the port a dump is
 // asked for on), `controls` (how often the control was run) and `parts.json` (what each dump of
 // the last server held). A dump is callgrind's in name and shape: with `--separate-threads=yes`
 // a file a thread, `<out>.<part>-01` and `-02`, and `<out>-01` and `-02` when the server is
@@ -56,7 +56,7 @@ function serve() {
   const out = options.find((option) => option.startsWith("--callgrind-out-file="))?.slice("--callgrind-out-file=".length);
   writeFileSync(
     join(/** @type {string} */ (state), "started.json"),
-    JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR }),
+    JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR, HOSTS: process.env.HOSTS ?? null }),
   );
   /** @type {Record<string, Record<string, string>>} */
   const bodies = { api: { "GET /baseline11?a=1&b=2": "3", "GET /unstaged11?a=1&b=2": "3", "GET /pipeline": "ok" }, pages: { "GET /text": "ok" } };

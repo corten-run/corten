@@ -204,6 +204,29 @@ test("count.mjs prints each case's count to the nearest instruction, its window'
   assert.deepEqual(pipeline?.slice(0, 4), ["pipeline", "1001", "1001", "1001"]);
 });
 
+test("a case of an app that answers to any host starts the probe with HOSTS=*, and the others with no HOSTS whatever the caller's holds", { skip }, async () => {
+  const any = await counting("unstaged-any-last", 1);
+  assert.equal(any.started.HOSTS, "*");
+  assert.equal(any.started.configuration, "api");
+  assert.equal(any.window.serving, 1_000_600);
+  const named = await counting("get", 1, { HOSTS: "shop.example" });
+  assert.equal(named.started.HOSTS, null);
+  const set = await counting("get-any", 1, { HOSTS: "shop.example" });
+  assert.equal(set.started.HOSTS, "*");
+});
+
+test("count.mjs widens the case's column for a name longer than it, and keeps it 14 for the rest", { skip }, async () => {
+  const run = await running("count.mjs", ["--cases", "get,unstaged-any-last", "--reps", "1"]);
+  assert.equal(run.status, 0, run.stderr);
+  const [header, get, last] = run.stdout.trimEnd().split("\n");
+  assert.equal(header?.indexOf("median"), 19 + 4);
+  assert.match(String(get), /^get {16}\s+1001\s/);
+  assert.match(String(last), /^unstaged-any-last  \s+1001\s/);
+  assert.equal(get?.indexOf("1001"), last?.indexOf("1001"));
+  const short = await running("count.mjs", ["--cases", "get", "--reps", "1"]);
+  assert.equal(short.stdout.split("\n")[0]?.indexOf("median"), 14 + 4);
+});
+
 test("count.mjs takes a depth of 240, the whole of the requests before the counted ones", { skip }, async () => {
   const run = await running("count.mjs", ["--cases", "pipeline", "--reps", "1", "--depth", "240"]);
   assert.equal(run.status, 0, run.stderr);
