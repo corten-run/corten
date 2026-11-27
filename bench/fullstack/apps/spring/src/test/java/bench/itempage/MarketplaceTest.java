@@ -96,7 +96,7 @@ class MarketplaceTest {
         var model = new ExtendedModelMap();
         var source = org.mockito.Mockito.mock(MarketplaceSource.class);
         org.mockito.Mockito.when(source.get("item_1")).thenReturn(sample());
-        var controller = new MarketplaceController(source, org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class));
+        var controller = new MarketplaceController(source, org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class), null);
         var request = new MockHttpServletRequest("GET", "/marketplace/fr-FR/item_1");
         assertEquals("marketplace", controller.show("fr-FR", "item_1", "", "asc", "", "", "", request, new org.springframework.mock.web.MockHttpServletResponse(), model));
         // The web context expands @{...} routes in the actual MVC integration; this

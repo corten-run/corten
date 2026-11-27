@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -154,6 +155,91 @@ func TestNativeAlertHTTP(t *testing.T) {
 			t.Fatal("duplicate", row.Email)
 		}
 		seen[row.Email] = true
+	}
+}
+
+func TestMarketplacePublicOrigin(t *testing.T) {
+	const public = "https://localhost:8080"
+	for _, invalid := range []string{"ftp://localhost:8080", "https://", "https://localhost/", "https://localhost?", "https://localhost#", "https://user@localhost", "https://localhost:*", "https://localhost:65536", "https://localhost:443", "https://[not-ipv6]", " https://localhost"} {
+		if _, err := parseMarketplacePublicOrigin(invalid); err == nil {
+			t.Errorf("accepted invalid origin %q", invalid)
+		}
+	}
+	t.Setenv("MARKETPLACE_PUBLIC_ORIGIN", public)
+	t.Setenv("MARKETPLACE_SOURCE", "")
+	t.Setenv("PROFILE", "matched")
+	t.Setenv("HOSTS", "localhost,127.0.0.1")
+	source, err := newMarketplaceSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.fixture = map[string]*marketplaceRecord{"item_1": sampleMarketplace()}
+	router := gin.New()
+	if err := configureProduction(router); err != nil {
+		t.Fatal(err)
+	}
+	source.routes(router)
+	for _, tc := range []struct {
+		name, host, origin, site string
+		status                   int
+		secure                   bool
+	}{
+		{"edge", "localhost:8080", public, "same-origin", 200, true},
+		{"wrong scheme", "localhost:8080", "http://localhost:8080", "same-origin", 403, false},
+		{"wrong origin", "localhost:8080", "https://other.invalid", "same-origin", 403, false},
+		{"wrong port", "localhost:8081", public, "same-origin", 403, false},
+		{"public origin on direct host", "127.0.0.1:8080", public, "same-origin", 403, false},
+		{"missing origin", "localhost:8080", "", "same-origin", 403, false},
+		{"cross-site", "localhost:8080", public, "cross-site", 403, false},
+		{"unlisted host", "other.invalid:8080", public, "same-origin", 421, false},
+		{"direct", "127.0.0.1:8080", "http://127.0.0.1:8080", "same-origin", 200, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "http://"+tc.host+"/marketplace/en-US/item_1",
+				strings.NewReader("email=edge%40example.test&target_price=1.25"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+			if tc.status != 200 {
+				claimed := tc.origin
+				if claimed == "" {
+					claimed = public
+				}
+				u, err := url.Parse(claimed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Forwarded", "host="+strconv.Quote(u.Host)+";proto="+u.Scheme)
+				req.Header.Set("X-Forwarded-Host", u.Host)
+				req.Header.Set("X-Forwarded-Proto", u.Scheme)
+			}
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != tc.status {
+				t.Fatalf("status = %d, want %d", res.Code, tc.status)
+			}
+			cookies := res.Result().Cookies()
+			if tc.status != 200 {
+				if len(cookies) != 0 {
+					t.Fatal("rejected form created a session")
+				}
+				return
+			}
+			if len(cookies) != 1 || cookies[0].Name != alertCookie || cookies[0].Secure != tc.secure {
+				t.Fatal("unexpected session cookie", cookies)
+			}
+			read := httptest.NewRequest("GET", "http://"+tc.host+"/api/alerts", nil)
+			read.AddCookie(cookies[0])
+			res = httptest.NewRecorder()
+			router.ServeHTTP(res, read)
+			var rows []storedAlert
+			if err := json.Unmarshal(res.Body.Bytes(), &rows); err != nil ||
+				!reflect.DeepEqual(rows, []storedAlert{{"item_1", "edge@example.test", 125}}) {
+				t.Fatal("accepted form did not append one alert", rows, err)
+			}
+		})
 	}
 }
 

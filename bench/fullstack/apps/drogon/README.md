@@ -80,9 +80,14 @@ fetches an item nor creates, clears or refreshes a session, and sends `no-store`
 The first accepted POST sets host-only `marketplace_session`, with `Path=/`,
 `HttpOnly`, `SameSite=Lax` and no browser expiry. The credential is 32 bytes from
 OpenSSL's cryptographic random source, hex encoded; the existing Drogon dependency
-already links OpenSSL. `Secure` follows the native connection's TLS state, never
-forwarding headers. The existing connection-origin guard is unchanged apart from
-rejecting non-same-origin Fetch Metadata. TLS termination in a proxy is not inferred.
+already links OpenSSL. The form guard normally uses the connection's origin.
+With an exact `MARKETPLACE_PUBLIC_ORIGIN` (for example `https://localhost:8080`),
+a POST whose actual Host equals that authority must carry exactly that Origin,
+even if the edge forwards over HTTP. On that host, a configured HTTPS origin
+also marks the session cookie `Secure`. There is no HTTP fallback on that Host.
+Other hosts, including the direct HTTP preflight, still use the connection.
+The matched Host allowlist and Fetch Metadata are still checked separately,
+and no forwarding header is trusted.
 An unknown cookie is never adopted as a new session's credential.
 
 The mutex-protected process-local store expires sessions one hour after creation,
@@ -92,6 +97,9 @@ not durable or distributed storage. CTest includes concurrent store/cookie/capac
 checks. For fixture/API HTTP, real browser forms in JS/no-JS contexts, cookie-jar
 readback and isolation, run the compiled-native driver documented in
 `../gin/README.md` with `drogon` and the image under test.
+For the focused public-origin check, start the fixture-backed matched server
+with `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080` and run
+`node tests/public-origin-http.mjs http://127.0.0.1:8080` from this app directory.
 
 POST source parsing requires one complete JSON document and the requested record
 identity. A successful native CSP response must be prepared before appending.
