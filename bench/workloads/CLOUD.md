@@ -1464,7 +1464,8 @@ cancellation refused, so the message names neither. The next collect keeps that
 receipt as an interrupted one (below) and retires on a fresh drain proof of the
 same session.
 The restore only records how the DELETE ended, so it runs even after
-cancellation; a custody mismatch at the restore refuses and keeps the intent. Any
+cancellation; a custody mismatch at the restore refuses and keeps the intent,
+which leaves the host as a torn withdrawal does (below). Any
 other outcome after the intent keeps the intent, with recovery by exact absence
 alone: a request that started (an HTTP error, a timeout or a lost
 acknowledgement), an unacknowledged worker result, or a refusal by the
@@ -1524,12 +1525,16 @@ with it depends on the retirement kind:
    (for a v2 or v3 receipt, through its recorded digest: the receipt is kept and a
    fresh proof retires). A torn `destroyedAt` leaves the intent after the one
    DELETE, so the next collect only checks exact absence and records
-   `destroyedAt`, with no second DELETE. A torn withdrawal keeps the intent, so
-   recovery is exact absence alone and no DELETE is sent.
-2. The handoff and exit-one retirements refuse. Their state save rechecks handoff
+   `destroyedAt`, with no second DELETE.
+2. A torn withdrawal (the drain proof's or an ordinary collect's) does not
+   recover. It keeps the intent of a DELETE that was never sent, on a host that
+   is still running, so every later collect waits for an exact absence that does
+   not come and refuses with `deletion not confirmed; outcome uncertain`,
+   sending no DELETE, until the operator clears it (operator cleanup below).
+3. The handoff and exit-one retirements refuse. Their state save rechecks handoff
    custody and keeps the operation lock when it fails, and their publication check
    refuses every `state.json.*.tmp` name as an unsettled publication.
-3. The pinned unused retirement refuses. Its custody check admits only a closed
+4. The pinned unused retirement refuses. Its custody check admits only a closed
    list of names in the state root, so a leftover stage refuses with
    `unexpected local bootstrap custody; preserve host`.
 
@@ -1540,6 +1545,12 @@ next ordinary save with `EEXIST` until the operator archives it: fleet
 verification's external-failure check treats that exact name as an unsettled
 publication, and the handoff publication check treats every `state.json.*.tmp`
 name that way, so it is not bypassed.
+
+All of these are saves that fail with an error, after which the collect
+releases its `operation.lock`. A controller killed during one (or anywhere else
+under the lock) also leaves that lock, and every later collect refuses on it
+until the operator accounts for that process tree and removes it, as for any
+retained lock (above).
 
 A v2 or
 v3 receipt and its history copy are published whole: each is written and synced
