@@ -208,7 +208,7 @@ document, so the layout is never stale.
 
 `corten::serve` reads and writes HTTP/1.1 with hyper. `.own_http1(true)` has Corten's own
 connection code answer the requests that have no body, and leaves the rest to hyper
-([design Choice 77](../design.md#choice-own-http1)). It is off unless the app sets it.
+([design Choice 78](../design.md#choice-own-http1)). It is off unless the app sets it.
 
 ```rust,ignore
 let app = App::new(url::router()).own_http1(true);
