@@ -106,62 +106,66 @@ export function syncDirectory(path) {
   if (process.platform === "win32") return;
   const fd = openSync(path, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
 }
-// Returns the written file's own identity, read from its descriptor after the sync.
 export function durable(path, bytes) {
   physical(dirname(path)); const fd = openSync(path, "wx", 0o600);
-  let written;
-  try { writeFileSync(fd, bytes); fsyncSync(fd); written = fstatSync(fd, { bigint: true }); } finally { closeSync(fd); }
+  try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
-  return written;
 }
 // A file published whole or not at all: written and synced under its own stage name in
 // the same directory, then hard-linked to its final name, which fails rather than
 // replacing an existing file. A stage is never trusted; a stage left by an interrupted
 // write is this function's own name, so the next write removes it first. A caller's
 // `beforePublish` runs after the stage is written and synced, immediately before the link.
-// The stage name is only a name: what this call wrote is the file it created (device and
-// inode, read from its descriptor) holding the bytes it wrote. The link is made only while
-// the stage still names that file with those bytes, and the stage is removed only while it
-// still names that file; a replacement or rewrite there is refused and left as found.
-// If `beforePublish` throws, nothing is published and the stage is removed only if it is
-// still the one this call wrote; a replaced stage is kept and the error says so.
+// The stage name is only a name: what this call wrote is the file it created, held open
+// by its own descriptor from creation until the link or refusal, so its inode cannot be
+// freed and reused by a replacement. The link is made only while the stage still names
+// that file and the file still holds the bytes written, and the stage is removed only
+// while it still names that file; a replacement or rewrite there is refused and left as
+// found. If `beforePublish` throws, nothing is published and the stage is removed only if
+// it is still the one this call wrote; a replaced stage is kept and the error says so.
 export const publicationStage = (path) => `${path}.stage`;
 export function discardPublicationStage(path) {
   const stage = publicationStage(path);
   if (!lstatSync(stage, { throwIfNoEntry: false })) return;
   unlinkSync(stage); syncDirectory(dirname(path));
 }
-const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
-// Whether `path` still names the authored file, optionally also holding exactly `sha256`.
-function authored(path, written, sha256) {
-  const now = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-  if (!now?.isFile() || !sameFile(now, written)) return false;
-  if (sha256 === undefined) return true;
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const open = fstatSync(fd, { bigint: true });
-    if (!sameFile(open, written) || open.size > BigInt(smallLimit)) return false;
-    const bytes = Buffer.alloc(Number(open.size)); if (bytes.length) readAt(fd, bytes, 0);
-    return digest(bytes) === sha256;
-  } finally { closeSync(fd); }
-}
 export function durableNew(path, bytes, beforePublish = () => {}) {
   assert.ok(Buffer.byteLength(bytes) <= smallLimit, "bounded publication required");
   physical(dirname(path)); discardPublicationStage(path);
   const stage = publicationStage(path), sha256 = digest(bytes);
-  const written = durable(stage, bytes);
-  try { beforePublish(); } catch (error) {
-    if (authored(stage, written)) discardPublicationStage(path);
-    else if (error && typeof error === "object") {
-      try { error.message = `${error.message}; the publication stage was replaced and is kept`; } catch {}
+  const fd = openSync(stage, "wx", 0o600);
+  try {
+    writeFileSync(fd, bytes); fsyncSync(fd); syncDirectory(dirname(path));
+    const written = fstatSync(fd, { bigint: true });
+    // Whether `name` still names the held file, and, with `content`, whether that file
+    // still holds exactly the bytes written.
+    const authored = (name, content = false) => {
+      const now = lstatSync(name, { bigint: true, throwIfNoEntry: false });
+      if (!now?.isFile() || now.dev !== written.dev || now.ino !== written.ino) return false;
+      if (!content) return true;
+      // The held descriptor is write-only, so the bytes are read through a second one,
+      // admitted only if it opened the same held file.
+      const read = openSync(name, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      try {
+        const open = fstatSync(read, { bigint: true });
+        if (open.dev !== written.dev || open.ino !== written.ino || open.size > BigInt(smallLimit)) return false;
+        const held = Buffer.alloc(Number(open.size)); if (held.length) readAt(read, held, 0);
+        return digest(held) === sha256;
+      } finally { closeSync(read); }
+    };
+    try { beforePublish(); } catch (error) {
+      if (authored(stage)) discardPublicationStage(path);
+      else if (error && typeof error === "object") {
+        try { error.message = `${error.message}; the publication stage was replaced and is kept`; } catch {}
+      }
+      throw error;
     }
-    throw error;
-  }
-  assert.ok(authored(stage, written, sha256), "publication stage replaced before its link; nothing published, the replacement is kept");
-  linkSync(stage, path);
-  assert.ok(authored(path, written), "published file is not the stage this write made; preserve both");
-  assert.ok(authored(stage, written), "publication stage replaced after its link; the replacement is kept");
-  unlinkSync(stage); syncDirectory(dirname(path));
+    assert.ok(authored(stage, true), "publication stage replaced before its link; nothing published, the replacement is kept");
+    linkSync(stage, path);
+    assert.ok(authored(path), "published file is not the stage this write made; preserve both");
+    assert.ok(authored(stage), "publication stage replaced after its link; the replacement is kept");
+    unlinkSync(stage); syncDirectory(dirname(path));
+  } finally { closeSync(fd); }
 }
 export function durableCopy(source, destination, expected) {
   const file = opened(source, archiveLimit), hash = createHash("sha256");
