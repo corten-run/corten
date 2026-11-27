@@ -42,7 +42,11 @@ summary.ssr = ssrOf(raw, Object.keys(apps));
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 for (const [key, runs] of Object.entries(read(join(dir, "instructions.json")) ?? {})) {
   if (!Array.isArray(runs)) { summary.instructions[key] = { failed: runs.failed }; continue; }
-  summary.instructions[key] = { user: median(runs.map((r) => r.userPerRequest)), kernel: median(runs.map((r) => r.kernelPerRequest)), runs: runs.length, failed: runs.reduce((n, r) => n + r.failed, 0) };
+  // Which load kernel instructions came from: a row with `kernelPass` counted them over a second
+  // load of their own (#2151); one without, from before that, over the load user instructions are.
+  const second = runs.filter((r) => r?.kernelPass != null).length;
+  const kernelLoad = second === runs.length ? "second" : second === 0 ? "same" : "mixed";
+  summary.instructions[key] = { user: median(runs.map((r) => r.userPerRequest)), kernel: median(runs.map((r) => r.kernelPerRequest)), kernelLoad, runs: runs.length, failed: runs.reduce((n, r) => n + r.failed + (r.kernelPass?.failed ?? 0), 0) };
 }
 
 const rows = read(join(dir, "browser.json")) ?? [];
@@ -129,8 +133,11 @@ if (mixedRows.length) {
   }
 }
 if (Object.keys(summary.instructions).length) {
-  console.log("\nInstructions per request (median, user / kernel)");
-  for (const [key, c] of Object.entries(summary.instructions)) if (c.failed) console.log(line([key, `FAILED: ${c.failed}`])); else console.log(line([key, `${c.user.toLocaleString("en-US")} / ${c.kernel.toLocaleString("en-US")}`, `${c.runs} runs`, `${c.failed} failed`]));
+  // Each key says which load its kernel instructions are from (kernelLoad), so a round counted
+  // before kernel instructions had a load of their own is not read as two loads', nor one after as one's.
+  const loads = { second: "kernel over a second load", same: "kernel over the same load", mixed: "kernel over the same load in some runs, a second in others" };
+  console.log("\nInstructions per request (median, user / kernel, each over its own load's requests)");
+  for (const [key, c] of Object.entries(summary.instructions)) if (c.failed) console.log(line([key, `FAILED: ${c.failed}`])); else console.log(line([key, `${c.user.toLocaleString("en-US")} / ${c.kernel.toLocaleString("en-US")}`, loads[/** @type {keyof typeof loads} */ (c.kernelLoad)], `${c.runs} runs`, `${c.failed} failed`]));
 }
 if (summary.build) {
   const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;

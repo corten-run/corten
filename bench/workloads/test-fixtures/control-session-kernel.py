@@ -44,6 +44,9 @@ argument = json.loads(sys.stdin.readline() if interactive else sys.stdin.read())
 source = argument["source"]
 scope = {"__name__": "source_bound_fixture"}
 exec(compile(source, "<reviewed-control-session>", "exec"), scope)
+if "drainSource" in argument:
+    # The failed-setup query runs the separate drain source after the guardian, in its namespace.
+    exec(compile(argument["drainSource"], "<reviewed-setup-drain>", "exec"), scope)
 mode = argument["mode"]
 token = argument["token"] if interactive else "0123456789abcdef"
 commit = "a" * 40
@@ -96,6 +99,7 @@ with patch.dict(scope, {"os": storage_os}):
             sys.exit(0)
     assert scope["read"](path) == b"abc"
 data, folders, rows, units, threads, errors = {}, set(), {}, {}, [], []
+failed_units = set()
 local = threading.local()
 lock = threading.RLock()
 current = {}
@@ -103,6 +107,8 @@ current = {}
 
 removed_scopes = set()
 remove_on_read = set()
+# Paths that are dangling symbolic links: is_symlink() is true and exists() is false.
+symlinks = set()
 
 class Path:
     def __init__(self, value):
@@ -140,6 +146,9 @@ class Path:
                 return False
             return cg.endswith(".scope") or any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
         return self.value in data or self.value in folders
+
+    def is_symlink(self):
+        return self.value in symlinks
 
     def read_text(self, **kwargs):
         assert self.name == "cgroup.events"
@@ -184,9 +193,9 @@ def read(path, limit=8 * 1024 * 1024):
     return value
 
 
-def row(pid, ppid, cg):
+def row(pid, ppid, cg, ticks=None):
     fields = ["0"] * 49
-    fields[0], fields[18] = str(ppid), str(pid * 100)
+    fields[0], fields[18] = str(ppid), str(pid * 100 if ticks is None else ticks)
     return {"pid": pid, "startTicks": fields[18], "cgroup": "0::" + cg + "\n",
             "stat": str(pid) + " (no-name-authority) S " + " ".join(fields) + "\n",
             "executable": {"device": "1", "inode": str(pid)}, "commandSha256": hashlib.sha256(str(pid).encode()).hexdigest()}
@@ -200,6 +209,7 @@ def proc(pid):
 
 rows[1] = row(1, 0, "/init.scope")
 rows[10] = row(10, 1, "/system.slice/ssh.service")
+listener = [10]
 
 
 class Sink(io.BytesIO):
@@ -252,16 +262,48 @@ class Child:
             if mode == "setup-extra-record": write(root / "unknown.json", b"{}")
             if mode == "setup-custody": data["/bench/control/helper.py"] += b"changed"
             if mode == "setup-source": data[str(root / "helper.py")] += b"changed"
+            if mode == "setup-drain-scope": rows[999] = row(999, 1, "/user.slice/user-0.slice/session-7.scope")
+            if mode == "setup-drain-descendant": rows[999] = row(999, 102, "/foreign.scope")
+            if mode == "setup-drain-extra-record": write(root / "unknown.json", b"{}")
+            if mode == "setup-drain-stream": write(root / "stream-registration.json", b"{}")
+            # A failed-session grandchild that moved to its own transient scope and was reparented to PID 1.
+            if mode == "setup-drain-escaped": rows[999] = row(999, 1, "/system.slice/run-u7.scope")
+            # An unrelated process older than the failed session, and a kernel thread, are allowed.
+            if mode == "setup-drain-older": rows[5] = row(5, 1, "/system.slice/cron.service")
+            if mode == "setup-drain-kthread":
+                rows[998] = row(998, 2, "/")
+                fields = rows[998]["stat"].split(" ")
+                fields[8] = str(0x00200000)
+                rows[998]["stat"] = " ".join(fields)
+            # Docker after docker-install: a socket, or a daemon older than the failed session.
+            if mode == "setup-drain-docker-socket": data["/run/docker.sock"] = b""
+            if mode == "setup-drain-containerd-socket": data["/run/containerd/containerd.sock"] = b""
+            # A dangling symlink at either socket path: exists() is false, is_symlink() is true.
+            if mode == "setup-drain-docker-symlink": symlinks.add("/run/docker.sock")
+            if mode == "setup-drain-containerd-symlink": symlinks.add("/run/containerd/containerd.sock")
+            for pid, name in ((6, "dockerd"), (7, "containerd"), (8, "containerd-shim")):
+                if mode == "setup-drain-" + name:
+                    rows[pid] = row(pid, 1, "/system.slice/" + name + ".service")
+                    rows[pid]["stat"] = rows[pid]["stat"].replace("(no-name-authority)", "(" + name + ")")
+            # The failed watcher's process, or another process in its unit cgroup, remains.
+            if mode == "setup-drain-observer-alive": rows[200] = row(200, 1, "/system.slice/" + list(units)[0])
+            if mode == "setup-drain-cgroup-populated": rows[996] = row(996, 1, "/system.slice/" + list(units)[0])
+            # Two failed sessions: a process that started between the first and the second.
+            if mode == "setup-drain-two-between": rows[990] = row(990, 1, "/system.slice/cron.service", 10500)
             local.pid = query_pid
+            query = scope["setup_drain_query"] if "watcherFailures" in argument["expected"] else scope["setup_query"]
             try:
                 with patch.object(scope["os"], "getppid", lambda: timeout_pid), patch.object(sys, "argv", query_argv[1:]):
-                    current["proof"] = scope["setup_query"](root, argument["expected"])
+                    current["proof"] = query(root, argument["expected"])
             except (AssertionError, KeyError) as error:
-                assert mode != "setup-normal", traceback.format_exc()
+                assert mode not in ("setup-normal", "setup-drain-normal", "setup-drain-older", "setup-drain-kthread", "setup-drain-unloaded",
+                                    "setup-drain-two"), traceback.format_exc()
                 current["rejected"] = True
+                current["reason"] = type(error).__name__ + ": " + str(error)
             finally:
                 local.pid = current["guardian"]
-                for pid in (query_pid, timeout_pid, 999): rows.pop(pid, None)
+                for pid in (query_pid, timeout_pid, 999, 998, 996, 990, 5, 6, 7, 8): rows.pop(pid, None)
+                if mode == "setup-drain-observer-alive": rows.pop(200, None)
         rows.pop(self.pid)
         if mode == "disconnect":
             raise scope["subprocess"].TimeoutExpired("synthetic-disconnect", timeout)
@@ -289,6 +331,7 @@ def run(args, **kwargs):
                 scope["main"](["watch", token, identifier])
             except Exception as error:
                 errors.append(traceback.format_exc(limit=4))
+                failed_units.add(unit)
             finally:
                 rows.pop(observer, None)
 
@@ -301,6 +344,18 @@ def run(args, **kwargs):
         return types.SimpleNamespace(returncode=0)
     assert args[0] == "/usr/bin/systemctl" and args[1] == "show", "unexpected host command"
     unit = args[2]
+    if "--property=ControlPID" in args:
+        # The drain proof's view of a failed watcher unit. Restart=no leaves it failed.
+        failed = unit in failed_units
+        # observer-alive: systemd reports the unit failed while its process still shows in /proc.
+        active = units[unit] in rows and mode != "setup-drain-observer-alive" or (failed and mode == "setup-drain-active")
+        values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "failed" if failed else "inactive",
+                  "MainPID": str(units[unit]) if active else "0", "ControlPID": "0", "Job": "42" if mode == "setup-drain-queued" else ""}
+        if failed and mode == "setup-drain-controlpid": values["ControlPID"] = "77"
+        if failed and mode == "setup-drain-loaded-inactive": values["ActiveState"] = "inactive"
+        if failed and mode == "setup-drain-notfound-failed": values["LoadState"] = "not-found"
+        if failed and mode == "setup-drain-unloaded": values.update(LoadState="not-found", ActiveState="inactive")
+        return types.SimpleNamespace(returncode=0, stdout="".join(k + "=" + v + "\n" for k, v in values.items()).encode())
     active = units[unit] in rows or mode == "watcher-alive"
     values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "inactive",
               "MainPID": str(units[unit]) if active else "0", "ExecMainCode": "1", "ExecMainStatus": "0"}
@@ -311,7 +366,7 @@ def run(args, **kwargs):
 
 
 def sockets(pid):
-    return {"500"} if pid == 10 else {"501"} if pid in rows and scope["parent"](rows[pid]) == 10 else set()
+    return {"500"} if pid == listener[0] else {"501"} if pid in rows and scope["parent"](rows[pid]) == listener[0] else set()
 
 
 tcp = [(["0:", "00000000:0016", "00000000:0000", "0A", "0", "0", "0", "0", "0", "500"],
@@ -328,7 +383,14 @@ scope.update({"root_for": lambda t: root if t == token else None, "private": lam
               "socket_rows": lambda: tcp, "sockets": sockets, "mutex": mutex})
 # Windows Python monotonic may be tick-resolution. The fake clock uses its high-
 # resolution monotonic counter; shorten synthetic sleeps, not source deadlines.
-scope["time"] = types.SimpleNamespace(monotonic_ns=time.perf_counter_ns, sleep=lambda seconds: time.sleep(min(seconds, 0.005)))
+# A held step advances this clock past its deadline inside the watcher's own sleep, the
+# last statement of its loop, so the watcher always stops at the loop's deadline check.
+skew, pending_skew = [0], [0]
+def fixture_sleep(seconds):
+    if pending_skew[0]:
+        skew[0], pending_skew[0] = skew[0] + pending_skew[0], 0
+    time.sleep(min(seconds, 0.005))
+scope["time"] = types.SimpleNamespace(monotonic_ns=lambda: time.perf_counter_ns() + skew[0], sleep=fixture_sleep)
 invocations = []
 commands = {}
 zombie_seen = threading.Event()
@@ -401,7 +463,15 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         local.pid = current["guardian"]
         ancestor = 100 + sequence * 10
         session = "/user.slice/user-0.slice/session-" + str(sequence + 7) + ".scope"
-        rows[ancestor] = row(ancestor, 10, "/system.slice/ssh.service")
+        # The SSH listener restarted after the failed session (same PID, later start), or a
+        # different, older listener serves the query. Neither served the failed session.
+        if not interactive and sequence == 2 and mode == "setup-drain-listener-restarted":
+            rows[10] = row(10, 1, "/system.slice/ssh.service", 20000)
+        if not interactive and sequence == 2 and mode == "setup-drain-listener-replaced":
+            rows.pop(10)
+            rows[11] = row(11, 1, "/system.slice/ssh.service")
+            listener[0] = 11
+        rows[ancestor] = row(ancestor, listener[0], "/system.slice/ssh.service")
         rows[current["guardian"]] = row(current["guardian"], ancestor, session)
         rows[current["child"]] = row(current["child"], current["guardian"], session)
         try:
@@ -430,10 +500,38 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         if mode == "ancestor-zombie":
             rows[ancestor]["executable"] = None
             rows[ancestor]["stat"] = rows[ancestor]["stat"].replace(") S ", ") Z ")
-        if mode not in ("ancestor-survives", "ancestor-zombie"):
+        # A drain mode keeps the first session's ancestor until its watcher misses the deadline.
+        # A two-session mode also keeps the second (SFTP) session until its watcher misses it.
+        drain_hold = step.get("hold", False) if interactive else mode.startswith("setup-drain-") and (
+            sequence == 0 or sequence == 1 and mode.startswith("setup-drain-two"))
+        if mode not in ("ancestor-survives", "ancestor-zombie") and not drain_hold:
             rows.pop(ancestor, None)
+        if drain_hold:
+            pending_skew[0] = invocation["deadlineMs"] * 1000000 + 1
         threads[-1].join(3)
         assert not threads[-1].is_alive(), "test watcher leaked"
+        if drain_hold:
+            assert str(root / ("watch-failure-" + identifier + ".json")) in data, "fixture watcher did not fail"
+            assert str(root / ("receipt-" + identifier + ".json")) not in data
+            assert len(errors) == 1, errors
+            errors.pop()
+            if mode == "setup-drain-bytes": data[str(root / ("watch-failure-" + identifier + ".json"))] += b" "
+            if mode == "setup-drain-result": del data[str(root / ("result-" + identifier + ".json"))]
+            # A result whose transport is not an observed exit, and a registration for another
+            # invocation or boot.
+            for name, record, change in (("transport", "result", {"transport": "lost"}),
+                                         ("registration", "registration", {"invocation": {**invocation, "deadlineMs": 2000}}),
+                                         ("boot", "registration", {"host": {**boot, "bootId": "fedcba98-7654-3210-fedc-ba9876543210"}})):
+                if mode == "setup-drain-" + name:
+                    record_path = str(root / (record + "-" + identifier + ".json"))
+                    data[record_path] = scope["encoded"]({**json.loads(data[record_path]), **change})
+            if mode == "setup-drain-window":
+                # A start record whose deadline is still ahead of the query's clock.
+                start_path = str(root / ("start-" + identifier + ".json"))
+                start = json.loads(data[start_path])
+                start["deadlineMonoNs"] = str(10 ** 30)
+                data[start_path] = scope["encoded"](start)
+            if mode != "setup-drain-chain": rows.pop(ancestor, None)
         if interactive:
             assert not errors, errors
             response = {"proof": current["proof"]} if current["query"] else {}
@@ -446,7 +544,7 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
     if interactive:
         sys.exit(0)
     if mode.startswith("setup-"):
-        output = {"proof": current.get("proof"), "rejected": current.get("rejected", False),
+        output = {"proof": current.get("proof"), "rejected": current.get("rejected", False), "reason": current.get("reason"),
                   "custody": {p.rsplit("/", 1)[-1]: value.hex() for p, value in data.items() if p.startswith("/bench/control/")}}
     elif mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):
         scope["custody"](root)

@@ -256,10 +256,12 @@ browser smokes in three groups, one engine of the watchlist's smoke in each. The
 `rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
 supported Rust floor. A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
-The three example groups use the pinned Playwright image directly. A fourth group,
-`benchmark-checks`, runs the `npm-check` part, the marketplace browser oracle and the native
-workload group apparatus on its own runner. Only that group builds the Git-capable test-tools
-image. The apparatus runs as the checkout owner with fingerprint-checked Git and immutable-source checks.
+The three example groups use the pinned Playwright image directly. Two more groups run the
+benchmark checks beside them: `benchmark-checks` runs the `npm-check` part, and
+`benchmark-apparatus` runs the marketplace browser oracle and the native workload group
+apparatus, so neither waits for the other under its 30-minute bound. Only
+`benchmark-apparatus` builds the Git-capable test-tools image. The apparatus runs as the
+checkout owner with fingerprint-checked Git and immutable-source checks.
 
 Add new watchlist runtime checks to the matching area in [`scripts/smoke/`](scripts/smoke/),
 and new gallery checks to the matching widget or area in [`examples/ui-gallery/smoke/`](examples/ui-gallery/smoke/).
