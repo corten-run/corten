@@ -8745,9 +8745,12 @@ rules something out.
     call. A render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
-    page as markup. A key drawn outside the handler's polls, or on another thread during one
-    (by a task it spawned, a render it handed to a blocking task, a thread of its own), is not
-    seen, and such an answer is kept with it and sent `public`, as its route wrote. Nor is a key
+    page as markup. The watch does not see a key drawn outside the handler's polls, or on another
+    thread during one (by a task it spawned, a render it handed to a blocking task, a thread of
+    its own): one a bare render (`to_html()`) draws there is kept with the answer and sent
+    `public`, as its route wrote. A render that marks the signal itself (a page's, a patch's,
+    one made with `req.rendered`) does not rely on the watch and is seen on whatever thread it
+    runs. Nor is a key
     drawn as a body is sent after the handler returned (`Media::stream`, a relay's body whose
     code renders as it is read, a live stream's fragments), one already in bytes the app relays,
     or one in a feed's rows, snapshot or replay: the guides say such an answer is not `Public`
@@ -9625,9 +9628,10 @@ rules something out.
     handler's, as for a page, and gains nothing by this), and
     are worth a second copy in memory while kept, and the hour
     `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
-    handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
-    runs it before it returns, not by a task it spawned, one it handed a render to, a thread of
-    its own, a body sent after it returned or a feed's rows; an app's own answer type is rare,
+    handler nothing that must happen for every request; markup with a form's new submit key
+    that only the watch sees (a bare `to_html()`) is rendered by the handler itself on the
+    thread that runs it before it returns, not by a task it spawned, one it handed a render to,
+    a thread of its own, a body sent after it returned or a feed's rows; an app's own answer type is rare,
     so the watch its route always runs costs an app little; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept; an app's kept answers
     are given again at ages of 1,000 to 9,999 seconds, which a lifetime of an hour reaches,
@@ -9670,7 +9674,7 @@ rules something out.
     its path to count by; a kept answer given again with a head of many names or many values
     of one name is measured costing more than its handler's map cost to clone, so the head
     should be held as a map past some size; an app
-    is found rendering a form's submit key in a task its `Public` handler spawned, on a
+    is found rendering a form's submit key with a bare `to_html()` in a task its `Public` handler spawned, on a
     thread of the handler's own or in a body it streams, which the watch does not see; an
     app's own answer type, which is always watched, is found on a hot path where the watch's
     cost shows, so such a type should be able to say it is never `Public`; an app's binary is held to a
