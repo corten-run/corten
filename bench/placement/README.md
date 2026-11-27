@@ -241,7 +241,8 @@ one of the commands above with its output under `<run dir>/log`:
    block alone, from its status line to the blank line that ends it, so a masked header only an
    interim response or a chunked trailer sends is sent 0 times. The comparison masks a header in
    that final block alone, so an interim block and any trailers are compared with no header
-   masked: two answers whose early hints preload different files differ, even when the plan masks
+   masked (every block, the final one included, is compared with each line's CR before its LF
+   taken off and every `Date` line left out): two answers whose early hints preload different files differ, even when the plan masks
    `Link`, because nothing shows an interim block's value may differ between starts. Both scripts run `answers.mjs` with an
    environment of `PATH` alone (so no `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a
    placement's comparison, which takes three answers) and KILL 5 s after, and fail saying so when

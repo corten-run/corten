@@ -13,7 +13,9 @@
 // no evidence for the answer's own, so a masked header an interim block sends and the final one
 // does not is sent 0 times, and neither are the chunked trailers curl writes after the final
 // block's blank line. The comparison masks a header within the final block alone, the block these
-// checks read, and compares an interim block and the trailers byte for byte (answers.mjs).
+// checks read, and compares an interim block and the trailers with no header masked, though, as
+// in the final block, with each line's CR before its LF taken off and every Date line left out
+// (answers.mjs, masked).
 //   node mask.mjs sed <mask.json>                       the sed script that masks those values
 //   node mask.mjs starts <mask.json> <headers> <headers>  two starts of one binary: exit 1 unless
 //                                                       each masked header was sent once by both
