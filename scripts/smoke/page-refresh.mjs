@@ -1717,8 +1717,9 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       // read's place in `wholeReads` (`pollTarget`), so `Saved.` an older read's answer or anything
       // else drew does not pass for it, and that read must itself be one the page started after the
       // replacement. A fetch carries its own number on the count (`smoke-note`, which the wrapper puts
-      // on the request it notes), so the answer is bound to that request, not to any read of the same
-      // address: one started before the replacement, though at the replaced address, does not do,
+      // on each request it notes that the whole-read route answers, and that route takes off), so the
+      // answer is bound to that request, not to any read of the same address: one started before the
+      // replacement, though at the replaced address, does not do,
       // however the reads arrive. A load (the page reading itself again without the Navigation API)
       // carries no number: its document notes its own on the count as it starts, with its kind of
       // load, and it must be a reload numbered after the replacement, at the replaced address, as only
@@ -1773,9 +1774,11 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               const at = new URL(input instanceof Request ? input.url : String(input), location.href);
               if (at.origin === location.origin && at.pathname === "/alerts") {
                 const noted = note({ kind: "fetch", url: at.href });
-                // The request carries its own number, so the answer the route marks is bound to it.
-                if (typeof noted === "number") {
-                  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+                const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+                // The request carries its own number, so the answer the route marks is bound to it, but
+                // only one the whole-read route answers (`**/alerts?saved=*`, not in action mode), as
+                // that route takes the number off before the server sees it; any other is only noted.
+                if (typeof noted === "number" && /^\?saved=[^/]*$/.test(at.search) && headers.get("corten") !== "action") {
                   headers.set("smoke-note", String(noted));
                   return original.call(this, input, { ...init, headers });
                 }
@@ -1790,6 +1793,27 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
         let drawnAs = null;
         /** The case's notes, read after the wait. @type {{ count: number, notes: { at: number, kind: string, url: string, load?: string | null }[] } | null} */
         let notes = null;
+        // Only a request the whole-read route answers may carry the case's mark (`smoke-note`), as
+        // that route takes it off before the server sees it. Once the notes are read, two requests the
+        // route does not take it off are sent through the case's wrapper: a bare `/alerts`, which no
+        // route of the case's matches, and an action-mode read of a receipt, which the route passes
+        // on as the page sent it. A route of the control's own, set over the case's, stops each (they
+        // carry `smoke-control`), keeps the mark it carries, which is what the server would have been
+        // sent, and answers 204, so the server sees neither.
+        /** The mark each control request carried, by its name (null for none). @type {Record<string, string | null>} */
+        const controlMarks = {};
+        /** The statuses the page saw for the control's two requests, once it has sent them. @type {unknown} */
+        let controlSent = null;
+        /** @param {URL} url */
+        const controlReads = (url) => url.pathname === "/alerts";
+        /** @param {import("@playwright/test").Route} route */
+        const controlRoute = (route) => {
+          const headers = route.request().headers();
+          const which = headers["smoke-control"];
+          if (which === undefined) return letThrough(route);
+          controlMarks[which] = headers["smoke-note"] ?? null;
+          return within(5000, "", route.fulfill({ status: 204 })).catch(() => {});
+        };
         try {
           await within(5000, "the replaced-address case's notes were not added within 5 s", noting);
           const loadFrom = performance.now();
@@ -1826,10 +1850,20 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
               return noted === null ? null : JSON.parse(noted);
             }, noteKey),
           ).catch(() => null);
+          await within(5000, "the replaced-address control's route was not set within 5 s", page.route(controlReads, controlRoute));
+          controlSent = await readWithin(
+            "the replaced-address control's requests",
+            page.evaluate(async () => {
+              const bare = await fetch("/alerts", { headers: { "smoke-control": "bare" } });
+              const action = await fetch("/alerts?saved=smoke-control", { headers: { "smoke-control": "action", corten: "action" } });
+              return [bare.status, action.status];
+            }),
+          ).catch(() => null);
         } finally {
           placeLoads = null;
           pollTarget = null;
           await cleanUp(
+            () => within(5000, "the replaced-address control's route was not removed within 5 s", page.unroute(controlReads, controlRoute)),
             () => within(5000, "the replaced-address case's notes were not removed within 5 s", noting.then((s) => s.dispose())),
             () =>
               within(
@@ -1888,6 +1922,14 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           "a page reads itself again at the address a script replaced",
           !!loadAnswer?.saving && replacedIn && replacedAt !== null && ownRead && asRuntime && oneDocument && replaced === "Saved." && exact && wholeAnswerFaults.length === faultsFrom,
           `${faultsSince(faultsFrom)}${loadAnswer ? `loaded with ${loadAnswer.what}` : "no load of the receipt seen"} -> ${replaced}${drawnBy}${replacedIn && replacedAt !== null ? "" : " (the replacement was not noted in the load's document)"}${replacement === null || replacement.url === replacedTo.href ? "" : ` (replaced with ${replacement.url}, not ${replacedTo.href})`}${oneDocument ? "" : ` (documents ${documents.map((d) => `${d.at} ${d.url}`).join(", ") || "none"}, replaced at ${replacedAt ?? "none"})`} after the replacement: ${again.join(", ") || "no read"}${exact || after.length === 0 ? "" : `, wanted every one ${replacement?.url ?? replacedTo.href}`}`,
+        );
+        /** What the control route saw of one request. @param {string} which */
+        const controlMark = (which) => (!(which in controlMarks) ? "not seen" : controlMarks[which] === null ? "unmarked" : `marked ${controlMarks[which]}`);
+        const sentBoth = Array.isArray(controlSent) && controlSent[0] === 204 && controlSent[1] === 204;
+        check(
+          "the replaced-address case marks only the reads its route takes the mark off",
+          sentBoth && controlMarks.bare === null && controlMarks.action === null,
+          `a bare /alerts ${controlMark("bare")}, an action-mode read of a receipt ${controlMark("action")}${sentBoth ? "" : `, the page saw ${JSON.stringify(controlSent)} where both were answered 204`}`,
         );
       }
       // A script's replaceState while a read is on its way (a sort clicked as it polls) cancels that
