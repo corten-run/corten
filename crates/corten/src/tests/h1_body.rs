@@ -802,8 +802,8 @@ async fn a_limit_on_a_body_holds_as_it_does_with_hyper() {
 
 /// A deadline that passes while the handler waits for more of the body is the client's 408, and
 /// one that passes while it waits for anything else is the server's 503, on both connections
-/// (design Choice 30): the body Corten's connection gives marks a read that waits as hyper's
-/// does, and the deadline's timer is the connection's on both.
+/// (`docs/design.md#choice-deadline-body`): the body Corten's connection gives marks a read that
+/// waits as hyper's does, and the deadline's timer is the connection's on both.
 #[tokio::test(start_paused = true)]
 async fn a_deadline_while_the_body_is_awaited_is_the_clients_408() {
     let pair = pair_of(|app| app.deadline(Duration::from_millis(300)), 32 * 1024);
