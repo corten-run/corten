@@ -321,11 +321,14 @@ so it would pass even if the handler ignored `signal`. Do not supply a different
 the test. For an enhancement a task depends on, also load the page with JavaScript on and the
 component's module blocked (`page.route` aborting its URL before the page loads, which also
 aborts the runtime's retries), check that the block took effect, and finish the task through the
-visible native control, as the seller-desk smoke does for its filter. Keep the test with scripts
-off as well; an interaction only a browser with scripts can do (a drag) needs neither.
-[The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection,
-filtering and sorting this way; [the runtime smoke areas](../../scripts/smoke/) cover connection and
-cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
+visible native control. Check the server's answer did the task (the response body, not only the
+page it leaves), then that the page shows what the answer carried, so a script that fakes the
+result on screen cannot pass for it. Keep the test with scripts off as well; an interaction only
+a browser with scripts can do (a drag) needs neither.
+[The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection, filtering and
+sorting with the grid's module running; filtering also with that module blocked and with scripts
+off, and sorting with scripts off. [The runtime smoke areas](../../scripts/smoke/) cover connection
+and cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
 separately from `cargo test` and `corten check`; keep them in the app's CI too.
 
 ## Components and their roots

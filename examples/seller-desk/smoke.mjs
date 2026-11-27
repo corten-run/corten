@@ -547,52 +547,111 @@ try {
     await themed.context().close();
   }
 
+  /**
+   * Loads the grid with JavaScript on and its module never loading (every request for it, the
+   * runtime's retries too, aborted), filters through the visible Filter button, and reads the
+   * server's answer as sent: its rows, those it leaves unhidden and the count it says. The page must
+   * then show exactly the rows the answer carried. With `fake`, the filtered address is answered
+   * with the unfiltered page and a script hides the other sets' rows on submit: a page that only
+   * looks filtered. `fooled` says whether the page alone (only Tidebreak rows shown) passes.
+   * @param {import("@playwright/test").BrowserContext} context @param {boolean} fake
+   */
+  const blockedFilter = async (context, fake) => {
+    const blocked = await context.newPage();
+    let aborted = 0;
+    await blocked.route((url) => url.pathname.endsWith("/inventory_grid.js"), (route) => (aborted += 1, route.abort()));
+    if (fake) {
+      await blocked.route((url) => url.searchParams.get("q") === "tidebreak", async (route) => {
+        const unfiltered = new URL(route.request().url());
+        unfiltered.searchParams.delete("q");
+        await route.fulfill({ response: await route.fetch({ url: unfiltered.href }) });
+      });
+      await blocked.addInitScript(() => {
+        let sent = false;
+        const hide = () => {
+          if (!sent) return;
+          for (const row of /** @type {NodeListOf<HTMLTableRowElement>} */ (document.querySelectorAll("tbody tr"))) {
+            if (!row.hidden && row.cells[2]?.textContent !== "Tidebreak") row.hidden = true;
+          }
+        };
+        addEventListener("submit", () => (sent = true, hide()), { capture: true });
+        new MutationObserver(hide).observe(document, { childList: true, subtree: true, attributeFilter: ["hidden"] });
+      });
+    }
+    await blocked.goto(base);
+    // The runtime ran (it is a module of its own), and it found no grid module to hand events to.
+    const ran = await blocked.evaluate(async () => {
+      const { ready } = await import("corten");
+      await ready;
+      return document.querySelectorAll('script[type="module"][src$="/inventory_grid.js"]').length;
+    });
+    const button = "form[role=search] button";
+    await blocked.fill("input[type=search]", "tidebreak");
+    // Typing filtered nothing: no grid handler ran.
+    const before = await blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
+    const all = await blocked.$$eval("tbody tr", (rows) => rows.length);
+    if (!(await blocked.isVisible(button))) return { ok: false, fooled: false, detail: `aborted ${aborted}; the Filter button is not drawn` };
+    // The runtime still sends a GET form itself (a client navigation), so the answer may be a
+    // fetch rather than a document load: either is the server's filter.
+    const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 15_000 });
+    const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=tidebreak/), blocked.click(button)]);
+    const body = await response.text();
+    // Parsed in a blank page of the same browser: the app's page allows no markup from a string.
+    const reader = await context.newPage();
+    const sent = await reader.evaluate((html) => {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const rows = /** @type {HTMLTableRowElement[]} */ ([...doc.querySelectorAll("tbody tr")]);
+      const carried = rows.filter((r) => !r.hasAttribute("hidden"));
+      return {
+        rows: rows.length,
+        inSet: rows.filter((r) => r.cells[2]?.textContent === "Tidebreak").length,
+        ids: carried.map((r) => r.id),
+        sets: carried.map((r) => r.cells[2]?.textContent ?? ""),
+        says: doc.querySelector("#item-count")?.previousElementSibling?.textContent?.trim() ?? "",
+      };
+    }, body);
+    await reader.close();
+    // A client navigation draws the answer after its response: wait until the page shows the rows
+    // the answer carried (or the wait ends), then read them.
+    const shownIds = () => Array.from(document.querySelectorAll("tbody tr:not([hidden])"), (r) => r.id);
+    await blocked.waitForFunction(`JSON.stringify((${shownIds})()) === ${JSON.stringify(JSON.stringify(sent.ids))}`, null, { timeout: 5_000 }).catch(() => {});
+    const shown = await blocked.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => ({ id: r.id, set: /** @type {HTMLTableRowElement} */ (r).cells[2]?.textContent ?? "" })));
+    const n = sent.ids.length;
+    const reached = aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 &&
+      new URL(blocked.url()).searchParams.get("q") === "tidebreak";
+    // What the earlier check read: the page's rows alone.
+    const fooled = reached && shown.length > 0 && shown.every((r) => r.set === "Tidebreak");
+    const filtered = n > 0 && n === sent.inSet && sent.sets.every((s) => s === "Tidebreak") && sent.rows === all &&
+      sent.says === `${n.toLocaleString("en")} of ${sent.rows.toLocaleString("en")} shown`;
+    const matches = JSON.stringify(shown.map((r) => r.id)) === JSON.stringify(sent.ids) && sent.ids.every(Boolean);
+    return {
+      ok: reached && filtered && matches,
+      fooled,
+      detail: `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ` +
+        `answer: ${n} of ${sent.rows} rows unhidden, ${sent.inSet} in the set, says "${sent.says}"; page: ${shown.length} rows${matches ? " as sent" : " not as sent"}; ${blocked.url()}`,
+    };
+  };
+
   // Without JavaScript, in each engine (the `scripting` media feature is the engine's): the filter
   // is a GET form the server answers, with its Filter button drawn, and a header is a link to the
   // grid sorted by its column, the filter kept. And with JavaScript but the grid's module never
-  // loading (every request for it, the runtime's retries too, aborted): `scripting` still matches
-  // `enabled`, so the Filter button must not depend on it to be drawn.
+  // loading (`blockedFilter`): `scripting` still matches `enabled`, so the Filter button must not
+  // depend on it to be drawn, and the server's answer, not a script on the page, must filter.
   for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
     const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
-    const blockedContext = await (own ?? browser).newContext();
-    const blockedCase = `${name} with JavaScript and the grid's module not loading: the Filter button is drawn and sends the GET the server filters`;
-    try {
-      const blocked = await blockedContext.newPage();
-      let aborted = 0;
-      await blocked.route((url) => url.pathname.endsWith("/inventory_grid.js"), (route) => (aborted += 1, route.abort()));
-      await blocked.goto(base);
-      // The runtime ran (it is a module of its own), and it found no grid module to hand events to.
-      const ran = await blocked.evaluate(async () => {
-        const { ready } = await import("corten");
-        await ready;
-        return document.querySelectorAll('script[type="module"][src$="/inventory_grid.js"]').length;
-      });
-      const button = "form[role=search] button";
-      await blocked.fill("input[type=search]", "tidebreak");
-      // Typing filtered nothing: no grid handler ran.
-      const before = await blocked.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
-      const all = await blocked.$$eval("tbody tr", (rows) => rows.length);
-      if (!(await blocked.isVisible(button))) {
-        check(blockedCase, false, `aborted ${aborted}; the Filter button is not drawn`);
-      } else {
-        // The runtime still sends a GET form itself (a client navigation), so the answer may be a
-        // fetch rather than a document load: either is the server's filter.
-        const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "tidebreak", { timeout: 15_000 });
-        const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=tidebreak/), blocked.click(button)]);
-        // A client navigation draws the answer after its response; give it a moment, then read it.
-        await blocked.waitForFunction(() => Array.from(document.querySelectorAll("tbody tr:not([hidden])"), (r) => /** @type {HTMLTableRowElement} */ (r).cells[2].textContent).every((s) => s === "Tidebreak"), null, { timeout: 5_000 }).catch(() => {});
-        const sets = await blocked.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => r.cells[2].textContent));
-        check(
-          blockedCase,
-          aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 &&
-            new URL(blocked.url()).searchParams.get("q") === "tidebreak" && sets.length > 0 && sets.every((s) => s === "Tidebreak"),
-          `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ${sets.length} rows; ${blocked.url()}`,
-        );
+    for (const fake of [false, true]) {
+      const context = await (own ?? browser).newContext();
+      const what = fake
+        ? `${name} control: an unfiltered answer whose rows a script hides on the page is refused, though the page alone would pass`
+        : `${name} with JavaScript and the grid's module not loading: the Filter button is drawn and the server's answer filters the rows`;
+      try {
+        const run = await blockedFilter(context, fake);
+        check(what, fake ? run.fooled && !run.ok : run.ok, run.detail);
+      } catch (error) {
+        check(what, false, String(error));
+      } finally {
+        await context.close();
       }
-    } catch (error) {
-      check(blockedCase, false, String(error));
-    } finally {
-      await blockedContext.close();
     }
     const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
     try {
