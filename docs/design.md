@@ -12310,7 +12310,19 @@ rules something out.
     the one write that requests arriving together share here; what that would cost was not
     counted, and it was not built. Everything around the loop is what hyper's connection
     has: the service, the watched socket and so both timeouts and the connection's place under the
-    cap, the request's deadline and shutdown. It brings no rule for `Host`: the host check that
+    cap, the request's deadline and shutdown. The timer a connection keeps for its requests'
+    deadlines ([Choice 77](#choice-deadline-timer)) is kept here as there: the connection's task
+    is polled through the same wrapper, so the timer is made at the second request of the
+    connection's to wait and taken by each after it, and it is the task's and not the
+    connection code's, so a connection handed to hyper has the one it had made and a request
+    with a body waits on it. That Choice stands on a connection polling one request's future at
+    a time inside its own poll, which this one does too: a pipeline's handlers run one after
+    another, each to its answer before the next is asked. When `main` gained that Choice, this
+    branch's connection had no wrapper, every deadline on it made its own timer as all did
+    before, and seven tests said so with the suite on Corten's connection, six of `main`'s and
+    one written here for the handoff
+    (`a_connection_keeps_its_deadlines_timer_and_takes_it_to_hyper`, on both connections). It
+    brings no rule for `Host`: the host check that
     answers every request ([the app guide](guide/app.md#host-names)) answers these, and the service marks an
     HTTP/1.1 request with no `Host` line for it by the function it uses for hyper's.
 
