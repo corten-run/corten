@@ -641,6 +641,23 @@ export async function dataAddress(browser) {
     check("without the Navigation API a marked patch that moves the address to another path reads the page again there", readAgain.moved && readAgain.read, JSON.stringify(readAgain));
     await plain.close();
   }
+  // The entry's own state stays as a marked answer puts its address in: its `history.state`, and
+  // the Navigation API's (`getState()`), which `replaceState` drops and the runtime puts back on
+  // the same entry, beginning no navigation.
+  for (const plain of [false, true]) {
+    const name = plain
+      ? "without the Navigation API a marked patch keeps the entry's history.state as it puts its address in"
+      : "a marked patch keeps the entry's history.state and Navigation API state as it puts its address in, on the same entry, beginning no navigation";
+    const kept = await keptState(browser, plain, errors);
+    if (!kept) skip(name, "no Navigation API");
+    else
+      check(
+        name,
+        kept.api === !plain && kept.drawn && kept.at === "?scope=week" && kept.added === 0 && kept.state === '{"page":"own"}' &&
+          (plain || (kept.sameKey && kept.navState === '{"draft":"unsaved"}' && kept.navigates.join() === "replace" && kept.changes.join() === "replace,null" && !kept.transition)),
+        JSON.stringify(kept),
+      );
+  }
   const kept = await pressesKept(browser);
   if (!kept) skip("a form's press is let go once it settles", "no DevTools heap query (Chromium only)");
   else
@@ -2551,6 +2568,69 @@ async function silentRefusal(page) {
   const result = { drawn, read: asked || reloaded };
   const end = await page.evaluate(() => ({ at: location.search, shown: document.querySelector("#smoke-address output")?.textContent, replaces: /** @type {any} */ (window).__weekReplaces() }));
   return { ...result, ...end };
+}
+
+/**
+ * Presses Week on the screen once its entry holds a state of the page's own (`history.state`, and
+ * `getState()` where the Navigation API is), and says what the entry holds once the answer is
+ * drawn: the address, the entries added, both states, whether the key stayed, and each `navigate`
+ * and `currententrychange` since the press. With `plain`, without the Navigation API; null when the engine lacks it.
+ * @param {import("@playwright/test").Browser} browser @param {boolean} plain @param {string[]} errors
+ */
+async function keptState(browser, plain, errors) {
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => errors.push(`kept state${plain ? " plain" : ""}: ${e.message}`));
+  if (plain)
+    await page.addInitScript(() => {
+      delete (/** @type {any} */ (Window.prototype)).navigation;
+      delete (/** @type {any} */ (window)).navigation;
+    });
+  await page.goto(`${base}/smoke/address`);
+  const first = await page.evaluate(() => {
+    const nav = /** @type {any} */ (window).navigation;
+    // `history.state` first: a `replaceState` drops the Navigation API's state.
+    history.replaceState({ page: "own" }, "", location.href);
+    nav?.updateCurrentEntry({ state: { draft: "unsaved" } });
+    /** @type {string[]} */
+    const navigates = [];
+    /** @type {{ type: string | null, id: string }[]} */
+    const changes = [];
+    nav?.addEventListener("navigate", (/** @type {any} */ event) => navigates.push(event.navigationType));
+    nav?.addEventListener("currententrychange", (/** @type {any} */ event) => changes.push({ type: event.navigationType, id: nav.currentEntry.id }));
+    Object.assign(window, { __navigates: navigates, __changes: changes });
+    return { api: !!nav, length: history.length, key: nav?.currentEntry.key ?? null };
+  });
+  if (!plain && !first.api) {
+    await page.close();
+    return null;
+  }
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(
+      () => location.search === "?scope=week" && document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"),
+      undefined,
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  const end = await page.evaluate((first) => {
+    const nav = /** @type {any} */ (window).navigation;
+    return {
+      api: !!nav,
+      at: location.search,
+      added: history.length - first.length,
+      state: JSON.stringify(history.state),
+      navState: nav ? JSON.stringify(nav.currentEntry.getState()) : null,
+      sameKey: nav ? nav.currentEntry.key === first.key : null,
+      navigates: /** @type {string[]} */ (/** @type {any} */ (window).__navigates),
+      // Each change of the entry since the press: the replace, then the state put back, whose
+      // entry is the one the replace made (the same id).
+      changes: /** @type {{ type: string | null, id: string }[]} */ (/** @type {any} */ (window).__changes).map((c) => `${c.type}${c.id === nav?.currentEntry.id ? "" : " other"}`),
+      transition: nav ? !!nav.transition : null,
+    };
+  }, first);
+  await page.close();
+  return { drawn, ...end };
 }
 
 /**

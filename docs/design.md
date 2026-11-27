@@ -11641,7 +11641,12 @@ rules something out.
     as the browser's own GET writes it (a submit that sends no field keeps the query's `?`,
     and an action that ends in a bare `#` keeps it, as `/scope?#`; the runtime's request for any
     GET `data-patch` form's answer, marked or not, has that query too, `?` and all, as the
-    browser's own GET of the form does), keeping the entry's `history.state`. The limit is a
+    browser's own GET of the form does), keeping the entry's `history.state` and, where the
+    Navigation API is, the entry's state there (`getState()`), which `replaceState` drops: the
+    runtime reads it just before the replace and puts it back with `navigation.updateCurrentEntry`
+    on the entry the replace made, which keeps its key and `id` and begins no navigation (not on
+    an entry a listener replaced inside the runtime's call, which is that listener's; a state the
+    runtime cannot read leaves the address as it was). The limit is a
     redirect (a 3xx that is not Corten's own): the runtime puts in the URL the redirect reached
     with no `#fragment`. The browser's own GET reaches the fragment the redirect's `Location`
     names, else the action's, and `fetch` shows neither (`Response.url` never carries one), so
@@ -12001,10 +12006,11 @@ rules something out.
       runtime makes that replace itself, in the task the press was made in, so it is the one
       replace it can tell is its own without tracking navigations.
 
-    What it costs: the runtime every page loads is 2,061 bytes larger raw (46,502 to 48,563), 853
-    with gzip (16,718 to 17,571) and 747 with brotli (15,106 to 15,853), paid once a release by
-    every user (40, 18 and 4 larger than the build before this one, whose press kept the answer
-    whose draw made it, and with it each press and answer before, until the last settled). A
+    What it costs: the runtime every page loads is 2,182 bytes larger raw (46,502 to 48,684), 906
+    with gzip (16,718 to 17,624) and 800 with brotli (15,106 to 15,906), paid once a release by
+    every user (121, 53 and 53 larger than the build before this one, which dropped the entry's
+    Navigation API state as it put the address in, and allocated an answer's draw note for every
+    `data-patch` answer, marked or not). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12014,14 +12020,16 @@ rules something out.
     draw, reads the size of the set of visits on their way the runtime keeps already, and builds an
     address, reads `navigation.transition` and compares it with the page's last read of itself
     again (kept as that read begins), compares the entry's id, or its address and state, with the
-    press's by `Object.is`, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
+    press's by `Object.is`, reads the entry's Navigation API state before the replace and, when
+    it holds one, sets it again after, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
     each `currententrychange` (`popstate` without the Navigation API) compares the key (the
     address) with the last seen, and adds one to a count of changes, and a visit the runtime
     begins adds one to a counter. A patch or page drawn for a marked answer notes it as it draws,
     a press made then keeps that note, and the answer's replace compares the count of changes
     across its call and keeps the entry before and after it, in a plain object that a weak map
     holds by the answer and the press keeps, so a press of its draw compares those two readings as
-    well as its own and keeps no answer or earlier press once they settle. On the
+    well as its own and keeps no answer or earlier press once they settle; that object is made only
+    for a marked answer that may put its address in. On the
     server nothing runs that did not: `html!` writes the mark as an attribute and refuses a
     misplaced one when the markup compiles.
 
@@ -12036,7 +12044,9 @@ rules something out.
     changes, measured once in each engine; `currententrychange` fires inside `replaceState`,
     before it returns, once for a replace nothing else changes the entry in, so a listener's own
     `replaceState` there runs inside the runtime's, in the
-    smoke's checks in each engine; `fetch` keeps an empty query (`?`) in its response's
+    smoke's checks in each engine; `replaceState` drops the entry's Navigation API state, and
+    `updateCurrentEntry` sets it on the same entry, keeping its key and `id`, firing
+    `currententrychange` and no `navigate`, in the smoke's checks in each engine; `fetch` keeps an empty query (`?`) in its response's
     URL, where Chromium's `URL.search` setter drops it, measured once in each engine; a `fetch`
     that followed a redirect shows no `#fragment` in its response's URL, where the browser's own
     GET reaches the `Location`'s fragment, else the request's, in the smoke's checks in each
@@ -12089,12 +12099,18 @@ rules something out.
     entry's key or stops aborting a navigation under way in one of the engines, or a move to an
     `#id` or a traversal between `#id` entries stops firing `popstate` before the script that made
     it goes on in one, or the key stops changing before `currententrychange` fires in one, or a
-    replace stops giving the entry a new `id`, or `history.state` a new object, in one; or the platform
+    replace stops giving the entry a new `id`, or `history.state` a new object, in one, or
+    `updateCurrentEntry` stops keeping the entry's key and `id` or comes to fire a `navigate`,
+    or `replaceState` comes to keep the Navigation API state, in one; or the platform
     shows a load of another document on its way, or `navigation.transition` comes to show a
     navigation begun in `navigatesuccess`, in one, when the address could be left for those too.
 
     Last checked: 2026-11-26, the runtime's size with this change against main `28d5743f6`, whose
     runtime is unchanged since `8b4e863b1`, and the page's and the patch's bodies on `6ca02c26e`;
+    2026-11-26, the entry's `history.state` and Navigation API state across a marked answer's
+    replace, with the key, the `id` and the events `updateCurrentEntry` fires, and `history.state`
+    without the API, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's
+    checks; the build before this one leaves `getState()` reading `undefined`);
     2026-11-26, `navigation.transition` for a navigation a listener holds before and after its
     address changes and for one begun in `navigatesuccess`, and a load of another document through
     `replaceState`, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2, and through a

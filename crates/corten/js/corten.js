@@ -3622,52 +3622,73 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // does not guess.
       // Only for a press made on a marked form, which knows its entry: one sent again from a form an
       // answer marked draws as an unmarked form's does, and leaves the address.
-      /** @type {Draw} */
-      const draw = {};
-      const done =
-        pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500
-          ? function replace() {
-              const to = res.url + (res.redirected ? "" : url.href.replace(/^[^#]*/, ""));
-              const path = location.pathname;
-              // Not if what it drew began a visit or moved to another entry (a script that navigates
-              // as it connects): the replace would cancel that navigation, or write over that entry.
-              // A press it made does not stop it, as it has drawn. Nor while the browser says a
-              // navigation the runtime did not begin is on its way (`transition`: one a page's
-              // `navigate` listener took, its address changed or not), which the replace would
-              // cancel too; the page reading itself again is the runtime's, and reads again later.
-              // Nor once anything has replaced the entry since the press, keeping its key (a script's
-              // `replaceState`, a navigation of the page's that replaced it, another marked answer's
-              // own replace): the runtime does not tell whose it was, and the answer is drawn under
-              // the address put in then, as an unmarked form's is. The one exception is the replace
-              // of the marked answer whose draw made this press, which it came before ({@link onEntry}).
-              const transition = navigation?.transition;
-              if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
-              const before = exact();
-              const seen = changes;
-              try {
-                history.replaceState(history.state, "", to);
-              } catch {
-                // Refused (WebKit throws past its limit of history updates): as below.
-              }
-              // Not in the entry: the browser refused it (Chromium past its limit says nothing), or a
-              // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
-              // address stays as it was, the answer drawn under it, as an unmarked form's is: the
-              // runtime neither guesses which nor reads the page again over what it cannot see.
-              if (location.href !== to) return;
-              // The entry the answer was drawn on, at its new address, by this replace.
-              entrySeen = where();
-              // What it left, for a press this draw made: only when the Navigation API saw no other
-              // change of the entry inside the call (a listener's own `replaceState`), which would
-              // be another's replace.
-              if (!navigation || changes === seen + 1) {
-                draw.found = before;
-                draw.left = exact();
-              }
-              // Read again at the new address, which without the Navigation API goes by the path.
-              if (location.pathname !== path) readAgainLater();
+      /** @type {(() => void) | undefined} */
+      let done;
+      if (pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500) {
+        /** @type {Draw} */
+        const draw = {};
+        done = function replace() {
+          const to = res.url + (res.redirected ? "" : url.href.replace(/^[^#]*/, ""));
+          const path = location.pathname;
+          // Not if what it drew began a visit or moved to another entry (a script that navigates
+          // as it connects): the replace would cancel that navigation, or write over that entry.
+          // A press it made does not stop it, as it has drawn. Nor while the browser says a
+          // navigation the runtime did not begin is on its way (`transition`: one a page's
+          // `navigate` listener took, its address changed or not), which the replace would
+          // cancel too; the page reading itself again is the runtime's, and reads again later.
+          // Nor once anything has replaced the entry since the press, keeping its key (a script's
+          // `replaceState`, a navigation of the page's that replaced it, another marked answer's
+          // own replace): the runtime does not tell whose it was, and the answer is drawn under
+          // the address put in then, as an unmarked form's is. The one exception is the replace
+          // of the marked answer whose draw made this press, which it came before ({@link onEntry}).
+          const transition = navigation?.transition;
+          if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
+          // The entry's state is kept, as the browser's own GET leaves it with no new entry: its
+          // `history.state`, and the Navigation API's own (`getState()`), which `replaceState`
+          // drops, put back once the address is in. One the runtime cannot read leaves the address.
+          /** @type {unknown} */
+          let state;
+          try {
+            state = navigation?.currentEntry?.getState();
+          } catch {
+            return;
+          }
+          const before = exact();
+          const seen = changes;
+          try {
+            history.replaceState(history.state, "", to);
+          } catch {
+            // Refused (WebKit throws past its limit of history updates): as below.
+          }
+          // Not in the entry: the browser refused it (Chromium past its limit says nothing), or a
+          // page's `navigate` listener cancelled it, perhaps for a navigation of its own. The
+          // address stays as it was, the answer drawn under it, as an unmarked form's is: the
+          // runtime neither guesses which nor reads the page again over what it cannot see.
+          if (location.href !== to) return;
+          // The entry the answer was drawn on, at its new address, by this replace.
+          entrySeen = where();
+          // What it left, for a press this draw made: only when the Navigation API saw no other
+          // change of the entry inside the call (a listener's own `replaceState`), which would
+          // be another's replace.
+          const alone = !navigation || changes === seen + 1;
+          if (alone) {
+            draw.found = before;
+            draw.left = exact();
+          }
+          // Its Navigation API state, back in the entry this replace made (`updateCurrentEntry`
+          // keeps its key and id, adding no entry and beginning no navigation). Not in one a
+          // listener replaced inside the call, which is that listener's.
+          if (alone && state !== undefined)
+            try {
+              navigation?.updateCurrentEntry({ state });
+            } catch {
+              // A document no longer fully active: no one reads the entry's state from it.
             }
-          : undefined;
-      if (done) draws.set(done, draw);
+          // Read again at the new address, which without the Navigation API goes by the path.
+          if (location.pathname !== path) readAgainLater();
+        };
+        draws.set(done, draw);
+      }
       if (res.headers.has("corten-patch")) {
         await apply(body, signal, sent, res.ok, undefined, undefined, within, here, done);
         // Dropped, the visit left while it waited for its modules, or left as it drew: nothing more.
