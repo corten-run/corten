@@ -598,7 +598,9 @@ establish a general ranking.
       One command of [`bench/placement`](bench/placement/README.md#the-trend) makes the run on
       a quiet host and adds a row to [the trend's page](bench/placement/trend/README.md). A row
       gates no pull request and no release. A run is past the threshold when the lower bound of
-      a workload's change, `main` against the release, is at or above +2% (a proposal); the
+      a workload's change, `main` against the release, is at or above +2%, the figure the
+      maintainer settled on 2026-11-27, to be read again once four weekly rows are in the table
+      ([design Choice 76](docs/design.md#choice-counted-or-measured) says what it rests on); the
       command then drafts an issue for whoever made the run, naming the pull requests merged
       since the row before when the run's head descends from that row's commit, and since the
       release otherwise, and opens nothing. A run that is not past it has not shown the cost

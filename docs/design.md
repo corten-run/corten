@@ -11613,16 +11613,36 @@ rules something out.
     release and `main` answer `plain` differently, by a difference the run recorded and nobody
     reviewed (the `corten-shell` header, the script hash in the policy and the body, 6,124 bytes
     on each side), so part of what `plain` read can be the answer and not the path to it. It
-    leaves the rest open. The threshold is still a proposal nobody has accepted: the A/A bounds
-    are what this one run resolved, not a limit on what a run of the plan can show and not what
-    rise a release can carry, and the maintainer settles it.
+    left the rest open. The threshold was then still a proposal nobody had accepted: the A/A
+    bounds are what this one run resolved, not a limit on what a run of the plan can show and
+    not what rise a release can carry, and it was the maintainer's to settle (The threshold
+    settled, below).
     One run of one commit says nothing of runs made weekly and before each release. A reading
     of every change since the release together, here less on both workloads, attributes a cost
     to none of them, so it does not show that a change that merged counted costs a request
     under +1%, and a span that costs less as a whole can hold a change that costs more. Two
     requests to one probe still do not take every path a counted change can cost on. So the
-    Choice decides as it did, and under Revisit when the condition the run met gives way to
-    the one that follows it, the threshold settled.
+    Choice decided as it did, and under Revisit when the condition the run met gave way to
+    the one that followed it, the threshold settled.
+
+    The threshold settled. That condition is met as well, so the Choice was read again on
+    2026-11-27. The maintainer was asked how to settle the trend's threshold, told that the
+    first row is merged, what it reads on `plain` and `unstaged`, that the release against
+    itself read between +0.31% and +0.62% in that run, and that +2% on the lower bound was
+    still only a proposal, and settled it at +2%. The ruling rests on two things. One run's
+    A/A bounds, +0.31% to +0.62%: +2% is over three times the largest of them, so a rise of
+    that size is not what that run read between two builds that are the same. And the 2% a
+    release may carry, which the maintainer accepted as a proposal on 2026-11-25 for the kit's
+    counts of a release's candidate (Revisit when, below): the same figure in another unit,
+    instructions in a case there and the lower bound of cycles here. What it does not show:
+    one run's bounds are not a limit on what a run of the plan can show, and no run shows what
+    rise a release can carry, so the figure is a ruling and not a measured threshold, and it
+    stays among the bets below. Nothing gates on the trend, so the ruling decides what a row's
+    reading says and when the command drafts an issue, not what merges or ships. The figure is
+    the plan's as it was (`threshold`, 0.02), so the row already published reads as it did.
+    The Choice decides as it did, the count gating and the trend reporting, and under Revisit
+    when the condition the ruling met gives way to the next: four weekly rows in the trend's
+    table, when the threshold is read again against what those runs resolved and read.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
@@ -11686,8 +11706,9 @@ rules something out.
     trend is made, weekly and before a release, before counted costs add up past what a
     release can carry, its plan, command and page being in the placement kit and one such run
     made, of 2026-11-26, with every workload read; its threshold, `main` at least +2% over the
-    release on a workload by the lower bound of its cycles, is a proposal nobody has accepted,
-    beside which that run's A/A bounds, +0.31% to +0.62%, are what one run resolved
+    release on a workload by the lower bound of its cycles, which the maintainer settled on
+    2026-11-27, is the rise worth an issue, and a smaller one is not, which no run shows:
+    that run's A/A bounds, +0.31% to +0.62%, are what one run resolved
     and not what rise a release can carry, the 2% above being of instruction counts between
     releases; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the
@@ -11730,11 +11751,13 @@ rules something out.
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; the maintainer settles the trend's threshold, at
-    +2% on the lower bound or another figure, since this Choice leans on it as a proposal nobody
-    has accepted (this entry first named the trend's first run with every workload read, which
-    the run of 2026-11-26 met, showing what a run of the plan resolves and not what rise a
-    release can carry: The trend's first run, above); a run of the trend leaves a workload not
+    last release counted inside the budget; the trend's table holds four weekly rows, when its
+    threshold, settled at +2% on the lower bound by the maintainer on 2026-11-27, is read
+    again against what those runs resolved and read, since one run's A/A bounds are all of it
+    that was measured (this entry first named the trend's first run with every workload read,
+    which the run of 2026-11-26 met, showing what a run of the plan resolves and not what rise
+    a release can carry, and then the maintainer settling the threshold, which the ruling of
+    2026-11-27 met: The trend's first run and The threshold settled, above); a run of the trend leaves a workload not
     read, whatever its row gives as the reason (the probe does not build at the release's tag,
     the kit refuses
     a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
@@ -11784,7 +11807,11 @@ rules something out.
     `run.exit`, `run/row.md`, `run/plan.json` and each part's `results/report.json`, the
     change's and the A/A's cycles, user and kernel, as recorded and with the labels swapped,
     each K and the pilot it was sized from, and each side's aligned sections and second pads,
-    none in any part.
+    none in any part; 2026-11-27, for the threshold's ruling, the trend's page and plan read at
+    `e733f3d88` (the first row and `threshold`, 0.02) and the first run's A/A bounds read again
+    from its tag at `d4a002f34` (`evidence/trend-2026-11-26`), in each gated part's
+    `results/report.json`: +0.62% and +0.31% on `plain`, +0.47% and +0.61% on `unstaged`,
+    cycles, user and kernel, as recorded and with the labels swapped.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits
