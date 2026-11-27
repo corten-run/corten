@@ -8312,10 +8312,11 @@ rules something out.
     `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn
     submit key from the same marks and at the same return as a release build (the answer's mark,
     read before `Missed::keep`, and the request's signal, which `Missed::keep` reads first, each
-    said as `Verdict::DrewKey`; so a key drawn as the body is read is said by neither), counts the head of an answer whose locale was chosen late as
-    a release build names it, from a copy, so the answer the app's middleware sees is the one it
-    saw with no store, and leaves an answer it would keep for its body to be watched; a release
-    build's copy does none of this. In `router_cost` (callgrind, three rounds each, against
+    said as `Verdict::DrewKey`; so a key drawn as the body is read is said by neither), counts
+    the head of an answer whose locale was chosen late as a release build names it, from a copy,
+    so the answer the app's middleware sees is the one it saw with no store, and leaves an answer
+    it would keep for its body to be watched; a release build's copy does none of this. In
+    `router_cost` (callgrind, three rounds each, against
     `c46092aeb`, rustc 1.100.0) a kept page given again costs what it did (14,559.9 to 14,560.1
     instructions a request), a `Public` page that is not kept 3 more (21,238.0 to 21,240.7) and
     one that is made and stored 32 more (28,589.6 to 28,621.6). With rustc 1.99.1 the three are 9,
