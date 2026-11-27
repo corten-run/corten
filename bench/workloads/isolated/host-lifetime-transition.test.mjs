@@ -94,7 +94,7 @@ for (const [label, options, n] of [
   ["another process is in the census", { census: "5001\n" }, 1],
   ["a failed nonempty census retries to empty", { censusRace: true }, 1],
   ["the closing inspect reports a different generation", { finishDelay: 0, change: (c) => { c.RestartCount++; } }, 2],
-  ["the confirmation would start outside its budget", { inspectMs: 76 }, 1],
+  ["the confirmation would start at its deadline", { inspectMs: 75 }, 1],
 ]) test(`r104 exit: preserves the census gap when ${label}`, async (t) => {
   const { f, faults, inspections, exit, procReads, waits } = await exitTransition(t, { census: "", ...options });
   assert.deepEqual(exit.docker, { inventory: [id], gaps: [id], participants: [] });
