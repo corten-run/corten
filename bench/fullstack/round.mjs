@@ -326,25 +326,143 @@ const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * The script droplet.mjs runs on a droplet before it starts a round there, before it removes
  * anything an earlier round of that name left (its progress file, or all of /bench). It disables
  * and stops the round's unit, so a reboot cannot start the old round again while the new one is
- * set up, and fails unless the unit is then inactive (or failed) with no process left in its
- * control group: a stop that did not take leaves the old round running. Then it prints this boot's
- * ID and the full-stack round's progress file, base64 ("present <base64>", or "absent"), which
- * relaunchError reads.
+ * set up, and fails (exit 1, a reason on stderr, nothing on stdout) unless each of these is
+ * confirmed by a query that itself succeeded:
+ * - the unit is known to systemd and both its disable and its stop succeeded, or systemd confirms
+ *   it has no such unit (LoadState not-found), when there is nothing to disable or stop;
+ * - it cannot start at boot: `systemctl is-enabled` says disabled, static or masked (a known unit),
+ *   and no wants or requires link to it is left in `unitDir` (which a unit file without an
+ *   [Install] section would not remove);
+ * - it is inactive (or failed);
+ * - no process is left anywhere in its control group, its descendants included: the group's
+ *   cgroup v2 `cgroup.events` reads `populated 0`, or the group's directory is absent from a
+ *   readable cgroup v2 hierarchy (`cgroup.procs` lists only the group's own processes, not those
+ *   of a child group a process moved itself into).
+ * Then it prints this boot's ID and the full-stack round's progress file, base64 ("present
+ * <base64>", or "absent"), which relaunchError reads, in one write once both are read.
  * @param {string} unitName the round's unit, without ".service"
  * @param {string} progressFile the full-stack round's progress file on the droplet
+ * @param {{ unitDir?: string, cgroupRoot?: string }} [paths] systemd's unit directory and the cgroup v2
+ *   mount (tests point these elsewhere)
  */
-export const relaunchCustody = (unitName, progressFile) => {
-  const service = quote(`${unitName}.service`);
+export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/systemd/system", cgroupRoot = "/sys/fs/cgroup" } = {}) => {
+  const name = `${unitName}.service`;
+  const service = quote(name);
+  const cgRoot = quote(cgroupRoot);
+  const progress = quote(progressFile);
   return [
-    `systemctl disable --quiet ${service} >/dev/null 2>&1 || true`,
-    `systemctl stop ${service} >/dev/null 2>&1 || true`,
-    `state=$(systemctl show -p ActiveState --value ${service})`,
-    `case "$state" in inactive|failed) ;; *) echo "unit ${unitName} is $state after its stop" >&2; exit 1 ;; esac`,
+    `fail() { echo "unit ${unitName}: $*" >&2; exit 1; }`,
+    `load=$(systemctl show -p LoadState --value ${service}) || fail "its load state could not be read"`,
+    `case "$load" in`,
+    // Nothing to disable or stop; whether something of it still runs is checked below all the same.
+    `  not-found) ;;`,
+    `  "") fail "its load state could not be read" ;;`,
+    `  *) systemctl disable --quiet ${service} >&2 || fail "its disable failed"`,
+    `     systemctl stop ${service} >&2 || fail "its stop failed"`,
+    // is-enabled exits 1 for a disabled unit, so its answer is read, not its exit status.
+    `     enabled=$(systemctl is-enabled ${service} 2>/dev/null)`,
+    `     case "$enabled" in disabled|static|masked) ;; *) fail "it is \${enabled:-of unknown enablement} after its disable, so a boot could start it" ;; esac ;;`,
+    `esac`,
+    `for link in ${quote(unitDir)}/*.wants/${service} ${quote(unitDir)}/*.requires/${service}; do`,
+    `  if [ -e "$link" ] || [ -L "$link" ]; then fail "$link is left, so a boot could start it"; fi`,
+    `done`,
+    `state=$(systemctl show -p ActiveState --value ${service}) || fail "its state could not be read"`,
+    `case "$state" in inactive|failed) ;; *) fail "it is \${state:-of unknown state} after its stop" ;; esac`,
+    `cg=$(systemctl show -p ControlGroup --value ${service}) || fail "its control group could not be read"`,
+    // With no group of its own known, the one systemd would give it is checked.
+    `[ -n "$cg" ] || cg=/system.slice/${service}`,
+    `case "$cg" in /*) ;; *) fail "its control group $cg is not a path" ;; esac`,
+    `[ -r ${cgRoot}/cgroup.controllers ] || fail "no cgroup v2 hierarchy can be read at ${cgroupRoot}, so whether something of it still runs is not known"`,
+    `dir=${cgRoot}"$cg"`,
+    `if [ -e "$dir" ] || [ -L "$dir" ]; then`,
     // A cgroup file's size reads 0, so its content is read.
-    `cg=$(systemctl show -p ControlGroup --value ${service})`,
-    `if [ -n "$cg" ] && [ -e "/sys/fs/cgroup$cg/cgroup.procs" ] && [ -n "$(cat "/sys/fs/cgroup$cg/cgroup.procs")" ]; then echo "unit ${unitName} still has processes after its stop" >&2; exit 1; fi`,
-    "cat /proc/sys/kernel/random/boot_id || exit 1",
-    `if [ -e ${quote(progressFile)} ]; then printf 'present '; base64 -w0 < ${quote(progressFile)} || exit 1; echo; else echo absent; fi`,
+    `  events=$(cat "$dir/cgroup.events") || fail "its control group's events could not be read"`,
+    `  populated=$(printf '%s\\n' "$events" | sed -n 's/^populated \\([01]\\)$/\\1/p')`,
+    `  [ "$populated" = 0 ] || fail "it still has processes after its stop (or its control group's events say nothing of them)"`,
+    `fi`,
+    `boot=$(cat /proc/sys/kernel/random/boot_id) || fail "this boot's ID could not be read"`,
+    `if [ -e ${progress} ] || [ -L ${progress} ]; then`,
+    `  saved=$(base64 -w0 < ${progress}) || fail "the progress file could not be read"`,
+    `  printf '%s\\npresent %s\\n' "$boot" "$saved"`,
+    `else`,
+    `  printf '%s\\nabsent\\n' "$boot"`,
+    `fi`,
+  ].join("\n");
+};
+
+/**
+ * Where droplet.mjs holds a round's launch on a droplet, from its custody check (relaunchCustody)
+ * through its unit's start: a symbolic link whose target is the launch's token, made with `ln -s`,
+ * which fails when the link exists, so two launches of a round cannot both hold it. Outside /bench,
+ * which a launch removes, and kept across a reboot.
+ * @param {string} round
+ */
+export const launchLock = (round) => `/var/lib/corten-bench/launch-${round}.lock`;
+
+/**
+ * Whether a path in droplet.mjs's upload is a file only a droplet's round writes and run-all.mjs
+ * or droplet.mjs reads there (a round's progress file or log): one from this working tree, put on
+ * the droplet by the upload, would stand in for the droplet's own (a local "t finished" line made
+ * a new round read as finished). The upload leaves them out and refuses an archive holding one.
+ * @param {string} member a path as `tar -t` lists it
+ */
+export const hostOnlyFile = (member) => /^(?:\.\/)?bench\/(?:fullstack|live)\/results-[^/]+\.(?:progress|log)$/.test(member.trim());
+
+/**
+ * Takes the launch lock for `token`, or exits 3 with how to clear it when another launch holds it.
+ * One this token already holds (a step tried again after its connection dropped) is taken again.
+ * @param {string} lock launchLock's path
+ * @param {string} token this launch's own, which no other launch has
+ */
+export const takeLaunch = (lock, token) => [
+  `mkdir -p ${quote(lock.slice(0, lock.lastIndexOf("/")) || "/")} || exit 1`,
+  `if ! ln -s ${quote(token)} ${quote(lock)} 2>/dev/null && [ "$(readlink ${quote(lock)})" != ${quote(token)} ]; then`,
+  `  echo "the launch lock ${lock} is held ($(readlink ${quote(lock)} || echo 'unreadable')): another droplet.mjs is launching this round here, or one stopped part way through its launch. When none is and the round's unit is not running, remove it on the droplet (rm ${lock}) and launch again" >&2`,
+  "  exit 3",
+  "fi",
+].join("\n");
+
+/**
+ * Fails (exit 4) unless the launch lock is still `token`'s, so no step of a launch whose lock was
+ * cleared goes on beside another launch.
+ * @param {string} lock
+ * @param {string} token
+ */
+export const ownsLaunch = (lock, token) => `[ "$(readlink ${quote(lock)} 2>/dev/null)" = ${quote(token)} ] || { echo "this launch no longer holds ${lock}: another launch may have started since, so this one stops" >&2; exit 4; }`;
+
+/**
+ * Releases the launch lock if `token` holds it (and the clear marker it left), then fails unless
+ * the lock is no longer `token`'s. Another launch's lock is left as it is.
+ * @param {string} lock
+ * @param {string} token
+ */
+export const releaseLaunch = (lock, token) => [
+  ": corten-bench launch release",
+  `if [ "$(readlink ${quote(lock)} 2>/dev/null)" = ${quote(token)} ]; then rm -f ${quote(`${lock}.cleared`)} ${quote(lock)}; fi`,
+  `[ "$(readlink ${quote(lock)} 2>/dev/null)" != ${quote(token)} ]`,
+].join("\n");
+
+/**
+ * Clears what an earlier round left (`clear`) in the same step as a check that the launch still
+ * holds its lock and a second custody check whose output must equal the first's (`expected`):
+ * a unit that started again, a progress file that changed, or another boot since then refuses
+ * (exit 4, as a lock no longer held does) and clears nothing; a custody check or clear that fails
+ * exits 1. A step tried again after it cleared (its connection dropped) finds its own marker
+ * beside the lock and does not clear again; releaseLaunch removes the marker.
+ * @param {{ lock: string, token: string, custody: string, expected: string, clear: string }} step
+ */
+export const clearAfterCustody = ({ lock, token, custody, expected, clear }) => {
+  const marker = quote(`${lock}.cleared`);
+  // A command substitution drops trailing line breaks, from both sides alike.
+  const want = Buffer.from(expected.replaceAll("\r\n", "\n").replace(/\n+$/, "")).toString("base64");
+  return [
+    ownsLaunch(lock, token),
+    `if [ "$(cat ${marker} 2>/dev/null)" = ${quote(token)} ]; then exit 0; fi`,
+    `now=$(bash -c ${quote(custody)}) || exit 1`,
+    `want=$(printf '%s' ${quote(want)} | base64 -d) || exit 1`,
+    `[ "$now" = "$want" ] || { echo "the round's unit or progress file changed between the launch's custody check and its clear, so nothing is cleared" >&2; exit 4; }`,
+    `(${clear}) || exit 1`,
+    `printf '%s' ${quote(token)} > ${marker} || exit 1`,
   ].join("\n");
 };
 

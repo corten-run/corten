@@ -1407,10 +1407,23 @@ three runs:
    is left as it is, so a start stopped part way through cannot hide it from the next.
    `droplet.mjs` on a droplet a round of that name ran on (`--host`, with or without `--from`)
    checks the same before it removes anything that round left (its progress file, or all of
-   `/bench`): it disables and stops the round's unit, fails unless the unit is then inactive with
-   nothing left in its control group, and refuses the launch when the round's progress file shows
-   a count step that started in this boot and did not end, or ends in a cut line. Such a round
-   goes on from a new droplet, or, for a count step that started in this boot, after a reboot.
+   `/bench`). It fails unless systemd confirms, each query succeeding, that the round's unit is
+   either unknown to it or was disabled and stopped (both succeeding), that it cannot start at
+   boot (`is-enabled` disabled, static or masked, and no wants or requires link to it left), that
+   it is inactive, and that nothing is left anywhere in its control group (cgroup v2
+   `cgroup.events` reads `populated 0`, which counts child groups too, or the group is absent).
+   It refuses the launch when the round's progress file shows a count step that started in this
+   boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a
+   count step that started in this boot, after a reboot. From that check until the round's unit
+   has started, the launch holds `/var/lib/corten-bench/launch-<round>.lock` on the droplet, a
+   link `ln -s` makes only when none is there: another launch of the round refuses while it is
+   held, every later step that changes the droplet first checks it is still this launch's (but
+   the upload, which only writes `/bench/src.tgz` for a step that does to unpack), and the clear
+   runs in one step with a second check that must read as the first did. A launch that
+   fails releases it; one interrupted (Ctrl-C) leaves it, and says how to remove it once no launch
+   is running (`rm` it on the droplet). The upload leaves out the working tree's own
+   `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
+   archive that holds one, as the clear comes before the upload is unpacked.
    A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,

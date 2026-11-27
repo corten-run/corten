@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hoursFor, mayStart, outputReleaseMs, quote, relaunchCustody, relaunchError, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall, unit } from "./round.mjs";
+import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall, takeLaunch, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -264,106 +264,320 @@ test("a relaunch on a droplet reads the round's progress file there as run-all.m
   }
 });
 
-test("a relaunch stops the round's unit and reads its progress file only once the unit is inactive with nothing left in its control group", { skip: process.platform !== "linux" && "needs Linux's /proc and /sys" }, () => {
+// systemctl as relaunchCustody and droplet.mjs call it, answering from FAKE_* variables (a known,
+// disabled, inactive unit with no control group of its own unless they say otherwise), each call
+// recorded in FAKE_SYSTEMCTL_LOG.
+const fakeSystemctl = [
+  "#!/bin/sh",
+  'printf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"',
+  'case "$1" in',
+  "  show)",
+  '    case "$3" in',
+  '      LoadState) [ -z "$FAKE_LOAD_FAIL" ] || exit 1; echo "${FAKE_LOAD-loaded}" ;;',
+  '      ActiveState) [ -z "$FAKE_STATE_FAIL" ] || exit 1; echo "${FAKE_STATE-inactive}" ;;',
+  '      ControlGroup) [ -z "$FAKE_CG_FAIL" ] || exit 1; echo "${FAKE_CG-}" ;;',
+  "    esac ;;",
+  '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
+  '  stop) exit "${FAKE_STOP_RC:-0}" ;;',
+  '  is-enabled) echo "${FAKE_ENABLED-disabled}"; [ "${FAKE_ENABLED-disabled}" = enabled ] ;;',
+  "esac",
+  "exit 0",
+  "",
+].join("\n");
+
+test("a relaunch reads the round's progress file only once systemd confirms its unit is disabled, stopped and inactive with no process in its control group or below it", { skip: process.platform !== "linux" && "needs Linux's /proc" }, () => {
   const root = mkdtempSync(join(tmpdir(), "relaunch-custody-"));
   try {
     const bin = join(root, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "systemctl"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_LOG"\ncase "$*" in *ActiveState*) echo "$FAKE_STATE" ;; *ControlGroup*) echo "$FAKE_CG" ;; esac\n', { mode: 0o755 });
+    writeFileSync(join(bin, "systemctl"), fakeSystemctl, { mode: 0o755 });
+    const units = join(root, "systemd");
+    const cgroups = join(root, "cgroup");
+    mkdirSync(units);
+    mkdirSync(cgroups);
+    writeFileSync(join(cgroups, "cgroup.controllers"), "cpu io memory pids\n");
+    const group = join(cgroups, "system.slice", "corten-bench-r1.service");
     const progress = join(root, "results-r1.progress");
-    const group = join(root, "group");
-    mkdirSync(group);
-    // The script reads /sys/fs/cgroup<ControlGroup>/cgroup.procs: this one reaches the test's own.
-    const cg = `/../../..${group}`;
     const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-    const script = relaunchCustody("corten-bench-r1", progress);
-    const run = (/** @type {string} */ state, procs = "") => {
-      writeFileSync(join(group, "cgroup.procs"), procs);
-      rmSync(join(root, "log"), { force: true });
-      const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: join(root, "log"), FAKE_STATE: state, FAKE_CG: cg } });
-      return { ...r, calls: readFileSync(join(root, "log"), "utf8").trim().split("\n") };
+    const script = relaunchCustody("corten-bench-r1", progress, { unitDir: units, cgroupRoot: cgroups });
+    const log = join(root, "log");
+    /** @param {Record<string, string>} fake */
+    const run = (fake = {}) => {
+      rmSync(log, { force: true });
+      const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_SYSTEMCTL_LOG: log, ...fake } });
+      return { ...r, calls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [] };
     };
-    // A stop that did not take: the launch fails, and nothing of the progress file is printed.
-    for (const state of ["active", "deactivating", "reloading", ""]) {
-      const r = run(state);
-      assert.equal(r.status, 1, state);
-      assert.match(r.stderr, new RegExp(`unit corten-bench-r1 is ${state} after its stop`), state);
-      assert.equal(r.stdout, "", state);
-    }
-    const left = run("inactive", "4242\n");
-    assert.equal(left.status, 1);
-    assert.match(left.stderr, /unit corten-bench-r1 still has processes after its stop/);
-    assert.equal(left.stdout, "");
-    // Stopped and empty: disabled, so a reboot cannot start the old round again, then stopped.
-    const stopped = run("inactive");
-    assert.equal(stopped.status, 0, stopped.stderr);
-    assert.deepEqual(stopped.calls.slice(0, 2), ["disable --quiet corten-bench-r1.service", "stop corten-bench-r1.service"]);
+    const refused = (/** @type {Record<string, string>} */ fake, /** @type {RegExp} */ why, /** @type {string} */ label) => {
+      const r = run(fake);
+      assert.equal(r.status, 1, `${label}: ${r.stdout}${r.stderr}`);
+      assert.match(r.stderr, why, label);
+      assert.equal(r.stdout, "", label);
+      return r;
+    };
+    const ok = (/** @type {Record<string, string>} */ fake, /** @type {string} */ label) => {
+      const r = run(fake);
+      assert.equal(r.status, 0, `${label}: ${r.stderr}`);
+      return r;
+    };
+    // A query or command that failed is not an answer: a disable or a stop that failed, a load
+    // state, state or control group that could not be read, and no load state at all.
+    refused({ FAKE_DISABLE_RC: "1" }, /unit corten-bench-r1: its disable failed/, "disable failed");
+    refused({ FAKE_STOP_RC: "5" }, /unit corten-bench-r1: its stop failed/, "stop failed");
+    refused({ FAKE_LOAD_FAIL: "1" }, /its load state could not be read/, "load state failed");
+    refused({ FAKE_LOAD: "" }, /its load state could not be read/, "no load state");
+    refused({ FAKE_STATE_FAIL: "1" }, /its state could not be read/, "state failed");
+    refused({ FAKE_CG_FAIL: "1" }, /its control group could not be read/, "control group failed");
+    // A unit a boot could still start: still enabled, enablement unknown, or a wants link left
+    // (a unit file without [Install] has nothing for disable to remove).
+    refused({ FAKE_ENABLED: "enabled" }, /it is enabled after its disable, so a boot could start it/, "enabled");
+    refused({ FAKE_ENABLED: "" }, /of unknown enablement/, "enablement unknown");
+    mkdirSync(join(units, "multi-user.target.wants"));
+    symlinkSync(join(units, "corten-bench-r1.service"), join(units, "multi-user.target.wants", "corten-bench-r1.service"));
+    refused({}, /multi-user\.target\.wants\/corten-bench-r1\.service is left, so a boot could start it/, "wants link");
+    rmSync(join(units, "multi-user.target.wants"), { recursive: true, force: true });
+    // A stop that did not take.
+    for (const state of ["active", "deactivating", "reloading"]) refused({ FAKE_STATE: state }, new RegExp(`it is ${state} after its stop`), state);
+    refused({ FAKE_STATE: "" }, /it is of unknown state after its stop/, "no state");
+    // A unit systemd no longer has a file for may still run: its state is read all the same.
+    refused({ FAKE_LOAD: "not-found", FAKE_STATE: "active" }, /it is active after its stop/, "not-found, active");
+    // Something left in a child of its control group: cgroup.procs lists only the group's own
+    // processes, so the group's own file is empty; cgroup.events counts the whole subtree.
+    mkdirSync(join(group, "escaped"), { recursive: true });
+    writeFileSync(join(group, "cgroup.procs"), "");
+    writeFileSync(join(group, "escaped", "cgroup.procs"), "4242\n");
+    writeFileSync(join(group, "cgroup.events"), "populated 1\nfrozen 0\n");
+    refused({}, /it still has processes after its stop/, "child group populated");
+    refused({ FAKE_CG: "/system.slice/corten-bench-r1.service" }, /it still has processes after its stop/, "named group populated");
+    writeFileSync(join(group, "cgroup.events"), "frozen 0\n");
+    refused({}, /it still has processes after its stop/, "events without populated");
+    rmSync(join(group, "cgroup.events"));
+    refused({}, /its control group's events could not be read/, "events unreadable");
+    refused({ FAKE_CG: "system.slice/corten-bench-r1.service" }, /is not a path/, "relative group");
+    writeFileSync(join(group, "cgroup.events"), "populated 0\nfrozen 0\n");
+    rmSync(join(cgroups, "cgroup.controllers"));
+    refused({}, /no cgroup v2 hierarchy can be read/, "no cgroup v2");
+    writeFileSync(join(cgroups, "cgroup.controllers"), "cpu io memory pids\n");
+    // Confirmed: disabled, stopped, inactive, and its group empty to the bottom, or absent.
+    const stopped = ok({}, "group empty");
+    assert.deepEqual(stopped.calls.slice(0, 4), ["show -p LoadState --value corten-bench-r1.service", "disable --quiet corten-bench-r1.service", "stop corten-bench-r1.service", "is-enabled corten-bench-r1.service"]);
     assert.equal(stopped.stdout, `${bootId}\nabsent\n`);
     assert.equal(relaunchError(stopped.stdout), null);
+    ok({ FAKE_CG: "/system.slice/corten-bench-r1.service" }, "named group empty");
+    rmSync(join(cgroups, "system.slice"), { recursive: true, force: true });
+    ok({}, "no group");
+    for (const enabled of ["static", "masked"]) ok({ FAKE_ENABLED: enabled }, enabled);
+    // A unit systemd confirms it does not have: nothing to disable or stop, and neither is called.
+    const missing = ok({ FAKE_LOAD: "not-found", FAKE_DISABLE_RC: "1", FAKE_STOP_RC: "5", FAKE_ENABLED: "" }, "not-found");
+    assert.ok(!missing.calls.some((c) => /^(disable|stop|is-enabled) /.test(c)), missing.calls.join("; "));
     // A failed unit is stopped too; its progress file comes back byte for byte.
     writeFileSync(progress, `t boot\nt start count ${bootId}\n`);
-    const failed = run("failed");
-    assert.equal(failed.status, 0, failed.stderr);
-    assert.match(relaunchError(failed.stdout) ?? "", /it started again in the boot its count step started in/);
+    assert.match(relaunchError(ok({ FAKE_STATE: "failed" }, "failed").stdout) ?? "", /it started again in the boot its count step started in/);
     writeFileSync(progress, "t boot\nt start co");
-    assert.match(relaunchError(run("inactive").stdout) ?? "", /ends in a line cut short/);
+    assert.match(relaunchError(ok({}, "cut").stdout) ?? "", /ends in a line cut short/);
+    // A progress file that cannot be read prints nothing.
+    rmSync(progress);
+    mkdirSync(progress);
+    refused({}, /the progress file could not be read/, "progress unreadable");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("droplet.mjs on a reused droplet refuses a round whose count step started in this boot before it clears anything that round left", { skip: process.platform === "win32" && "stands in for ssh with a shell script" }, () => {
+test("a launch's lock is taken by one launch at a time, and the clear runs only under it, after a custody check that reads as the first did", { skip: process.platform === "win32" && "needs ln -s and readlink" }, () => {
+  const root = mkdtempSync(join(tmpdir(), "launch-lock-"));
+  try {
+    const lock = join(root, "var", "launch-r1.lock");
+    const sh = (/** @type {string} */ script) => spawnSync("bash", ["-c", script], { encoding: "utf8" });
+    const target = () => { try { return readlinkSync(lock); } catch { return null; } };
+    assert.equal(launchLock("r1"), "/var/lib/corten-bench/launch-r1.lock");
+    // The first launch takes it, and takes it again (a step tried again); a second refuses, with
+    // how to clear one a stopped launch left, and leaves it.
+    assert.equal(sh(takeLaunch(lock, "launch-a")).status, 0);
+    assert.equal(target(), "launch-a");
+    assert.equal(sh(takeLaunch(lock, "launch-a")).status, 0);
+    const second = sh(takeLaunch(lock, "launch-b"));
+    assert.equal(second.status, 3);
+    assert.match(second.stderr, /is held \(launch-a\): another droplet\.mjs is launching this round here/);
+    assert.ok(second.stderr.includes(`rm ${lock}`), second.stderr);
+    assert.equal(target(), "launch-a");
+    assert.equal(sh(ownsLaunch(lock, "launch-a")).status, 0);
+    const notOwned = sh(ownsLaunch(lock, "launch-b"));
+    assert.equal(notOwned.status, 4);
+    assert.match(notOwned.stderr, /this launch no longer holds/);
+    // The clear: its custody check stands in as a file read twice; `clear` removes a sentinel.
+    const state = join(root, "state");
+    const sentinel = join(root, "sentinel");
+    writeFileSync(state, "boot\nabsent\n");
+    const step = (/** @type {string} */ token, clear = `rm ${quote(sentinel)}`) => sh(clearAfterCustody({ lock, token, custody: `cat ${quote(state)}`, expected: "boot\nabsent\n", clear }));
+    writeFileSync(sentinel, "");
+    // Another launch's token, or a custody that changed in between: nothing is cleared.
+    const otherToken = step("launch-b");
+    assert.equal(otherToken.status, 4);
+    assert.match(otherToken.stderr, /no longer holds/);
+    assert.ok(existsSync(sentinel));
+    writeFileSync(state, "boot\npresent dCBzdGFydCBjb3VudAo=\n");
+    const changed = step("launch-a");
+    assert.equal(changed.status, 4);
+    assert.match(changed.stderr, /changed between the launch's custody check and its clear, so nothing is cleared/);
+    assert.ok(existsSync(sentinel));
+    writeFileSync(state, "boot\nabsent\n");
+    // A clear that failed leaves no marker, so a step tried again checks again.
+    assert.equal(step("launch-a", "false").status, 1);
+    assert.ok(!existsSync(`${lock}.cleared`));
+    // The same reading: cleared once; a step tried again after that does not clear again.
+    assert.equal(step("launch-a").status, 0);
+    assert.ok(!existsSync(sentinel));
+    writeFileSync(sentinel, "");
+    writeFileSync(state, "boot\npresent bm90IHRoZSBzYW1lCg==\n");
+    assert.equal(step("launch-a").status, 0);
+    assert.ok(existsSync(sentinel));
+    // Released only by its holder.
+    assert.equal(sh(releaseLaunch(lock, "launch-b")).status, 0);
+    assert.equal(target(), "launch-a");
+    assert.equal(sh(releaseLaunch(lock, "launch-a")).status, 0);
+    assert.equal(target(), null);
+    assert.ok(!existsSync(`${lock}.cleared`));
+    assert.equal(sh(takeLaunch(lock, "launch-b")).status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("droplet.mjs uploads none of a round's progress files or logs from the working tree", () => {
+  for (const member of ["./bench/fullstack/results-r1.progress", "bench/fullstack/results-m3.log", "./bench/live/results-l2.log", "./bench/live/results-l2.progress\r"]) assert.ok(hostOnlyFile(member), member);
+  for (const member of ["./bench/fullstack/round.mjs", "./bench/fullstack/results-r1.progress.bak", "./bench/browser/results-r1.log", "./bench/fullstack/results/r1/run.log", "./x/bench/fullstack/results-r1.progress"]) assert.ok(!hostOnlyFile(member), member);
+});
+
+test("droplet.mjs on a reused droplet holds the round's launch from its custody check through its unit's start, clears what that round left only under it, and uploads no progress file", { skip: process.platform === "win32" && "stands in for ssh with a shell script" }, () => {
   const root = mkdtempSync(join(tmpdir(), "relaunch-droplet-"));
   try {
     // droplet.mjs and what it imports, in a tree of their own with a fixture, so the launch
-    // uploads (with the real tar) only that tree.
-    const fullstack = join(root, "bench", "fullstack");
+    // uploads (with the real tar) only that tree. The tree is dirty: it has a progress file saying
+    // the round finished and a log saying it is all done, as a local round would leave.
+    const tree = join(root, "tree");
+    const fullstack = join(tree, "bench", "fullstack");
     mkdirSync(join(fullstack, "fixtures"), { recursive: true });
-    mkdirSync(join(root, "bench", "live"));
+    mkdirSync(join(tree, "bench", "live"));
     for (const file of ["droplet.mjs", "apps.mjs", "conformance.mjs", "inventory.mjs", "pack.mjs", "passes.mjs", "round.mjs", "count-perf.mjs"]) copyFileSync(join(import.meta.dirname, file), join(fullstack, file));
-    copyFileSync(join(import.meta.dirname, "..", "live", "apps.mjs"), join(root, "bench", "live", "apps.mjs"));
+    copyFileSync(join(import.meta.dirname, "..", "live", "apps.mjs"), join(tree, "bench", "live", "apps.mjs"));
     writeFileSync(join(fullstack, "fixtures", "items.json"), JSON.stringify({ item_1: { id: "item_1" } }));
-    // ssh records each remote script and answers relaunchCustody's with FAKE_REPLY; scp and doctl
-    // are recorded too, and doctl fails (a reused droplet needs none).
+    writeFileSync(join(fullstack, "results-r1.progress"), "t boot\nt finished\n");
+    writeFileSync(join(fullstack, "results-r1.log"), "all done\n");
+    // The droplet is a directory: ssh runs each script there with its paths moved into it (but
+    // provisioning, which it only records), scp copies into it, and systemctl, docker, npm and
+    // npx are stand-ins; doctl fails (a reused droplet needs none). FAKE_HOOK, when it exists,
+    // runs just before the clear, as another launch or operator would act between the two.
+    const remote = join(root, "remote");
     const bin = join(root, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "ssh"), '#!/bin/sh\nfor last; do :; done\nprintf "ssh %s\\n=====\\n" "$last" >> "$FAKE_LOG"\ncase "$last" in *boot_id*) cat "$FAKE_REPLY" ;; esac\nexit 0\n', { mode: 0o755 });
-    writeFileSync(join(bin, "scp"), '#!/bin/sh\nprintf "scp %s\\n=====\\n" "$*" >> "$FAKE_LOG"\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, "ssh"), [
+      "#!/bin/sh",
+      "for last; do :; done",
+      'printf "ssh %s\\n=====\\n" "$last" >> "$FAKE_LOG"',
+      'case "$last" in *cloud-init*) exit 0 ;; esac',
+      // The clear's step, by words of it its quoting leaves whole.
+      'case "$last" in *"so nothing is cleared"*) if [ -f "$FAKE_HOOK" ]; then sh "$FAKE_HOOK"; fi ;; esac',
+      // /bench only where a path starts (not the second of /bench/bench).
+      'script=$(printf "%s" "$last" | sed -E -e "s#(^|[^A-Za-z0-9_./-])/bench#\\1$FAKE_REMOTE/bench#g" -e "s#/var/lib/corten-bench#$FAKE_REMOTE/lock#g" -e "s#/sys/fs/cgroup#$FAKE_REMOTE/cgroup#g" -e "s#/etc/systemd/system#$FAKE_REMOTE/systemd#g" -e "s#/tmp/droplet.lock#$FAKE_REMOTE/droplet.lock#g")',
+      'exec bash -c "$script"',
+      "",
+    ].join("\n"), { mode: 0o755 });
+    writeFileSync(join(bin, "scp"), [
+      "#!/bin/sh",
+      'printf "scp %s\\n=====\\n" "$*" >> "$FAKE_LOG"',
+      "for last; do :; done",
+      'eval "src=\\${$(($# - 1))}"',
+      'cp "$src" "$FAKE_REMOTE$(printf "%s" "${last#*:}")"',
+      "",
+    ].join("\n"), { mode: 0o755 });
     writeFileSync(join(bin, "doctl"), '#!/bin/sh\nprintf "doctl %s\\n=====\\n" "$*" >> "$FAKE_LOG"\nexit 1\n', { mode: 0o755 });
-    const boot = "0f1e2d3c-4b5a-4968-8776-655443322110", other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-    const unfinished = `t boot\nt start fixture\nt end fixture\nt start count ${boot}\n`;
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: join(root, "log"), FAKE_REPLY: join(root, "reply") };
+    writeFileSync(join(bin, "systemctl"), fakeSystemctl, { mode: 0o755 });
+    for (const stub of ["docker", "npm", "npx"]) writeFileSync(join(bin, stub), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    const other = bootId === "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" ? "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const unfinished = (/** @type {string} */ boot) => `t boot\nt start fixture\nt end fixture\nt start count ${boot}\n`;
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: join(root, "log"), FAKE_SYSTEMCTL_LOG: join(root, "systemctl"), FAKE_REMOTE: remote, FAKE_HOOK: join(root, "hook") };
     delete env.GIT_DIR;
     delete env.GIT_WORK_TREE;
-    const launch = (/** @type {string} */ id, /** @type {string[]} */ extra) => {
-      writeFileSync(join(root, "reply"), `${id}\npresent ${Buffer.from(unfinished).toString("base64")}\n`);
-      rmSync(join(root, "log"), { force: true });
-      const r = spawnSync(process.execPath, [join(fullstack, "droplet.mjs"), "r1", "--host", "203.0.113.9", ...extra, "--detach"], { cwd: root, encoding: "utf8", env, timeout: 120_000 });
+    const remoteProgress = join(remote, "bench", "bench", "fullstack", "results-r1.progress");
+    const remoteLog = join(remote, "bench", "bench", "fullstack", "results-r1.log");
+    const lock = join(remote, "lock", "launch-r1.lock");
+    const target = () => { try { return readlinkSync(lock); } catch { return null; } };
+    /** @param {{ progress?: string | null, extra?: string[], hook?: string, held?: string }} setup */
+    const launch = ({ progress = null, extra = [], hook, held }) => {
+      rmSync(remote, { recursive: true, force: true });
+      mkdirSync(join(remote, "bench", "bench", "fullstack"), { recursive: true });
+      mkdirSync(join(remote, "systemd"), { recursive: true });
+      mkdirSync(join(remote, "cgroup"), { recursive: true });
+      writeFileSync(join(remote, "cgroup", "cgroup.controllers"), "cpu io memory pids\n");
+      writeFileSync(remoteLog, "the droplet's own log\n");
+      if (progress !== null) writeFileSync(remoteProgress, progress);
+      if (held) {
+        mkdirSync(join(remote, "lock"));
+        symlinkSync(held, lock);
+      }
+      rmSync(join(root, "hook"), { force: true });
+      if (hook) writeFileSync(join(root, "hook"), hook);
+      for (const file of ["log", "systemctl"]) rmSync(join(root, file), { force: true });
+      const r = spawnSync(process.execPath, [join(fullstack, "droplet.mjs"), "r1", "--host", "203.0.113.9", ...extra, "--detach"], { cwd: tree, encoding: "utf8", env, timeout: 120_000 });
       const calls = existsSync(join(root, "log")) ? readFileSync(join(root, "log"), "utf8").split("\n=====\n").filter(Boolean) : [];
-      return { ...r, calls };
+      const units = existsSync(join(root, "systemctl")) ? readFileSync(join(root, "systemctl"), "utf8").trim().split("\n") : [];
+      return { ...r, calls, units, started: units.includes("start corten-bench-r1"), progress: existsSync(remoteProgress) ? readFileSync(remoteProgress, "utf8") : null };
     };
-    const custody = (/** @type {string} */ c) => c.startsWith("ssh ") && c.includes("systemctl stop") && c.includes("boot_id");
-    const clears = (/** @type {string} */ c) => c.startsWith("ssh ") && (/rm -f \S*results-r1\.progress/.test(c) || c.includes("rm -rf /bench"));
-    // The same boot, going on from the count step or starting the round again: refused, with the
-    // progress file and /bench as they were and nothing uploaded or started.
+    const label = (/** @type {string[]} */ extra) => extra.join(" ") || "new";
+    const notStarted = (/** @type {ReturnType<typeof launch>} */ r, /** @type {string} */ what) => {
+      assert.ok(!r.started, what);
+      assert.ok(!r.calls.some((c) => c.startsWith("scp ")), what);
+    };
     for (const extra of [["--from", "count"], []]) {
-      const r = launch(boot, extra);
-      assert.notEqual(r.status, 0, `${extra.join(" ")}: ${r.stdout}`);
-      assert.match(r.stderr, /round r1 may not start again on the droplet at 203\.0\.113\.9: the round stopped in its count step and it started again in the boot its count step started in/, extra.join(" "));
-      assert.equal(r.calls.filter(custody).length, 1, extra.join(" "));
-      assert.deepEqual(r.calls.filter(clears), [], extra.join(" "));
-      assert.ok(!r.calls.some((c) => c.startsWith("scp ") || c.includes("systemctl start")), extra.join(" "));
+      // The same boot: refused, with the progress file as it was, nothing uploaded or started, and
+      // the lock released.
+      const same = launch({ progress: unfinished(bootId), extra });
+      assert.notEqual(same.status, 0, `${label(extra)}: ${same.stdout}`);
+      assert.match(same.stderr, /round r1 may not start again on the droplet at 203\.0\.113\.9: the round stopped in its count step and it started again in the boot its count step started in/, label(extra));
+      assert.equal(same.progress, unfinished(bootId), label(extra));
+      notStarted(same, label(extra));
+      assert.equal(target(), null, label(extra));
+      // Another boot (the droplet rebooted, which ends any perf): the launch goes on and clears the
+      // progress file; none of the working tree's progress file or log reaches the droplet; the
+      // lock is released once the unit has started.
+      const ok = launch({ progress: unfinished(other), extra });
+      assert.equal(ok.status, 0, `${label(extra)}: ${ok.stderr}`);
+      assert.ok(ok.started, label(extra));
+      assert.equal(ok.progress, null, label(extra));
+      assert.ok(existsSync(join(remote, "bench", "bench", "fullstack", "round.mjs")), label(extra));
+      assert.equal(readFileSync(remoteLog, "utf8"), extra.length ? "the droplet's own log\n" : "", label(extra));
+      assert.equal(target(), null, label(extra));
+      assert.ok(!existsSync(`${lock}.cleared`), label(extra));
+      // Every step after the custody check that changes the droplet checks the lock first.
+      const changes = ok.calls.filter((c) => c.startsWith("ssh ") && !c.includes("cloud-init") && !c.includes("launch release") && !c.includes("passes.json"));
+      assert.ok(changes.length >= 5, label(extra));
+      for (const c of changes.slice(1)) assert.ok(c.includes("no longer holds"), `${label(extra)}: ${c.slice(0, 200)}`);
     }
-    // Another boot (the droplet rebooted, which ends any perf): the launch goes on, and clears the
-    // progress file only after it has read it.
-    for (const extra of [["--from", "count"], []]) {
-      const r = launch(other, extra);
-      assert.equal(r.status, 0, `${extra.join(" ")}: ${r.stderr}`);
-      const read = r.calls.findIndex(custody);
-      const cleared = r.calls.findIndex(clears);
-      assert.ok(read >= 0 && cleared > read, `${extra.join(" ")}: read ${read}, cleared ${cleared}`);
-      assert.ok(r.calls.some((c) => c.includes("systemctl start corten-bench-r1")), extra.join(" "));
-    }
+    // Another launch holds the lock (or a stopped one left it): refused before the unit is even
+    // stopped, with how to clear it, and the lock is left as it is.
+    const held = launch({ progress: unfinished(other), held: "another-launch" });
+    assert.notEqual(held.status, 0, held.stdout);
+    assert.match(held.stderr, /the launch lock \S+launch-r1\.lock is held \(another-launch\): another droplet\.mjs is launching this round here/);
+    assert.match(held.stderr, /rm \S+launch-r1\.lock\) and launch again/);
+    assert.ok(!held.units.some((u) => u.startsWith("stop ")), held.units.join("; "));
+    assert.equal(held.progress, unfinished(other));
+    notStarted(held, "held");
+    assert.equal(target(), "another-launch");
+    // Between the custody check and the clear, the round's progress file changes (a round that
+    // started meanwhile), or another launch takes the lock: nothing is cleared or started.
+    const moved = launch({ progress: unfinished(other), hook: `printf 't start count ${bootId}\\n' >> '${remoteProgress}'\n` });
+    assert.notEqual(moved.status, 0, moved.stdout);
+    assert.match(moved.stderr, /changed between the launch's custody check and its clear, so nothing is cleared/);
+    assert.equal(moved.progress, `${unfinished(other)}t start count ${bootId}\n`);
+    notStarted(moved, "progress changed");
+    assert.equal(target(), null);
+    const taken = launch({ progress: unfinished(other), hook: `rm -f '${lock}' && ln -s another-launch '${lock}'\n` });
+    assert.notEqual(taken.status, 0, taken.stdout);
+    assert.match(taken.stderr, /this launch no longer holds/);
+    assert.equal(taken.progress, unfinished(other));
+    notStarted(taken, "lock taken");
+    assert.equal(target(), "another-launch");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
