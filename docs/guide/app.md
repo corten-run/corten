@@ -266,8 +266,8 @@ answers any other ([below](#host-names)). What differs:
    is answered twice or out of order, and a client that sends its next request again on a new
    connection, as HTTP has it do when a connection is closed on it, sees no difference.
 6. A client that pipelines requests and reads no answer holds a little more of the server's
-   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,193 to
-   2,277 MiB with the switch on and 2,090 to 2,120 MiB with it off (measured at `553b27040`,
+   memory than with hyper: the same flood of such clients took a 4 GiB container to 2,178 to
+   2,323 MiB with the switch on and 2,101 to 2,137 MiB with it off (measured at `568aa8d1a`,
    nine runs each). Most of either is socket buffers, and so is the difference: the server's
    own memory was lower with the switch on, and the kernel held more, the answers the
    connection had written, about twice as many by then, for clients that took none.
@@ -275,7 +275,7 @@ answers any other ([below](#host-names)). What differs:
    connection that takes nothing is kept. This is why the switch is off unless set; behind a
    proxy that does not pipeline to the app it does not arise. And a connection that has been
    handed to hyper holds about 1.6 KiB more while it waits than one hyper served from the start
-   (10,083 bytes against 8,471), so an app whose connections mostly carry bodies gains nothing
+   (10,082 bytes against 8,470), so an app whose connections mostly carry bodies gains nothing
    in memory.
 7. A body type of the app's own that panics. A panic where a body is asked for its next piece
    ends its answer as a failure does (item 4), with either connection. A body that panics where
@@ -296,12 +296,15 @@ answers any other ([below](#host-names)). What differs:
    Corten's.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
-connection, at `553b27040`): the shortest request the counting kit sends, to a route that says
-`unstaged` and answers two bytes, goes from 10,572 to 9,332, a staged API route's `GET` from
-18,339 to 17,093, and a 12 KB page from 43,227 to 42,200, each with three allocations fewer. A
+connection, at `568aa8d1a`): the shortest request the counting kit sends, to a route that says
+`unstaged` and answers two bytes, goes from 10,587 to 9,335, a staged API route's `GET` from
+18,354 to 17,096, and a 12 KB page from 33,220 to 32,186, each with three allocations fewer. A
 request with the header lines a browser sends costs as many instructions as it did, to a
-third of a percent either way (the same `GET` 23,879 and 23,808, a compressed page 221,841
-and 221,969), with the three allocations fewer; a request with a body costs what it did. A
+third of a percent either way (the same `GET` 23,894 and 23,811, a compressed page 211,835
+and 211,950), with the three allocations fewer; a request with a body costs what it did. A
+request whose head is longer than 2,560 bytes costs more than it did: one with a `Host` name
+of 4,096 bytes goes from 22,503 to 24,313, since Corten's connection reads less at first than
+hyper does and takes such a head in two reads. A
 connection waiting for a request holds 7,424 bytes where hyper's holds 8,471. No time has been
 measured yet, so this is less work for a short request and not yet a claim that it is faster.
 
