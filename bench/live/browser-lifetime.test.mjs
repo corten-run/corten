@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { gunzipSync } from "node:zlib";
+import { fanoutJourney, waitForFanoutDrain } from "./fanout.mjs";
 import { portFor, settingsFor, workloadFor } from "./native.mjs";
 import { browserJourney, runLiveAdapters } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
@@ -80,7 +82,7 @@ async function fixture(t, app) {
 }
 
 const apps = "aspnet,express", options = { group, requested: apps, profile: "bounded" };
-async function runnerFixture(t) {
+async function runnerFixture(t, measured) {
   const scratch = await mkdtemp(join(tmpdir(), "live-browser-lifetime-")), out = join(scratch, "evidence");
   t.after(async () => {
     const rel = relative(resolve(tmpdir()), resolve(scratch)); assert.ok(rel && rel !== ".." && !rel.startsWith(`..${sep}`));
@@ -89,7 +91,10 @@ async function runnerFixture(t) {
   const images = new Map(), containers = new Map(), history = [];
   for (const [i, app] of apps.split(",").entries()) {
     const index = String(i + 1), id = index.repeat(64), image = `sha256:${id}`;
-    images.set(portFor(app).image, { app, image, id, port: new URL(await fixture(t, app)).port });
+    const native = measured?.app === app ? measured : undefined;
+    images.set(portFor(app).image, native ? { app, id: native.provenance.containerId, image: native.provenance.imageId,
+      port: new URL(native.host.base).port, top: native.provenance.processInventory }
+      : { app, image, id, port: new URL(await fixture(t, app)).port });
   }
   const ok = (stdout = "") => ({ status: 0, stdout });
   return { out, history, spawn(program, args) {
@@ -113,7 +118,7 @@ async function runnerFixture(t) {
       Config: { Labels: { "agent.owner": "codex", "agent.task": "bench-parity-live" } },
       NetworkSettings: { Ports: { "8080/tcp": [{ HostPort: entry.port }] } },
       HostConfig: { NanoCpus: 1e9, Memory: 2 ** 30, MemorySwap: 2 ** 30 } }]));
-    if (args[0] === "top") return ok("PID PPID COMMAND\n1001 1 fixture\n");
+    if (args[0] === "top") return ok(entry.top ?? "PID PPID COMMAND\n1001 1 fixture\n");
     if (args[0] === "rm") {
       assert.deepEqual(args, ["rm", "-f", "-v", entry.id]);
       history.push(`remove:${entry.app}`); containers.delete(entry.id); return ok();
@@ -154,6 +159,122 @@ test("live runner uses a fresh Chromium for the next adapter after a real discon
   assert.equal(replay.readyForLoad, false);
   assert.equal(replay.inspected.length, 4); assert.deepEqual(replay.unqualified, []);
 });
+
+test("native fanout drain aborts a stalled fetch at its deadline without retrying", async (t) => {
+  let calls = 0, aborted = false;
+  t.mock.method(globalThis, "fetch", async (_url, { signal }) => {
+    calls++;
+    return new Promise((_, reject) => {
+      const watchdog = setTimeout(() => reject(new Error("probe did not abort")), 1500);
+      signal.addEventListener("abort", () => {
+        aborted = true; clearTimeout(watchdog); reject(signal.reason);
+      }, { once: true });
+    });
+  });
+  const run = new AbortController();
+  assert.equal(await waitForFanoutDrain("http://127.0.0.1:1", 100, run.signal), "timeout");
+  assert.equal(calls, 1);
+  assert.equal(aborted, true);
+  assert.equal(run.signal.aborted, false);
+});
+
+for (const mode of ["drained", "timeout", "late-zero", "fetch", "body-fetch", "malformed", "invalid-json", "unavailable", "redirect"]) {
+  test(`failed native fanout teardown: ${mode}`, async (t) => {
+    const saved = async (name) => JSON.parse(gunzipSync(await readFile(new URL(
+      `./evidence/review-v3-express/express-${name}.json.gz`, import.meta.url))));
+    const { app, group, provenance, qualification, schema, profile, ...measured } = await saved("fanout-1");
+    const { out, history, spawn } = await runnerFixture(t, { app, provenance, host: measured.host });
+    const events = [], attached = { connections: 2, subscriptions: 2, pendingTasks: 2, queueEvents: 0,
+      queuePeak: 0, historyEvents: 0, historyPeak: 0, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit };
+    let current, active = false, closed = 0, polls = 0, offset = 0;
+    const now = performance.now.bind(performance);
+    t.mock.method(performance, "now", () => now() + offset);
+    t.mock.method(globalThis, "fetch", async (target, options) => {
+      const path = new URL(target).pathname;
+      if (path === "/parity/configure") {
+        events.push(`configure:${current}:${active ? 400 : 200}`);
+        return Response.json({}, { status: active ? 400 : 200 });
+      }
+      assert.equal(path, "/parity/resources");
+      if (!current) return Response.json({}); // Startup.
+      if (closed !== 2) {
+        events.push(`attach:${current}`);
+        return Response.json(attached);
+      }
+      events.push(`drain:${++polls}`);
+      assert.equal(options.redirect, "manual");
+      if (mode === "fetch") throw new Error("unsaved fixture fetch details");
+      if (mode === "body-fetch") return new Response(new ReadableStream({
+        start(controller) { controller.error(new TypeError("unsaved fixture body details")); },
+      }));
+      if (mode === "malformed") return Response.json({ connections: 0, subscriptions: "0" });
+      if (mode === "invalid-json") return new Response('{"connections":0,"subscriptions":');
+      if (mode === "unavailable") return Response.json({}, { status: 503 });
+      if (mode === "redirect") return Response.redirect("http://127.0.0.1:1/not-resources");
+      if (mode === "timeout" || mode === "late-zero") offset = 5001;
+      if (mode === "late-zero" || (mode === "drained" && polls === 3)) {
+        active = false;
+        return Response.json({ connections: 0, subscriptions: 0 });
+      }
+      if (mode === "drained") return Response.json({ connections: polls === 1 ? 0 : 1, subscriptions: polls === 1 ? 1 : 0 });
+      return Response.json(attached);
+    });
+    let launched = true;
+    const browser = { isConnected: () => launched, async close() { launched = false; }, async newContext() {
+      const page = new EventEmitter();
+      Object.assign(page, { setDefaultTimeout() {}, async content() { return ""; }, async waitForFunction() {},
+        async goto() { if (current === 4) throw new Error("fixture ended final cell"); },
+        async evaluate(_fn, arg) {
+          if (arg?.seq) throw new Error("fixture publisher failed");
+          if (arg?.queueLimit) active = true;
+          return [];
+        } });
+      return { async newPage() { return page; }, async close() {
+        if (current === 2 && ++closed === 2) events.push("closed:2");
+      }, async newCDPSession() {
+        return { on() {}, async send() { return { targetInfo: { targetId: "fixture", browserContextId: "fixture" } }; } };
+      } };
+    } };
+    const run = runLiveAdapters({ ...options, requested: "express", out, measure: true }, {
+      spawn, chromium: { async launch() { return browser; } },
+      async journey(_browser, _base, _input, { scenario }) {
+        const { app, group, scenario: _name, provenance, workload, settings, schema, profile, ...observed } = await saved(scenario);
+        return observed;
+      },
+      fanout(browser, base, settings, clients, port) {
+        current = clients; events.push(`attempt:${clients}`);
+        if (clients === 1) return measured;
+        return fanoutJourney(browser, base, settings, clients, port, () => ({ receipt: { startedAt: now() } }));
+      },
+    });
+    if (mode === "drained") assert.equal(await run, false);
+    else await assert.rejects(run, /native fanout teardown refused/);
+    assert.deepEqual(history, ["start:express", "remove:express"]);
+    assert.equal(launched, false);
+    assert.deepEqual(events, ["attempt:1", "attempt:2", "configure:2:200", "attach:2", "closed:2", "drain:1",
+      ...(mode === "drained" ? ["drain:2", "drain:3", "attempt:4", "configure:4:200"] : [])]);
+    assert.equal((await readArtifact(out, "express-fanout-1.json.gz")).schema, "native-live-fanout/v3");
+    const failed = await readArtifact(out, "express-fanout-2.json.gz");
+    assert.equal(failed.error, "fixture publisher failed");
+    assert.equal(failed.schema, "native-live-fanout-failure/v1");
+    assert.ok(!Object.hasOwn(failed, "summary"));
+    const replay = await verifyRound(out);
+    assert.equal(replay.readyForLoad, false);
+    assert.deepEqual(replay.passed, ["express"]);
+    assert.deepEqual(replay.measured, []);
+    assert.deepEqual(replay.unqualified, []);
+    if (mode === "drained") {
+      assert.equal(failed.teardownFailure, undefined);
+      assert.equal((await readArtifact(out, "express-fanout-4.json.gz")).error, "fixture ended final cell");
+    } else {
+      assert.equal(failed.teardownFailure, { "late-zero": "timeout", "body-fetch": "fetch",
+        "invalid-json": "malformed", redirect: "unavailable" }[mode] ?? mode);
+      assert.equal(replay.cancelled, true);
+      assert.deepEqual(replay.notAttempted.express, { scenarios: [], clients: [4] });
+      assert.equal(existsSync(join(out, "express-fanout-4.json.gz")), false);
+    }
+  });
+}
 
 test("production cancellation of the last readiness probe is not a startup failure", { timeout: 10000 }, async (t) => {
   const { out, history, spawn } = await runnerFixture(t);

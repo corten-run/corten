@@ -11,6 +11,40 @@ export const fanoutProfile = Object.freeze({ schema: "native-live-fanout-profile
   seed: 17, rowCount: 5, eventCount: 60, rate: 20, deadlineMs: 90000, maxScheduleLagMs: 500,
   limits: "one local repeat; bounded browser fan-out, not saturation, dedicated-host throughput or a ranking" });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Context close can finish before the native endpoint drops its readers.
+// A nonzero observation may settle; a failed or ambiguous observation cannot.
+export async function waitForFanoutDrain(base, maxCleanupMs, signal) {
+  const deadline = performance.now() + maxCleanupMs;
+  const timeout = AbortSignal.timeout(maxCleanupMs);
+  const probe = AbortSignal.any([signal, timeout]);
+  const expired = () => timeout.aborted || performance.now() >= deadline;
+  const refuse = (reason) => signal.aborted ? undefined : expired() ? "timeout" : reason;
+  while (!signal.aborted) {
+    if (expired()) return "timeout";
+    try {
+      const response = await fetch(`${base}/parity/resources`, { signal: probe, redirect: "manual" });
+      if (expired() || response.status !== 200) {
+        void response.body?.cancel().catch(() => {});
+        return refuse("unavailable");
+      }
+      let counts;
+      try { counts = await response.json(); }
+      catch (error) {
+        return refuse(error instanceof SyntaxError ? "malformed" : "fetch");
+      }
+      if (signal.aborted) return;
+      if (expired()) return "timeout";
+      if (!counts || typeof counts !== "object" || Array.isArray(counts)
+        || ![counts.connections, counts.subscriptions].every((n) => Number.isSafeInteger(n) && n >= 0)) return "malformed";
+      if (counts.connections === 0 && counts.subscriptions === 0) return;
+    } catch {
+      return refuse("fetch");
+    }
+    await sleep(Math.max(0, Math.min(25, deadline - performance.now())));
+  }
+}
+
 const sort = (rows) => [...rows].sort((a, b) => a.id.localeCompare(b.id));
 const pct = (values, p) => [...values].sort((a, b) => a - b)[Math.ceil(p * values.length) - 1];
 
