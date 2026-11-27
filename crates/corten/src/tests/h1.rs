@@ -1562,7 +1562,11 @@ async fn the_look_behind_a_head_as_long_as_the_limit_is_given_a_reads_room() {
         }
     }
     impl tokio::io::AsyncWrite for Full {
-        fn poll_write(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
             self.answered.lock().unwrap().extend_from_slice(buf);
             Poll::Ready(Ok(buf.len()))
         }

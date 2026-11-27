@@ -1448,7 +1448,9 @@ async fn a_bodys_piece_that_is_ready_with_its_clients_end_is_not_sent() {
         };
         let first = || futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"first"))]);
         // `first`, and a piece 50 ms later.
-        let two = move || async move { Body::from_stream(futures_util::StreamExt::chain(first(), futures_util::stream::once(later()))) };
+        let two = move || async move {
+            Body::from_stream(futures_util::StreamExt::chain(first(), futures_util::stream::once(later())))
+        };
         // And one more, 50 ms after that.
         let three = move || async move {
             let second = futures_util::StreamExt::chain(first(), futures_util::stream::once(later()));
@@ -1501,7 +1503,9 @@ async fn a_bodys_piece_that_is_ready_with_its_clients_end_is_not_sent() {
 #[tokio::test(start_paused = true)]
 async fn an_answer_that_waits_when_shutdown_begins_is_cut_when_its_client_closes_its_side() {
     let app = || {
-        let table = Table::new().route("/short", get(|| async { vec![b's'; 3_000] })).route("/long", get(|| async { vec![b'l'; 10 * 1024] }));
+        let table = Table::new()
+            .route("/short", get(|| async { vec![b's'; 3_000] }))
+            .route("/long", get(|| async { vec![b'l'; 10 * 1024] }));
         App::new(Routes::from(table))
     };
     let moment = || tokio::time::sleep(Duration::from_millis(5));
