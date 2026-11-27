@@ -95,9 +95,14 @@ function serve() {
   const resident = join(/** @type {string} */ (state), "proc", String(process.pid), "status");
   mkdirSync(dirname(resident), { recursive: true });
   let pages = 0;
-  /** Writes the resident memory with `more` pages, whole: idle.mjs never reads half a status. @param {number} more */
+  /**
+   * Writes the resident memory with `more` pages, whole: idle.mjs never reads half a status. Only
+   * a probe not under callgrind writes it, as idle.mjs runs one; a count never reads it.
+   * @param {number} more
+   */
   const hold = (more) => {
     pages += more;
+    if (out !== undefined) return;
     writeFileSync(`${resident}.next`, `Name:\tstand-in\nVmRSS:\t${10_240 + 4 * pages} kB\n`);
     renameSync(`${resident}.next`, resident);
   };
