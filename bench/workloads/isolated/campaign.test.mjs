@@ -22,7 +22,8 @@ import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
 import * as actualHost from "./host-observation.mjs";
-import { liveActorCpus, liveApplication } from "./native-roles.mjs";
+import { hardeningActorCpus, hardeningCpuGate, liveActorCpus, liveApplication } from "./native-roles.mjs";
+import { budgets as hardeningBudgets, matrix as hardeningMatrix } from "../../hardening/plan.mjs";
 import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
@@ -39,6 +40,7 @@ let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSecondWorker, settleSurvives, settleNativeFails;
 let liveOutput, liveRoundTrip, compilerScratch;
+let commandOutput;
 let auditClock, offlinePrep;
 const liveFixturePid = 42042;
 let liveFixtureSignals;
@@ -287,6 +289,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   const child = fakeChild((child) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
     const native = !invocation[0].endsWith("fixtures.mjs");
+    commandOutput?.(child, native);
     const finish = () => {
       if (compilerScratch) {
         const id = options.env.CORTEN_ISOLATED_COMPILER_TARGET_ID;
@@ -353,6 +356,7 @@ let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null; settleSecondWorker = false;
   liveOutput = null; liveRoundTrip = null; compilerScratch = null; offlinePrep = null;
+  commandOutput = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -725,6 +729,46 @@ for (const [group, settle] of [["json-api", false], ["json-api", true], ["mixed-
       }
     }
   }
+});
+
+test("monitored Hardening relays only complete ordered native stdout cell starts", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+  const proof = JSON.parse(result.stdout), s = setupGroup("hardening"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  admittedApparatus = { ...structuredClone(controlRegistration), binding: proof.binding, host: admittedHost };
+  proof.admission.apparatus = admittedApparatus;
+  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  const [binding] = s.plan.bindings;
+  binding.resources.actorCpus = hardeningActorCpus;
+  binding.resources.budget = hardeningBudgets().resources;
+  binding.execution.effectiveOptions = { isolated: true, profile: "bounded" };
+  binding.sources.files.push({ path: hardeningCpuGate });
+  const sent = [], stream = { registration: admittedApparatus, check() {}, open() {}, close() {}, progress(frame) { sent.push(frame); },
+    async seal() { return { registration: admittedApparatus }; } };
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  controlWindows.directory = handle.directory; controlWindows.phase = "00-hardening-timing";
+  const cells = hardeningMatrix().map(({ key }) => "hardening " + key), liveCounts = [];
+  commandOutput = ({ stdout, stderr }, native) => {
+    if (!native) { stdout.write(cells[0] + "\n"); return; }
+    stderr.write(cells[0] + "\n");
+    stdout.write(cells[1] + "\n" + "x".repeat(65536));
+    stdout.write(cells[0] + "\n");
+    stdout.write(cells[0].slice(0, 7));
+    liveCounts.push(sent.length);
+    stdout.write(cells[0].slice(7) + "\n" + cells[0] + "\n");
+    liveCounts.push(sent.length);
+    stdout.write(cells[1] + "\r\n" + cells[2]);
+    liveCounts.push(sent.length);
+  };
+  const status = await s.campaign.advance(handle);
+  assert.equal(status.state, "finished");
+  assert.deepEqual(liveCounts, [0, 1, 2], "only complete ordered native stdout markers advance while the child is live");
+  assert.equal(Object.hasOwn(status, "nativeCellProgress"), false, "monitor progress is not saved campaign evidence");
+  assert.deepEqual(sent.map(({ round, state, nextGroup, nativeCellProgress }) => ({ round, state, nextGroup, nativeCellProgress })),
+    [1, 2].map(started => ({ round: "r21", state: "active", nextGroup: "hardening", nativeCellProgress: { started, total: cells.length } })));
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {

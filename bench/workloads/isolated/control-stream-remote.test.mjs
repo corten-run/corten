@@ -165,7 +165,9 @@ for mode in ('normal','wrong-at-start','drift','stale','eof','late-stop'):
 
 test("independent consumer supervises native windows, paused audit, immutable seal and actual drain probe", async (t) => {
   const f = await fixture(t), s = f.supervisor;
-  s.progress({ state: "active" }); assert.equal(f.get("stream-state.json").kind, "progress");
+  const payload = { state: "active", nextGroup: "hardening", nativeCellProgress: { started: 19, total: 108 } };
+  s.progress(payload);
+  assert.deepEqual(f.get("stream-state.json"), { kind: "progress", payload });
   s.open({ app: "1", api: "2", load: "3-7" }); s.close();
   s.progress({ state: "blocked-review-needed", campaign: "r21-0123456789abcdef", auditGroup: "json-api", auditSubjectSha256: "e".repeat(64) });
   assert.equal(f.get("stream-state.json").kind, "audit-ready");

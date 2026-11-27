@@ -48,7 +48,12 @@ test("production transport uses one fixed guardian exec, bounded journal, typed 
   assert.ok(argv.at(-1).startsWith("/usr/bin/python3 -I /run/corten-bench-control-" + binding.token + "/helper.py monitor " + binding.token + " "));
   assert.equal(options.shell, false); assert.equal(options.cwd, resolve("."));
   f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) }); assert.equal(f.input.at(-1).kind, "renew");
-  assert.equal(localStreamStatus(f.local).kind, "progress");
+  const nativeCellProgress = { started: 19, total: 108 };
+  f.frame("progress", { state: "active", nextGroup: "hardening", nativeCellProgress });
+  const progress = localStreamStatus(f.local);
+  assert.equal(progress.kind, "progress");
+  assert.deepEqual(progress.frame.payload.nativeCellProgress, nativeCellProgress);
+  assert.equal(existsSync(join(f.local, "monitor-terminal.json")), false);
   f.frame("terminal", { id: registration.id, campaign: "r21-0123456789abcdef", nativeTerminal: true, sealSha256: "f".repeat(64) });
   const done = await result.monitor.done; assert.equal(done.terminal, true); assert.equal(done.remoteDrained, false);
   assert.equal(streamRecoveryReady(f.local, { id: registration.id, registrationSha256: (await import("./cloud-local.mjs")).digest(JSON.stringify(registration)) }), false);

@@ -23,6 +23,14 @@ checkpoint, so JSON/mixed/all-group review waits remain blocked. Catalog has no 
 wait. Legacy schemas/collection remain explicit. See the drain contract for custody,
 failed-only recovery and first-official-host qualification limits.
 
+On a monitored Hardening run the same stream reports
+`nativeCellProgress: { started, total }` as the native runner writes its
+ordered cell-start lines. A count describes cells entered, not completed
+or qualified. It is not a saved campaign result, proof of an active cell,
+or authority to collect or retire a host. An older controller or one that
+has not received a complete first marker has no count. If the next
+ordered marker is missing, the last reported count need not be current.
+
 ## Parent interface
 
 ```sh

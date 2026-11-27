@@ -116,9 +116,9 @@ export function supervise(invocation, { cwd, env, log, signal, onStart, onStartu
         error ??= failure.message;
         if (!child.pid) finish(true); else cancel();
       });
-      for (const stream of [child.stdout, child.stderr]) stream?.on("data", (bytes) => {
+      for (const channel of ["stdout", "stderr"]) child[channel]?.on("data", (bytes) => {
         if (settled) return;
-        try { log(bytes); } catch (failure) { error ??= failure.message; cancel(); }
+        try { log(bytes, channel); } catch (failure) { error ??= failure.message; cancel(); }
       });
       for (const stream of [child.stdout, child.stderr]) stream?.on("error", (failure) => { error ??= failure.message; cancel(); });
       child.on("message", (message) => {

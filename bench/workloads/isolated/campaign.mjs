@@ -21,9 +21,30 @@ import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateM
 import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
 import { liveGroup } from "./native-roles.mjs";
 import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
+import { matrix as hardeningMatrix } from "../../hardening/plan.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
+function watchHardeningCells(publish) {
+  const markers = hardeningMatrix().map(({ key }) => "hardening " + key);
+  const line = Buffer.alloc(Math.max(...markers.map((marker) => marker.length)) + 1); // allow CRLF
+  let length = 0, started = 0;
+  return (bytes) => {
+    for (let offset = 0; offset < bytes.length && started < markers.length;) {
+      const newline = bytes.indexOf(10, offset), end = newline < 0 ? bytes.length : newline;
+      if (length >= 0) {
+        if (length + end - offset > line.length) length = -1;
+        else { bytes.copy(line, length, offset, end); length += end - offset; }
+      }
+      if (newline < 0) return;
+      if (length >= 0 && line.toString("latin1", 0, length - (line[length - 1] === 13 ? 1 : 0)) === markers[started]) {
+        publish({ started: ++started, total: markers.length });
+      }
+      length = 0; offset = end + 1;
+    }
+  };
+}
+
 function fresh(path) {
   assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined, "native output already exists");
   let parent = dirname(path); while (!lstatSync(parent, { throwIfNoEntry: false })) parent = dirname(parent);
@@ -133,10 +154,18 @@ export function createCampaign({ authorize }) {
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       if (compilerTarget) compilerTarget.settled = false;
+      let nativeProgress;
+      if (c.stream && binding.request.group === "hardening" && invocation === binding.execution.invocation) {
+        const active = status(c);
+        nativeProgress = watchHardeningCells((nativeCellProgress) => c.stream.progress({ ...active, nativeCellProgress }));
+      }
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
           GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env }, signal: commandSignal,
-        log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
+        log(bytes, channel) {
+          let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; }
+          if (channel === "stdout" && !commandSignal.aborted) nativeProgress?.(bytes);
+        },
         onStartupRejected(outcome) {
           try { disposeObserver(); }
           finally { if (outcome === "deadline") captureStartupDiagnostic(true); }
