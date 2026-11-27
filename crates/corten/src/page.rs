@@ -1308,7 +1308,7 @@ impl Action<'_> {
         }
         #[cfg(debug_assertions)]
         self.0.parses_whole(&body)?;
-        let mut res = html_response(status, body, Some(PATCH_HEADER));
+        let mut res = html_response(status, body, Some(PATCH_HEADER), HeaderValue::from_static(VARY));
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
             res.extensions_mut().insert(crate::cache::Unrepeatable);
@@ -1898,7 +1898,7 @@ impl Req {
         size.store(out.len() + out.len() / 8, Ordering::Relaxed);
         // Only a swap says it is one: a document a cache gave to a navigation fetch by mistake
         // makes the runtime load the URL in full.
-        let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
+        let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER), self.vary()), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
             // Looked for only when there is one: a page with places is otherwise every `GET`'s.
@@ -2356,9 +2356,9 @@ impl Req {
     }
 
     /// Adds the shell key, which tells the runtime whether the page around `<main>` is still current.
+    /// `res` already varies as [`Req::vary`] says.
     fn finish(&self, mut res: Response, key: u64) -> Response {
         res.headers_mut().insert(SHELL_HEADER, key_header(key));
-        res.headers_mut().insert(header::VARY, self.vary());
         self.content_language(&mut res);
         if let Some(notice) = &self.notice {
             // Shown once: this page is the one it was for, drawn here or by the runtime.
@@ -3024,7 +3024,7 @@ impl Req {
         match self.mode {
             Mode::Action => {
                 let DrawnPatch(body) = form(FormPatch(self)).await?;
-                Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER))))
+                Ok(HtmlResponse::new(html_response(status, body, Some(PATCH_HEADER), HeaderValue::from_static(VARY))))
             }
             #[cfg(feature = "json")]
             Mode::Data => Ok(HtmlResponse::new(errors.response())),
@@ -4496,7 +4496,8 @@ fn unruled_vars(page: &str, rules: &str) -> Result<()> {
     }
 }
 
-pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<HeaderName>) -> Response {
+/// An HTML answer, which varies as `vary` says: [`VARY`] for a patch, [`Req::vary`] for a page.
+pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<HeaderName>, vary: HeaderValue) -> Response {
     let mut res = Response::new(Body::from(body));
     *res.status_mut() = status;
     let headers = res.headers_mut();
@@ -4507,7 +4508,7 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
     // instructions than 12 in every case, the ranges apart.
     headers.reserve(13);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
-    headers.insert(header::VARY, HeaderValue::from_static(VARY));
+    headers.insert(header::VARY, vary);
     if let Some(kind) = kind {
         headers.insert(kind, HeaderValue::from_static("1"));
     }

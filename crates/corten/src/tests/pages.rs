@@ -133,6 +133,71 @@ async fn each_reader_of_the_language_at_the_error_page_gets_the_requests() {
     assert_eq!(*seen.0.lock().unwrap(), [Some("fr-CA, en;q=0.5".to_string())], "a layout read at Corten's");
 }
 
+/// The `Vary` each HTML answer leaves `Req` with, before the app's own stage settles the language
+/// (which would hide a page sent with the fixed line, as a page that reads its locale is named
+/// there again): a page ends with what [`Req::vary`] says of the request, a patch and a refused
+/// form's patch with the fixed line, even in an app whose pages vary on `Accept-Language`, and
+/// each with one line.
+#[tokio::test]
+async fn a_page_varies_as_its_request_does_and_a_patch_as_every_patch_does() {
+    use crate::i18n::Messages as _;
+    use crate::page::{default_error_page, error_page_fn, Shared};
+    use std::sync::Arc;
+    crate::i18n::messages! { struct VaryMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    let req = |locales: bool, mode: Option<&'static str>| {
+        let mut shared = Shared::new(error_page_fn(default_error_page, ()), None, String::new());
+        if locales {
+            shared.locales = Some(VaryMsg::LOCALES);
+        }
+        let mut req = Request::post("/").header("accept-language", "fr");
+        if let Some(mode) = mode {
+            req = req.header("corten", mode);
+        }
+        let (mut parts, ()) = req.body(()).unwrap().into_parts();
+        parts.extensions.insert(crate::Signal::for_app(Arc::new(shared), 0));
+        async move { <Req as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await.unwrap() }
+    };
+    let vary = |res: &Response| res.headers().get_all(http::header::VARY).iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
+    // Reads no locale, so only `App::messages` makes it vary on the language.
+    let page =
+        |req: &Req| req.page::<ForOne>(html! { <html><head><title>"A"</title><Corten /></head><body><main>"a"</main></body></html> }).unwrap().0;
+    let language = ["corten, accept, accept-language"];
+    let fixed = ["corten, accept"];
+    for mode in [None, Some("nav")] {
+        assert_eq!(vary(&page(&req(true, mode).await)), language, "{mode:?}: with messages");
+        let chosen = req(true, mode).await;
+        chosen.set_locale(crate::i18n::Locale::of(VaryMsg::for_locale("fr")));
+        assert_eq!(vary(&page(&chosen)), fixed, "{mode:?}: a locale the URL chose");
+        assert_eq!(vary(&page(&req(false, mode).await)), fixed, "{mode:?}: nothing read");
+        let read = req(false, mode).await;
+        let _: VaryMsg = read.t();
+        assert_eq!(vary(&page(&read)), language, "{mode:?}: messages read");
+    }
+    for locales in [true, false] {
+        let action = req(locales, Some("action")).await;
+        let res = action
+            .patch_or_with::<ForOne, crate::Patches, _, _, _, _>(
+                |action| async move { action.patch(html! { <p id={MsgId}>"saved"</p> }) },
+                || async { unreachable!("an action draws its patch") },
+            )
+            .await
+            .unwrap();
+        assert_eq!(vary(&res.0), fixed, "a patch, messages {locales}");
+        let action = req(locales, Some("action")).await;
+        let mut errors = crate::Errors::new();
+        errors.refuse(crate::Refusal::Conflict, "moved on");
+        let res = action
+            .invalid_with::<ForOne, crate::Patches, _, _, _, _>(
+                &errors,
+                |form| async move { form.draw(html! { <p id={MsgId}>"refused"</p> }) },
+                || async { unreachable!("an action draws its patch") },
+            )
+            .await
+            .unwrap();
+        assert_eq!(vary(&res.0), fixed, "a refused form's patch, messages {locales}");
+    }
+}
+
 /// Corten's own error page reads nothing of the language a request asked for in an app without
 /// messages or layout reads, which is why its request keeps no `Accept-Language` there
 /// (`Shared::error_page_language`): drawn with each of these lines and with none, its answer is

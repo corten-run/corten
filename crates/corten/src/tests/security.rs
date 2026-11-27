@@ -1574,7 +1574,7 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     let reserved = http::HeaderMap::<http::HeaderValue>::with_capacity(13).capacity();
     // A page starts with this capacity, so ending with it means the map never grew (12 slots grown
     // once end at the same size).
-    let start = crate::page::html_response(StatusCode::OK, String::new(), None);
+    let start = crate::page::html_response(StatusCode::OK, String::new(), None, http::HeaderValue::from_static(crate::page::VARY));
     assert_eq!(start.headers().capacity(), reserved);
     // Without `compress` nothing is compressed and each sends one header fewer.
     let zipped = cfg!(feature = "compress");
