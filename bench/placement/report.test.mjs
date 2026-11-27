@@ -363,21 +363,28 @@ test("code aligned beyond 16 bytes: each side's sections and list, and every pla
   has(report(results({ align: 32, touch: (res) => rmSync(join(res, "layout", "base-p320-map.txt")) })).json.refused, "base-p320: no second pad's line with a passing map check");
 });
 
-// A shuffled run's results: each side's list of functions, and every layout check (and map
-// check, with a second pad) a shuffled one naming the SHA-256 of the ordering file order.mjs
-// draws from that list, the seed and the binary's index.
+// A shuffled run's results: each side's list of functions, every placement map's SHA-256
+// (maps/placements.sha256, here a stand-in from the placement's name), and every layout check
+// (and map check, with a second pad) a shuffled one naming the SHA-256 of the ordering file
+// order.mjs draws from that list, the seed and the binary's index, and of its placement map; each
+// head's check against base's at its index names both ordering files and both maps.
 const FUNCTIONS = "_start\ncrc\n_ZN5probe4main17h0123456789abcdefE.llvm.123\n";
+const mapSha = (b) => createHash("sha256").update(`map of ${b}`).digest("hex");
 const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, alike = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
   const second = align > 16;
   for (const side of r.sides) put(`functions-${side}.txt.gz`, gzipSync(FUNCTIONS));
   const used = new Set();
   for (const c of r.comparisons) for (let i = 1; i <= r.K; i++) for (const b of sides(c, i, r.P, r.Q)) used.add(b);
-  for (const b of used) {
+  const orderOf = (b) => {
     const pad = Number(b.replace(/^.*-p/, "")), i = r.P.includes(pad) ? r.P.indexOf(pad) + 1 : r.Q.indexOf(pad) + 1;
-    const sha = createHash("sha256").update(order(FUNCTIONS.trim().split("\n"), r.seed, index(i))).digest("hex");
-    put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, ...layout })}\n`);
+    return createHash("sha256").update(order(FUNCTIONS.trim().split("\n"), r.seed, index(i))).digest("hex");
+  };
+  put(join("maps", "placements.sha256"), [...used].map((b) => `${mapSha(b)}  ${b}.map\n`).join(""));
+  for (const b of used) {
+    const pad = Number(b.replace(/^.*-p/, "")), sha = orderOf(b);
+    put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, placedMap: mapSha(b), ...layout })}\n`);
     if (second) put(join("layout", `${b}-map.txt`), `.text: 3 input sections\nJSON ${JSON.stringify({ ok: true, pad, second: 48, shuffled: true })}\n`);
-    if (b.startsWith("head-")) put(join("layout", `${b}-alike.txt`), `functions both placements have, each defined once in each: 3; in one order: 3\nJSON ${JSON.stringify({ ok: true, pad, shuffled: true, shared: 3, ...alike })}\n`);
+    if (b.startsWith("head-")) put(join("layout", `${b}-alike.txt`), `3 shared names compared, 0 left out as ambiguous\nJSON ${JSON.stringify({ ok: true, pad, shuffled: true, shared: 3, compared: 3, leftOut: 0, baseOrder: orderOf(`base-p${pad}`), headOrder: sha, baseMap: mapSha(`base-p${pad}`), headMap: mapSha(b), ...alike })}\n`);
   }
   touch(res, put, r);
 } });
@@ -388,7 +395,7 @@ test("a shuffled run says so in its header and reads only placements linked in t
   const r = report(res);
   assert.equal(r.exit, 0, r.json.refused?.join(" | "));
   assert.equal(r.json.shuffle, true);
-  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first", "That order is partial: input sections the file gives one key", "but for two copies both write alike", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
+  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first", "That order is partial: input sections the file gives one key", "every function whose name (less a ThinLTO suffix) each side defines exactly once", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
   assert.ok(!r.md.includes("every function moved by exactly its pad"));
   assert.equal(report(shuffledRun({ align: 32 })).exit, 0);
   const refused = (opts, word) => { const x = report(shuffledRun(opts)); assert.equal(x.exit, 2, word); has(x.json.refused, word); };
@@ -406,6 +413,22 @@ test("a shuffled run says so in its header and reads only placements linked in t
   refused({ touch: (res_) => rmSync(join(res_, "layout", "head-p320-alike.txt")) }, "head-p320: no passing check that it lays the functions it has with base-p320 in one order with it");
   refused({ alike: { ok: false } }, "no passing check that it lays the functions it has with base-p");
   refused({ alike: { shuffled: undefined } }, "no passing check that it lays the functions it has with base-p");
+});
+
+test("a shuffled run's checks are bound to the placement maps it kept and the ordering files it draws", () => {
+  assert.equal(report(shuffledRun()).exit, 0);
+  const refused = (opts, word) => { const x = report(shuffledRun(opts)); assert.equal(x.exit, 2, word); has(x.json.refused, word); };
+  // A run that does not say which placement maps it kept; a layout check of another map.
+  refused({ touch: (res_) => rmSync(join(res_, "maps", "placements.sha256")) }, "a shuffled run without maps/placements.sha256");
+  refused({ layout: { placedMap: mapSha("elsewhere") } }, "base-p320: no passing shuffled layout check");
+  // A check against base at the same pad that read other maps or ordering files than this run's,
+  // or names none: its pad matches, its maps contradict the run's.
+  for (const k of ["baseMap", "headMap", "baseOrder", "headOrder"]) {
+    refused({ alike: { [k]: mapSha("elsewhere") } }, "head-p320: no passing check that it lays the functions it has with base-p320 in one order with it, of the ordering files drawn for both and the placement maps kept for both");
+    refused({ alike: { [k]: undefined } }, "head-p320: no passing check that it lays the functions it has with base-p320");
+  }
+  // Two placements' maps swapped in the alike check: each a map this run kept, neither the one for its side.
+  refused({ alike: { baseMap: mapSha("head-p320"), headMap: mapSha("base-p320") } }, "head-p320: no passing check that it lays the functions it has with base-p320");
 });
 
 test("build.sh and run.sh shuffle only when the plan says so, whatever SHUFFLE the caller's environment holds", { skip: process.platform !== "linux" && "runs the scripts' start under sh" }, () => {

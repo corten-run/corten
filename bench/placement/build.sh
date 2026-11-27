@@ -51,11 +51,9 @@
 # each moved by the pad with its neighbours (5's map check takes --shuffled, its sections in any
 # order). Each head placement is then checked against base's at its index (layout.mjs --alike,
 # bin/layout/head-p<n>-alike.txt, from both sides' unpadded binaries, maps, placement maps and
-# ordering files): the function definitions both have lie in one order in both, each place holding
-# the same of them (sections of one key, or of keys one name less a ThinLTO suffix, which the draw
-# orders by that suffix alone, in any order among themselves), a name defined more than once
-# matched copy by copy by what a rebuild keeps of its object (less ordinals and hashes) and input
-# section, or head is refused (7).
+# ordering files): the names each side defines exactly once (less a ThinLTO suffix) lie in one
+# order in both, each sharing its address with the same others, or head is refused (7); a name
+# defined more than once on a side is left out and counted, and fewer than two compared refuse.
 # A refusal (3, 5 or 7) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
 # 5 and 7 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,

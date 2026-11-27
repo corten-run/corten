@@ -859,16 +859,22 @@ establish a general ranking.
          by a key of the workload's seed, i and the function's name, one order for every binary
          at i and another at each i, and the run records that each placement has exactly that
          binary's functions and the pad, the pad first, in that order, in place of the move by
-         the pad and the neighbours. That order is partial, and the run asks no more of it:
-         input sections the file gives one key (local copies of one function in several
-         objects) lie in any order among themselves, since LLD sorts by the key alone; and
-         between base and head, sections whose keys are one name less a ThinLTO suffix
-         (`.llvm.<n>`, a number a rebuild of the same code can change) lie in any order against
-         each other, but for two copies both sides write alike, which keep the order the draw
-         gives them. A change whose base and head at one index lay the functions both have in
-         different orders outside those ties, as a symbol one side alone has in an input section
-         both have can, or where the run cannot tell which of a name's copies on one side is
-         which on the other, has no reading across shuffled placements.
+         the pad and the neighbours. LLD gives an input section the earliest place the file
+         gives any symbol of it, a function, a label or an object, local or global, and the run
+         reads each section's place so, from the symbols each link's map lists; a placement whose
+         file names a symbol the map also has outside `.text`, an order of another output
+         section the run does not read, or whose first input section is not the first pad at
+         exactly the declared size, is refused. That order is partial, and the run asks no more
+         of it: input sections the file gives one place lie in any order among themselves, since
+         LLD sorts by the place alone. Between base and head at one index the run compares only
+         the names (less a ThinLTO suffix, `.llvm.<n>`, a number a rebuild of the same code can
+         change) each side defines exactly once, in its symbol table and its map alike; a name
+         defined more than once on either side is left out, never matched to a copy on the other
+         by its object, its section or its source, and the run reports how many names it compared
+         and how many it left out. A change whose base and head at one index lay the names it
+         compares in different orders (each name at one address, an alias or a fold, keeping its
+         place), or that leaves fewer than two to compare, has no reading across shuffled
+         placements.
          The run also records, from the unpadded link's map, what the fifth point asks of every
          run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly

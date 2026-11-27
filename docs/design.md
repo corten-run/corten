@@ -10343,23 +10343,31 @@ rules something out.
     side's unpadded `.text` in the order of a keyed hash of the workload's seed, i and each
     name, the same order for every binary at i, so base and head lay the functions they share
     alike and differ by the change's own, and another order at each i, so the placements sample
-    inner layouts as well as offsets. The order is partial where neither the draw nor LLD gives
-    one: input sections the file gives one key (local copies of one function in several
-    objects) lie in any order among themselves, since LLD sorts by the key alone, not stably;
-    and between base and head, sections whose keys are one name less a ThinLTO suffix, which
-    the draw orders by the name as written, a suffix number a rebuild of the same code can
-    change, lie in any order against each other, but for two copies both sides write alike,
-    which keep the draw's order. Within those ties two links can lay base's and head's copies
-    of one function at other addresses, and the run reads them as alike. LLD places an input
-    section by the first of its names the file lists, so a symbol one side alone has in a
-    section both have can give the functions in it another place; the run refuses a change
-    whose base and head at one index lay the functions both have in different orders outside
-    those ties, and one where it cannot tell which of a name's copies on one side is which on
-    the other (by what a rebuild keeps of their objects, never by a section's size, which a
-    change to the code changes). The run checks each placement holds the unpadded
-    functions and the pad, the pad first, in that order, every definition of a name defined
-    more than once included, after the whole pad and inside `.text`, in place of the shift and
-    the neighbours. That is not the pinned layout turned away below, which gates one layout; it
+    inner layouts as well as offsets. LLD gives an input section the earliest place the file
+    gives any symbol defined in it, whatever its type (a function, a label, an object) and
+    binding, so the run reads a section's place from every symbol its link's map lists in it,
+    and refuses a placement whose file names a symbol the map also has in another output
+    section, which LLD orders as well and the run does not read. The order is partial where
+    neither the draw nor LLD gives one: input sections the file gives one place (local copies
+    of one function in several objects) lie in any order among themselves, since LLD sorts by
+    the place alone, not stably. The run checks each placement holds the unpadded functions and
+    the pad, the first input section of `.text` the first pad at exactly the declared size, in
+    that order, every definition of a name defined more than once included, each section listing
+    the symbols its unpadded one lists, after the whole pad and inside `.text`, in place of the
+    shift and the neighbours. Between base and head at one index it compares only what has one
+    identity on both sides: a name, less a ThinLTO suffix (a number a rebuild of the same code
+    can change), that each side defines exactly once, as one function of `.text`, one symbol of
+    its symbol table and one of its map at that function's address. A name defined more than
+    once on either side, or that those readings disagree on, is left out and counted, never
+    matched to a copy on the other side by its object, its section, its source file or its
+    size, each of which a change or a rebuild can move; earlier versions matched copies so, and
+    each way of matching certified some wrong layout. The compared names must lie in one order
+    on both sides, every name at one address (an alias, an identical-code fold) keeping its
+    place, and at least two must be compared; the report states how many were compared and how
+    many left out. What is left out is unchecked: two links can lay base's and head's copies of
+    a repeated name at other places, and the run reads them as alike. On the probe of the
+    diagnosis above, relinked with six shuffled orders, that is 34 of 3,467 shared names, each
+    defined more than once on a side, against 3,433 compared. That is not the pinned layout turned away below, which gates one layout; it
     samples many. Its cost is that each placement is a link no app builds, which may cost every
     placement cycles a default order does not, both sides alike, as the first version's shuffle
     could; unlike that one it gives base and head one order, partial only within those ties.
@@ -11348,7 +11356,20 @@ rules something out.
     `c6e9be955` and `9a79ad877`, rustc 1.100.0's ThinLTO release link captured from its LLD
     23.1.5 and relinked by Debian LLD 19.1.7 with six shuffled orders, 3,538 functions both
     have, 105 of them of names defined more than once: each placement passed its order, each
-    relinked again passed as alike, and base against head passed at every index, by both checks.
+    relinked again passed as alike, and base against head passed at every index, by both checks;
+    2026-11-27 (UTC), the checks as changed after `bdf034104` to compare only names each side
+    defines once, on the five cases of that head's review linked by Debian LLD 19.1.7 or made
+    here (copies of one name traded between two objects while a third's source is renamed, an
+    alias of one ThinLTO copy, placed first in the symbol table, renamed so its section takes
+    the other's place, a first pad 16 bytes longer than declared, and a report whose check
+    against base names other placement maps), each certified by `bdf034104`'s kit and refused or
+    left out by the changed one, and a local label of a listed name in another function's
+    section, whose genuine link `bdf034104`'s kit refused as well as another seed's, passed by
+    the changed one with that other seed's link refused as it, and that probe's link relinked
+    again by LLD 19.1.7 with six shuffled orders at seed 2026112701 and a second pad: every
+    placement passed its order, base against head passed at each index and a placement against
+    its own relink passed, 3,433 names compared and 34 left out, and base at index 1 against
+    head at index 2 was refused.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
