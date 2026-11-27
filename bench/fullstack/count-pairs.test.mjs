@@ -3,33 +3,39 @@
 // runner, with a stand-in for Docker and count.mjs: its ledger, its locks and its failure paths.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
-import { BAND, compare, complete, COUNTS, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
+import { EventEmitter } from "node:events";
+import { BAND, compare, complete, COUNTS, DAEMON_LOCK, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, RELEASE_MS, resolution, runPairs, schedule, spawnBounded, spawnExec, within } from "./count-pairs.mjs";
 
 /** n recorded pairs whose changes are spread evenly from lo to hi. */
 const spread = (lo, hi, n = 100) => Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
 const pairsOf = (changes) => changes.map((c, i) => ({ pair: i + 1, base: 100000, head: 100000 * (1 + c) }));
 const of = (lo, hi) => compare(pairsOf(spread(lo, hi)));
 const running = Object.fromEntries(Object.values(COUNTS).map((e) => [e, 100]));
-const goodRow = (over = {}) => ({ requests: 5000, failed: 0, userPerRequest: 75000, kernelPerRequest: 26000, userCyclesPerRequest: 100000, kernelCyclesPerRequest: 60000, userL1iMissesPerRequest: 5000, perfRunningPct: { ...running }, perfDiagnostics: {}, ...over });
+const goodRow = (over = {}) => ({ requests: 5000, failed: 0, kernelPass: { requests: 5000, failed: 0 }, userPerRequest: 75000, kernelPerRequest: 26000, userCyclesPerRequest: 100000, kernelCyclesPerRequest: 60000, userL1iMissesPerRequest: 5000, perfRunningPct: { ...running }, perfDiagnostics: {}, ...over });
 const notDecided = { verdict: "not decided: the count's A/A does not resolve the default band, so the change is read as one inside the band, neither held nor cleared", decided: false, holds: false, clears: false, failed: false };
 const aaFailed = "failed: the count's A/A has no bound, so the count does not pass until the maintainer decides";
 const changeFailed = "failed: the change's pairs have no bound, so the count does not pass until the maintainer decides";
+
+/** A load's k6 summary as count.mjs seals it: its requests, failed requests and status checks. */
+const sealedSummary = (requests = 5000, failed = 0, checks = { passes: 5000, fails: 0 }) => ({ metrics: { http_reqs: { count: requests }, http_req_failed: { passes: failed }, checks } });
 
 /**
  * A stand-in host: Docker images by name and ID, the tag count.mjs reads, the daemon and the
  * containers made on it, perf and the kernel, and count.mjs, which writes its round's records as
  * the real one does. `row(round, image, target)` gives each count's row (cycles 6% more on the
- * head's image by default), `rc` its exit status, `tagRc` the tag's, and `launch(round)` the
- * image the counted container was started from (the tagged one by default).
+ * head's image by default), `rc` its exit status, `signal` the signal that stopped it (none by
+ * default), `tagRc` the tag's, and `launch(round)` the image the counted container was started
+ * from (the tagged one by default).
  */
-function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCount = () => {}, launch = () => null } = {}) {
+function host(results, { row = () => ({}), rc = () => 0, signal = () => null, tagRc = () => 0, onCount = () => {}, launch = () => null } = {}) {
   const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
   const state = { tagged: "", counted: [], tags: [], calls: 0, startRc: 0, daemon: { id: "daemon-1", version: "29.1.0", kernel: "6.8.0-test", name: "bench" }, perf: "perf version 6.8.12", kernel: "6.8.0-test", containers: new Map(), made: 0 };
   const paths = { docker: "/usr/bin/docker", perf: "/usr/bin/perf" };
@@ -82,13 +88,17 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     const n = state.counted.length;
     const r = goodRow({ userCyclesPerRequest: Math.round((image === "sha256:head" ? 106000 : 100000) * (1 + 0.001 * ((n % 5) - 2))), kernelCyclesPerRequest: 0, ...row(round, image, target) });
     writeFileSync(join(dir, "instructions.json"), JSON.stringify({ [`corten/${target}`]: [r] }));
-    writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify({ metrics: { checks: { passes: 5000, fails: 0 } } }));
+    writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify(sealedSummary(r.requests, r.failed)));
+    writeFileSync(join(dir, `count-corten-${target}-0-kernel.json`), JSON.stringify(sealedSummary(r.kernelPass?.requests, r.kernelPass?.failed)));
     writeFileSync(join(dir, "count-images.json"), JSON.stringify({ [`corten/${target}`]: { container: hex(1000 + n), image: launch(round) ?? image } }));
-    return { status: rc(round) };
+    const stopped = signal(round);
+    return stopped ? { status: null, signal: stopped } : { status: rc(round) };
   };
   /** What `docker container prune` does: removes every container not running. */
   const prune = () => { for (const [name, c] of state.containers) if (!c.running) state.containers.delete(name); };
-  return { ids, state, exec, paths, prune, which: (name) => paths[name] ?? null };
+  /** The daemon's lock's removal, as the runner makes it: the same stand-in, answered without blocking. */
+  const bounded = async (cmd, args, options) => exec(cmd, args, options);
+  return { ids, state, exec, bounded, paths, prune, which: (name) => paths[name] ?? null };
 }
 
 /** A temporary results directory and count kit for one test. */
@@ -103,7 +113,7 @@ function scratch() {
   return { results, kit, done: () => rmSync(results, { recursive: true, force: true }) };
 }
 const env = { BENCH_APP_CPUS: "1", BENCH_LOAD_CPUS: "4-7", PATH: "/usr/bin" };
-const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, kit: s.kit, exec: h.exec, which: h.which, env, now: () => 0, ...over });
+const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, kit: s.kit, exec: h.exec, bounded: h.bounded, which: h.which, env, now: () => 0, ...over });
 /** The calls that change what is counted: a tag or a count. */
 const counts = (h) => h.state.tags.length + h.state.counted.length;
 
@@ -124,22 +134,36 @@ test("a run is four invocations a pair and target, the A/A the change with the b
   assert.equal(plan[0].name, "p1-page-ab-000-head");
 });
 
-test("an invocation is valid only with a clean tag, exit 0, 5,000 requests, none failed, every count a number at 100%, its k6 checks and the side's image", () => {
-  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { row: [goodRow()], summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+test("an invocation is valid only with a clean tag, exit 0, 5,000 requests in each of its two loads, none failed, every count a number at 100%, both loads' k6 checks and the side's image", () => {
+  const summary = sealedSummary();
+  const ok = { row: [goodRow()], summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid(ok), []);
   assert.deepEqual(invalid({ ...ok, after: "sha256:b" }), ["the image counted was not the side's"]);
   assert.deepEqual(invalid({ ...ok, rc: 1 }), ["count.mjs exited 1"]);
+  assert.deepEqual(invalid({ ...ok, rc: 4 }), ["count.mjs exited 4: a perf it started was not seen to end, so no further count runs on that host"]);
   assert.deepEqual(invalid({ ...ok, rc: null, signal: "SIGINT" }), ["count.mjs was stopped by SIGINT"]);
   assert.deepEqual(invalid({ ...ok, tagRc: 1 }), ["docker tag exited 1, so count.mjs was not run"]);
   assert.deepEqual(invalid({ ...ok, fresh: false }), ["its output path existed before it ran, so count.mjs was not run"]);
-  assert.deepEqual(invalid({ ...ok, row: [goodRow({ failed: 2, userCyclesPerRequest: null })] }), ["2 failed requests", "userCyclesPerRequest is null, not a number"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ failed: 2, userCyclesPerRequest: null })] }), ["2 failed requests", "userCyclesPerRequest is null, not a number", "its k6 summary gives 0 failed requests where the row has 2"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: "100000" })] }), ["userCyclesPerRequest is \"100000\", not a number"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPerRequest: Infinity })] }), ["kernelPerRequest is Infinity, not a number"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: { ...running, "cycles:k": 88 } })] }), ["perf ran cycles:k 88% of its enabled time, not 100%"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ perfRunningPct: undefined })] }), Object.values(COUNTS).map((e) => `perf's running percentage for ${e} is not recorded`));
   assert.deepEqual(invalid({ ...ok, row: { failed: "never answered" } }), ["count.mjs recorded failed: never answered"]);
-  assert.deepEqual(invalid({ ...ok, summary: { metrics: { checks: { passes: 4999, fails: 1 } } } }), ["1 failed status checks", "4999 passed status checks, not 5000"]);
+  assert.deepEqual(invalid({ ...ok, summary: sealedSummary(5000, 0, { passes: 4999, fails: 1 }) }), ["1 failed status checks", "4999 passed status checks, not 5000"]);
+  // Kernel instructions come from a second load (#2151): it must be whole too, by its row and its summary.
+  assert.deepEqual(invalid({ ...ok, kernelSummary: sealedSummary(5000, 0, { passes: 4999, fails: 1 }) }), ["1 failed status checks in the kernel instructions' load", "4999 passed status checks in the kernel instructions' load, not 5000"]);
+  // A sealed summary that disagrees with a clean row, in either load: its requests or its failures.
+  assert.deepEqual(invalid({ ...ok, summary: sealedSummary(4999) }), ["its k6 summary gives 4999 requests where the row has 5000"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: sealedSummary(4999) }), ["its k6 summary gives 4999 requests in the kernel instructions' load where the row has 5000"]);
+  assert.deepEqual(invalid({ ...ok, summary: sealedSummary(5000, 3) }), ["its k6 summary gives 3 failed requests where the row has 0"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: sealedSummary(5000, 2) }), ["its k6 summary gives 2 failed requests in the kernel instructions' load where the row has 0"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: { metrics: { checks: { passes: 5000, fails: 0 } } } }), ["its k6 summary gives no requests in the kernel instructions' load where the row has 5000", "its k6 summary gives no failed requests in the kernel instructions' load where the row has 0"]);
+  // A kernel load of 4,999 requests with failures, its row and summary agreeing: not valid.
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: { requests: 4999, failed: 2 } })], kernelSummary: sealedSummary(4999, 2, { passes: 4997, fails: 2 }) }), ["4999 requests in the kernel instructions' load, not 5000", "2 failed requests in the kernel instructions' load", "2 failed status checks in the kernel instructions' load", "4997 passed status checks in the kernel instructions' load, not 5000"]);
+  assert.deepEqual(invalid({ ...ok, kernelSummary: undefined }), ["no k6 summary of the counted load in the kernel instructions' load"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: { requests: 4990, failed: 3 } })] }), ["4990 requests in the kernel instructions' load, not 5000", "3 failed requests in the kernel instructions' load", "its k6 summary gives 5000 requests in the kernel instructions' load where the row has 4990", "its k6 summary gives 0 failed requests in the kernel instructions' load where the row has 3"]);
+  assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelPass: undefined })] }), ["undefined requests in the kernel instructions' load, not 5000", "undefined failed requests in the kernel instructions' load", "its k6 summary gives 5000 requests in the kernel instructions' load where the row has undefined", "its k6 summary gives 0 failed requests in the kernel instructions' load where the row has undefined"]);
   assert.deepEqual(invalid({ ...ok, interrupted: true }), ["started and never ended; not run again"]);
 });
 
@@ -249,7 +273,9 @@ test("the report keeps the user and kernel cycle split, kernel instructions and 
     assert.equal(d.ab.kernelPerRequest.head, 26500);
     assert.ok(Math.abs(d.ab.kernelPerRequest.change - (26500 / 26000 - 1)) < 1e-12);
     assert.equal(d.aa.userL1iMissesPerRequest.head, 4100);
-    for (const label of ["user cycles", "kernel cycles", "user instructions", "kernel instructions", "user L1i misses"]) assert.match(md, new RegExp(`\\| the change \\| ${label} \\|`));
+    // Each measure names the load it is counted over: kernel instructions are a second load's.
+    for (const label of ["user cycles, first load", "kernel cycles, first load", "user instructions, first load", "kernel instructions, second load", "user L1i misses, first load"]) assert.match(md, new RegExp(`\\| the change \\| ${label} \\|`));
+    assert.match(md, /user and kernel cycles \(the reading above\), user instructions and user L1i misses over the first, kernel instructions alone over the second, each over its own load's requests/);
     assert.match(md, /- its A\/A, pair 3, side head: count\.mjs exited 1/);
   } finally {
     s.done();
@@ -277,6 +303,275 @@ test("a failed command or a record not to be trusted yields no bound: exit 1 wit
     } finally {
       s.done();
     }
+  }
+});
+
+test("a count.mjs that could not see its perf end (exit 4) stops the run: no further invocation on that host, now or when the command is run again", async () => {
+  const s = scratch();
+  try {
+    const stuck = "t1-json-ab-002-base";
+    const h = host(s.results, { rc: (round) => (round === stuck ? 4 : 0) });
+    await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base: a perf it started was not seen to end, so no further count runs on this host; stopped with no report/);
+    const ran = h.state.counted.map(([round]) => round);
+    assert.equal(ran.at(-1), stuck);
+    const tags = h.state.tags.length;
+    // Run again: refused before any tag or count.
+    await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
+    assert.deepEqual(h.state.counted.map(([round]) => round), ran);
+    assert.equal(h.state.tags.length, tags);
+  } finally {
+    s.done();
+  }
+});
+
+test("a count.mjs exit 4 is in the ledger before anything that can fail: a failed image read or seal after it still stops the run, now and when run again", async () => {
+  const stuck = "t1-json-ab-002-base";
+  const records = (/** @type {string} */ results) => readFileSync(join(results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  // What fails once count.mjs has returned 4: the read of the tag's image, or reading an output to seal it.
+  for (const where of ["image", "seal"]) {
+    const s = scratch();
+    let armed = false;
+    try {
+      const h = host(s.results, { rc: (round) => (round === stuck ? ((armed = true), 4) : 0) });
+      const exec = h.exec;
+      const failing = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ options) => {
+        if (armed && where === "image" && cmd === "docker" && args[0] === "image" && args[4] === "cb-corten") throw Object.assign(new Error("EIO: i/o error, docker image inspect"), { code: "EIO" });
+        return exec(cmd, args, options);
+      };
+      const read = fs.readFileSync;
+      mock.method(fs, "readFileSync", function (/** @type {any} */ path, /** @type {any[]} */ ...rest) {
+        if (armed && where === "seal" && String(path).endsWith(join(stuck, "count-corten-json-0-kernel.json"))) throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" });
+        return read.call(this, path, ...rest);
+      });
+      syncBuiltinESMExports();
+      await assert.rejects(runPairs(options(s, { ...h, exec: failing })), /count\.mjs exited 4 in t1-json-ab-002-base: a perf it started was not seen to end/, where);
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      armed = false;
+      // Its exit is in the ledger, though its end is not.
+      const mine = records(s.results).filter((r) => r.name === stuck);
+      assert.deepEqual(mine.map((r) => Object.keys(r).find((k) => ["started", "dispatched", "exited", "ended"].includes(k))), ["started", "dispatched", "exited"], where);
+      assert.equal(mine[2].rc, 4, where);
+      const ran = h.state.counted.length, tags = h.state.tags.length;
+      assert.equal(h.state.counted.at(-1)?.[0], stuck, where);
+      // Run again: refused before any tag or count.
+      await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/, where);
+      assert.equal(h.state.counted.length, ran, where);
+      assert.equal(h.state.tags.length, tags, where);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      s.done();
+    }
+  }
+});
+
+test("a count.mjs stopped by a signal stops the run as an exit 4 does: no further invocation on that host, now or when the command is run again", async () => {
+  const stuck = "t1-json-ab-002-base";
+  const records = (/** @type {string} */ results) => readFileSync(join(results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const why = /count\.mjs was stopped by SIGKILL in t1-json-ab-002-base before it saw each perf and probe it started end: one may still count, so no further count runs on this host; stopped with no report\. Count on a fresh host under a new prefix/;
+  for (const signal of ["SIGKILL", "SIGTERM"]) {
+    const s = scratch();
+    try {
+      const h = host(s.results, { signal: (round) => (round === stuck ? signal : null) });
+      await assert.rejects(runPairs(options(s, h)), new RegExp(why.source.replace("SIGKILL", signal)), signal);
+      assert.equal(h.state.counted.at(-1)?.[0], stuck, signal);
+      // Its exit is in the ledger and its end is not: nothing of it is sealed or read.
+      const mine = records(s.results).filter((r) => r.name === stuck);
+      assert.deepEqual(mine.map((r) => Object.keys(r).find((k) => ["started", "dispatched", "exited", "ended"].includes(k))), ["started", "dispatched", "exited"], signal);
+      assert.equal(mine[2].signal, signal);
+      const ran = h.state.counted.length, tags = h.state.tags.length;
+      // Run again: refused before any tag or count.
+      await assert.rejects(runPairs(options(s, h)), new RegExp(why.source.replace("SIGKILL", signal)), signal);
+      assert.equal(h.state.counted.length, ran, signal);
+      assert.equal(h.state.tags.length, tags, signal);
+    } finally {
+      s.done();
+    }
+  }
+  // A ledger in which a signalled count's end was recorded, as the runner before this change wrote
+  // one (and told the operator to run again): the replay refuses it too, rather than counting on.
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 3 })), /stopped before/);
+    const name = schedule(6, ["json"], "t1")[3].name;
+    for (const row of [{ name, want: "sha256:base", started: 0 }, { name, dispatched: 0 }, { name, exited: 0, rc: null, signal: "SIGKILL" }, { name, want: "sha256:base", started: 0, ended: 0, fresh: true, tagRc: 0, rc: null, signal: "SIGKILL", before: "sha256:base", after: "sha256:base", artifacts: {} }]) {
+      appendFileSync(join(s.results, "t1", "invocations.jsonl"), JSON.stringify(row) + "\n");
+    }
+    const ran = h.state.counted.length;
+    await assert.rejects(runPairs(options(s, h)), new RegExp(why.source.replace("t1-json-ab-002-base", name)));
+    assert.equal(h.state.counted.length, ran);
+    // The control: the same ledger with that invocation exiting 1 goes on past it.
+    const lines = readFileSync(join(s.results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    writeFileSync(join(s.results, "t1", "invocations.jsonl"), lines.map((r) => JSON.stringify(r.name === name && "signal" in r ? { ...r, rc: 1, signal: null } : r)).join("\n") + "\n");
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4 - 1);
+    assert.equal(targets.json.aa.bound, null);
+    assert.notEqual(targets.json.change.bound, null);
+  } finally {
+    s.done();
+  }
+});
+
+test("past a count.mjs exit 4 or a signal the runner asks Docker only to remove its lock, and waits for that no longer than RELEASE_MS, however Docker answers", async (t) => {
+  const stuck = "t1-json-ab-002-base";
+  for (const [how, over] of [["exit 4", { rc: (/** @type {string} */ round) => (round === stuck ? 4 : 0) }], ["SIGKILL", { signal: (/** @type {string} */ round) => (round === stuck ? "SIGKILL" : null) }]]) {
+    // withheld: a docker client that does not exit, even after its SIGKILL (one stuck in the kernel).
+    for (const answer of ["withheld", "failed", "removed"]) {
+      const s = scratch();
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      try {
+        const h = host(s.results, over);
+        /** @type {string[][]} */
+        const after = [];
+        /** @type {[string[], any][]} */
+        const removals = [];
+        let returned = false;
+        let held = "";
+        /** @type {() => void} */
+        let asked = () => {};
+        const asking = new Promise((/** @type {(v?: unknown) => void} */ r) => (asked = r));
+        const exec = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts = {}) => {
+          if (returned) {
+            after.push([cmd, ...args]);
+            // A removal made by a call that returns once its child exits waits on that child, past
+            // any SIGKILL its timeout sends: here, a while past RELEASE_MS.
+            if (answer === "withheld" && args[0] === "rm") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RELEASE_MS + 2000);
+            return { status: null, signal: "SIGKILL" };
+          }
+          const r = h.exec(cmd, args, opts);
+          if (String(args[0]).endsWith("count.mjs") && args[1] === stuck) { returned = true; held = h.state.containers.get(DAEMON_LOCK)?.id ?? ""; }
+          return r;
+        };
+        const bounded = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => {
+          removals.push([[cmd, ...args], opts]);
+          asked();
+          if (answer === "withheld") return new Promise(() => {});
+          return Promise.resolve(answer === "failed" ? { status: null } : h.exec(cmd, args, opts));
+        };
+        /** @type {string[]} */
+        const said = [];
+        const started = Date.now();
+        const run = runPairs(options(s, { ...h, exec, bounded }, { log: (/** @type {string} */ l) => said.push(l) }));
+        await Promise.race([asking, run.then(() => {}, () => {})]);
+        t.mock.timers.tick(RELEASE_MS);
+        await assert.rejects(run, how === "exit 4" ? /count\.mjs exited 4 in t1-json-ab-002-base/ : /stopped by SIGKILL in t1-json-ab-002-base/, how);
+        const where = `${how}, ${answer}`;
+        assert.ok(Date.now() - started < RELEASE_MS, `${where}: returned ${Date.now() - started} ms after it started`);
+        assert.ok(returned, where);
+        // No image read, seal or lock check after it, and no call that waits on its child: one
+        // removal of the lock by its ID, not waited for past its bound.
+        assert.deepEqual(after, [], where);
+        assert.deepEqual(removals.map(([c]) => c), [["docker", "rm", "-f", held]], where);
+        assert.equal(removals[0][1].timeout, RELEASE_MS, where);
+        if (answer === "removed") assert.equal(h.state.containers.size, 0, where);
+        else assert.ok(said.some((l) => l.includes(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK}`)), `${where}: ${said.join("\n")}`);
+        // run.lock is released all the same.
+        assert.ok(!existsSync(join(s.results, "t1", "run.lock")), where);
+      } finally {
+        t.mock.timers.reset();
+        s.done();
+      }
+    }
+  }
+  // The bound is the runner's exec's for every other call: a command past it is killed and given a null status.
+  const started = Date.now();
+  const r = spawnExec(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 500, output: false });
+  assert.equal(r.status, null);
+  assert.ok(Date.now() - started < 20_000, `returned ${Date.now() - started} ms after it started`);
+  assert.equal(spawnExec(process.execPath, ["-e", "process.exit(0)"], { timeout: 20_000, output: false }).status, 0);
+});
+
+test("the lock's removal settles at its deadline whether or not its command exits, and does not keep the process for it", async () => {
+  // A docker client that ignores its SIGKILL and never exits, as one stuck in the kernel does.
+  const child = Object.assign(new EventEmitter(), { signals: /** @type {string[]} */ ([]), unrefd: false, kill(/** @type {string} */ signal) { this.signals.push(signal); return true; }, unref() { this.unrefd = true; } });
+  const started = Date.now();
+  assert.deepEqual(await spawnBounded("docker", ["rm", "-f", "x"], { timeout: 300 }, /** @type {any} */ (() => child)), { status: null });
+  assert.ok(Date.now() - started < 10_000, `settled ${Date.now() - started} ms after it started`);
+  assert.deepEqual(child.signals, ["SIGKILL"]);
+  assert.ok(child.unrefd, "the child is unref'd, so it keeps neither the runner nor its caller");
+  // A real command: one past its bound is killed and given a null status; one that exits gives its status; one not found, null.
+  const t0 = Date.now();
+  assert.deepEqual(await spawnBounded(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 500 }), { status: null });
+  assert.ok(Date.now() - t0 < 20_000, `settled ${Date.now() - t0} ms after it started`);
+  assert.deepEqual(await spawnBounded(process.execPath, ["-e", "process.exit(3)"], { timeout: 20_000 }), { status: 3 });
+  assert.deepEqual(await spawnBounded(join(tmpdir(), "no-such-docker-here"), [], { timeout: 20_000 }), { status: null });
+  // The deadline itself does not wait on what it bounds: a promise that never settles, or rejects, gives the fallback.
+  assert.equal(await within(new Promise(() => {}), 50, false), false);
+  assert.equal(await within(Promise.reject(new Error("EIO")), 20_000, false), false);
+  assert.equal(await within(Promise.resolve(true), 20_000, false), true);
+});
+
+test("a ledger that kept a halt is refused when run again before any Docker call: no image, lock, environment or count", async () => {
+  const stuck = "t1-json-ab-002-base";
+  for (const [kind, over, why] of [
+    ["exit 4", { rc: (/** @type {string} */ round) => (round === stuck ? 4 : 0) }, /count\.mjs exited 4 in t1-json-ab-002-base/],
+    ["SIGTERM", { signal: (/** @type {string} */ round) => (round === stuck ? "SIGTERM" : null) }, /count\.mjs was stopped by SIGTERM in t1-json-ab-002-base/],
+    ["no exit", { onCount: (/** @type {string} */ round) => { if (round === stuck) throw new Error("the runner died"); } }, /count\.mjs was started in t1-json-ab-002-base and its exit was not recorded/],
+  ]) {
+    const s = scratch();
+    try {
+      const h = host(s.results, /** @type {any} */ (over));
+      await assert.rejects(runPairs(options(s, h)), kind === "no exit" ? /the runner died/ : why, kind);
+      const calls = h.state.calls;
+      let removals = 0;
+      const bounded = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => { removals += 1; return h.bounded(cmd, args, opts); };
+      await assert.rejects(runPairs(options(s, { ...h, bounded })), why, kind);
+      assert.equal(h.state.calls - calls, 0, `${kind}: ${h.state.calls - calls} calls on the host when run again`);
+      assert.equal(removals, 0, kind);
+      // Refused under run.lock: another runner's lock is reported as before, and this one's is released.
+      assert.ok(!existsSync(join(s.results, "t1", "run.lock")), kind);
+      writeFileSync(join(s.results, "t1", "run.lock"), JSON.stringify({ pid: 1, host: "elsewhere", started: "then", ledger: "t1" }) + "\n");
+      await assert.rejects(runPairs(options(s, h)), /is locked by process 1 on elsewhere/, kind);
+      assert.equal(h.state.calls - calls, 0, kind);
+    } finally {
+      s.done();
+    }
+  }
+});
+
+test("a count.mjs started with no end recorded stops the run when run again: its exit not kept may have been 4, and one kept was not sealed", async () => {
+  const stuck = "t1-json-ab-002-base";
+  // The runner dies while count.mjs runs (its exit never comes back), or once count.mjs has exited 0
+  // and before its end is recorded (a seal that fails).
+  for (const [kind, why] of [
+    ["died", /count\.mjs was started in t1-json-ab-002-base and its exit was not recorded: it may have exited 4, a perf it started not seen to end, so no further count runs on this host; stopped with no report/],
+    ["unsealed", /count\.mjs exited 0 in t1-json-ab-002-base and the end of that invocation \(the image it counted and its sealed outputs\) was not recorded; stopped with no report/],
+  ]) {
+    const s = scratch();
+    let armed = false;
+    try {
+      const h = host(s.results, { onCount: (round) => { if (kind === "died" && round === stuck) throw new Error("the runner died"); }, rc: (round) => ((armed = round === stuck), 0) });
+      const exec = h.exec;
+      const failing = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ options) => {
+        if (armed && cmd === "docker" && args[0] === "image" && args[4] === "cb-corten") throw new Error("EIO: i/o error, docker image inspect");
+        return exec(cmd, args, options);
+      };
+      await assert.rejects(runPairs(options(s, { ...h, exec: failing })), kind === "died" ? /the runner died/ : /EIO/, kind);
+      armed = false;
+      const ran = h.state.counted.length, tags = h.state.tags.length;
+      await assert.rejects(runPairs(options(s, h)), why, kind);
+      assert.equal(h.state.counted.length, ran, kind);
+      assert.equal(h.state.tags.length, tags, kind);
+    } finally {
+      s.done();
+    }
+  }
+  // The control: a start row with nothing after it (the runner stopped before count.mjs started)
+  // is the interrupted invocation it always was, not run again, and the run goes on past it.
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 3 })), /stopped before/);
+    appendFileSync(join(s.results, "t1", "invocations.jsonl"), JSON.stringify({ name: schedule(6, ["json"], "t1")[3].name, want: "sha256:base", started: 0 }) + "\n");
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4 - 1);
+    assert.ok(targets.json);
+  } finally {
+    s.done();
   }
 });
 
@@ -504,7 +799,7 @@ test("an invocation's row, summary and launched image are sealed when it ends: b
     assert.equal(first.targets.json.reading.verdict, "a miss");
     const counted = h.state.counted.length;
     const end = [...readFileSync(join(s.results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l))].find((r) => r.name === "t1-json-ab-002-head" && r.ended != null);
-    assert.deepEqual(Object.keys(end.artifacts).sort(), ["count-corten-json-0.json", "count-images.json", "instructions.json"]);
+    assert.deepEqual(Object.keys(end.artifacts).sort(), ["count-corten-json-0-kernel.json", "count-corten-json-0.json", "count-images.json", "instructions.json"]);
     assert.match(end.artifacts["instructions.json"].sha256, /^[0-9a-f]{64}$/);
     // Every change's head row replaced by one at the base's level: a run that read them would clear the change.
     for (let pair = 1; pair <= 6; pair++) {
@@ -525,6 +820,11 @@ test("an invocation's row, summary and launched image are sealed when it ends: b
       const read = await runPairs(options(s2, h2));
       assert.equal(read.targets.json.aa.bound, null);
       assert.ok(read.targets.json.pairs.aa.find((p) => p.pair === 3).why.includes("its A/A, pair 3, side base: count-corten-json-0.json is gone since the invocation ended"));
+      // So is the kernel instructions' load's summary.
+      rmSync(join(s2.results, "t1-json-ab-004-head", "count-corten-json-0-kernel.json"));
+      const kernel = await runPairs(options(s2, h2));
+      assert.equal(kernel.targets.json.change.bound, null);
+      assert.ok(kernel.targets.json.pairs.ab.find((p) => p.pair === 4).why.includes("the change, pair 4, side head: count-corten-json-0-kernel.json is gone since the invocation ended"));
     } finally {
       s2.done();
     }
@@ -665,8 +965,8 @@ test("the band's ends are read exactly from the cycle counts: a bound at an end 
   const split = compare(Array.from({ length: 5 }, (_, i) => ({ pair: i + 1, base: 6000 + 4000, head: 5802 + 4000 })));
   assert.equal(reading(split, aa).verdict, "inside the default band: not decided");
   // A count that is not a whole number is not valid.
-  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  const summary = sealedSummary();
+  const ok = { summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ kernelCyclesPerRequest: 60000.5 })] }), ["kernelCyclesPerRequest is 60000.5, not a whole count"]);
 });
 
@@ -730,8 +1030,8 @@ test("a replay reads each invocation against the image run.json pins for its slo
 });
 
 test("user plus kernel cycles past 2^53 - 1 are not an exact count, so a sum that would round to the band's end is not valid rather than read inside it", async () => {
-  const summary = { metrics: { checks: { passes: 5000, fails: 0 } } };
-  const ok = { summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
+  const summary = sealedSummary();
+  const ok = { summary, kernelSummary: summary, want: "sha256:a", before: "sha256:a", after: "sha256:a", launched: { container: "c".repeat(64), image: "sha256:a" }, rc: 0, tagRc: 0, fresh: true };
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: 5216500000000000, kernelCyclesPerRequest: 5216500000000001 })] }), ["user plus kernel cycles a request is above 2^53 - 1, so not an exact count"]);
   assert.deepEqual(invalid({ ...ok, row: [goodRow({ userCyclesPerRequest: Number.MAX_SAFE_INTEGER - 1, kernelCyclesPerRequest: 1 })] }), []);
   // 10433000000000001 / 10000000000000000 - 1 is past the band's high end less +1%; added as doubles it is 10433000000000000, at that end.
@@ -770,7 +1070,11 @@ else if (a[0] === "network" && a[1] === "inspect") out = JSON.stringify(net) + "
 else if (a[0] === "run") {
   const summary = a[a.indexOf("--summary-export") + 1].replace("/bench", a[a.indexOf("-v") + 1].split(":/bench")[0]);
   const n = Number(env.ITERATIONS ?? 100);
+  // A counted load (MODE iterations) takes FAKE_LOAD_MS, and its start and end are recorded.
+  const counted = env.MODE === "iterations", started = Date.now();
+  if (counted && process.env.FAKE_LOAD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_LOAD_MS));
   fs.writeFileSync(summary, JSON.stringify({ metrics: { http_reqs: { count: n }, http_req_failed: { passes: 0 }, checks: { passes: n, fails: 0 } } }));
+  if (counted) fs.appendFileSync(path.join(process.env.FAKE_DIR, "loads.jsonl"), JSON.stringify({ start: started, end: Date.now() }) + "\\n");
   // Another container takes the name, as a second runner or a hand would.
   if (env.MODE === process.env.FAKE_REPLACE) s.names["fsw-corten"] = hex(++s.made);
   if (env.MODE === process.env.FAKE_ALIAS) leftover();
@@ -786,16 +1090,66 @@ else if (a[0] === "run") {
   else status = 1;
 } else if (a[0] === "rm") for (const [n, id] of Object.entries(s.names)) if (n === a.at(-1) || id === a.at(-1)) delete s.names[n];
 fs.writeFileSync(file, JSON.stringify(s));
+// With FAKE_DOCKER_RM_STALL, removing a container by its ID does not answer: it records itself and waits a minute.
+if (a[0] === "rm" && process.env.FAKE_DOCKER_RM_STALL && /^[0-9a-f]{64}$/.test(a.at(-1))) { fs.writeFileSync(path.join(process.env.FAKE_DIR, "rm-stall.pid"), String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000); }
 if (out) process.stdout.write(out + "\\n");
 process.exit(status);
 `;
 const fakePerf = `#!/usr/bin/env node
-const fs = require("node:fs"), path = require("node:path");
+const fs = require("node:fs"), path = require("node:path"), net = require("node:net");
 const a = process.argv.slice(2);
-if (a.includes("sleep")) { process.stderr.write("1000,,instructions:u,1000000,100.00,,\\n"); process.exit(0); }
+// The probe (perf stat -e <set> -- sleep 1, no cgroup) answers on --log-fd 1 for each event it names.
+// With FAKE_PROBE_HOLD naming its set, it leaves a self-bounded child holding its output as it exits.
+// With FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
+if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1] && process.env.FAKE_BREAK) { fs.rmSync(process.env.FAKE_BREAK, { force: true }); fs.mkdirSync(process.env.FAKE_BREAK); }
+if (a.includes("sleep") && process.env.FAKE_PROBE_HOLD === a[a.indexOf("-e") + 1]) require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 9000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
+if (a.includes("sleep")) { fs.appendFileSync(path.join(process.env.FAKE_DIR, "probe.jsonl"), JSON.stringify(a) + "\\n"); process.stdout.write(a[a.indexOf("-e") + 1].split(",").map((e) => \`1000,,\${e},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); }
 fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf.jsonl"), JSON.stringify(a) + "\\n");
 const events = a[a.indexOf("-e") + 1].split(","), cgroup = a[a.indexOf("-G") + 1].split(",")[0];
-process.on("SIGINT", () => { process.stdout.write(events.map((e) => \`500000000,,\${e},\${cgroup},1000000,100.00,,\`).join("\\n") + "\\n"); process.exit(0); });
+const set = events.join(",");
+const named = (knob) => (process.env[knob] ?? "").split("|").includes(set);
+// With -A a row a CPU, for -C's CPUs or every online one, their counts summing to a whole count's;
+// in a set FAKE_PERF_CPU_GAP names the last CPU's counter never ran, printed as perf 6.1 prints one
+// (its total would still read 100%).
+const cpuList = a.includes("-C") ? a[a.indexOf("-C") + 1] : fs.readFileSync("/sys/devices/system/cpu/online", "utf8").trim();
+const cpus = cpuList.split(",").flatMap((p) => { const [x, y = x] = p.split("-").map(Number); return Array.from({ length: y - x + 1 }, (_, i) => x + i); });
+const counting = named("FAKE_PERF_CPU_GAP") ? cpus.length - 1 : cpus.length;
+const share = (i) => Math.floor(500000000 / counting) + (i === 0 ? 500000000 % counting : 0);
+const rows = (e) => a.includes("-A")
+  ? cpus.map((c, i) => "CPU" + c + "," + (i >= counting ? "<not counted>" : share(i)) + ",," + e + "," + cgroup + "," + (i >= counting ? 0 : 1000000) + ",100.00,,").join("\\n")
+  : "500000000,," + e + "," + cgroup + ",1000000,100.00,,";
+// When this perf counted from ("enable") and to ("disable", "exit"), for each load to be held against.
+const mark = (what) => fs.appendFileSync(path.join(process.env.FAKE_DIR, "perf-times.jsonl"), JSON.stringify({ set, what, at: Date.now() }) + "\\n");
+const print = () => process.stdout.write(events.map(rows).join("\\n") + "\\n");
+// A set FAKE_PERF_LATE names starts counting 1.5 s late; one FAKE_PERF_EARLY names ("|" between
+// sets) exits by itself 0.8 s after it started, printing rows a whole count's would have.
+const late = (process.env.FAKE_PERF_LATE ?? "").split("|").includes(set) ? 1500 : 0;
+const early = (process.env.FAKE_PERF_EARLY ?? "").split("|").includes(set);
+const start = () => { mark("enable"); if (early) setTimeout(() => { print(); mark("exit"); process.exit(0); }, 800); };
+// perf stat --delay=-1 --control=fd:<ctl>,<ack>: counting starts at "enable", and each command is
+// acknowledged as perf 6.1 does, "ack\\n" and a NUL byte; a set FAKE_PERF_DOUBLE_ACK names
+// acknowledges enable twice and disable not at all.
+const double = named("FAKE_PERF_DOUBLE_ACK");
+const control = a.find((x) => x.startsWith("--control=fd:"));
+if (control) {
+  const [ctl, ack] = control.slice("--control=fd:".length).split(",").map(Number);
+  let buffered = "";
+  new net.Socket({ fd: ctl, readable: true, writable: false }).on("data", (d) => {
+    buffered += d;
+    for (let at; (at = buffered.indexOf("\\n")) >= 0; buffered = buffered.slice(at + 1)) {
+      const command = buffered.slice(0, at);
+      if (command === "enable") setTimeout(() => { start(); fs.writeSync(ack, double ? "ack\\n\\0ack\\n\\0" : "ack\\n\\0"); }, late);
+      else if (command === "disable") { mark("disable"); if (!double) fs.writeSync(ack, "ack\\n\\0"); }
+    }
+  });
+} else setTimeout(start, late);
+// A set FAKE_PERF_HOLD names leaves a process holding its output open as it exits, so its end is never seen;
+// with FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
+process.on("SIGINT", () => {
+  if (named("FAKE_PERF_HOLD") && process.env.FAKE_BREAK) { fs.rmSync(process.env.FAKE_BREAK, { force: true, recursive: true }); fs.mkdirSync(process.env.FAKE_BREAK, { recursive: true }); }
+  if (named("FAKE_PERF_HOLD")) require("node:child_process").spawn(process.execPath, ["-e", "require('node:fs').writeFileSync(" + JSON.stringify(path.join(process.env.FAKE_DIR, "holder.pid")) + ", String(process.pid)); setTimeout(() => {}, 50000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
+  print(); mark("exit"); process.exit(0);
+});
 setInterval(() => {}, 1000);
 `;
 
@@ -836,7 +1190,8 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
       const perf = existsSync(join(dir, "perf.jsonl")) ? readFileSync(join(dir, "perf.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
       const row = JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"];
       const receipt = JSON.parse(readFileSync(join(kit, "results", round, "count-images.json"), "utf8"))["corten/json"];
-      return { code, docker, perf, row, receipt, log };
+      const probe = existsSync(join(dir, "probe.jsonl")) ? readFileSync(join(dir, "probe.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+      return { code, docker, perf, probe, row, receipt, log };
     };
     const first = "0".repeat(63) + "1";
     // Nothing replaced: perf counts that container's cgroup, the load is counted, and it is removed by its ID.
@@ -845,6 +1200,14 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     assert.equal(kept.receipt.container, first);
     assert.ok(kept.perf.every((args) => args[args.indexOf("-G") + 1].split(",").every((g) => g === `system.slice/docker-${first}.scope`)));
     assert.ok(Array.isArray(kept.row) && kept.row[0].requests === 5000 && kept.row[0].userPerRequest === 100000, JSON.stringify(kept.row));
+    // Kernel instructions over a load of their own, so no perf session, probe or count, holds both
+    // instructions:u and instructions:k (#2151); every set a count gives perf was probed first.
+    assert.deepEqual(kept.row[0].kernelPass, { requests: 5000, failed: 0 });
+    assert.equal(kept.row[0].kernelPerRequest, 100000);
+    const sets = (/** @type {string[][]} */ calls) => calls.map((args) => args[args.indexOf("-e") + 1]);
+    assert.deepEqual(sets(kept.perf), ["cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u", "instructions:k"]);
+    assert.deepEqual(sets(kept.probe), ["instructions:u", "instructions:k", "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u"]);
+    for (const set of [...sets(kept.perf), ...sets(kept.probe)]) assert.ok(!(set.includes("instructions:u") && set.includes("instructions:k")), set);
     assert.deepEqual(kept.docker.calls.at(-1), ["rm", "-f", first]);
     // The ID is logged before perf attaches; in the counted window the log names the container.
     const lines = kept.log.split("\n");
@@ -892,6 +1255,163 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
     const alone = await count("alone-by-id", "none", "none", { BENCH_NETWORK: byId, FAKE_NET_NAME: "rustbench" });
     assert.equal(alone.code, 0);
     assert.ok(Array.isArray(alone.row) && alone.row[0].requests === 5000, JSON.stringify(alone.row));
+    // A probe whose perf exits while a process it started holds its output: its end is not seen, so
+    // count.mjs exits 4 with nothing counted and no later probe run, a grace after the exit.
+    {
+      const dir = join(root, "probe-held");
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PROBE_HOLD: "instructions:k", HOME: process.env.HOME ?? root };
+      const started = Date.now();
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), "probe-held", "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.equal(code, 4, said);
+      assert.ok(Date.now() - started < 8500, `settled after ${Date.now() - started} ms, not when the held output closed`);
+      assert.match(said, /cleanup unconfirmed.*nothing more is counted on this host/);
+      const probes = readFileSync(join(dir, "probe.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+      assert.deepEqual(probes.map((args) => args[args.indexOf("-e") + 1]), ["instructions:u", "instructions:k"]);
+      assert.ok(!existsSync(join(dir, "perf.jsonl")), "no count after an unconfirmed probe");
+      assert.ok(!existsSync(join(kit, "results", "probe-held", "instructions.json")));
+      assert.match(readFileSync(join(kit, "results", "probe-held", "count-kernel.txt"), "utf8"), /refused: .*cleanup unconfirmed[\s\S]*stopped: the probe's perf was not seen to end/);
+    }
+    // Each pass's perf must be counting before its load starts and still counting when it ends
+    // (#2183): one that starts late is waited for, and one that exits during its load fails the
+    // pass, the first load after its repeat.
+    const timed = async (/** @type {string} */ round, /** @type {Record<string, string>} */ extra) => {
+      const got = await count(round, "none", "none", { FAKE_LOAD_MS: "1500", ...extra });
+      const lines = (/** @type {string} */ f) => existsSync(join(root, round, f)) ? readFileSync(join(root, round, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+      const marks = lines("perf-times.jsonl");
+      // Each perf in turn: when it started counting and when it stopped, by a disable or its exit.
+      const sessions = [];
+      for (const m of marks) {
+        if (m.what === "enable") sessions.push({ set: m.set, from: m.at, to: null });
+        else if (sessions.at(-1) && sessions.at(-1).to === null) sessions.at(-1).to = m.at;
+      }
+      const loads = lines("loads.jsonl");
+      // The loads perf counted over whole: each in its turn inside its perf's counting.
+      const covered = loads.map((load, i) => sessions[i] !== undefined && sessions[i].from <= load.start && sessions[i].to !== null && load.end <= sessions[i].to);
+      return { ...got, sessions, loads, covered };
+    };
+    const mainSet = "cycles:u,cycles:k,instructions:u,L1-icache-load-misses:u";
+    for (const [round, set] of [["late-main", mainSet], ["late-kernel", "instructions:k"]]) {
+      const got = await timed(round, { FAKE_PERF_LATE: set });
+      assert.equal(got.code, 0, round);
+      assert.ok(Array.isArray(got.row) && got.row[0].requests === 5000 && got.row[0].kernelPass.requests === 5000, `${round}: ${JSON.stringify(got.row)}`);
+      assert.equal(got.loads.length, 2, round);
+      assert.deepEqual(got.covered, [true, true], `${round}: a kept count's load started before its perf counted: ${JSON.stringify({ sessions: got.sessions, loads: got.loads })}`);
+    }
+    for (const [round, sets, why] of [
+      ["early-main", `${mainSet}|instructions:u`, /^instructions-only perf failed: perf did not count the full load: perf ended before its load did/],
+      ["early-kernel", "instructions:k", /^kernel instructions' perf failed: perf did not count the full load: perf ended before its load did/],
+    ]) {
+      const got = await timed(round, { FAKE_PERF_EARLY: sets });
+      assert.equal(got.code, 0, round);
+      assert.ok(!Array.isArray(got.row), `${round}: a count whose perf exited during its load was kept: ${JSON.stringify({ row: got.row, sessions: got.sessions, loads: got.loads })}`);
+      assert.match(got.row.failed, why, round);
+      // Its perf did exit during the load, before the load's end.
+      assert.ok(got.covered.includes(false), round);
+    }
+    // Each CPU perf is given must count, read from its own row (-A): perf 6.1 sums every CPU's
+    // enabled and running times, so a CPU whose counter never ran leaves its total at 100%. Given
+    // CPUs 0 and 1, both counting is kept, their counts summed; CPU 1 never running is not.
+    {
+      const both = await count("cpus-both", "none", "none", { BENCH_APP_CPUS: "0-1" });
+      assert.equal(both.code, 0);
+      assert.ok(Array.isArray(both.row) && both.row[0].userPerRequest === 100000 && both.row[0].kernelPerRequest === 100000, JSON.stringify(both.row));
+      assert.ok(both.perf.length === 2 && both.perf.every((args) => args.includes("-A") && args[args.indexOf("-C") + 1] === "0-1"), JSON.stringify(both.perf));
+      const gap = await count("cpus-gap", "none", "none", { BENCH_APP_CPUS: "0-1", FAKE_PERF_CPU_GAP: "instructions:k" });
+      assert.equal(gap.code, 0);
+      assert.ok(!Array.isArray(gap.row), `a count with a CPU that never counted was kept: ${JSON.stringify(gap.row)}`);
+      assert.match(gap.row.failed, /^kernel instructions' perf failed: instructions:k: CPU 1: <not counted>/);
+    }
+    // An acknowledgment answers one command: a perf that acknowledges enable twice and disable not
+    // at all has not acknowledged its disable, and its count is not kept.
+    {
+      const doubled = await count("acks-double", "none", "none", { FAKE_PERF_DOUBLE_ACK: "instructions:k" });
+      assert.equal(doubled.code, 0);
+      assert.ok(!Array.isArray(doubled.row), `a count whose perf acknowledged enable twice was kept: ${JSON.stringify(doubled.row)}`);
+      assert.match(doubled.row.failed, /^kernel instructions' perf failed: perf did not count the full load: perf acknowledged 2 commands where it had been given 1/);
+    }
+    // A count's perf whose end is not seen halts the step with exit 4 as soon as it is given up,
+    // whatever Docker does then: the counted container's removal is asked for and not waited for,
+    // so a docker that does not answer cannot hold the exit back.
+    {
+      const round = "halt-docker-stalled";
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PERF_HOLD: mainSet, FAKE_DOCKER_RM_STALL: "1", HOME: process.env.HOME ?? root };
+      const started = Date.now();
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      const took = Date.now() - started;
+      const pid = (/** @type {string} */ f) => existsSync(join(dir, f)) ? Number(readFileSync(join(dir, f), "utf8")) : null;
+      try {
+        assert.equal(code, 4, said);
+        // perf is given 30 s to stop and 5 s once killed, then the halt: not the stalled docker's minute.
+        assert.ok(took < 50_000, `exit 4 came ${took} ms after the start, held by the docker rm: ${said}`);
+        assert.match(said, /asked docker to remove [0-9a-f]{64}, not waiting for it/);
+        assert.match(JSON.parse(readFileSync(join(kit, "results", round, "instructions.json"), "utf8"))["corten/json"].failed, /perf did not count the full load: no answer/);
+        // The removal was asked for: the stalled docker rm started.
+        for (let i = 0; i < 50 && pid("rm-stall.pid") === null; i++) await new Promise((r) => setTimeout(r, 100));
+        assert.notEqual(pid("rm-stall.pid"), null, "no docker rm was started");
+      } finally {
+        for (const f of ["rm-stall.pid", "holder.pid"]) try { const p = pid(f); if (p) process.kill(p, "SIGKILL"); } catch {}
+      }
+    }
+    // A write that fails as count.mjs records a count's perf it could not see end leaves its exit 4
+    // and still asks for the counted container's removal.
+    {
+      const round = "halt-unwritable";
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PERF_HOLD: mainSet, FAKE_BREAK: join(kit, "results", round, "instructions.json"), HOME: process.env.HOME ?? root };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      const holder = join(dir, "holder.pid");
+      try {
+        assert.equal(code, 4, said);
+        assert.match(said, /the halt's diagnostics were not all written: EISDIR/);
+        assert.match(said, /asked docker to remove [0-9a-f]{64}, not waiting for it/);
+        const removed = () => JSON.parse(readFileSync(join(dir, "docker.json"), "utf8")).calls.some((/** @type {string[]} */ c) => c.join(" ") === `rm -f ${first}`);
+        for (let i = 0; i < 50 && !removed(); i++) await new Promise((r) => setTimeout(r, 100));
+        assert.ok(removed(), "the counted container's removal was not asked for");
+      } finally {
+        try { if (existsSync(holder)) process.kill(Number(readFileSync(holder, "utf8")), "SIGKILL"); } catch {}
+      }
+    }
+    // A write that fails as count.mjs records a probe it could not see end leaves its exit 4, so
+    // count-pairs.mjs starts no next invocation.
+    {
+      const round = "probe-held-unwritable";
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PROBE_HOLD: "instructions:k", FAKE_BREAK: join(kit, "results", round, "count-kernel.txt"), HOME: process.env.HOME ?? root };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.equal(code, 4, said);
+      assert.match(said, /the halt's diagnostics were not all written: EISDIR/);
+      assert.ok(!existsSync(join(dir, "perf.jsonl")), "no count after an unconfirmed probe");
+      // That exit, as count-pairs.mjs's runner sees it: the run stops there, now and when run again.
+      const s = scratch();
+      try {
+        const stuck = "t1-json-ab-002-base";
+        const h = host(s.results, { rc: (name) => (name === stuck ? /** @type {number} */ (code) : 0) });
+        await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
+        assert.equal(h.state.counted.at(-1)?.[0], stuck);
+        const ran = h.state.counted.length;
+        await assert.rejects(runPairs(options(s, h)), /count\.mjs exited 4 in t1-json-ab-002-base/);
+        assert.equal(h.state.counted.length, ran);
+      } finally {
+        s.done();
+      }
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(root, { recursive: true, force: true });

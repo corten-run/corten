@@ -32,8 +32,13 @@
 // PATH and their versions, the kernel, Node and the k6 image; written before the first invocation,
 // and a run going on refuses if any differs or cannot be established) and `invocations.jsonl`
 // (each invocation as it starts and as it ends, with the SHA-256 and size of the row, the k6
-// summary and the launched image it is read from: a replay reads those bytes or none). No
-// invocation is run again: the command run again goes on from the first not started.
+// summaries of its two loads and the launched image it is read from: a replay reads those bytes
+// or none; and, between those, as count.mjs is started and as it exits, its exit written before
+// anything that can fail). No invocation is run again: the command run again goes on from the first
+// not started, and refuses where count.mjs was started and its end was not recorded, as it may have
+// exited 4, or where it exited 4 or was stopped by a signal (a perf or probe it started may still
+// count), refusing before any Docker call. Past such an exit the runner asks Docker nothing but
+// the daemon's lock's removal, which it waits for no longer than its bound, however Docker answers.
 // `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
 // that only one runner can make and that runs while it is held, so a prune leaves it (the lock on
 // the daemon's `cb-corten` tag and the `fsw-corten` container count.mjs starts, whatever directory
@@ -41,13 +46,14 @@
 // Before each invocation, as each ends and before the report, it stops with no report if that
 // container is not the one it made or a file run.json binds has other bytes. It writes `report.json` and prints the report once every invocation has ended, unless it was
 // asked to stop.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { k6Image } from "../load-tool.mjs";
+import { HALT_EXIT, loadTotals } from "./count-perf.mjs";
 import { median, pct, upperRank } from "../placement/stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -84,12 +90,66 @@ export const DAEMON_LOCK = "corten-count-pairs-lock";
 const HOLDER = "run.corten.count-pairs.holder";
 /**
  * How long the daemon's lock runs, in seconds: seven days, an expiry and not a bound on a schedule
- * (999 pairs of both targets, 7,992 invocations, are about 77 hours at #2066's 34.8 s each, estimated;
+ * (999 pairs of both targets, 7,992 invocations, are about 77 hours at #2066's 34.8 s each, estimated, before
+ * #2151 gave each invocation a second load for kernel instructions, which adds an unmeasured time;
  * a slower run can outlast it, and then stops at its next check, as the lock is not running). It runs so that
  * `docker container prune`, which removes stopped containers, cannot remove it while a run goes on,
  * and exits by itself after this so one a killed runner left stops.
  */
 export const LOCK_SECONDS = 7 * 24 * 3600;
+/** How long the daemon's lock's removal may take, in ms, so a halt reaches the caller however Docker answers. */
+export const RELEASE_MS = 10_000;
+/**
+ * A command run without blocking, its output not kept, resolved with its exit status once it exits
+ * or with a null status at `timeout` ms, when it is sent SIGKILL. The deadline does not wait on the
+ * child: one that does not exit after the signal (a client stuck in the kernel) is left, unref'd,
+ * so it keeps neither this process nor its caller from going on.
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {{ env?: Record<string, string | undefined>, timeout?: number }} [opts]
+ * @param {typeof spawn} [start]
+ * @returns {Promise<{ status: number | null }>}
+ */
+export function spawnBounded(cmd, args, opts = {}, start = spawn) {
+  return new Promise((done) => {
+    /** @type {ReturnType<typeof spawn>} */
+    let child;
+    try { child = start(cmd, args, { stdio: "ignore", env: opts.env, windowsHide: true }); } catch { return done({ status: null }); }
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} done({ status: null }); }, opts.timeout ?? RELEASE_MS);
+    child.on("error", () => { clearTimeout(timer); done({ status: null }); });
+    child.on("exit", (code) => { clearTimeout(timer); done({ status: code }); });
+    child.unref();
+  });
+}
+/**
+ * `promise`'s value, or `fallback` once `ms` have passed or where it rejects: a deadline that does
+ * not depend on what the promise waits for.
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {T} fallback
+ * @returns {Promise<T>}
+ */
+export function within(promise, ms, fallback) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const deadline = new Promise((done) => { timer = setTimeout(done, ms, fallback); });
+  return /** @type {Promise<T>} */ (Promise.race([promise.catch(() => fallback), deadline])).finally(() => clearTimeout(timer));
+}
+/**
+ * The runner's exec: a command run to its end, its output to `log` when given and none kept with
+ * `output` false, killed at `timeout` ms when given (a command past its bound gives a null status).
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {{ log?: string, env?: Record<string, string | undefined>, timeout?: number, output?: boolean }} [opts]
+ */
+export function spawnExec(cmd, args, opts = {}) {
+  const bound = opts.timeout ? { timeout: opts.timeout, killSignal: /** @type {const} */ ("SIGKILL") } : {};
+  if (opts.output === false) return spawnSync(cmd, args, { stdio: "ignore", env: opts.env, ...bound });
+  if (!opts.log) return spawnSync(cmd, args, { encoding: "utf8", env: opts.env, ...bound });
+  const fd = openSync(opts.log, "wx");
+  try { return spawnSync(cmd, args, { stdio: ["ignore", fd, fd], env: opts.env, ...bound }); } finally { closeSync(fd); }
+}
 /** User plus kernel cycles a request, the measure the count is read in. */
 export const cycles = (/** @type {Record<string, number>} */ row) => row.userCyclesPerRequest + row.kernelCyclesPerRequest;
 
@@ -143,7 +203,7 @@ const isCount = (/** @type {unknown} */ x) => typeof x === "number" && Number.is
 
 /**
  * Why one invocation's row is not valid, or [] when it is.
- * @param {{ row?: any, summary?: any, launched?: any, want?: string, before?: string, after?: string, rc?: number | null,
+ * @param {{ row?: any, summary?: any, kernelSummary?: any, launched?: any, want?: string, before?: string, after?: string, rc?: number | null,
  *   signal?: string | null, tagRc?: number | null, fresh?: boolean, interrupted?: boolean, lost?: string[] }} inv
  */
 export function invalid(inv) {
@@ -155,7 +215,8 @@ export function invalid(inv) {
   if (Array.isArray(inv.lost) && inv.lost.length) why.push(`while it ran: ${inv.lost.join("; ")}`);
   if (inv.before !== inv.want || inv.after !== inv.want) why.push("the image counted was not the side's");
   if (inv.rc === 0 && (inv.launched?.image !== inv.want || !/^[0-9a-f]{64}$/.test(String(inv.launched?.container)))) why.push("the container counted was not started from the side's image");
-  if (inv.rc !== 0) why.push(inv.signal ? `count.mjs was stopped by ${inv.signal}` : `count.mjs exited ${inv.rc ?? "-"}`);
+  if (inv.rc === HALT_EXIT) why.push(`count.mjs exited ${HALT_EXIT}: a perf it started was not seen to end, so no further count runs on that host`);
+  else if (inv.rc !== 0) why.push(inv.signal ? `count.mjs was stopped by ${inv.signal}` : `count.mjs exited ${inv.rc ?? "-"}`);
   const row = inv.row;
   if (row == null) return [...why, "no row"];
   if (!Array.isArray(row)) return [...why, `count.mjs recorded failed: ${row.failed}`];
@@ -163,6 +224,9 @@ export function invalid(inv) {
   const r = row[0];
   if (r.requests !== REQUESTS) why.push(`${r.requests} requests, not ${REQUESTS}`);
   if (r.failed !== 0) why.push(`${r.failed} failed requests`);
+  // Kernel instructions are counted over a second load of their own (count-perf.mjs, #2151).
+  if (r.kernelPass?.requests !== REQUESTS) why.push(`${r.kernelPass?.requests} requests in the kernel instructions' load, not ${REQUESTS}`);
+  if (r.kernelPass?.failed !== 0) why.push(`${r.kernelPass?.failed} failed requests in the kernel instructions' load`);
   for (const [field, event] of Object.entries(COUNTS)) {
     const v = r[field];
     // count-perf.mjs rounds each count a request to a whole number, so sums and ratios of them are exact.
@@ -177,11 +241,15 @@ export function invalid(inv) {
     // A sum past 2^53 - 1 is rounded, so the bound would not be read from the counts exactly.
     else if (Number.isSafeInteger(r.userCyclesPerRequest) && Number.isSafeInteger(r.kernelCyclesPerRequest) && !Number.isSafeInteger(cycles(r))) why.push("user plus kernel cycles a request is above 2^53 - 1, so not an exact count");
   }
-  const checks = inv.summary?.metrics?.checks;
-  if (!checks) why.push("no k6 summary of the counted load");
-  else {
-    if (checks.fails !== 0) why.push(`${checks.fails} failed status checks`);
-    if (checks.passes !== REQUESTS) why.push(`${checks.passes} passed status checks, not ${REQUESTS}`);
+  // Each load's sealed k6 summary must give the same totals as its part of the row.
+  for (const [summary, load, part] of [[inv.summary, "", r], [inv.kernelSummary, " in the kernel instructions' load", r.kernelPass]]) {
+    const checks = summary?.metrics?.checks;
+    if (!checks) { why.push(`no k6 summary of the counted load${load}`); continue; }
+    if (checks.fails !== 0) why.push(`${checks.fails} failed status checks${load}`);
+    if (checks.passes !== REQUESTS) why.push(`${checks.passes} passed status checks${load}, not ${REQUESTS}`);
+    const t = loadTotals(summary);
+    if (t.requests === null || t.requests !== part?.requests) why.push(`its k6 summary gives ${t.requests ?? "no"} requests${load} where the row has ${part?.requests}`);
+    if (t.failed === null || t.failed !== part?.failed) why.push(`its k6 summary gives ${t.failed ?? "no"} failed requests${load} where the row has ${part?.failed}`);
   }
   return why;
 }
@@ -298,7 +366,7 @@ const COMPARISON = { ab: "the change", aa: "its A/A" };
  * the image ID run.json pins for its slot's side, not the one its own record names.
  * @param {ReturnType<typeof schedule>} plan
  * @param {Map<string, any>} records invocation records by name
- * @param {(name: string, target: string, record: any) => { row?: any, summary?: any, launched?: any, why?: string[] }} load
+ * @param {(name: string, target: string, record: any) => { row?: any, summary?: any, kernelSummary?: any, launched?: any, why?: string[] }} load
  * @param {{ base?: string, head?: string }} [ids] the image IDs run.json pins
  */
 export function readRun(plan, records, load, ids = {}) {
@@ -357,7 +425,8 @@ function split(/** @type {any[]} */ list) {
 
 const fmt = (/** @type {number | null} */ x) => (x == null ? "none" : pct(x));
 const num = (/** @type {number | null} */ x) => (x == null ? "none" : Math.round(x).toLocaleString("en-US"));
-const LABELS = { userCyclesPerRequest: "user cycles", kernelCyclesPerRequest: "kernel cycles", userPerRequest: "user instructions", kernelPerRequest: "kernel instructions", userL1iMissesPerRequest: "user L1i misses" };
+// Each measure names the load it is counted over: kernel instructions are a second load's (#2151).
+const LABELS = { userCyclesPerRequest: "user cycles, first load", kernelCyclesPerRequest: "kernel cycles, first load", userPerRequest: "user instructions, first load", kernelPerRequest: "kernel instructions, second load", userL1iMissesPerRequest: "user L1i misses, first load" };
 
 /** The report's Markdown for a run's reading. */
 export function markdown(/** @type {Record<string, any>} */ targets, /** @type {{ prefix: string, base: string, head: string }} */ run) {
@@ -372,6 +441,7 @@ export function markdown(/** @type {Record<string, any>} */ targets, /** @type {
       `| its A/A (base, base) | ${a.valid} of ${a.n} | ${fmt(a.min)} | ${fmt(a.median)} | ${fmt(a.max)} | ${fmt(a.bound)} | ${a.bound == null ? "none" : pct(a.bound - MARGIN)} | ${fmt(a.swappedBound)} |`,
       "", `The A/A: ${t.resolution}. The change is held or cleared only where both of the A/A's bounds, less +1%, are inside the band; with both bounds and either outside it is not decided, and with no bound the count failed.`, "",
       "Diagnostics, medians a request over the valid recorded invocations of each side, and the median of the per-pair changes:", "",
+      "Each invocation counts two loads of 5,000 requests on the same container: user and kernel cycles (the reading above), user instructions and user L1i misses over the first, kernel instructions alone over the second, each over its own load's requests. So kernel instructions are not from the load the cycles are, and their sum with user instructions is two loads'.", "",
       "| comparison | measure | side `base` | side `head` | per-pair change, median |",
       "| --- | --- | ---: | ---: | ---: |");
     for (const [comparison, d] of Object.entries(t.diagnostics)) {
@@ -507,21 +577,24 @@ export function environmentOf(exec, env, which) {
  * remove while it runs. Throws, naming its holder, where one is there. `held` says whether the
  * container of that name is still the one made and still running (a hand can remove it and another
  * runner make its own); `release` removes it by the ID it was made with, so never one another
- * runner made after it.
- * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined> }) => { status: number | null, stdout?: string }} exec
+ * runner made after it, through `bounded` and within RELEASE_MS whatever `bounded` does, as it runs
+ * after a halt too.
+ * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined>, timeout?: number, output?: boolean }) => { status: number | null, stdout?: string }} exec
  * @param {Record<string, string | undefined>} env
  * @param {string} image
  * @param {string} ledger
+ * @param {(cmd: string, args: string[], options: { env?: Record<string, string | undefined>, timeout: number }) => Promise<{ status: number | null }>} [bounded]
  */
-export function daemonLock(exec, env, image, ledger) {
+export async function daemonLock(exec, env, image, ledger, bounded = spawnBounded) {
   const holder = `process ${process.pid} on ${hostname()}, since ${new Date().toISOString()}, for ${ledger}`;
   const made = exec("docker", ["create", "--name", DAEMON_LOCK, "--network", "none", "--label", `${HOLDER}=${holder}`, "--label", `run.corten.count-pairs.token=${randomUUID()}`, "--entrypoint", "sleep", image, String(LOCK_SECONDS)], { env });
   const id = (made.stdout ?? "").trim();
   if (made.status === 0 && /^[0-9a-f]{64}$/.test(id)) {
-    const release = () => exec("docker", ["rm", "-f", id], { env }).status === 0;
+    // A docker that does not answer is given up at RELEASE_MS, and not waited for past it.
+    const release = () => within(bounded("docker", ["rm", "-f", id], { env, timeout: RELEASE_MS }).then((r) => r.status === 0), RELEASE_MS, false);
     const started = exec("docker", ["start", id], { env });
     if (started.status !== 0) {
-      const removed = release();
+      const removed = await release();
       throw new Error(`could not start the daemon's lock: docker start exited ${started.status ?? "-"}${removed ? "" : `; remove it with docker rm -f ${DAEMON_LOCK}`}`);
     }
     return {
@@ -539,7 +612,7 @@ export function daemonLock(exec, env, image, ledger) {
 }
 
 /** The outputs of one invocation that its reading is made from, sealed when it ends. */
-export const artifactsOf = (/** @type {string} */ target) => ["instructions.json", `count-corten-${target}-0.json`, "count-images.json"];
+export const artifactsOf = (/** @type {string} */ target) => ["instructions.json", `count-corten-${target}-0.json`, "count-images.json", `count-corten-${target}-0-kernel.json`];
 
 /** Each of an invocation's outputs as it is now: its SHA-256 and size, or null where it is not there. */
 export function seal(/** @type {string} */ dir, /** @type {string[]} */ names) {
@@ -580,7 +653,8 @@ const differences = (/** @type {Record<string, any>} */ a, /** @type {Record<str
 /**
  * Runs a count's invocations not yet started, then reads them all.
  * @param {{ prefix: string, images: { base: string, head: string }, last: number, targets: string[], results: string,
- *   exec: (cmd: string, args: string[], options?: { log?: string, env?: Record<string, string | undefined> }) => { status: number | null, signal?: string | null, stdout?: string },
+ *   exec: (cmd: string, args: string[], options?: { log?: string, env?: Record<string, string | undefined>, timeout?: number, output?: boolean }) => { status: number | null, signal?: string | null, stdout?: string },
+ *   bounded?: (cmd: string, args: string[], options: { env?: Record<string, string | undefined>, timeout: number }) => Promise<{ status: number | null }>,
  *   env?: Record<string, string | undefined>, kit?: string, which?: (name: string) => string | null, stop?: () => boolean,
  *   now?: () => number, log?: (line: string) => void }} o
  */
@@ -594,22 +668,53 @@ export async function runPairs(o) {
     return r.status === 0 ? (r.stdout ?? "").trim() : "";
   };
   mkdirSync(join(dir, "inv"), { recursive: true });
+  /** @type {(() => void | Promise<void>)[]} */
   const releases = [lock(join(dir, "run.lock"), dir)];
   try {
+    // A halt the ledger has kept is read first, under run.lock and before any Docker call: a perf it
+    // left may still count, so this host is asked nothing more.
+    const records = readRecords(join(dir, "invocations.jsonl"));
+    const halted = haltOf(records);
+    if (halted) throw new Error(halted);
     // The daemon's lock is a container made from the base's image, so the base's ID is read first; a
     // new run refuses one image for both sides before it takes the lock, a run going on in locked().
     const base = id(o.images.base), head = id(o.images.head);
     if (!base || !head) throw new Error("no image for a side");
     if (base === head && !existsSync(join(dir, "run.json"))) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
-    const daemon = daemonLock(o.exec, env, base, dir);
-    releases.push(() => { if (!daemon.release()) log(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK} if no runner is going`); });
-    return await locked(o, { dir, now, log, env, id, held: daemon.held });
+    const daemon = await daemonLock(o.exec, env, base, dir, o.bounded ?? spawnBounded);
+    releases.push(async () => { if (!(await daemon.release())) log(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK} if no runner is going`); });
+    return await locked(o, { dir, now, log, env, id, held: daemon.held, records });
   } finally {
-    for (const release of releases.reverse()) release();
+    for (const release of releases.reverse()) await release();
   }
 }
 
-async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string, held: () => boolean }} */ { dir, now, log, env, id, held }) {
+/** A perf count.mjs could not see end may still run on this host (count-perf.mjs): nothing more is counted on it. */
+const halt = (/** @type {string} */ name) => `count.mjs exited ${HALT_EXIT} in ${name}: a perf it started was not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
+// A count.mjs stopped by a signal did not see each perf and probe it started end (the probe runs
+// in a process group of its own, which the signal may not reach): the same halt, unconfirmed.
+const signalled = (/** @type {string} */ name, /** @type {string} */ signal) => `count.mjs was stopped by ${signal} in ${name} before it saw each perf and probe it started end: one may still count, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
+
+/**
+ * Why a ledger's invocations stop the run before anything else is asked of the host, or null: a
+ * count.mjs that exited HALT_EXIT, was stopped by a signal, or was started with no end recorded.
+ * @param {Map<string, any>} records
+ */
+function haltOf(records) {
+  for (const [name, r] of records) if (r.rc === HALT_EXIT) return halt(name);
+  for (const [name, r] of records) if (r.signal) return signalled(name, r.signal);
+  // A count.mjs started with no end recorded: its exit, if it was kept, is not 4, but what it
+  // counted was not sealed; if not, it may have been 4. Either way the run does not go on.
+  for (const [name, r] of records) {
+    if (r.dispatched == null || r.ended != null) continue;
+    return r.exited != null
+      ? `count.mjs exited ${r.rc ?? r.signal ?? "-"} in ${name} and the end of that invocation (the image it counted and its sealed outputs) was not recorded; stopped with no report. Count under a new prefix`
+      : `count.mjs was started in ${name} and its exit was not recorded: it may have exited ${HALT_EXIT}, a perf it started not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
+  }
+  return null;
+}
+
+async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string, held: () => boolean, records: Map<string, any> }} */ { dir, now, log, env, id, held, records }) {
   const file = join(dir, "invocations.jsonl"), runFile = join(dir, "run.json");
   const kitDir = o.kit ?? here;
   const plan = schedule(o.last, o.targets, o.prefix);
@@ -643,7 +748,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     return out;
   };
   const stopIf = (/** @type {string[]} */ why, /** @type {string} */ where) => { if (why.length) throw new Error(`${why.join("; ")} (${where}); stopped with no report`); };
-  const records = readRecords(file);
+  // The ledger's halts were refused before any Docker call (runPairs, haltOf).
   for (const inv of plan) {
     if (records.has(inv.name)) continue;
     if (o.stop?.()) throw new Error(`stopped before ${inv.name}; run the command again to go on`);
@@ -660,10 +765,20 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       const before = id(TAG);
       if (tag.status !== 0) end = { ...start, ended: now(), fresh: true, tagRc: tag.status, before };
       else {
+        // Written before count.mjs starts, so a restart that finds no exit after it refuses to go on.
+        appendFileSync(file, JSON.stringify({ name: inv.name, dispatched: now() }) + "\n");
         const r = o.exec(process.execPath, [join(kitDir, "count.mjs"), inv.name, ...COUNT_ARGS, inv.target], { log: logFile, env });
+        // Its exit first, before anything here that can fail: a halt is in the ledger whatever follows.
+        const exited = { name: inv.name, exited: now(), rc: r.status, signal: r.signal ?? null };
+        appendFileSync(file, JSON.stringify(exited) + "\n");
+        // A halt stops here, before the image read, the seals and the lock's check: the one Docker
+        // call left is the lock's bounded removal, and a replay refuses at its exit row.
+        if (r.status === HALT_EXIT) throw new Error(halt(inv.name));
+        if (r.signal) throw new Error(signalled(inv.name, r.signal));
         const after = id(TAG);
         // The bytes the reading is made from, so a replay reads these or none.
-        end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: r.signal ?? null, before, after, artifacts: seal(out, artifactsOf(inv.target)) };
+        const artifacts = seal(out, artifactsOf(inv.target));
+        end = { ...start, ended: now(), fresh: true, tagRc: 0, rc: r.status, signal: null, before, after, artifacts };
       }
     }
     // Seen as it ends, so an invocation that ran while the lock or the kit was lost is not valid.
@@ -673,7 +788,6 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     records.set(inv.name, end);
     stopIf(gone, `in ${inv.name}`);
     log(`${inv.name} rc ${end.rc ?? "-"} ${((Number(end.ended) - start.started) / 1000).toFixed(1)} s`);
-    if (end.signal) throw new Error(`count.mjs was stopped by ${end.signal} in ${inv.name}; run the command again to go on`);
     // A signal sent to this process alone is handled between invocations.
     await new Promise((resolve) => setImmediate(resolve));
   }
@@ -690,8 +804,8 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
       if (bytes.length !== sealed.bytes || sha256(bytes) !== sealed.sha256) return void why.push(`${f} changed since the invocation ended`);
       try { return JSON.parse(bytes.toString("utf8")); } catch { return void why.push(`${f} is not JSON`); }
     };
-    const [rows, summary, images] = artifactsOf(target).map(at);
-    return { row: rows?.[`corten/${target}`], summary, launched: images?.[`corten/${target}`], why };
+    const [rows, summary, images, kernelSummary] = artifactsOf(target).map(at);
+    return { row: rows?.[`corten/${target}`], summary, kernelSummary, launched: images?.[`corten/${target}`], why };
   };
   const targets = readRun(plan, records, load, ids);
   const json = { prefix: o.prefix, images: o.images, ids, last: o.last, band: BAND, margin: MARGIN, targets };
@@ -728,13 +842,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
   let stopped = false;
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stopped = true; });
-  const exec = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {{ log?: string, env?: Record<string, string | undefined> }} */ opts = {}) => {
-    if (!opts.log) return spawnSync(cmd, args, { encoding: "utf8", env: opts.env });
-    const fd = openSync(opts.log, "wx");
-    try { return spawnSync(cmd, args, { stdio: ["ignore", fd, fd], env: opts.env }); } finally { closeSync(fd); }
-  };
   try {
-    const { md, targets: read } = await runPairs({ ...options, images: { base, head }, results: join(here, "results"), exec, stop: () => stopped, log: (l) => console.log(new Date().toISOString(), l) });
+    const { md, targets: read } = await runPairs({ ...options, images: { base, head }, results: join(here, "results"), exec: spawnExec, bounded: spawnBounded, stop: () => stopped, log: (l) => console.log(new Date().toISOString(), l) });
     console.log(md);
     process.exit(complete(read) ? 0 : 1);
   } catch (e) {

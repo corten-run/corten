@@ -29,18 +29,24 @@ recorded:
 
 1. The status line and every header line but `Date`, after the plan's mask (the plan masks no
    header): the lines that differ, with both sides' values, are the ones recorded and no others.
-2. The two bodies' lengths in bytes.
-3. The first 16 hexadecimal digits of each body's SHA-256, the release's and `main`'s. A
-   pilot's or an A/A's placement must show the release's on both sides.
+2. The two bodies' lengths in bytes and their SHA-256s, the release's and `main`'s, or the one
+   body's when the two are the same. A pilot's or an A/A's placement must show the release's on
+   both sides.
 
-The kit's `turns.sh` holds a placement to the first two before its turns. The third is the
-trend's own: `turns.sh` keeps the digests for each placement, and the command compares them
-after each part with the two it recorded. A placement that fails any of them makes its workload
-"not read". The run's directory keeps the difference (`expect-<workload>.txt`) and the digests
-(`bodies-<workload>.txt`) for whoever reads the row.
+The kit's `turns.sh` holds a placement of the change to both before its turns: the recorded
+difference is its plan's expected one, and ends with a bodies line of both bodies' lengths and
+SHA-256s, or of the one body's when the headers alone differ, so it binds the body even then. A pilot's or an A/A's placement has none, and `turns.sh` holds its two sides to each
+other; the command then holds every placement to the bodies it recorded, by the first 16
+hexadecimal digits of each SHA-256, which `turns.sh` keeps for each placement. A placement that
+fails any of them makes its workload "not read". The run's directory keeps the difference
+(`expect-<workload>.txt`) and the digests (`bodies-<workload>.txt`) for whoever reads the row.
 
-The threshold is the plan's, +2% on the lower bound, a proposal until it is settled: no run has
-shown what a run of this plan resolves. It is not the +1% a measured change is held to: that is
+The threshold is the plan's, +2% on the lower bound, a proposal until the maintainer settles it.
+In the first run, of 2026-11-26, both A/As resolved: each A/A's bound, as recorded and with its
+labels swapped, was +0.62% and +0.31% on `plain` at K = 60 and +0.47% and +0.61% on `unstaged`
+at K = 28, under the +1% the kit asks of an A/A. Those are one run's bounds, not a limit on what
+a run of this plan can show, and one run does not show what rise a release can carry, so it does
+not settle the threshold. The threshold is not the +1% a measured change is held to: that is
 read on the bound, and the kit's own page for a gated part still prints that reading (a pilot's
 reads nothing: it sizes K). For a run past the threshold the command drafts an issue with the
 pull requests merged since the row before it, or since the release when the draft says so, and
@@ -51,3 +57,4 @@ them. Whoever makes the run keeps that directory under the tag `evidence/trend-<
 
 | run | base | head | workloads: lower bound to bound, `main` against the release | reading |
 | --- | --- | --- | --- | --- |
+| 2026-11-26 | v0.2.0 [`a833b4e3e`](https://github.com/corten-run/corten/commit/a833b4e3e55033c5fa179f50cb9291d190aeedfb) | [`056aba61c`](https://github.com/corten-run/corten/commit/056aba61c56cce4b2672b8f299b4961e476654ef) | `plain` -6.53% to -5.77%, median -6.17%, K = 60, A/A resolved, answers differ as recorded; `unstaged` -1.84% to -0.96%, median -1.62%, K = 28, A/A resolved | pass: no rise of +2.00% shown |

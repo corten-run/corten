@@ -10063,8 +10063,10 @@ rules something out.
     its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
     did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
-    no run has been read from it; and no run has read the image `count.mjs` starts across
-    placements, which that kit does not read either, so a catalog target the band leaves not
+    the first run read from it is the trend's of 2026-11-26, which gates no change
+    ([design Choice 76](#choice-counted-or-measured)); and no run has read the image
+    `count.mjs` starts across placements, which that kit does not read either, so a catalog
+    target the band leaves not
     decided has that to build, unless its plan names a probe workload for it that is read
     across placements (The catalog's `page` and `json`, below). The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
@@ -11032,8 +11034,12 @@ rules something out.
     takes the medians of the A/A it was sized from as independent and alike over time and the
     setup's spread as holding from one run to the next
     (in the fourth run's 100 medians no test detected drift or dependence, normality was
-    rejected, and the A/A resolved at the 100 its plan took; no run has yet been read at a K the
-    rule gave); a spread measured on one setup holds
+    rejected, and the A/A resolved at the 100 its plan took; the first run read at a K the rule
+    gave is the trend's of 2026-11-26, tag `evidence/trend-2026-11-26`, which sized K = 60 on
+    `plain` and K = 28 on `unstaged` from pilots of 100 placements, and both A/As resolved, with
+    bounds of +0.62% as recorded and +0.31% with the labels swapped on `plain` and +0.47% and
+    +0.61% on `unstaged`: one run, which does not test how often an A/A so sized fails); a
+    spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
     protocol and code;
     a second never-called function of 16 to 64 bytes laid last in `.text` costs a request
@@ -11217,7 +11223,11 @@ rules something out.
     [the change](https://github.com/corten-run/corten/pull/2066#issuecomment-7187087634)), their
     pairs worked again from the posted rows (the label swaps by the two-direction rule, 100,000
     draws of a seeded generator), and `count.mjs` and that kit's `run.sh` (tag
-    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`.
+    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`;
+    2026-11-27 (UTC), the trend's first run, read from its tag at `d4a002f34`
+    (`evidence/trend-2026-11-26`) for each pilot's K and sizing counts, each gated part's K,
+    and its A/A's bounds as recorded and with the labels swapped, from each part's
+    `results/report.json`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
@@ -11522,7 +11532,8 @@ rules something out.
     placements against the last release, is the run
     [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
     asks for: [`bench/placement`](../bench/placement/README.md#the-trend) has its plan, its
-    command and the page a run adds a row to, and no run has been made. It gates no pull
+    command and the page a run adds a row to, whose first row is the first run, of 2026-11-26
+    (The trend's first run, below). It gates no pull
     request, for the reason
     [design Choice 72](#choice-placement-runs) gives against gating a release: it reads every
     change since that release together and cannot attribute a cost to one.
@@ -11576,7 +11587,8 @@ rules something out.
     the changes that sentence names, and the author says why a change is of none of its kinds,
     which the review accepts, as a negative control's declaration is accepted. The trend reads
     what is left as it adds up (twenty costs at the budget are about 10% more instructions),
-    and no run of it has been made. A release takes the kit's counts of its candidate against
+    one row a run, the first of 2026-11-26. A release takes the kit's counts of its candidate
+    against
     the last release's tag, which anyone can take in minutes and which read instructions, not
     cycles, unless a row of the trend reads the commit of `main` that candidate is made from
     against that tag with every workload read
@@ -11592,6 +11604,37 @@ rules something out.
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     ran 1.52% fewer user instructions on `kept` and read 0.07% fewer cycles across placements,
     with a bound of +0.28%, one change in a reading that gated nothing.
+
+    The trend's first run. Its first run with every workload read was a condition under Revisit
+    when (below), and that run has been made. It read `main` at `056aba61c` against `v0.2.0`
+    at `a833b4e3e`, started 2026-11-26T18:03:43Z and ended 2026-11-27T00:52:27Z with exit 0
+    (tag `evidence/trend-2026-11-26`, commit `d4a002f34`), and its row reads `pass: no rise of
+    +2.00% shown`. Cycles a request, user and kernel, `main` against the release, across
+    placements (measured, one run): `plain` -6.53% by the lower bound and -5.77% by the bound,
+    median -6.17%, at K = 60, and `unstaged` -1.84% and -0.96%, median -1.62%, at K = 28, each K
+    the smallest at which the sizing check passed from that workload's pilot of 100 placements.
+    In this run both A/As, the release against itself in the same run, resolved: bounds of
+    +0.62% as recorded and +0.31% with its labels swapped on `plain`, and +0.47% and +0.61% on
+    `unstaged`, each under the +1% the kit asks of an A/A. The Choice was read again for it on
+    2026-11-27
+    (UTC). The run bears out three of the statements it stands on: the plan, its command and
+    the placement kit make a run with every workload read, at the K the sizing rule gives; the
+    kit's example probe builds at the release's tag and at `main` on both workloads (the
+    placement kit's probe, not `bench/request-cost`'s, whose build at a release's tag for a
+    release's count is still not tried); and the
+    release and `main` answer `plain` differently, by a difference the run recorded and nobody
+    reviewed (the `corten-shell` header, the script hash in the policy and the body, 6,124 bytes
+    on each side), so part of what `plain` read can be the answer and not the path to it. It
+    leaves the rest open. The threshold is still a proposal nobody has accepted: the A/A bounds
+    are what this one run resolved, not a limit on what a run of the plan can show and not what
+    rise a release can carry, and the maintainer settles it.
+    One run of one commit says nothing of runs made weekly and before each release. A reading
+    of every change since the release together, here less on both workloads, attributes a cost
+    to none of them, so it does not show that a change that merged counted costs a request
+    under +1%, and a span that costs less as a whole can hold a change that costs more. Two
+    requests to one probe still do not take every path a counted change can cost on. So the
+    Choice decides as it did, and under Revisit when the condition the run met gives way to
+    the one that follows it, the threshold settled.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
@@ -11653,10 +11696,12 @@ rules something out.
     binary and never to be compared with another's; the kit's probe builds against the last
     release's tag often enough for a release's count to be taken, which was not tried; the
     trend is made, weekly and before a release, before counted costs add up past what a
-    release can carry, its plan, command and page being in the placement kit and no such run
-    having been made; its threshold, `main` at least +2% over the release on a workload by the
-    lower bound of its cycles, is a proposal no reading stands behind and nobody has accepted,
-    the 2% above being of instruction counts between releases; and the placement kit's example
+    release can carry, its plan, command and page being in the placement kit and one such run
+    made, of 2026-11-26, with every workload read; its threshold, `main` at least +2% over the
+    release on a workload by the lower bound of its cycles, is a proposal nobody has accepted,
+    beside which that run's A/A bounds, +0.31% to +0.62%, are what one run resolved
+    and not what rise a release can carry, the 2% above being of instruction counts between
+    releases; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
@@ -11673,7 +11718,8 @@ rules something out.
     for one row of one run, `get`'s 3 of a budget of 91, and
     the six runs a job of each idle reading 0 to 4 bytes a connection; the
     default band and the estimate of a reading across placements, which are
-    [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
+    [design Choice 72](#choice-placement-runs)'s; and the trend's first run, one run under the
+    tag `evidence/trend-2026-11-26`, every workload read and both A/As resolved); reasoned (a bound inside the default band does
     not decide, so for a change this small the only cycles reading was across placements; a
     count of one binary repeats within 4 in 18,987, so a rise of 0.5% is not the count's own
     noise, which says nothing of two commits (the bet above); callgrind counts the serving
@@ -11696,10 +11742,13 @@ rules something out.
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; the trend's first run with every workload read is
-    made, which shows what a run of its plan resolves and so informs a review of the threshold,
-    not what rise a release can carry; a run of the trend leaves a workload not read, whatever
-    its row gives as the reason (the probe does not build at the release's tag, the kit refuses
+    last release counted inside the budget; the maintainer settles the trend's threshold, at
+    +2% on the lower bound or another figure, since this Choice leans on it as a proposal nobody
+    has accepted (this entry first named the trend's first run with every workload read, which
+    the run of 2026-11-26 met, showing what a run of the plan resolves and not what rise a
+    release can carry: The trend's first run, above); a run of the trend leaves a workload not
+    read, whatever its row gives as the reason (the probe does not build at the release's tag,
+    the kit refuses
     a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
     does not resolve, a placement answers with another body), so nothing read what this Choice
     leans on the trend to read; a release is
@@ -11741,7 +11790,13 @@ rules something out.
     nothing, no run having been made; 2026-11-26, that dry run made again with `main` at
     `aa526350f` and the command as it reads after its first review: both sides built, the
     same difference on `plain` and none on `unstaged`, and each of the 36 placements answered
-    with the bodies the check had recorded for its sides, by their digests.
+    with the bodies the check had recorded for its sides, by their digests; 2026-11-27 (UTC),
+    the trend's first run, `main` at `056aba61c` against `v0.2.0`, read from its tag at
+    `d4a002f34` (`evidence/trend-2026-11-26`): `run.out`, `run.started`, `run.ended`,
+    `run.exit`, `run/row.md`, `run/plan.json` and each part's `results/report.json`, the
+    change's and the A/A's cycles, user and kernel, as recorded and with the labels swapped,
+    each K and the pilot it was sized from, and each side's aligned sections and second pads,
+    none in any part.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

@@ -247,10 +247,12 @@ browser smokes in three groups, one engine of the watchlist's smoke in each. The
 `rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
 supported Rust floor. A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
-The three example groups use the pinned Playwright image directly. A fourth group,
-`benchmark-checks`, runs the `npm-check` part, the marketplace browser oracle and the native
-workload group apparatus on its own runner. Only that group builds the Git-capable test-tools
-image. The apparatus runs as the checkout owner with fingerprint-checked Git and immutable-source checks.
+The three example groups use the pinned Playwright image directly. Two more groups run the
+benchmark checks beside them: `benchmark-checks` runs the `npm-check` part, and
+`benchmark-apparatus` runs the marketplace browser oracle and the native workload group
+apparatus, so neither waits for the other under its 30-minute bound. Only
+`benchmark-apparatus` builds the Git-capable test-tools image. The apparatus runs as the
+checkout owner with fingerprint-checked Git and immutable-source checks.
 
 Add new watchlist runtime checks to the matching area in [`scripts/smoke/`](scripts/smoke/),
 and new gallery checks to the matching widget or area in [`examples/ui-gallery/smoke/`](examples/ui-gallery/smoke/).
@@ -601,9 +603,10 @@ establish a general ranking.
       command then drafts an issue for whoever made the run, naming the pull requests merged
       since the row before when the run's head descends from that row's commit, and since the
       release otherwise, and opens nothing. A run that is not past it has not shown the cost
-      to be under +2%. No run has been made, so no reading sees what counted changes add up to
-      in cycles, and a release takes the kit's counts of its candidate against the last release
-      whenever no row reads that candidate
+      to be under +2%. A row reads the one commit of `main` it names against the release it
+      names (the first, of 2026-11-26, `056aba61c` against `v0.2.0`) and no change merged after
+      that commit, and a release takes the kit's counts of its candidate
+      against the last release whenever no row reads that candidate
       ([RELEASING.md](RELEASING.md#readiness-checkpoints) says which row does).
 
       A reading published under the rule as it stood before this paragraph was on `main` stays

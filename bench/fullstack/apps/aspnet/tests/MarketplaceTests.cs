@@ -21,8 +21,8 @@ public sealed class MarketplaceTests
             Environment.SetEnvironmentVariable("PROFILE", profile);
             using var app = new App(new Upstream());
             using var client = app.CreateClient();
-            using var page = await client.GetAsync("/catalog/record_1");
-            using var json = await client.GetAsync("/api/catalog/record_1");
+            using var page = await client.GetAsync("/catalog/record_1", TestContext.Current.CancellationToken);
+            using var json = await client.GetAsync("/api/catalog/record_1", TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.OK, page.StatusCode);
             Assert.Equal(HttpStatusCode.OK, json.StatusCode);
             Assert.Equal(expected, page.Headers.Contains("Content-Security-Policy"));
@@ -99,15 +99,15 @@ public sealed class MarketplaceTests
         var previousPath = Environment.GetEnvironmentVariable("MARKETPLACE_FIXTURE_PATH");
         try
         {
-            await File.WriteAllTextAsync(file, JsonSerializer.Serialize(new Dictionary<string, MarketplaceRecord> { ["item_1"] = Sample() }, MarketplaceSource.Json));
+            await File.WriteAllTextAsync(file, JsonSerializer.Serialize(new Dictionary<string, MarketplaceRecord> { ["item_1"] = Sample() }, MarketplaceSource.Json), TestContext.Current.CancellationToken);
             Environment.SetEnvironmentVariable("MARKETPLACE_SOURCE", "fixture");
             Environment.SetEnvironmentVariable("MARKETPLACE_FIXTURE_PATH", file);
             using var services = new ServiceCollection().AddHttpClient().BuildServiceProvider();
             var source = new MarketplaceSource(services.GetRequiredService<IHttpClientFactory>());
-            await File.WriteAllTextAsync(file, "{}");
-            Assert.Equal(Sample().Title, (await source.Get("item_1"))!.Title);
-            Assert.Equal(JsonSerializer.Serialize(Sample(), MarketplaceSource.Json), JsonSerializer.Serialize(await source.Get("item_1"), MarketplaceSource.Json));
-            Assert.Null(await source.Get("missing"));
+            await File.WriteAllTextAsync(file, "{}", TestContext.Current.CancellationToken);
+            Assert.Equal(Sample().Title, (await source.Get("item_1", cancellationToken: TestContext.Current.CancellationToken))!.Title);
+            Assert.Equal(JsonSerializer.Serialize(Sample(), MarketplaceSource.Json), JsonSerializer.Serialize(await source.Get("item_1", cancellationToken: TestContext.Current.CancellationToken), MarketplaceSource.Json));
+            Assert.Null(await source.Get("missing", cancellationToken: TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -149,11 +149,11 @@ public sealed class MarketplaceTests
             await source.Get("late", traceParent: parent);
         }
         var delayed = Delayed(a);
-        await source.Get("current", traceParent: b);
+        await source.Get("current", traceParent: b, cancellationToken: TestContext.Current.CancellationToken);
         start.SetResult();
         await delayed;
-        await source.Get("invalid", traceParent: "bad");
-        await source.Get("untraced");
+        await source.Get("invalid", traceParent: "bad", cancellationToken: TestContext.Current.CancellationToken);
+        await source.Get("untraced", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(new string?[] { b, a, null, null }, upstream.Parents.ToArray());
         Assert.Equal(4, upstream.Requests);
     }
@@ -234,7 +234,7 @@ public sealed class MarketplaceTests
             Assert.Equal(HttpStatusCode.BadRequest, await Post(edgeClient, edgeToken, edge, host: "unrecognized.invalid"));
             foreach (var client in new[] { edgeClient, directClient })
             {
-                using var rows = JsonDocument.Parse(await client.GetStringAsync("/api/alerts"));
+                using var rows = JsonDocument.Parse(await client.GetStringAsync("/api/alerts", TestContext.Current.CancellationToken));
                 Assert.Equal(1, rows.RootElement.GetArrayLength());
             }
         }
@@ -373,7 +373,7 @@ public sealed class MarketplaceTests
         var upstream = new Upstream();
         using var app = new App(upstream);
         using var client = app.CreateClient(new() { AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
-        var document = new HtmlParser().ParseDocument(await client.GetStringAsync("/marketplace/en-US/item_1"));
+        var document = new HtmlParser().ParseDocument(await client.GetStringAsync("/marketplace/en-US/item_1", TestContext.Current.CancellationToken));
         var token = document.QuerySelector("input[name=__RequestVerificationToken]")!.GetAttribute("value")!;
         Task<HttpResponseMessage> Post() => client.PostAsync("/marketplace/en-US/item_1", new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -381,7 +381,7 @@ public sealed class MarketplaceTests
         }));
         using var accepted = await Post();
         Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
-        var before = await client.GetStringAsync("/api/alerts");
+        var before = await client.GetStringAsync("/api/alerts", TestContext.Current.CancellationToken);
         Assert.Equal(1, JsonDocument.Parse(before).RootElement.GetArrayLength());
         foreach (var broken in new[]
         {
@@ -399,7 +399,7 @@ public sealed class MarketplaceTests
             }
             // The default profile has no page exception handler; TestServer propagates it.
             catch (NullReferenceException) { }
-            Assert.Equal(before, await client.GetStringAsync("/api/alerts"));
+            Assert.Equal(before, await client.GetStringAsync("/api/alerts", TestContext.Current.CancellationToken));
         }
         upstream.Record = Sample();
         upstream.Status = HttpStatusCode.ServiceUnavailable;
@@ -409,11 +409,11 @@ public sealed class MarketplaceTests
             Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
         }
         catch (HttpRequestException) { }
-        Assert.Equal(before, await client.GetStringAsync("/api/alerts"));
+        Assert.Equal(before, await client.GetStringAsync("/api/alerts", TestContext.Current.CancellationToken));
         upstream.Status = HttpStatusCode.OK;
         using var recovered = await Post();
         Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
-        Assert.Equal(2, JsonDocument.Parse(await client.GetStringAsync("/api/alerts")).RootElement.GetArrayLength());
+        Assert.Equal(2, JsonDocument.Parse(await client.GetStringAsync("/api/alerts", TestContext.Current.CancellationToken)).RootElement.GetArrayLength());
     }
 
     [Theory]
@@ -424,24 +424,24 @@ public sealed class MarketplaceTests
         var upstream = new Upstream();
         using var app = new App(upstream);
         using var client = app.CreateClient(new() { AllowAutoRedirect = false });
-        using var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, path));
+        using var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, path), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, head.StatusCode);
         Assert.Equal("application/json", head.Content.Headers.ContentType?.MediaType);
-        using var wrongMethod = await client.PostAsync(path, new StringContent(""));
+        using var wrongMethod = await client.PostAsync(path, new StringContent(""), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.MethodNotAllowed, wrongMethod.StatusCode);
         Assert.Contains("HEAD", wrongMethod.Content.Headers.Allow);
         Assert.Equal("application/problem+json", wrongMethod.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(405, JsonDocument.Parse(await wrongMethod.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(405, JsonDocument.Parse(await wrongMethod.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("status").GetInt32());
         upstream.Status = HttpStatusCode.NotFound;
-        using var missing = await client.GetAsync(path);
+        using var missing = await client.GetAsync(path, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         Assert.Equal("application/problem+json", missing.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(404, JsonDocument.Parse(await missing.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(404, JsonDocument.Parse(await missing.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("status").GetInt32());
         upstream.Status = HttpStatusCode.ServiceUnavailable;
-        using var failed = await client.GetAsync(path);
+        using var failed = await client.GetAsync(path, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
         Assert.Equal("application/problem+json", failed.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(500, JsonDocument.Parse(await failed.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(500, JsonDocument.Parse(await failed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("status").GetInt32());
     }
 
     [Theory]
@@ -457,11 +457,11 @@ public sealed class MarketplaceTests
         using var client = app.CreateClient(new() { AllowAutoRedirect = false });
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Accept.ParseAdd(accept);
-        using var response = await client.SendAsync(request);
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(mediaType, response.Content.Headers.ContentType?.MediaType);
         if (mediaType == "application/problem+json")
-            Assert.Equal(404, JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("status").GetInt32());
+            Assert.Equal(404, JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("status").GetInt32());
     }
 
     [Fact]
@@ -471,7 +471,7 @@ public sealed class MarketplaceTests
         using var app = new App(upstream);
         using var client = app.CreateClient(new() { AllowAutoRedirect = false });
         var parser = new HtmlParser();
-        var html = await client.GetStringAsync("/marketplace/fr-FR/item_1");
+        var html = await client.GetStringAsync("/marketplace/fr-FR/item_1", TestContext.Current.CancellationToken);
         var doc = parser.ParseDocument(html);
         Assert.Equal("fr-FR", doc.DocumentElement.GetAttribute("lang"));
         Assert.Equal("<script> & Title", doc.QuerySelector("article h1")!.TextContent);
@@ -484,24 +484,24 @@ public sealed class MarketplaceTests
         using var response = await client.PostAsync(form.GetAttribute("action"), new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["__RequestVerificationToken"] = token, ["email"] = "a@b", ["target_price"] = "1234,50"
-        }));
+        }), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var post = parser.ParseDocument(await response.Content.ReadAsStringAsync());
+        var post = parser.ParseDocument(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Contains("1 234,50 $US", Spaces(post.QuerySelector(".marketplace__message")!.TextContent));
         Assert.Equal(2, upstream.Requests);
-        using var rejected = await client.PostAsync("/marketplace/fr-FR/item_1", new FormUrlEncodedContent(new Dictionary<string, string>()));
+        using var rejected = await client.PostAsync("/marketplace/fr-FR/item_1", new FormUrlEncodedContent(new Dictionary<string, string>()), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
         upstream.Record = Sample() with { Title = "Fresh title" };
-        var json = await client.GetStringAsync("/api/marketplace/item_1");
+        var json = await client.GetStringAsync("/api/marketplace/item_1", TestContext.Current.CancellationToken);
         Assert.Equal("Fresh title", JsonDocument.Parse(json).RootElement.GetProperty("title").GetString());
         Assert.Contains("\"price_minor\":null", json);
         Assert.Contains("\"lowest_minor\":-123450", json);
         Assert.Equal(3, upstream.Requests);
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/marketplace/es-ES/item_1")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/marketplace/es-ES/item_1", TestContext.Current.CancellationToken)).StatusCode);
         upstream.Status = HttpStatusCode.NotFound;
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/marketplace/en-US/missing")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/marketplace/missing")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/marketplace/en-US/missing", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/marketplace/missing", TestContext.Current.CancellationToken)).StatusCode);
         upstream.Status = HttpStatusCode.ServiceUnavailable;
-        Assert.Equal(HttpStatusCode.InternalServerError, (await client.GetAsync("/api/marketplace/item_1")).StatusCode);
+        Assert.Equal(HttpStatusCode.InternalServerError, (await client.GetAsync("/api/marketplace/item_1", TestContext.Current.CancellationToken)).StatusCode);
     }
 }
