@@ -120,6 +120,13 @@ pub mod url {
         pub name: &'a str,
     }
 
+    /// A nav whose entry is also current at an older address with characters HTML escapes in an
+    /// attribute (`NavTo::also`, #2119).
+    #[route("/smoke/amp/{name}", get = amp_page)]
+    pub struct AmpPage<'a> {
+        pub name: &'a str,
+    }
+
     /// A nav whose entry names an older address holding a raw NUL, which is not a usable address,
     /// and the same address with the NUL escaped, which is (`NavTo::also`, #2119).
     #[route("/smoke/nul/{name}", get = nul_page)]
@@ -196,6 +203,21 @@ async fn nul_page(req: Req, Params(_): Params<url::NulPage<'_>>) -> HtmlResult {
         req.nav_of([(corten::NavTo::section(&section), "Nul"), (corten::NavTo::page(&here).also(&raw).also(&escaped), "Here")]);
     req.page(html! {
         <Layout req={&req} title="Nav nul" viewer={None} head="">
+            <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
+        </Layout>
+    })
+}
+
+/// The amp nav: the section `/smoke/amp` and Here, also current at `/smoke/amp/a&copy;`, which the
+/// browser keeps in a path as written and the server must escape in `data-nav-also`: unescaped, the
+/// HTML parser would read `&copy;` as the copyright sign and the runtime would compare another address.
+async fn amp_page(req: Req, Params(_): Params<url::AmpPage<'_>>) -> HtmlResult {
+    let section = corten::Local::parse("/smoke/amp").expect("a local path");
+    let older = corten::Local::parse("/smoke/amp/a&copy;").expect("a local path");
+    let here = url::AmpPage { name: "here" };
+    let nav = req.nav_of([(corten::NavTo::section(&section), "Amp"), (corten::NavTo::page(&here).also(&older), "Here")]);
+    req.page(html! {
+        <Layout req={&req} title="Nav amp" viewer={None} head="">
             <nav>for (link, label) in nav.links() { <a {..link}>{*label}</a> }</nav>
         </Layout>
     })

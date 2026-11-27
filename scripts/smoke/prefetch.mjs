@@ -605,6 +605,71 @@ export async function navFar(browser, swaps) {
 }
 
 /**
+ * `NavTo::also` at an older address with a character HTML escapes, `/smoke/amp/a&copy;`, which the
+ * browser keeps in a path as written. The parsed `data-nav-also` holds that address literally (an
+ * unescaped `&copy;` would parse as the copyright sign), the group says the nav has other addresses, and the
+ * entry is current there: in the server's answer to the browser's own request, in that page once the
+ * runtime has ranked its links, and, on copies of the links it never saw marked, after a client
+ * navigation.
+ */
+export async function navAmp(browser, swaps) {
+  const name = "a nav entry is current at an older address with a character HTML escapes, by the server and the runtime alike";
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const older = "/smoke/amp/a&copy;";
+  /** The aria-current of the nav's section and entry links in the server's answer. */
+  const marks = (/** @type {string} */ html) =>
+    ["Amp", "Here"].map((label) => (new RegExp(`<a [^>]*aria-current="page"[^>]*>${label}</a>`).test(html) ? "page" : "-")).join(" ");
+  /** @type {string[]} */
+  const seen = [];
+  await page.goto(`${base}/smoke/amp/here`);
+  const parsed = await page.evaluate(() => {
+    const link = document.querySelector('main a[href="/smoke/amp/here"]');
+    return { group: link?.getAttribute("data-nav-group"), also: link?.getAttribute("data-nav-also") };
+  });
+  if (!/^[0-9a-f]{8}\+$/.test(parsed.group ?? "") || parsed.also !== older) seen.push(`parsed group "${parsed.group}" and paths ${JSON.stringify(parsed.also)}`);
+  const response = await page.goto(new URL(older, base).href);
+  const at = await page.evaluate(() => location.pathname);
+  if (at !== older) seen.push(`the browser shows ${older} as ${at}`);
+  const served = response ? marks(await response.text()) : "no answer";
+  if (response?.status() !== 200 || served !== "- page") seen.push(`server at the browser's request for ${older} (${response?.url()}): ${response?.status()} ${served}`);
+  // The runtime ranks the links again once the page has loaded, by the parsed attribute.
+  const loaded = await page.evaluate(() => Array.from(document.querySelectorAll("main a[data-nav-group]")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
+  if (loaded !== "- page") seen.push(`page loaded at ${older}: ${loaded}`);
+  if (!swaps) {
+    check(name, seen.length === 0, seen.join("; ") || "server only: without swaps a client navigation loads the page in full");
+    skip(`${name} (runtime)`, "without the Navigation API the browser loads that page in full");
+    await context.close();
+    return;
+  }
+  await page.goto(`${base}/smoke/amp/here`);
+  // Unmarked copies of the nav's links in the shell, which a client navigation keeps, and a plain
+  // link to the older address, as a stored link carries it.
+  await page.evaluate((older) => {
+    const nav = document.createElement("nav");
+    nav.id = "amp-copy";
+    for (const link of Array.from(document.querySelectorAll("main a[data-nav-group]"))) {
+      const copy = /** @type {Element} */ (link.cloneNode(true));
+      copy.removeAttribute("aria-current");
+      nav.append(copy);
+    }
+    const to = document.createElement("a");
+    to.id = "amp-older";
+    to.setAttribute("href", older);
+    to.textContent = "Older";
+    document.querySelector("header")?.append(nav, to);
+  }, older);
+  const before = await page.evaluate(() => location.pathname);
+  await page.click("#amp-older");
+  await page.waitForFunction((before) => location.pathname !== before && document.title.startsWith("Nav amp"), before);
+  await page.waitForFunction(() => !!document.querySelector("#amp-copy a[aria-current]"), null, { timeout: 5000 }).catch(() => {});
+  const copies = await page.evaluate(() => Array.from(document.querySelectorAll("#amp-copy a")).map((link) => link.getAttribute("aria-current") ?? "-").join(" "));
+  if (copies !== "- page") seen.push(`runtime at ${await page.evaluate(() => location.pathname)}: ${copies}`);
+  check(name, seen.length === 0, seen.join("; ") || `server and runtime marked the entry at ${older}, whose address the link carries as written`);
+  await context.close();
+}
+
+/**
  * `NavTo::also` naming an older address that holds a raw NUL, `/smoke/nul/raw<NUL>x`, which is not
  * a usable address: Chromium and WebKit ask for it as `/smoke/nul/raw%00x` and Firefox cuts it at
  * the NUL and asks for `/smoke/nul/raw`. The server leaves it out of `data-nav-also` and never

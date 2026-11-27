@@ -712,8 +712,7 @@ impl Also {
             paths.push_str(group);
             paths.push_str(r#"+" data-nav-also=""#);
             if crate::ascii::any(&paths.as_bytes()[start..*end], crate::ascii::html) {
-                let these = paths[start..*end].to_owned();
-                crate::view::escape_into(&these, paths);
+                crate::view::escape_from_within(paths, start..*end);
             } else {
                 paths.extend_from_within(start..*end);
             }

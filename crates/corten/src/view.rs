@@ -1937,6 +1937,19 @@ fn escape_each(text: &str, out: &mut String) {
     out.push_str(&text[start..]);
 }
 
+/// Appends `out[range]` to `out`, escaped as [`escape_into`] writes it, copying from within
+/// `out` rather than through a string of its own.
+pub(crate) fn escape_from_within(out: &mut String, range: std::ops::Range<usize>) {
+    let mut start = range.start;
+    while let Some(i) = next_escaped(&out.as_bytes()[..range.end], start) {
+        let entity = ENTITIES[ESCAPES[out.as_bytes()[i] as usize] as usize - 1];
+        out.extend_from_within(start..i);
+        out.push_str(entity);
+        start = i + 1;
+    }
+    out.extend_from_within(start..range.end);
+}
+
 /// The index of the first byte from `from` on that `escape_into` replaces. Most text has none, so
 /// it skips eight bytes at a time while none of them is one, and finds it in those eight with the
 /// table.

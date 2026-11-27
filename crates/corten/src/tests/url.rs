@@ -331,6 +331,20 @@ fn a_nav_entry_is_current_at_the_other_addresses_of_its_page() {
     assert!(links[1].ends_with(r#" data-nav-also="/old/caf%C3%A9/menu%7C" aria-current="page""#), "{links:?}");
     let under = written("/old/caf%C3%A9/menu%7C/more", vec![NavTo::section(&Settings).also(&Cafe)]);
     assert!(under[0].ends_with(r#" aria-current="page""#), "a section under it too: {under:?}");
+
+    // One whose path holds characters HTML escapes (`&`, `'`), which the browser keeps in a path,
+    // is escaped in the attribute, the entry's other addresses beside it and another entry's before
+    // it written as they are.
+    let amp = Local::parse("/old/a&copy;'b").unwrap();
+    let links = written(
+        "/old/a&copy;'b",
+        vec![NavTo::section(&Desk).also(&OldDesk), NavTo::page(&Settings).also(&amp).also(&Governance)],
+    );
+    assert!(links[0].contains(r#" data-nav-also="/seller-desk""#), "{links:?}");
+    assert!(
+        links[1].ends_with(r#" data-nav-also="/old/a&amp;copy;&#39;b /catalog/integrations/governance" aria-current="page""#),
+        "{links:?}"
+    );
 }
 
 /// The other addresses name the group by each entry's whole boundaries: two navs of the same text
@@ -614,7 +628,7 @@ fn a_nav_link_is_no_larger_than_before_other_addresses() {
 
 /// An entry is as deep as the deepest of its addresses that holds the page, not as its own URL: an
 /// other address deeper than the entry's URL wins over an entry whose URL is between the two, and
-/// one shallower does not make it deeper (#2119).
+/// one shallower, holding the page or not, leaves it as deep as its URL (#2119).
 #[test]
 fn a_nav_entry_is_as_deep_as_the_address_that_holds_the_page() {
     use crate::{
@@ -651,7 +665,16 @@ fn a_nav_entry_is_as_deep_as_the_address_that_holds_the_page() {
         marked(path, [(NavTo::section(&catalog).also(&legacy), "Catalog"), (NavTo::section(&integrations), "Integrations")]),
         ["Integrations"]
     );
-    // A shallower other address (`/c`, 2) does not make the entry deeper than its own URL.
+    // A shallower other address that holds the page too (`/catalog`, 8) does not make the entry
+    // shallower than its own URL (`/catalog/integrations/legacy`, 28), which still wins over the
+    // entry between the two (`/catalog/integrations`, 21), in either order.
+    for path in ["/catalog/integrations/legacy", "/catalog/integrations/legacy/x"] {
+        let legacy = || (NavTo::section(&legacy).also(&catalog), "Legacy");
+        let integrations = || (NavTo::section(&integrations), "Integrations");
+        assert_eq!(marked(path, [legacy(), integrations()]), ["Legacy"], "{path}");
+        assert_eq!(marked(path, [integrations(), legacy()]), ["Legacy"], "{path}");
+    }
+    // Nor does one that does not hold the page (`/c`, 2).
     assert_eq!(
         marked(path, [(NavTo::section(&catalog).also(&old), "Catalog"), (NavTo::section(&integrations), "Integrations")]),
         ["Integrations"]
