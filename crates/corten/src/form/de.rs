@@ -81,26 +81,86 @@ pub(crate) fn from_pairs<T: de::DeserializeOwned>(mut pairs: Vec<Pair<'_>>) -> R
 /// A query string's pairs sorted by key (the values of one key in the order sent), for
 /// [`field`] and [`prefixed`]: what `Params` reads a route's query parameters from.
 pub fn sorted_pairs(query: &str) -> Vec<Pair<'_>> {
-    // A query with no `%` and no `+` has nothing to decode, and a `&str` is UTF-8 already, so all
-    // that is left of `form_urlencoded::parse` is its splitting: fields at `&`, empty ones
-    // skipped, key and value at the first `=`. That is done here without the decoder's passes
-    // over each key and value (the links an app writes itself, `?a=1&b=2`, are such queries).
-    // Both characters are ASCII, so no byte of another character is taken for one. A query that
-    // has one pays for the look up to it and is then decoded as before.
-    let mut pairs: Vec<Pair<'_>> = if query.bytes().any(|b| b == b'%' || b == b'+') {
-        form_urlencoded::parse(query.as_bytes()).collect()
-    } else {
-        query
-            .split('&')
-            .filter(|field| !field.is_empty())
-            .map(|field| {
-                let (key, value) = field.split_once('=').unwrap_or((field, ""));
-                (Cow::Borrowed(key), Cow::Borrowed(value))
-            })
-            .collect()
-    };
+    // What `form_urlencoded::parse` reads, in one walk over the bytes: fields at `&`, empty ones
+    // skipped, key and value at the first `=`, a field with no `=` a key with an empty value. The
+    // walk that finds a key's or a value's end also sees whether it has a `+` or a `%`, so one
+    // with neither is borrowed as it is (a `&str` is UTF-8 already), which is every key and value
+    // of a link an app writes itself (`?a=1&b=2`), and only one that has either is decoded.
+    let bytes = query.as_bytes();
+    // The empty fields a query begins with are passed first, so what is left has a pair in it or
+    // is nothing: an empty query, or one of `&` alone, takes no memory, and any other takes room
+    // for four pairs at once, as collecting the decoder's took with its first.
+    let mut at = 0;
+    while bytes.get(at) == Some(&b'&') {
+        at += 1;
+    }
+    if at == bytes.len() {
+        return Vec::new();
+    }
+    let mut pairs: Vec<Pair<'_>> = Vec::with_capacity(4);
+    while at < bytes.len() {
+        let start = at;
+        let key = half(query, &mut at, true);
+        let value = if bytes.get(at) == Some(&b'=') {
+            at += 1;
+            half(query, &mut at, false)
+        } else {
+            Cow::Borrowed("")
+        };
+        // A field with nothing in it is no pair; `=` alone is one, of an empty key and value.
+        if at > start {
+            pairs.push((key, value));
+        }
+        at += 1;
+    }
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     pairs
+}
+
+/// The key (`key`) or the value of a query's field that starts at `at`, which is left at its
+/// end: the next `&`, for a key the next `=` if that comes first, or the query's end. Those and
+/// the two characters looked for are ASCII, so no byte of another character is taken for one
+/// and the text between them is whole characters.
+#[inline(always)]
+fn half<'a>(query: &'a str, at: &mut usize, key: bool) -> Cow<'a, str> {
+    let (start, mut plus, mut percent) = (*at, false, false);
+    while let Some(&byte) = query.as_bytes().get(*at) {
+        if byte == b'&' || (key && byte == b'=') {
+            break;
+        }
+        plus |= byte == b'+';
+        percent |= byte == b'%';
+        *at += 1;
+    }
+    let text = &query[start..*at];
+    if plus || percent {
+        unescaped(text, plus, percent)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// A key or a value with a `+` (`plus`) or a `%` (`percent`) in it, read as `form_urlencoded`
+/// reads one (it offers that for a whole query only): each `+` a space, then percent-decoded
+/// with the function it uses, then as UTF-8 with what is not UTF-8 replaced. Out of line, so the
+/// walk stays small for the queries with nothing to decode.
+#[inline(never)]
+fn unescaped(text: &str, plus: bool, percent: bool) -> Cow<'_, str> {
+    let spaced: Cow<'_, [u8]> = if plus {
+        Cow::Owned(text.bytes().map(|byte| if byte == b'+' { b' ' } else { byte }).collect())
+    } else {
+        Cow::Borrowed(text.as_bytes())
+    };
+    // Borrowed when no `%` is followed by two hex digits (`%`, `%zz`), which stay as written.
+    let decoded = if percent { Cow::from(percent_encoding::percent_decode(&spaced)) } else { Cow::Borrowed(&[][..]) };
+    let bytes = match decoded {
+        Cow::Owned(decoded) => decoded,
+        Cow::Borrowed(_) => match spaced {
+            Cow::Borrowed(_) => return Cow::Borrowed(text),
+            Cow::Owned(spaced) => spaced,
+        },
+    };
+    Cow::Owned(String::from_utf8(bytes).unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()))
 }
 
 /// One field of a route's query, by its key, from [`sorted_pairs`]. A key that is missing is
@@ -896,10 +956,19 @@ mod tests {
     #[test]
     fn a_query_reads_as_the_form_decoder_reads_it() {
         // Every key with every value, plain and escaped, among empty fields, a field with no `=`,
-        // one with no key and the key again.
-        for key in ["", "a", "猫", "%61", "+", "%ff", "%", "=", ";", "a;b"] {
-            for value in ["", "b", "é", "%26", "+", "=z", "%f0%9f", "c;d", "x=y=z"] {
+        // one with no key and the key again. So an escape is in a key alone, in a value alone, in
+        // both and in neither, and what is not quite one (`%`, `%f`, `%zz`), bytes that are not
+        // UTF-8 (`%ff`) and a `+` beside a character of several bytes are in each.
+        let keys =
+            ["", "a", "猫", "%61", "+", "%ff", "%", "=", ";", "a;b", "%f", "%zz", "猫+é", "a%2", "+%2B+", "é%C3%A9+", "%+"];
+        let values =
+            ["", "b", "é", "%26", "+", "=z", "%f0%9f", "c;d", "x=y=z", "%", "%f", "%zz", "%ff", "é+猫", "%3D+=%2B", "a%", "+%"];
+        for key in keys {
+            for value in values {
                 let query = format!("&&{key}={value}&z&{key}&=v&{key}=last&&");
+                assert_eq!(sorted_pairs(&query), decoded(&query), "{query}");
+                // And with the value as the key and the key as a value after a plain one.
+                let query = format!("{value}&first=1&k={key}&last={value}");
                 assert_eq!(sorted_pairs(&query), decoded(&query), "{query}");
             }
         }
@@ -939,7 +1008,7 @@ mod tests {
 
     #[test]
     fn an_escaped_query_is_decoded_wherever_the_escape_is() {
-        let cases: [(&str, &[(&str, &str)]); 14] = [
+        let cases: [(&str, &[(&str, &str)]); 27] = [
             // In a key, in a value, and in a field after ones that have none.
             ("a%20b=1", &[("a b", "1")]),
             ("a+b=1", &[("a b", "1")]),
@@ -949,14 +1018,32 @@ mod tests {
             ("a=1&b=2&c=x+y", &[("a", "1"), ("b", "2"), ("c", "x y")]),
             ("a=1&b=2&c%3Dd=3", &[("a", "1"), ("b", "2"), ("c=d", "3")]),
             ("a=1&b=2&c+d", &[("a", "1"), ("b", "2"), ("c d", "")]),
+            // In a key alone and in a value alone: the other is as written, whatever the first has.
+            ("a+b=c%d", &[("a b", "c%d")]),
+            ("a%20b=c%d", &[("a b", "c%d")]),
+            ("a%b=c+d", &[("a%b", "c d")]),
+            ("a%b=c%20d", &[("a%b", "c d")]),
+            // In one field of several, its neighbours as written.
+            ("a=1&b+c=2&d=3", &[("a", "1"), ("b c", "2"), ("d", "3")]),
+            ("a=1&b=%32&c=3&d=4", &[("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")]),
+            ("q=first+edition&page=2", &[("page", "2"), ("q", "first edition")]),
             // Sorted by the key as decoded, not as written.
             ("b=1&%61=2", &[("a", "2"), ("b", "1")]),
-            // An escaped `+` is a `+`, and an escaped separator is no separator.
+            ("b=1&+=2&a=3", &[(" ", "2"), ("a", "3"), ("b", "1")]),
+            // An escaped `+` is a `+` beside one that is a space, and an escaped separator is no
+            // separator.
             ("a=1%2B2&b=%3D%26", &[("a", "1+2"), ("b", "=&")]),
+            ("a=1%2B2+3&%2B+=4", &[("+ ", "4"), ("a", "1+2 3")]),
             ("%E7%8C%AB=%C3%A9", &[("猫", "é")]),
-            // What is no escape stays as written, and bytes that are not UTF-8 are replaced.
+            // A `+` beside a character of several bytes, written out and escaped.
+            ("猫+é=+ü+", &[("猫 é", " ü ")]),
+            ("%E7%8C%AB+é=ü+%C3%A9", &[("猫 é", "ü é")]),
+            // What is no escape stays as written, also beside one, and bytes that are not UTF-8 are
+            // replaced, the start of a character that does not end by one mark.
             ("a=%&b=%zz&c=%4", &[("a", "%"), ("b", "%zz"), ("c", "%4")]),
+            ("%=%f&%zz=%%&%f+=+%zz%41%", &[("%", "%f"), ("%f ", " %zzA%"), ("%zz", "%%")]),
             ("a=%ff", &[("a", "\u{fffd}")]),
+            ("%ff+=x%ffy+%C3&b=%e7%8c", &[("b", "\u{fffd}"), ("\u{fffd} ", "x\u{fffd}y \u{fffd}")]),
             ("a=1&+", &[(" ", ""), ("a", "1")]),
         ];
         for (query, read) in cases {
@@ -966,20 +1053,32 @@ mod tests {
     }
 
     #[test]
-    fn an_escape_at_any_place_in_a_query_keeps_it_from_the_direct_split() {
-        // Every kind of field. A search for an escape that took a query in blocks could miss one
-        // by where it lies in a block or in what is left over, so a query of each length up to
-        // this one's is read with the escape at each of its places.
+    fn an_escape_at_any_place_in_a_query_is_decoded() {
+        // Every kind of field. The walk that finds where a key or a value ends is the one that
+        // sees its escape, so an escape could be missed by where it lies in one: first, last,
+        // next to the `=` or the `&`, in a field with no `=`, at the query's end. A query of each
+        // length up to this one's is read with the escape at each of its places.
         let whole = "alpha=one&beta=two&&gamma&=delta&epsilon=猫=é;x&".repeat(2);
         assert!(whole.len() > 96 && !whole.contains(['%', '+']));
         let places = |text: &str| (0..=text.len()).filter(|&at| text.is_char_boundary(at)).collect::<Vec<_>>();
         for plain in places(&whole).into_iter().map(|end| &whole[..end]) {
             for at in places(plain) {
-                for escape in ["+", "%2B", "%41"] {
+                for escape in ["+", "%2B", "%41", "+%20"] {
                     let query = format!("{}{escape}{}", &plain[..at], &plain[at..]);
                     let read = sorted_pairs(&query);
-                    // Split directly, the escape would be in a key or a value as it was written.
+                    // Not decoded, the escape would be in a key or a value as it was written.
                     assert!(read.iter().all(|(key, value)| !key.contains(escape) && !value.contains(escape)), "{query}");
+                    assert_eq!(read, decoded(&query), "{query}");
+                }
+                // What is no escape is in the one it was written in, as written.
+                for not_one in ["%", "%z", "%4"] {
+                    let query = format!("{}{not_one}{}", &plain[..at], &plain[at..]);
+                    let read = sorted_pairs(&query);
+                    // Before a hex digit of the query's own, `%4` is an escape after all.
+                    if !plain[at..].starts_with(|next: char| next.is_ascii_hexdigit()) || not_one == "%z" {
+                        let written = read.iter().filter(|(key, value)| key.contains(not_one) || value.contains(not_one));
+                        assert_eq!(written.count(), 1, "{query}");
+                    }
                     assert_eq!(read, decoded(&query), "{query}");
                 }
             }
@@ -1096,8 +1195,8 @@ mod tests {
 
     /// What reading a route's query into its sorted pairs costs, for callgrind, counted as
     /// [`what_reading_a_form_costs`] is: `QUERY_READS` (200) reads of `QUERY`, which is `a=1&b=2`
-    /// unless set. A query with an escape (`q=a+b&page=2`) is searched for one before the decoder
-    /// reads it, which no case of `bench/request-cost` sends.
+    /// unless set. A key or a value with a `+` or a `%` in it (`q=a+b&page=2`) is decoded, which no
+    /// case of `bench/request-cost` sends, so this is where that is counted.
     #[test]
     #[ignore]
     fn what_reading_a_query_costs() {
