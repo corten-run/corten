@@ -616,8 +616,9 @@ async function again() {
   const gets = new Map();
   for (const r of inflight.keys()) {
     if (r.method() !== "GET" || r.resourceType() === "eventsource" || gets.has(r.url())) continue;
-    // Headers fetch refuses to send, and ones the connection sets for itself.
-    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([name]) => !/^(host|connection|keep-alive|transfer-encoding|upgrade|expect|content-length)$/i.test(name)));
+    // Headers fetch refuses to send, ones the connection sets for itself, and the smoke's own marks
+    // on a request (`smoke-note`, `smoke-control`), which its routes take off or answer themselves.
+    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([name]) => !/^(host|connection|keep-alive|transfer-encoding|upgrade|expect|content-length|smoke-note|smoke-control)$/i.test(name)));
     gets.set(r.url(), headers);
   }
   return Promise.all(

@@ -1401,8 +1401,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
       const noted = Number(request.headers()["smoke-note"] ?? NaN);
       if (read) wholeReads.push({ address, navigation, load: placeLoad > 0, saved: null, note: Number.isInteger(noted) && noted > 0 ? noted : null });
       // Each step within 5 s, and no answer sent once the cases are over (`exchange`): one that fails
-      // or runs out aborts the request and fails the check it belongs to (`wholeAnswerFaults`).
-      const ex = exchange(route, `the whole-read route's answer to ${request.method()} ${address}${mode ? ` (corten: ${mode})` : ""}`, () => wholeOver);
+      // or runs out aborts the request and fails the check it belongs to (`wholeAnswerFaults`). One
+      // the cases ended for is let through without the replaced-address case's mark (`smoke-note`),
+      // as its fetch below is sent.
+      const unmarked = () => {
+        const headers = { ...request.headers() };
+        delete headers["smoke-note"];
+        return route.fallback({ headers });
+      };
+      const ex = exchange(route, `the whole-read route's answer to ${request.method()} ${address}${mode ? ` (corten: ${mode})` : ""}`, () => wholeOver, unmarked);
       // A load or read of the full-load case's receipt: its place among them (`fullReads`), marked on
       // its answer's status line (`data-smoke-full`), else -1.
       const full = fullTarget !== null && address === fullTarget ? fullReads.push(request) - 1 : -1;
@@ -1854,8 +1861,10 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           controlSent = await readWithin(
             "the replaced-address control's requests",
             page.evaluate(async () => {
-              const bare = await fetch("/alerts", { headers: { "smoke-control": "bare" } });
-              const action = await fetch("/alerts?saved=smoke-control", { headers: { "smoke-control": "action", corten: "action" } });
+              // One signal for both, which the cleanup aborts before it removes the control's route.
+              const { signal } = (/** @type {any} */ (window).__smokeControlStop ??= new AbortController());
+              const bare = await fetch("/alerts", { headers: { "smoke-control": "bare" }, signal });
+              const action = await fetch("/alerts?saved=smoke-control", { headers: { "smoke-control": "action", corten: "action" }, signal });
               return [bare.status, action.status];
             }),
           ).catch(() => null);
@@ -1863,7 +1872,15 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
           placeLoads = null;
           pollTarget = null;
           await cleanUp(
-            () => within(5000, "the replaced-address control's route was not removed within 5 s", page.unroute(controlReads, controlRoute)),
+            // The control's requests are aborted in the page first (one not yet sent is refused unsent),
+            // and its route removed only once that is confirmed, so neither can reach the server; one
+            // not confirmed leaves the route in place, answering them itself.
+            () =>
+              within(
+                5000,
+                "the replaced-address control's requests were not aborted within 5 s",
+                page.evaluate(() => (/** @type {any} */ (window).__smokeControlStop ??= new AbortController()).abort()),
+              ).then(() => within(5000, "the replaced-address control's route was not removed within 5 s", page.unroute(controlReads, controlRoute))),
             () => within(5000, "the replaced-address case's notes were not removed within 5 s", noting.then((s) => s.dispose())),
             () =>
               within(
