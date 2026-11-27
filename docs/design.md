@@ -2700,7 +2700,28 @@ rules something out.
     through the stages. Neither fails when the pass is never taken, since what is sent is the
     same: the counts in [the app guide](guide/app.md#the-request-path) show that it is. An
     answer the pass does not take pays the test that tells it apart (a page and a 404 page 6
-    to 27 instructions, Stands on). `unstaged` is no stage at all, which
+    to 27 instructions, Stands on). The stage after the pass reads that it was taken: an
+    answer given its scope's lines brought its `Content-Type` at most, so its tag
+    ([Limit 21](#limit-etag)) is made without a search of its lines for one that leaves it
+    untagged and without a walk over them for the ones a tag is made from, where the scope's
+    lines say that none of them does either. They say it of themselves as they are made
+    (`security::Lines`, which nothing else makes), by the two tests `cache::tag` makes of any
+    other answer's lines, so no one has to remember it when a line is added: a scope whose
+    lines came to hold such a line has its answers searched as before. The tag is the same
+    bytes either way, since the one line of such an answer that is part of a tag is its type,
+    hashed as the walk hashes it. Two more tests hold that:
+    `an_answer_given_its_scope_s_lines_in_one_pass_is_tagged_as_one_whose_lines_are_searched`
+    tags every answer the pass takes, under each policy and with each scope's lines (the app's,
+    which Corten's own routes share, an area's, an API's, an API's in the area), searched and
+    not, and beside the same answer given each line by the stages, asked without a tag, with
+    its tag and with another, and asserts that every scope's lines are ones that need no
+    search, so a line that changes that fails it rather than only raising a count;
+    `a_scope_line_that_leaves_an_answer_untagged_or_is_part_of_its_tag_has_its_answers_searched`
+    gives a scope's lines one more (a `corten-` line, a type, a tag, an encoding, a range, a
+    `Cache-Control` that says `no-store` or `immutable`) and asserts that its answers are
+    then the ones the search gives, and not what leaving the search out would give. The
+    second of the pass's own two tests compares the tags through the router too.
+    `unstaged` is no stage at all, which
     listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
     without, the same for every unstaged route ([Choice 25](#choice-axum-router), step 2).
     Nor the stages rewritten as combinators, measured
@@ -3183,7 +3204,20 @@ rules something out.
     process with `crates/corten/tests/router_cost.rs`, three runs each: text from a route with
     a parameter 10,694 to 10,244, text under an API 8,207 to 7,895, text answering a `POST`
     11,075 to 10,625, and the 404 page, which does not take it, 15,322 to 15,343; with glibc
-    12,207 to 11,716, 9,518 to 9,155, 12,682 to 12,235 and 17,078 to 17,105); value
+    12,207 to 11,716, 9,518 to 9,155, 12,682 to 12,235 and 17,078 to 17,105); measured
+    (the tag of an answer that took the pass, made without a search of its lines,
+    `bench/request-cost` at `3e3b6d1b7` against main `e87ad02da`, instructions a request, the
+    median of three counts, valgrind 3.24.0 and rustc 1.100.0: `text-browser`, the kit's one
+    case that takes the pass and is tagged, 25,840 to 25,275, 565 fewer; the staged cases that
+    take the pass and are not tagged one more, which carries that the pass was taken to the
+    stage after it, twice two more at a median (`get` 18,352 to 18,354, `post` 22,834 to
+    22,835, `text` 17,193 to 17,194, `get-browser` 23,892 to 23,893); `page`, which takes
+    neither, 33,214 to 33,215 and `page-browser`, tagged after a search as before, 211,828 to
+    211,836; no unstaged case moved; allocations a request the same in all 19 cases and idle
+    memory no higher. With the search a function the stage calls rather than in line in it,
+    `page-browser` counted 59 more than that, and with the tag made once where the pass is
+    taken and once where it is not, so that nothing is carried, the staged cases counted 62
+    more, each counted once on a build that was not kept); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -3245,9 +3279,21 @@ rules something out.
     instructions (`router_cost.rs` with jemalloc: 450 on its text and 312 under an API at
     `fad2caf29`); or when an answer is found that the pass and the stages send differently; or
     when a stage comes to read something of an answer or its request that the pass's two tests
-    cannot vary, so that nothing would hold the two paths equal.
+    cannot vary, so that nothing would hold the two paths equal. Search the lines of every
+    answer for its tag again when a tag comes to be made from something of an answer's lines
+    that `cache::tag`'s two tests of them do not read, which `security::Lines` would then not
+    know of; or when leaving the search out saves `text-browser` fewer than about 150
+    instructions (565 at `3e3b6d1b7`).
 
-    Last checked: 2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
+    Last checked: 2026-11-26, the tag of an answer that took the pass at `3e3b6d1b7` against
+    `e87ad02da`, instructions and allocations a request and idle memory by
+    `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), and its two tests and
+    the pass's second against eight ways of breaking it, each of which fails one of them: the
+    type left out of such an answer's tag or hashed under another name, every scope's lines
+    said to need no search, a line that is part of a tag or one that leaves an answer untagged
+    not looked for in a scope's lines, a scope's lines not asked, no answer searched, and no
+    answer spared the search;
+    2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
     instructions and allocations a request by `bench/request-cost` in the hosted Request Cost job
     ([run 45924572746](https://github.com/corten-run/corten/actions/runs/45924572746), AMD EPYC
     9V74, valgrind 3.26.0, rustc 1.100.0; no cycles); 2026-11-25, the earlier any-host reader
