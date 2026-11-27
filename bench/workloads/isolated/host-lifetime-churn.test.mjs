@@ -373,7 +373,7 @@ for (const outcome of ["stable", "gone", "start-changed", "different-image", "su
 }
 
 for (const [mode, outcome] of [["prepare", "anchored"], ["prepare", "unanchored"], ["prepare", "wrong-image"],
-  ["check-only-no-build", "anchored"], ["fixture", "anchored"], ["timing", "anchored"]]) {
+  ["check-only-no-build", "anchored"], ["fixture", "anchored"]]) {
   test(`JSON API ${mode} executable bookends: ${outcome}`, async (t) => {
     let faults = 0, openings = 0, switched = false;
     const f = await fixture(t, [], false, () => faults++, 0, false, mode);
@@ -399,7 +399,82 @@ for (const [mode, outcome] of [["prepare", "anchored"], ["prepare", "unanchored"
       assert.equal(faults, 1); assert.equal(replay.status, "blocked");
       assert.equal(f.terminal.observerFailures.first.operation, mode !== "prepare" ? "executable-recheck"
         : outcome === "unanchored" ? "executable-recheck-inode" : "executable-recheck-successor");
+      assert.equal(f.terminal.observerFailures.first.executableRecheckReason,
+        mode === "prepare" ? undefined : mode === "check-only-no-build" ? "device-or-inode" : "link");
       if (mode === "prepare") assert.equal(f.proof().executables.length, 1);
+    }
+  });
+}
+
+for (const outcome of ["unchanged", "admitted", "parent", "unanchored", "wrong-prior-image", "wrong-next-image",
+  "gone", "pid-changed", "start-changed", "cgroup-changed", "no-budget", "overslept", "late", "hash-overrun", "next-image-unreadable",
+  "parent-gone", "reparented", "mixed-open", "same-bytes", "old-mutated", "also-renamed"]) {
+  test(`JSON timing inline executable successor: ${outcome}`, async (t) => {
+    let faults = 0, attempts = 0, switched = false;
+    const f = await fixture(t, [], false, () => faults++, 0, false, "timing");
+    let retryReads = 0;
+    if (["late", "hash-overrun"].includes(outcome)) {
+      const read = fs.readSync;
+      t.mock.method(fs, "readSync", (fd, ...args) => {
+        if (attempts === 2 && f.held.has(fd) && ++retryReads === 1 && outcome === "hash-overrun") f.clock += 1000;
+        return read(fd, ...args);
+      });
+      syncBuiltinESMExports();
+    }
+    const leader = 4242, forked = ["parent", "parent-gone", "reparented", "unanchored"].includes(outcome);
+    const pid = forked ? 5000 : leader, at = `/proc/${pid}`, scope = `/sys/fs/cgroup${f.scope}`;
+    if (forked) f.members.push(pid);
+    if (outcome === "cgroup-changed") f.children = ["moving"];
+    if (outcome === "wrong-prior-image") f.thirdExecutable = true;
+    if (outcome === "same-bytes") f.mutateImage("new", "original executable");
+    if (outcome === "overslept") f.retryOversleep = 1000;
+    f.clock += 100;
+    f.override = (path, op) => {
+      if (path === `${scope}/cpu.stat` && ++attempts === 2) {
+        if (outcome === "wrong-next-image") f.thirdExecutable = true;
+        if (outcome === "gone") f.members = [];
+        if (outcome === "pid-changed") f.members = [4243];
+        if (outcome === "cgroup-changed") f.members = [];
+        if (outcome === "late") f.clock += 1000;
+        if (outcome === "parent-gone") f.members = [pid];
+      }
+      if (path === `${scope}/moving/cgroup.procs` && attempts === 2 && outcome === "cgroup-changed") return `${pid}\n`;
+      if (path === `${at}/cgroup` && attempts === 2 && outcome === "cgroup-changed") return `0::${f.scope}/moving\n`;
+      if (path === `${at}/stat`) {
+        if (forked) return stat(pid, "node", pid * 10, outcome === "unanchored" || (attempts === 2 && outcome === "reparented") ? 1 : leader);
+        if (attempts === 2 && outcome === "start-changed") return stat(pid, "node", 99999);
+        if (switched && outcome === "also-renamed") return stat(pid, "different-name");
+      }
+      if (path === `${at}/exe` && op === "open" && attempts === 2 && outcome === "next-image-unreadable") throw missing();
+      if (path === `${at}/exe` && op === "stat" && outcome === "mixed-open" && !switched) {
+        switched = true; f.nextPid = pid; // A hash from the opened file must not be paired with this stat.
+      }
+      if (path === `${at}/cmdline` && !switched && outcome !== "unchanged") {
+        switched = true; f.thirdExecutable = false; f.nextPid = pid;
+        if (outcome === "no-budget") f.clock += 1000;
+        if (outcome === "old-mutated") f.mutateImage("old", "mutated and longer");
+      }
+    };
+    await f.tick();
+    const accepted = ["unchanged", "admitted", "parent"].includes(outcome);
+    assert.equal(faults, accepted ? 0 : 1);
+    assert.equal(attempts, ["unchanged", "unanchored", "wrong-prior-image", "no-budget", "overslept", "mixed-open",
+      "same-bytes", "old-mutated", "also-renamed"].includes(outcome) ? 1 : 2);
+    if (outcome === "late") assert.equal(retryReads, 0, "do not start hashing after the retry deadline");
+    if (outcome === "hash-overrun") assert.equal(retryReads, 1, "do not start another read after one overruns");
+    assert.equal(f.samples().length, accepted ? 3 : 2);
+    if (outcome === "mixed-open") {
+      f.override = () => {}; f.members = [leader]; await f.tick();
+      assert.equal(f.samples().length, 3, "a failed split lookup must not poison a later coherent read");
+    }
+    const replay = await f.finish();
+    assert.equal(replay.status, accepted ? "verified" : "blocked");
+    assert.equal(f.terminal.empty, true);
+    assert.equal(f.terminal.observerFailures.count, accepted ? 0 : 1);
+    const last = replay.samples.at(-2).processes.find((p) => processIdentity(p.stat).pid === pid);
+    if (accepted || outcome === "mixed-open") {
+      assert.equal(last.executableSha256, createHash("sha256").update(outcome === "unchanged" ? "original executable" : "next executable").digest("hex"));
+      assert.equal(Object.hasOwn(last, "executableRef"), false);
     }
   });
 }
