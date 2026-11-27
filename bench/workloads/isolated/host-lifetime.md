@@ -34,9 +34,9 @@ process-read rules.
 An inline (unpinned) executable digest mismatch still reports
 `executable-recheck` and refuses the census. Its optional
 `executableRecheckReason` names the first differing lookup field class, in
-order: `device-or-inode`, `link`, or `metadata` (size/mtime/ctime). This
-compares only the existing lookup inputs, adds no procfs reads,
-and does not prove an exec or admit a retry. Legacy receipts need not have it.
+order: `device-or-inode`, `link` (legacy path only), or `metadata` (size/mtime/ctime).
+The label itself neither proves an exec nor admits a retry. Legacy receipts need
+not have it.
 
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
@@ -175,8 +175,7 @@ executable remains unreadable exhausts the budget and blocks proof. Permission,
 I/O, non-process read failures and PID/start-tick changes still fail immediately.
 
 A child of a catalog command or the native JSON API preparation command can
-replace its image via exec between the two executable reads. JSON API fixture
-generation and timing still use their existing observer. A different device/inode
+replace its image via exec between the two executable reads. A different device/inode
 at the closing read alone is not enough to retry. The immediately preceding
 admitted sample must bind the same PID,
 start ticks and cgroup to the opening executable, or bind its parent as
@@ -198,6 +197,27 @@ same child on the expected new image, still naming that parent at both reads.
 This uses the parent's already-admitted descriptor and digest; the failed
 census adds no accounting or process records. Matching an unrelated process's
 image is not sufficient.
+
+The exact native JSON API timing invocation keeps inline digests, not pinned
+artifacts. Each executable bookend opens the live procfs image, binds its bytes
+and nano-resolution file identity to that descriptor, and checks that the procfs
+path still matches. The opening descriptor remains open through the closing
+bookend. An incoherent lookup cannot populate the admitted digest cache.
+Only an interval with a changed inode **and** digest, unchanged process name
+between those bookends, and an immediately preceding admitted image or parent
+can try the same single fresh census. Both candidate images are hashed from their
+own descriptors, and the fresh census independently opens and hashes the exact
+successor and any parent anchor. Both process and directory membership are read
+afresh. No digest or accounting row from the rejected census is published. The
+temporary descriptors close before the sample is written. Fixture generation
+and other unpinned invocations keep their existing observer.
+
+Replay still checks the ordinary inline digest records and sample membership,
+continuity and accounting. It can read different accepted digests for the same
+PID and start ticks across samples; it does not reconstruct the failed census
+or certify a transition between samples. This repair does not introduce a new
+receipt, change qualification, or detect an image change invisible to the
+bookends.
 
 Unseen old images, same-inode metadata changes and unproven successors remain
 blocked. This is sampled image replacement, not a trace of exec syscalls or
@@ -378,8 +398,10 @@ running inode, without substituting procfs stat results. The former requires
 both image digests in replay; the latter must not seal the mutated descriptor.
 The exact JSON API timing binding (without launching the benchmark) also tests
 a same-name exec between unpinned bookends and an unchanged child. The exec
-must block with a `device-or-inode` reason despite matching process identity
-and an empty terminal; the unchanged control must verify.
+must verify through one fresh census, with both inline digests replayable and
+no executable-proof sidecar; the unchanged child takes no retry. Synthetic
+controls refuse missing or wrong images, changed process or parent identity,
+changed cgroup, split opens, ambiguous changes and exhausted deadlines.
 Other cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure

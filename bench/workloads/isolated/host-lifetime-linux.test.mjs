@@ -154,7 +154,7 @@ for (const replace of [false, true]) test(`JSON API timing unpinned bookends: ${
     });
     syncBuiltinESMExports();
     try { tick(); } finally { hook.mock.restore(); syncBuiltinESMExports(); }
-    assert.equal(bookends, 1, "must take exactly one census attempt");
+    assert.equal(bookends, replace ? 2 : 1, "an exec gets exactly one fresh census");
     assert.equal(reachedSuccessor, replace, "owned child did not exec within the fixture deadline");
     assert.deepEqual(processIdentity(readFileSync(`${at}/stat`, "utf8")), before);
     assert.equal(readFileSync(`${at}/cgroup`, "utf8") === cgroup, true, "child changed cgroups");
@@ -162,27 +162,23 @@ for (const replace of [false, true]) test(`JSON API timing unpinned bookends: ${
     await observer.drain();
     child.stdin.end(); const [code, signal] = await closed;
     assert.deepEqual([code, signal], [0, null]);
-    // Keep the command exit identical in both arms: only observer evidence
-    // should distinguish the blocked replay from its verified control.
     const result = { terminal: true, code, signal, cancelled: false, forced: false, success: true, error: null };
     await observer.finish(result); finished = true;
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
     assert.equal(existsSync(join(directory, "executables.json")), false, "control must use the unpinned path");
-    assert.equal(faults, Number(replace));
+    assert.equal(faults, 0);
     assert.equal(terminal.empty, true);
-    assert.equal(terminal.observerError, replace ? "host-observation-gap" : null);
-    assert.equal(terminal.observerFailures.count, Number(replace));
-    if (replace) {
-      const { phase, operation, code, executableRecheckReason } = terminal.observerFailures.first;
-      assert.deepEqual({ phase, operation, code, executableRecheckReason },
-        { phase: "interval", operation: "executable-recheck", code: "ERR_ASSERTION", executableRecheckReason: "device-or-inode" });
-      assert.deepEqual(Object.keys(terminal.observerFailures.first).sort(),
-        ["phase", "operation", "code", "executableRecheckReason", "at", "samples", "lastSampleAt"].sort());
-    }
+    assert.equal(terminal.observerError, null);
+    assert.equal(terminal.observerFailures.count, 0);
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command, pid, result });
-    assert.equal(proof.checks.observer, !replace);
-    assert.equal(proof.status, replace ? "blocked" : "verified");
-    assert.deepEqual(proof.samples.map((sample) => sample.processes.length), replace ? [0, 1, 0] : [0, 1, 1, 0]);
+    assert.equal(proof.status, "verified");
+    const closing = createHash("sha256").update(readFileSync(next)).digest("hex");
+    assert.deepEqual(proof.samples.map((sample) => sample.processes.map((row) => {
+      assert.deepEqual(processIdentity(row.stat), before);
+      assert.equal(row.cgroup === cgroup, true);
+      assert.equal(Object.hasOwn(row, "executableRef"), false);
+      return row.executableSha256;
+    })), [[], [opening], [replace ? closing : opening], []]);
   } finally {
     if (!finished) observer?.dispose();
     if (child?.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
