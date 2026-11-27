@@ -146,8 +146,8 @@ export function summarize(rows) {
   }));
 }
 export async function run([container, payload, codecConfiguration, rateArg = "150", ...rest]) {
-  assert.ok(/^[a-f0-9]{64}$/.test(container) && Object.hasOwn(payloads, payload) && codecConfiguration?.trim() && ["30", "75", "150"].includes(rateArg) && !rest.length,
-    "usage: node bench/json-api/transport.mjs FULL_CONTAINER_ID catalog-v1|marketplace-v2 'native middleware, codec level or unknown' [30|75|150]");
+  assert.ok(/^[a-f0-9]{64}$/.test(container) && Object.hasOwn(payloads, payload) && codecConfiguration?.trim() && ["10", "30", "75", "150"].includes(rateArg) && !rest.length,
+    "usage: node bench/json-api/transport.mjs FULL_CONTAINER_ID catalog-v1|marketplace-v2 'native middleware, codec level or unknown' [10|30|75|150]");
   const rate = Number(rateArg);
   // A remote daemon's loopback is not this generator's loopback.
   const endpoint = (!process.env.DOCKER_CONTEXT && process.env.DOCKER_HOST) || docker("context", "inspect", "--format", "{{.Endpoints.docker.Host}}");
@@ -167,7 +167,8 @@ export async function run([container, payload, codecConfiguration, rateArg = "15
     const arm = arms[(pass + i) % arms.length];
     const options = { base, cases, arm, rate, lanes: 4, counter: () => observer.read() };
     const warmup = await sample({ ...options, perLane: 30 });
-    const measured = await sample({ ...options, perLane: rate * 2 });
+    // At low rates still exercise three complete ten-request connection lifetimes per lane.
+    const measured = await sample({ ...options, perLane: Math.max(30, rate * 2) });
     if (warmup.status !== measured.status) measured.status = "incomplete";
     rows.push({ pass: pass + 1, warmup, ...measured });
   } } finally { await observer.close(); }

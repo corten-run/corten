@@ -11,6 +11,12 @@ import { descriptor, k6Image, nodeImage, scheduledProducerMarker, sha256 } from 
 import { inspectJson, renderJson } from "./report.mjs";
 import { result, failedResult } from "./test-fixtures.mjs";
 
+test("strict JSON inspection refuses the retired roster before reading evidence", () => {
+  const group = descriptor("b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9");
+  assert.equal(group.apps.length, 9);
+  assert.throws(() => inspectJson({ group }, { commit: "a".repeat(40), load: assert.fail }), /this checkout's roster/);
+});
+
 test("a complete negative raw attempt retains all selected apps but no gated comparison", () => {
   for (const profile of descriptor().cases) {
     const f = failedResult("corten", profile), report = inspectJson(f.summary, { load: f.load });

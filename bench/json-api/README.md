@@ -18,7 +18,7 @@ node bench/json-api/transport.mjs FULL_CONTAINER_ID marketplace-v2 "middleware a
 ```
 
 Three arms share the same three rotating records, four sequential HTTP/1.1 lanes and
-150 scheduled requests/second by default. On a constrained generator, specify 30 or 75
+150 scheduled requests/second by default. On a constrained generator, specify 10, 30 or 75
 as the final argument for **every** adapter; never pool different rates. Compare persistent identity against persistent gzip to
 isolate compression; compare persistent identity against identity with a clean close
 every ten requests to isolate connection turnover. There is no fourth combined arm and
@@ -41,7 +41,11 @@ of 80% or more, or p99 start lag of half a lane interval or more, including warm
 These checks can rule out a run; passing them does not prove the host was isolated.
 The pinned ntex adapter compresses the freshly serialized response in-process:
 `ntex 4.11.1`'s `src/http/encoding/encoder.rs` selects flate2's fast (level 1)
-for gzip. A framework-default axum adapter without a compression layer is unsupported,
+for gzip (zlib-rs backend). Corten's dynamic `Json` response also uses in-process
+gzip level 1 (`crates/corten/src/compress.rs`), with flate2's default miniz_oxide
+backend. These are matched wire codecs and levels, not identical encoders:
+attribute a within-app delta to the deployment rather than ranking compressors.
+A framework-default axum adapter without a compression layer is unsupported,
 not a zero-cost compression result.
 The existing identity-only group and native-source gates remain unchanged in purpose.
 
@@ -353,7 +357,7 @@ separately from `baseline`. A complete functional negative attempt has `baseline
 comparisons and process exit one. Check-only preparation remains unqualified pending the
 independent exact-image audit, whether its observed functional outcome passed or failed.
 
-This implementation has unit/fake-operation and HTTP test coverage, not a measured nine-app
+This implementation has unit/fake-operation and HTTP test coverage, not a measured full-group
 native baseline. It makes no independent-review, serialization-audit, deployment-parity,
 build-cost, instruction-count or browser-experience claim. The catalog upstream's functional
 gate cannot inject redirects; the marketplace gate does exercise refusal of redirects.
@@ -370,8 +374,8 @@ The standalone `--require-complete` report and `inspectJson(summary, { load, com
 read the measured Git commit in the repository they run from; an unavailable commit
 refuses strict reporting. Report-only inspection without a commit does not consult Git.
 Isolated replay instead checks the producer against the campaign's bound source digests.
-Thresholds, rates, VUs, durations, budgets,
-the full nine-app/four-profile roster and pass rotation are unchanged.
+Thresholds, rates, VUs, durations, budgets and pass rotation are unchanged.
+Each selected app still runs the same four profiles.
 
 Production fixed phases use the instrumented fixed script below and retain **all**
 original stock JSON stdout, not a selected-event replacement. Closed phases use

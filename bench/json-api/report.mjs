@@ -46,6 +46,8 @@ export function verifyProducerAtCommit(producer, commit, repo = process.cwd()) {
 }
 
 export function inspectJson(summary, { load, commit } = {}) {
+  if (commit !== undefined) assert.equal(summary.group?.contractSha256, descriptor().contractSha256,
+    "strict comparison requires this checkout's roster; use the measured checkout to qualify a historical group");
   return inspectReport(summary, { load, commit, verifySource: commit === undefined ? undefined : () => {
     const required = producerPolicyAtCommit(commit);
     const timed = summary.schema === timedSummarySchema;
@@ -336,8 +338,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (strict) requireMeasuredCommit(measured);
     const report = strict ? inspectJson(summary, { load, commit: measured }) : inspectReport(summary, { load, commit });
     console.log(renderJson(report));
-    if (strict) assert.equal(summary.group.contractSha256, descriptor().contractSha256,
-      "strict comparison requires this checkout's roster; use the measured checkout to qualify a historical group");
     if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

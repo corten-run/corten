@@ -266,11 +266,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         report.warnings.push(...result.errors);
       }
     }
-    console.log(renderCatalog(report));
     // Preserve pre-header v3's original strict ledger semantics. For a header-checked
     // group, do not let a retired roster qualify as the current comparison.
     if (strict && summary.group?.documentHeaders && summary.group.contractSha256 !== groupDescriptor("catalog-page").contractSha256)
       throw new Error("strict header-checked comparison requires this checkout's roster; use the measured checkout for a historical group");
+    console.log(renderCatalog(report));
     if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; } })();
 }
