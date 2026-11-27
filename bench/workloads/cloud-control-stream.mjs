@@ -108,7 +108,8 @@ function cellCounts(value) {
 }
 
 function isHardeningProgress(value, round) {
-  return value?.state === "active" && value.nextGroup === "hardening" && value.round === round;
+  return value?.state === "active" && value.nextGroup === "hardening" && value.round === round
+    && typeof value.campaign === "string" && /^r[1-9]\d*-[a-f0-9]{16}$/.test(value.campaign);
 }
 
 function readCellProgress(local, { id, payload }) {
@@ -365,22 +366,19 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
           lastPeerLease = last;
         }
       } else if (kind === "progress") {
-        const { nativeCellProgress, ...status } = payload;
-        const hardening = isHardeningProgress(status, expected.binding.round);
+        const hardening = isHardeningProgress(payload, expected.binding.round);
         if (Object.hasOwn(payload, "nativeCellProgress")) {
-          if (!hardening) return;
-          // An older sender can combine the first active state with a count.
-          if (!nativeEntered) { append({ ...frame, payload: status }); nativeEntered = true; activeHardening = status; }
-          if (!activeHardening || activeHardening.campaign !== status.campaign) return;
-          const counts = cellCounts(nativeCellProgress);
+          // Count-bearing frames never establish native entry or enter the custody journal.
+          if (!hardening || activeHardening?.campaign !== payload.campaign) return;
+          const counts = cellCounts(payload.nativeCellProgress);
           if (counts && (!nativeCells || counts.total === nativeCells.total && counts.started > nativeCells.started)) {
             nativeCells = counts;
-            pendingCells = { id: expected.id, round: status.round, campaign: status.campaign, ...counts };
+            pendingCells = { id: expected.id, round: payload.round, campaign: payload.campaign, ...counts };
             if (!writingCells) void flushCells();
           }
         } else {
-          if (status.state === "active") nativeEntered = true;
-          activeHardening = hardening ? status : undefined;
+          if (payload.state === "active") nativeEntered = true;
+          activeHardening = hardening ? payload : undefined;
           if (!hardening) pendingCells = undefined;
           append(frame);
         }
