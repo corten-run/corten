@@ -195,6 +195,34 @@ export function resumeAt(progress, from = steps[0]) {
 }
 
 /**
+ * Why a round that starts again may not go on past its count step, or null. A count step that
+ * started and did not end may have left a `perf` or probe counting (countHalt), as when run-all.mjs
+ * itself was killed in it: a reboot ends them, a start of run-all.mjs again in the same boot does
+ * not, and the clean slate cannot tell the two apart. run-all.mjs writes the boot's ID
+ * (/proc/sys/kernel/random/boot_id) on the step's start line, "<time> start count <boot ID>", so
+ * the round goes on only where that step started in another boot, known by its ID.
+ * @param {string} progress the progress file as resumeAt reads it
+ * @param {string | null} bootId this boot's ID, or null where it cannot be read
+ */
+export function countRestartError(progress, bootId) {
+  /** @type {string | null} */
+  let running = null;
+  /** @type {string | undefined} */
+  let started;
+  for (const line of progress.split("\n")) {
+    const [, what, step, boot] = line.trim().split(" ");
+    if (what === "start" && steps.includes(step)) { running = step; started = boot; }
+    else if (what === "end" && steps.includes(step)) running = null;
+  }
+  if (running !== "count") return null;
+  const why = !started || !BOOT_ID.test(started) ? "its count step's start recorded no boot ID"
+    : !bootId || !BOOT_ID.test(bootId) ? "this boot's ID cannot be read"
+    : started === bootId ? "it started again in the boot its count step started in" : null;
+  return why && `the round stopped in its count step and ${why}, so a perf or probe that step started may still run; nothing more runs on this host`;
+}
+const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
  * The apps whose build calls are in `all` and not in `built`, in the order they run: what the
  * build step has left.
  * @param {ReturnType<typeof calls>} all

@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
-import { BAND, compare, complete, COUNTS, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, resolution, runPairs, schedule } from "./count-pairs.mjs";
+import { BAND, compare, complete, COUNTS, DAEMON_LOCK, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, RELEASE_MS, resolution, runPairs, schedule, spawnExec } from "./count-pairs.mjs";
 
 /** n recorded pairs whose changes are spread evenly from lo to hi. */
 const spread = (lo, hi, n = 100) => Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
@@ -30,10 +30,11 @@ const sealedSummary = (requests = 5000, failed = 0, checks = { passes: 5000, fai
  * A stand-in host: Docker images by name and ID, the tag count.mjs reads, the daemon and the
  * containers made on it, perf and the kernel, and count.mjs, which writes its round's records as
  * the real one does. `row(round, image, target)` gives each count's row (cycles 6% more on the
- * head's image by default), `rc` its exit status, `tagRc` the tag's, and `launch(round)` the
- * image the counted container was started from (the tagged one by default).
+ * head's image by default), `rc` its exit status, `signal` the signal that stopped it (none by
+ * default), `tagRc` the tag's, and `launch(round)` the image the counted container was started
+ * from (the tagged one by default).
  */
-function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCount = () => {}, launch = () => null } = {}) {
+function host(results, { row = () => ({}), rc = () => 0, signal = () => null, tagRc = () => 0, onCount = () => {}, launch = () => null } = {}) {
   const ids = { "cb-corten-base": "sha256:base", "cb-corten-head": "sha256:head" };
   const state = { tagged: "", counted: [], tags: [], calls: 0, startRc: 0, daemon: { id: "daemon-1", version: "29.1.0", kernel: "6.8.0-test", name: "bench" }, perf: "perf version 6.8.12", kernel: "6.8.0-test", containers: new Map(), made: 0 };
   const paths = { docker: "/usr/bin/docker", perf: "/usr/bin/perf" };
@@ -89,7 +90,8 @@ function host(results, { row = () => ({}), rc = () => 0, tagRc = () => 0, onCoun
     writeFileSync(join(dir, `count-corten-${target}-0.json`), JSON.stringify(sealedSummary(r.requests, r.failed)));
     writeFileSync(join(dir, `count-corten-${target}-0-kernel.json`), JSON.stringify(sealedSummary(r.kernelPass?.requests, r.kernelPass?.failed)));
     writeFileSync(join(dir, "count-images.json"), JSON.stringify({ [`corten/${target}`]: { container: hex(1000 + n), image: launch(round) ?? image } }));
-    return { status: rc(round) };
+    const stopped = signal(round);
+    return stopped ? { status: null, signal: stopped } : { status: rc(round) };
   };
   /** What `docker container prune` does: removes every container not running. */
   const prune = () => { for (const [name, c] of state.containers) if (!c.running) state.containers.delete(name); };
@@ -359,6 +361,99 @@ test("a count.mjs exit 4 is in the ledger before anything that can fail: a faile
       s.done();
     }
   }
+});
+
+test("a count.mjs stopped by a signal stops the run as an exit 4 does: no further invocation on that host, now or when the command is run again", async () => {
+  const stuck = "t1-json-ab-002-base";
+  const records = (/** @type {string} */ results) => readFileSync(join(results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const why = /count\.mjs was stopped by SIGKILL in t1-json-ab-002-base before it saw each perf and probe it started end: one may still count, so no further count runs on this host; stopped with no report\. Count on a fresh host under a new prefix/;
+  for (const signal of ["SIGKILL", "SIGTERM"]) {
+    const s = scratch();
+    try {
+      const h = host(s.results, { signal: (round) => (round === stuck ? signal : null) });
+      await assert.rejects(runPairs(options(s, h)), new RegExp(why.source.replace("SIGKILL", signal)), signal);
+      assert.equal(h.state.counted.at(-1)?.[0], stuck, signal);
+      // Its exit is in the ledger and its end is not: nothing of it is sealed or read.
+      const mine = records(s.results).filter((r) => r.name === stuck);
+      assert.deepEqual(mine.map((r) => Object.keys(r).find((k) => ["started", "dispatched", "exited", "ended"].includes(k))), ["started", "dispatched", "exited"], signal);
+      assert.equal(mine[2].signal, signal);
+      const ran = h.state.counted.length, tags = h.state.tags.length;
+      // Run again: refused before any tag or count.
+      await assert.rejects(runPairs(options(s, h)), new RegExp(why.source.replace("SIGKILL", signal)), signal);
+      assert.equal(h.state.counted.length, ran, signal);
+      assert.equal(h.state.tags.length, tags, signal);
+    } finally {
+      s.done();
+    }
+  }
+  // A ledger in which a signalled count's end was recorded, as the runner before this change wrote
+  // one (and told the operator to run again): the replay refuses it too, rather than counting on.
+  const s = scratch();
+  try {
+    const h = host(s.results);
+    let n = 0;
+    await assert.rejects(runPairs(options(s, h, { stop: () => ++n > 3 })), /stopped before/);
+    const name = schedule(6, ["json"], "t1")[3].name;
+    for (const row of [{ name, want: "sha256:base", started: 0 }, { name, dispatched: 0 }, { name, exited: 0, rc: null, signal: "SIGKILL" }, { name, want: "sha256:base", started: 0, ended: 0, fresh: true, tagRc: 0, rc: null, signal: "SIGKILL", before: "sha256:base", after: "sha256:base", artifacts: {} }]) {
+      appendFileSync(join(s.results, "t1", "invocations.jsonl"), JSON.stringify(row) + "\n");
+    }
+    const ran = h.state.counted.length;
+    await assert.rejects(runPairs(options(s, h)), new RegExp(why.source.replace("t1-json-ab-002-base", name)));
+    assert.equal(h.state.counted.length, ran);
+    // The control: the same ledger with that invocation exiting 1 goes on past it.
+    const lines = readFileSync(join(s.results, "t1", "invocations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    writeFileSync(join(s.results, "t1", "invocations.jsonl"), lines.map((r) => JSON.stringify(r.name === name && "signal" in r ? { ...r, rc: 1, signal: null } : r)).join("\n") + "\n");
+    const { targets } = await runPairs(options(s, h));
+    assert.equal(h.state.counted.length, 7 * 4 - 1);
+    assert.equal(targets.json.aa.bound, null);
+    assert.notEqual(targets.json.change.bound, null);
+  } finally {
+    s.done();
+  }
+});
+
+test("past a count.mjs exit 4 or a signal the runner asks Docker only to remove its lock, within a bound, so the halt reaches the caller however Docker answers", async () => {
+  const stuck = "t1-json-ab-002-base";
+  for (const [how, over] of [["exit 4", { rc: (/** @type {string} */ round) => (round === stuck ? 4 : 0) }], ["SIGKILL", { signal: (/** @type {string} */ round) => (round === stuck ? "SIGKILL" : null) }]]) {
+    for (const stalled of [false, true]) {
+      const s = scratch();
+      try {
+        const h = host(s.results, over);
+        /** @type {[string, string[], any][]} */
+        const after = [];
+        let returned = false;
+        const lockId = () => h.state.containers.get(DAEMON_LOCK)?.id;
+        let held = "";
+        const exec = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts = {}) => {
+          if (returned) {
+            after.push([cmd, args, opts]);
+            // A docker that does not answer: given up at its bound, a null status.
+            if (stalled) return { status: null, signal: "SIGKILL" };
+          }
+          const r = h.exec(cmd, args, opts);
+          if (String(args[0]).endsWith("count.mjs") && args[1] === stuck) { returned = true; held = lockId() ?? ""; }
+          return r;
+        };
+        /** @type {string[]} */
+        const said = [];
+        await assert.rejects(runPairs(options(s, { ...h, exec }, { log: (/** @type {string} */ l) => said.push(l) })), how === "exit 4" ? /count\.mjs exited 4 in t1-json-ab-002-base/ : /stopped by SIGKILL in t1-json-ab-002-base/, how);
+        assert.ok(returned, how);
+        // No image read, seal or lock check after it: one call, the lock's removal by its ID, bounded.
+        assert.deepEqual(after.map(([cmd, args]) => [cmd, ...args]), [["docker", "rm", "-f", held]], `${how}${stalled ? ", stalled" : ""}`);
+        assert.equal(after[0][2].timeout, RELEASE_MS);
+        if (stalled) assert.ok(said.some((l) => l.includes(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK}`)), said.join("\n"));
+        else assert.equal(h.state.containers.size, 0);
+      } finally {
+        s.done();
+      }
+    }
+  }
+  // The bound is the runner's exec's: a command past it is killed and given a null status.
+  const started = Date.now();
+  const r = spawnExec(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 500, output: false });
+  assert.equal(r.status, null);
+  assert.ok(Date.now() - started < 20_000, `returned ${Date.now() - started} ms after it started`);
+  assert.equal(spawnExec(process.execPath, ["-e", "process.exit(0)"], { timeout: 20_000, output: false }).status, 0);
 });
 
 test("a count.mjs started with no end recorded stops the run when run again: its exit not kept may have been 4, and one kept was not sealed", async () => {
@@ -972,8 +1067,10 @@ if (control) {
     }
   });
 } else setTimeout(start, late);
-// A set FAKE_PERF_HOLD names leaves a process holding its output open as it exits, so its end is never seen.
+// A set FAKE_PERF_HOLD names leaves a process holding its output open as it exits, so its end is never seen;
+// with FAKE_BREAK too, it first makes that path a directory, so count.mjs's next write there fails.
 process.on("SIGINT", () => {
+  if (named("FAKE_PERF_HOLD") && process.env.FAKE_BREAK) { fs.rmSync(process.env.FAKE_BREAK, { force: true, recursive: true }); fs.mkdirSync(process.env.FAKE_BREAK, { recursive: true }); }
   if (named("FAKE_PERF_HOLD")) require("node:child_process").spawn(process.execPath, ["-e", "require('node:fs').writeFileSync(" + JSON.stringify(path.join(process.env.FAKE_DIR, "holder.pid")) + ", String(process.pid)); setTimeout(() => {}, 50000)"], { stdio: ["ignore", "inherit", "inherit"] }).unref();
   print(); mark("exit"); process.exit(0);
 });
@@ -1186,6 +1283,29 @@ test("count.mjs attaches perf to the container docker run gave by its ID, and re
         assert.notEqual(pid("rm-stall.pid"), null, "no docker rm was started");
       } finally {
         for (const f of ["rm-stall.pid", "holder.pid"]) try { const p = pid(f); if (p) process.kill(p, "SIGKILL"); } catch {}
+      }
+    }
+    // A write that fails as count.mjs records a count's perf it could not see end leaves its exit 4
+    // and still asks for the counted container's removal.
+    {
+      const round = "halt-unwritable";
+      const dir = join(root, round);
+      mkdirSync(dir);
+      const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_DIR: dir, FAKE_K6: k6Image, FAKE_REPLACE: "none", FAKE_ALIAS: "none", FAKE_PERF_HOLD: mainSet, FAKE_BREAK: join(kit, "results", round, "instructions.json"), HOME: process.env.HOME ?? root };
+      const child = spawn(process.execPath, [join(kit, "count.mjs"), round, "1", "corten", "json"], { env, stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (d) => (said += d));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      const holder = join(dir, "holder.pid");
+      try {
+        assert.equal(code, 4, said);
+        assert.match(said, /the halt's diagnostics were not all written: EISDIR/);
+        assert.match(said, /asked docker to remove [0-9a-f]{64}, not waiting for it/);
+        const removed = () => JSON.parse(readFileSync(join(dir, "docker.json"), "utf8")).calls.some((/** @type {string[]} */ c) => c.join(" ") === `rm -f ${first}`);
+        for (let i = 0; i < 50 && !removed(); i++) await new Promise((r) => setTimeout(r, 100));
+        assert.ok(removed(), "the counted container's removal was not asked for");
+      } finally {
+        try { if (existsSync(holder)) process.kill(Number(readFileSync(holder, "utf8")), "SIGKILL"); } catch {}
       }
     }
     // A write that fails as count.mjs records a probe it could not see end leaves its exit 4, so

@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
+import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -171,6 +171,25 @@ test("a count call that exits 4, or is stopped or killed before count.mjs saw it
   assert.ok(log.includes("progress finished"));
 });
 
+test("a round that starts again in its count step goes on only where that step started in another boot, known by its ID", () => {
+  const boot = "0f1e2d3c-4b5a-4968-8776-655443322110", other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const started = (/** @type {string} */ line) => `t boot\nt start fixture\nt end fixture\nt ${line}\n`;
+  const why = (/** @type {string} */ what) => `the round stopped in its count step and ${what}, so a perf or probe that step started may still run; nothing more runs on this host`;
+  // The same boot: run-all.mjs itself was killed or stopped, and the count's perf may still run.
+  assert.equal(countRestartError(started(`start count ${boot}`), boot), why("it started again in the boot its count step started in"));
+  // No boot ID on the start line (a round started before this change), or none to compare with now.
+  assert.equal(countRestartError(started("start count"), boot), why("its count step's start recorded no boot ID"));
+  assert.equal(countRestartError(started("start count not-a-boot-id"), boot), why("its count step's start recorded no boot ID"));
+  assert.equal(countRestartError(started(`start count ${boot}`), null), why("this boot's ID cannot be read"));
+  // The controls: a count step that started in another boot, one that ended, and a restart in another step.
+  assert.equal(countRestartError(started(`start count ${other}`), boot), null);
+  assert.equal(countRestartError(started(`start count ${boot}`) + "t end count\nt start conform\n", boot), null);
+  assert.equal(countRestartError(started("start conform"), boot), null);
+  assert.equal(countRestartError("", boot), null);
+  // resumeAt reads the start line with its boot ID as before.
+  assert.deepEqual(resumeAt(started(`start count ${other}`), "fixture"), resumeAt(started("start count"), "fixture"));
+});
+
 /** The relative module files `entry` imports, itself included, followed through every file they import. */
 function importClosure(/** @type {string} */ entry) {
   const seen = new Set();
@@ -209,7 +228,10 @@ test("an unattended run-all.mjs whose count exits 4 starts no later step and doe
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
       const exit = await new Promise((done) => child.on("close", done));
       const ran = readFileSync(join(here, "ran.txt"), "utf8").split("\n").filter(Boolean);
-      const progress = readFileSync(join(here, "results-r1.progress"), "utf8").split("\n").filter(Boolean).map((l) => l.split(" ").slice(1).join(" "));
+      const lines = readFileSync(join(here, "results-r1.progress"), "utf8").split("\n").filter(Boolean);
+      const progress = lines.map((l) => l.split(" ").slice(1, 3).join(" "));
+      // The count step's start names the boot it started in.
+      assert.equal(lines.find((l) => l.split(" ")[1] === "start")?.split(" ").slice(1).join(" "), `start count ${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}`);
       if (code === 4) {
         assert.equal(exit, 1, said);
         assert.deepEqual(ran, ["count.mjs"], said);
@@ -221,6 +243,50 @@ test("an unattended run-all.mjs whose count exits 4 starts no later step and doe
         assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
         assert.deepEqual(progress, ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished"], said);
         assert.ok(!existsSync(join(here, "results", "r1", "skipped.txt")), said);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unattended run-all.mjs that starts again in the boot its count step started in ends the round; one in another boot goes on", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
+  const bench = resolve(import.meta.dirname, "..");
+  const root = mkdtempSync(join(tmpdir(), "run-all-restart-"));
+  const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  try {
+    for (const [name, at] of [["same", boot], ["legacy", ""], ["other", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]]) {
+      const copy = join(root, name, "bench");
+      for (const file of importClosure(join(import.meta.dirname, "run-all.mjs"))) {
+        mkdirSync(dirname(join(copy, relative(bench, file))), { recursive: true });
+        copyFileSync(file, join(copy, relative(bench, file)));
+      }
+      const here = join(copy, "fullstack");
+      const stand = (/** @type {string} */ script) => writeFileSync(join(here, script), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, ${JSON.stringify(script)} + "\\n");\nprocess.exit(0);\n`);
+      for (const script of ["count.mjs", "conform.mjs", "summarize.mjs"]) stand(script);
+      // A start before this one, which stopped in its count step: run-all.mjs killed, or the host restarted.
+      writeFileSync(join(here, "results-r1.progress"), `t boot\nt ${`start count ${at}`.trimEnd()}\n`);
+      const scratch = join(root, name, "tmp");
+      mkdirSync(scratch);
+      const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      let said = "";
+      for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
+      const exit = await new Promise((done) => child.on("close", done));
+      const ran = existsSync(join(here, "ran.txt")) ? readFileSync(join(here, "ran.txt"), "utf8").split("\n").filter(Boolean) : [];
+      const progress = readFileSync(join(here, "results-r1.progress"), "utf8").split("\n").filter(Boolean).map((l) => l.split(" ").slice(1, 3).join(" "));
+      const skipped = readFileSync(join(here, "results", "r1", "skipped.txt"), "utf8");
+      if (name === "other") {
+        assert.equal(exit, 0, said);
+        assert.deepEqual(ran, ["conform.mjs", "summarize.mjs"], said);
+        assert.deepEqual(progress, ["boot", "start count", "boot", "start conform", "end conform", "start summary", "finished"], said);
+        assert.match(skipped, /step count skipped: the droplet restarted while it ran/);
+      } else {
+        assert.equal(exit, 1, `${name}: ${said}`);
+        assert.deepEqual(ran, [], `${name}: ${said}`);
+        assert.deepEqual(progress, ["boot", "start count", "boot", "failed"], `${name}: ${said}`);
+        assert.match(skipped, name === "same" ? /step count skipped: the round stopped in its count step and it started again in the boot its count step started in, so a perf or probe that step started may still run; nothing more runs on this host/ : /its count step's start recorded no boot ID/, name);
       }
     }
   } finally {
@@ -662,6 +728,16 @@ test("a count is returned only when both loads are whole: as many requests as th
   ]) await assert.rejects(run(main, kernel, { requests: 5000 }), why);
   // Without an expected count, the kernel load must still match the first load's requests.
   await assert.rejects(run(countSummary(10), countSummary(9), {}), /kernel instructions' load is not whole: 9 requests, not 10/);
+});
+
+test("a first load whose status checks failed where its requests did not is not kept, since its row records only the requests", async () => {
+  const run = (/** @type {any} */ main) => measure((p) => (p === "main" ? { text: mainText(), summary: main } : { text: kernelInstructions, summary: countSummary(5000) }), assert.fail, { requests: 5000 });
+  for (const [failed, checksFailed] of [[0, 1], [0, 5000], [2, 3]]) {
+    await assert.rejects(run(countSummary(5000, failed, checksFailed)), new RegExp(`^Error: the first load had ${checksFailed} failed status checks where ${failed} of its 5000 requests failed, so its count is not kept$`), `${failed}/${checksFailed}`);
+  }
+  // The controls: no failure, and failures each of which is a failed request, are recorded in the row as before.
+  assert.equal((await run(countSummary(5000))).failed, 0);
+  assert.equal((await run(countSummary(5000, 2, 2))).failed, 2);
 });
 
 test("a first load that ran is whole before it is repeated: a counter error does not buy a load short of its requests a repeat", async () => {

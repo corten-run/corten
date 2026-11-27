@@ -1391,7 +1391,10 @@ three runs:
    seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
    does not reach the probe's process group of its own) ends the round there, with the reason in
    `skipped.txt`: no later step, clean slate or summary runs and the round is recorded failed, so
-   it does not start again at boot.
+   it does not start again at boot. `run-all.mjs` writes the boot's ID on the count step's start
+   line, and a round that starts again while its count step had not ended goes on only where that
+   ID is another boot's: one started again in the same boot (`run-all.mjs` itself killed or
+   stopped), or with no ID to compare, ends the round the same way, before its clean slate.
    A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
@@ -1498,7 +1501,8 @@ three runs:
    load, or both across its runs). When user instructions are unusable in the first pass and its load had no failures,
    it is repeated with `instructions:u` alone; the second pass is not repeated. A count is kept
    only when each load's k6 summary gives its requests, failed requests and a status check a
-   request, both loads made 5,000 requests, and the second had no failure. A load that ran is
+   request, both loads made 5,000 requests, the second had no failure, and the first no more
+   failed status checks than failed requests (its row records only the requests). A load that ran is
    checked whole before anything else is read from it, so a first load short of
    its requests is refused rather than repeated; the repeat is for counters, never for a load.
    Each load is taken as counted whole on `perf`'s acknowledgments, not on a wait: `perf` starts with its events
@@ -1548,8 +1552,10 @@ three runs:
    whatever writing its diagnostics does then, and without waiting on Docker (it starts the
    container's removal and does not wait for it),
    and `count-pairs.mjs` stops its run there and refuses to go on with it, so the rest is counted
-   on a fresh host under a new prefix. `count-pairs.mjs` writes `count.mjs`'s exit to its ledger
-   before anything else it does for that invocation, so a 4 is kept whatever fails after it. `droplet.mjs` turns off the droplet's automatic
+   on a fresh host under a new prefix; a `count.mjs` stopped by a signal did not see its `perf`s
+   end either, and is taken the same way. `count-pairs.mjs` writes `count.mjs`'s exit to its ledger
+   before anything else it does for that invocation, so a 4 is kept whatever fails after it, and
+   past a 4 or a signal it asks Docker only to remove its lock, killed after 10 s. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed
    for.
 6. Browser (`browser.mjs`): every app running at once on the app core, items from the item API,
@@ -2127,7 +2133,7 @@ their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl
 as it starts and as it ends, with the SHA-256 and size of the four files it is read from (its
 `instructions.json` row, the k6 summaries of its two loads and `count-images.json`), and between
 those, as `count.mjs` is started and as it exits (its exit status written before the image read
-and the seals, which can fail); each invocation's log under
+and the seals, which can fail; past an exit 4 or a signal neither is made); each invocation's log under
 `inv/`; and `report.json`. A wrapper that starts `count-pairs.mjs`, as a kit's `run.sh` does, is
 not among the files it binds; what it runs is. Each invocation's own output is
 `results/<round>/` as `count.mjs` writes it, and must not exist before it runs, since `count.mjs`
@@ -2154,7 +2160,8 @@ container's endpoint by the network's name, as Docker keys it, even where `BENCH
 the network's ID. A container that joins
 and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
 the first one not started, and refuses where `count.mjs` was started for one and its end was not
-recorded (its exit not kept may have been 4, and one kept was not sealed), or if the images' IDs, the schedule, a setting, a file the
+recorded (its exit not kept may have been 4, and one kept was not sealed) or where it exited 4 or
+was stopped by a signal, or if the images' IDs, the schedule, a setting, a file the
 count runs or the host differ from `run.json`, or the host cannot be established; one
 interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
 honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a

@@ -13,6 +13,9 @@
 //     Progress goes to results-<round>.progress: started again after a restart (a lockup panics
 //     the kernel, which reboots), the round skips the step that was running and goes on from the
 //     next; in the build step it skips the app that was building and goes on with the next app.
+//     In the count step it goes on only where it started in another boot, by the boot's ID on the
+//     step's start line: a start again in the same boot, which cannot tell its perf is gone, ends
+//     the round (round.mjs, countRestartError).
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
 //     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
@@ -31,7 +34,7 @@ import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil } from "./round.mjs";
+import { buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -49,13 +52,17 @@ const now = () => new Date().toISOString();
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8", timeout: 5 * minute });
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 const progressFile = join(here, `results-${round}.progress`);
+/** This boot's ID, or null where it cannot be read. */
+const bootId = () => { try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; } };
 // Synced to disk (the file and, when it is new, its directory), so a line written just before a
-// kernel panic is still there after the reboot.
+// kernel panic is still there after the reboot. The count step's start names the boot it started
+// in, so a start again in that boot does not go on past it (countRestartError).
 const progress = (/** @type {string} */ what) => {
   if (!unattended) return;
   const created = !existsSync(progressFile);
   const fd = openSync(progressFile, "a");
-  try { writeSync(fd, `${now()} ${what}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+  const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd() : what;
+  try { writeSync(fd, `${now()} ${line}\n`); fsyncSync(fd); } finally { closeSync(fd); }
   if (created) { const dir = openSync(here, "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
 };
 const skippedFile = join(here, "results", round, "skipped.txt");
@@ -195,11 +202,18 @@ try {
   /** The apps whose builds have started, before a restart or in this start: none is built again. @type {string[]} */
   let built = [];
   if (unattended) {
-    const state = resumeAt(existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "", from);
+    const text = existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "";
+    const state = resumeAt(text, from);
     if (state.ended) process.exit(0);
     // Written before anything else, so every start counts, even one cut short in reset().
     progress("boot");
     if (state.boots) {
+      // Before the clean slate: a count step whose perf may still run ends the round, as a halt does.
+      const halted = countRestartError(text, bootId());
+      if (halted) {
+        skip("count", halted);
+        throw new Error(halted);
+      }
       console.log(now(), "the round starts again after the droplet restarted");
       // First, before anything else runs: what the boot that ended left of its kernel log.
       keepKernelLog(state.boots + 1);

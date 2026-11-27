@@ -331,12 +331,16 @@ for (const name of appsArg.split(",")) {
     } catch (e) {
       // A perf not seen to end may still count, or be stuck in the kernel: no further load or count
       // on this host. The halt comes first, so nothing written here can change its exit.
+      // The container's removal is asked for whatever the record's write does.
       if (e instanceof UnconfirmedPerf) halt(() => {
-        const why = e.message.trim().split("\n")[0] || "perf was not seen to end";
-        results[`${name}/${target}${suffix}`] = { failed: why };
-        console.error(`${name} ${target}${suffix}: ${why}`);
-        writeFileSync(file, JSON.stringify(results, null, 1));
-        removeUnwaited(container);
+        try {
+          const why = e.message.trim().split("\n")[0] || "perf was not seen to end";
+          results[`${name}/${target}${suffix}`] = { failed: why };
+          console.error(`${name} ${target}${suffix}: ${why}`);
+          writeFileSync(file, JSON.stringify(results, null, 1));
+        } finally {
+          removeUnwaited(container);
+        }
       });
       // One line, never empty: summarize.mjs prints it in a table and reads an empty one as a count.
       const why = (e instanceof Error ? e.message : String(e)).trim().split("\n")[0] || "the count failed with no message";

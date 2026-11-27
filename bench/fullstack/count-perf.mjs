@@ -395,7 +395,8 @@ function totalsError(/** @type {ReturnType<typeof loadTotals>} */ t, /** @type {
  * with user instructions alone when they are unusable and its load, if it ran, was whole with no
  * failures; the kernel pass counts one event already, so it is not retried. The kernel pass's load
  * must also match the main pass's request count and have no failures, since its count is not kept
- * otherwise.
+ * otherwise; the main pass's load may fail no more status checks than requests, since its row
+ * records only the requests.
  * @param {(pass: "main" | "kernel", instructionsOnly: boolean) => any} collect
  * @param {(message: string) => void} warn
  * @param {{ requests?: number, cpus: number[] }} expected
@@ -437,6 +438,8 @@ export async function measurePerfCounts(collect, warn, expected) {
     if (main.ranLoad) requireWhole(main, expected.requests);
     if (main.error) throw new Error(`instructions-only perf failed: ${main.error}`);
   }
+  // The row records failed requests, not status checks: one that failed with its request not failed would not show.
+  if (main.checksFailed > main.failed) throw new Error(`the ${main.load} had ${main.checksFailed} failed status checks where ${main.failed} of its ${main.requests} requests failed, so its count is not kept`);
   const kernel = await attempt("kernel", false);
   if (kernel.ranLoad) requireWhole(kernel, main.requests);
   if (kernel.error) {
