@@ -8529,7 +8529,13 @@ rules something out.
     given (the app's, a middleware's or a relayed upstream's): that tag names a body whose key a
     browser may have sent already, and a `304` to it would keep that body. The store reads the
     request's signal before it keeps an answer, so one whose key `req.rendered` drew on a thread
-    the handler's watch did not poll is not kept either. A lifetime a middleware
+    the handler's watch did not poll is not kept either. That read costs a request that misses
+    the store 5.0 more instructions in `router_cost`'s `unkept` (`c0da2d63c` against
+    `186572163`, all of it in `Keeping<false>::call::{closure#2}`, where `Missed::keep` is
+    inlined) and 3.6 to 6.2 more in its `inserted`; a store hit (`router_cost`'s `kept`,
+    `what_settling_a_page_costs`'s `public`) and an answer that returns before `Missed::keep`
+    (its `keyed`) cost none more, and its `json` 7.0 fewer, all in glibc's `memcmp`, whose
+    count turns on where the bytes it compares lie. Its cycles were not run. A lifetime a middleware
     or the app gave it goes too, so the browser asks again before it shows a key it may have sent:
     a plain `private, max-age=60` goes out `private, no-cache`, and one with a `no-store`
     (`private, no-store, max-age=60`) `private, no-store`, which `b910dedf7` sent as written
@@ -9725,7 +9731,9 @@ rules something out.
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-26 for the stages' mark
     past the middleware, the probe of `bench/request-cost` at `d10bedc5f` (this change as it was
-    then, before its later production changes: a historical count, not taken again since), the control `da6420d62`, `273e27b05`,
+    then, before its later production changes: the count for that head, which has no `Public`
+    route, so the store's later read of the signal was counted with `router_cost` instead,
+    below), the control `da6420d62`, `273e27b05`,
     `66d66c28e` and `cf2ea1a01` against `9b8834fcc` (`9c8cd07e7` in an earlier run), built
     one after another in one directory with rustc 1.100.0, counted with valgrind 3.24.0 and
     `--cpu 2` in a `rust:1-trixie` container on a 12-CPU workstation, answers compared first
@@ -9752,7 +9760,14 @@ rules something out.
     orders, `fill` read by function, with the future sizes from the same builds, and the probe of
     `bench/request-cost` at `3431fd85b` and `b910dedf7`, built one after another in one
     directory with rustc 1.100.0 and counted with valgrind 3.24.0, answers compared first with no
-    difference, idle memory in two rounds, and no cycles measured; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    difference, idle memory in two rounds, and no cycles measured; 2026-11-27 for the store's
+    read of the request's signal (the review's round 12), `c0da2d63c` against `186572163`, each
+    built from its own `git archive` tree at one path with rustc 1.99.1 in release with all
+    features, `router_cost`'s `unkept`, `inserted` and `kept` and
+    `what_settling_a_page_costs`'s `public`, `json` and `keyed` counted under callgrind as
+    the difference of a run of 1,200 requests and one of 200, in two rounds in opposite orders,
+    the counts by function compared for `unkept` (no other function moved by 0.5 or more) and
+    `json`, and no cycles measured; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
