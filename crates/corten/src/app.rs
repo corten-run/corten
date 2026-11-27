@@ -613,7 +613,7 @@ impl Default for Connections {
             send_timeout: Some(Duration::from_secs(60)),
             max: None,
             drain: Drain { grace: GRACE, most: GRACE.max(DEADLINE), each: false },
-            own: own_in_tests(),
+            own: true,
         }
     }
 }
