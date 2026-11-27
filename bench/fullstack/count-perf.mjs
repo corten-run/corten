@@ -110,8 +110,9 @@ export function perfCountArgs(/** @type {string[]} */ cpus, /** @type {string} *
  * at a time, `command()` called before it is written, and must answer it with one `ack` line (perf
  * 6.1 writes "ack\n" and a NUL byte) before the next is given; an acknowledgment with no command
  * waiting for it, or anything else on the descriptor, is a fault (`error()`), and the count is not
- * kept. `command()` resolves "ack", "closed" (perf ended first), "timeout" (none within ackMs) or
- * "fault". `end()` is called once perf has closed its descriptors, so nothing more can arrive.
+ * kept. Part of a line still unended when a command is given (other than the NUL that follows an
+ * "ack\n") is a fault too: it was written before that command, so it cannot answer it.
+ * `command()` resolves "ack", "closed" (perf ended first), "timeout" (none within ackMs) or "fault". `end()` is called once perf has closed its descriptors, so nothing more can arrive.
  */
 export function acknowledgments(ackMs = ACK_MS) {
   let partial = "", given = 0, heard = 0, ended = false;
@@ -147,6 +148,7 @@ export function acknowledgments(ackMs = ACK_MS) {
     command() {
       if (waiting) throw new Error("a perf command is still waiting for its acknowledgment");
       given += 1;
+      if (partial.replace(/\0/g, "") !== "") fail(`perf wrote ${JSON.stringify(partial.slice(0, 80))} on its acknowledgment descriptor before command ${given} was given`);
       return /** @type {Promise<"ack" | "closed" | "timeout" | "fault">} */ (new Promise((resolve) => {
         if (fault) return resolve("fault");
         if (ended) return resolve("closed");
@@ -296,6 +298,20 @@ export function parsePerfCounts(/** @type {string} */ text) {
 }
 
 /**
+ * perf's running percentage from its decimal text: its value (null when the text is not a decimal),
+ * whether the text is above 100 and whether it is exactly 100, both read from the digits before
+ * conversion, since a value a hair either side of 100 converts to exactly 100.
+ * @param {string} text
+ */
+function percent(text) {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(text);
+  if (!m) return { pct: null, over: false, full: false };
+  const whole = m[1].replace(/^0+(?=\d)/, ""), zeros = /^0*$/.test(m[2] ?? "");
+  const over = Number(whole) > 100 || (whole === "100" && !zeros);
+  return { pct: Number(text), over, full: whole === "100" && zeros };
+}
+
+/**
  * A count's counts from perf's rows a CPU (`-A -x , -G`: CPU, count, unit, event, cgroup, running
  * time in ns, running percentage), each event summed here over `cpus`, the CPUs perf was given. An
  * event is usable only when every one of those CPUs gave it exactly one row, with a whole count, a
@@ -308,7 +324,7 @@ export function parsePerfCounts(/** @type {string} */ text) {
  */
 export function parsePerCpuCounts(text, cpus) {
   if (!Array.isArray(cpus) || !cpus.length || !cpus.every((c) => Number.isSafeInteger(c) && c >= 0)) throw new Error(`a count's CPUs are ${JSON.stringify(cpus)}, not a list of CPU numbers`);
-  /** @type {Map<string, Map<number, { raw: string, count: number | null, run: number | null, pct: number | null, pctRaw: string, twice: boolean }>>} */
+  /** @type {Map<string, Map<number, { raw: string, count: number | null, run: number | null, pct: number | null, over: boolean, full: boolean, pctRaw: string, twice: boolean }>>} */
   const rows = new Map();
   for (const line of text.split("\n")) {
     const [cpuField, value = "", , event, , run, running] = line.split(",");
@@ -322,7 +338,7 @@ export function parsePerCpuCounts(text, cpus) {
       raw,
       count: /^\d+$/.test(raw) ? Number(raw) : null,
       run: /^\d+$/.test(run?.trim() ?? "") ? Number(run) : null,
-      pct: /^\d+(?:\.\d+)?$/.test(running?.trim() ?? "") ? Number(running) : null,
+      ...percent(running?.trim() ?? ""),
       pctRaw: running?.trim() ?? "",
       twice: at.has(n),
     });
@@ -341,8 +357,10 @@ export function parsePerCpuCounts(text, cpus) {
       if (r.twice) error ??= `two rows for CPU ${cpu}`;
       if (r.count === null) error ??= `CPU ${cpu}: ${r.raw || "missing count"}`;
       else if (!r.run) error ??= `CPU ${cpu}: no running time, so perf is not shown to have counted there`;
-      // A percentage above 100 is not one perf can mean; the lowest would read it as 100.
-      if (r.pct !== null && !(r.pct <= 100)) error ??= `CPU ${cpu}: running percentage ${r.pctRaw} is outside 0 to 100`;
+      // A percentage above 100 is not one perf can mean; the lowest would read it as 100. Read from
+      // its digits, as one a hair above or below 100 converts to exactly 100.
+      if (r.over) error ??= `CPU ${cpu}: running percentage ${r.pctRaw} is outside 0 to 100`;
+      else if (r.pct === 100 && !r.full) error ??= `CPU ${cpu}: running percentage ${r.pctRaw} is below 100 but converts to 100`;
       runningPct = r.pct === null || runningPct === null ? null : Math.min(runningPct, r.pct);
       count += r.count ?? 0;
     }

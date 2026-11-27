@@ -114,17 +114,18 @@ test("a build.mjs that exits with an error or is killed skips that app's results
 /**
  * run-all.mjs's steps from count through the builds, run with recording effects: `outcome` is each
  * call's result by its script (by default it ends with 0).
- * @param {(script: string) => { stopped?: string | null, code?: number | null }} [outcome]
+ * @param {(script: string) => { stopped?: string | null, code?: number | null, live?: boolean } | Promise<{ stopped?: string | null, code?: number | null, live?: boolean }>} [outcome]
+ * @param {string} [from] the first step
  */
-async function runRound(outcome = () => ({})) {
+async function runRound(outcome = () => ({}), from = "count") {
   const all = calls("r13", "10", ["corten", "gin"], ["u1", "u2"]);
   /** @type {string[]} */
   const log = [];
-  const run = runSteps(stepsUntil("count", "build").steps, all, {
+  const run = runSteps(stepsUntil(from, "build").steps, all, {
     call: async (limit, args) => {
       log.push(`call ${args[0]}`);
-      const r = outcome(args[0]);
-      return { stopped: r.stopped ?? null, code: r.code === undefined ? 0 : r.code };
+      const r = await outcome(args[0]);
+      return { stopped: r.stopped ?? null, code: r.code === undefined ? 0 : r.code, live: r.live ?? false };
     },
     progress: (what) => log.push(`progress ${what}`),
     skip: (step, why) => log.push(`skip ${step}: ${why}`),
@@ -170,6 +171,49 @@ test("a count call that exits 4, or is stopped or killed before count.mjs saw it
   await run;
   assert.deepEqual(log.slice(log.indexOf("call look.mjs"), log.indexOf("call look.mjs") + 4), ["call look.mjs", "skip browser: look.mjs ran longer than 15 minutes, so it was stopped", "reset", "close browser"]);
   assert.ok(log.includes("progress finished"));
+});
+
+test("a call left running after its stop, in any step, ends the round: no clean slate, later call, step or summary", async () => {
+  // A call before the count step that never exits after TERM and KILL, through superviseCall itself.
+  const stuckCall = async () => {
+    const stuck = fakeChild();
+    return superviseCall(/** @type {any} */ (stuck), { label: "run-ssr.mjs", limitMs: 0, idleMs: Infinity, tickMs: 10, graceMs: 20, releaseMs: 20, write: () => {}, signalGroup: () => {} });
+  };
+  const first = await stuckCall();
+  assert.equal(first.live, true);
+  const { run, log } = await runRound(async (script) => (script === "run-ssr.mjs" ? stuckCall() : {}), "fixture");
+  await assert.rejects(run, /run-ssr\.mjs was still running .* after it was stopped.*; the round stopped in its fixture step/);
+  assert.match(log.at(-1) ?? "", /^skip fixture: run-ssr\.mjs ran longer than 0 minutes, so it was stopped; run-ssr\.mjs was still running .*, so the round stops here and nothing more runs on this host$/);
+  for (const after of ["reset", "progress end fixture", "progress start api", "call count.mjs", "progress start count", "call summarize.mjs", "done", "progress finished"]) assert.ok(!log.includes(after), `${after} after a live call\n${log.join("\n")}`);
+  // In the browser step and in the summary too.
+  const browser = await runRound((script) => (script === "look.mjs" ? { stopped: "look.mjs was still running", code: null, live: true } : {}));
+  await assert.rejects(browser.run, /the round stopped in its browser step/);
+  assert.ok(!browser.log.includes("reset") && !browser.log.includes("call bytes.mjs") && !browser.log.includes("call summarize.mjs"));
+  const summary = await runRound((script) => (script === "summarize.mjs" ? { stopped: "summarize.mjs was still running", code: null, live: true } : {}));
+  await assert.rejects(summary.run, /the round stopped in its summary step/);
+  assert.ok(!summary.log.includes("done") && !summary.log.includes("progress finished"));
+  // The control: a call stopped and seen to exit skips the rest of its step, asks for a clean slate and goes on.
+  const exited = await runRound((script) => (script === "run-ssr.mjs" ? { stopped: "run-ssr.mjs ran longer than 5 minutes, so it was stopped", code: null } : {}), "fixture");
+  await exited.run;
+  assert.ok(exited.log.includes("reset") && exited.log.includes("call count.mjs") && exited.log.includes("progress finished"));
+});
+
+test("a build left running after its stop ends the round; one stopped and seen to exit skips its app alone", async () => {
+  const { log, run } = (() => {
+    const all = calls("r13", "10", ["corten", "gin"], ["u1", "u2"], ["django"]);
+    /** @type {string[]} */
+    const log = [];
+    return { log, run: buildStep(all, [], {
+      minutes: () => 0,
+      call: async (limit, args) => { log.push(`call ${args.at(-1)}`); return args.at(-1) === "gin" ? { stopped: "build.mjs r13 gin was still running", code: null, live: true } : { stopped: null, code: 0 }; },
+      progress: (what) => log.push(`progress ${what}`),
+      skip: (step, why) => log.push(`skip ${step}: ${why}`),
+      reset: () => log.push("reset"),
+    }) };
+  })();
+  await assert.rejects(run, /the round stopped in its build step/);
+  assert.deepEqual(log.slice(-2), ["call gin", "skip build: build.mjs r13 gin was still running, so the round stops here and nothing more runs on this host"]);
+  assert.ok(!log.includes("reset"));
 });
 
 test("a round that starts again in its count step goes on only where that step started in another boot, known by its ID", () => {
@@ -443,7 +487,7 @@ test("a call settles on its process's exit and releases an output something it s
   const cleanRun = superviseCall(/** @type {any} */ (clean), { label: "conform.mjs", limitMs: Infinity, idleMs: Infinity, signalGroup: (_, s) => signals.push(s), write: (c) => wrote.push(String(c)), releaseMs: 5000 });
   clean.stdout.emit("data", Buffer.from("ok"));
   clean.exitCode = 0; clean.emit("exit", 0, null); clean.emit("close", 0, null);
-  assert.deepEqual(await cleanRun, { stopped: null, code: 0 });
+  assert.deepEqual(await cleanRun, { stopped: null, code: 0, live: false });
   assert.deepEqual(wrote, ["ok"]);
   assert.deepEqual(signals, []);
 });
@@ -470,7 +514,7 @@ test("a stopped call's group is signalled only while its process is unreaped, an
   const reapedRun = superviseCall(/** @type {any} */ (reaped), { label: "look.mjs", limitMs: 0, idleMs: 0, tickMs: 10, graceMs: 20, releaseMs: 1000, write: () => {}, signalGroup: (_, s) => none.push(s) });
   await wait(100);
   reaped.emit("exit", 0, null); reaped.emit("close", 0, null);
-  assert.deepEqual(await reapedRun, { stopped: null, code: 0 });
+  assert.deepEqual(await reapedRun, { stopped: null, code: 0, live: false });
   assert.deepEqual(none, []);
   // Never exits: SIGTERM, then SIGKILL while still unreaped, then left unreferenced with its output released.
   const stuck = fakeChild();
@@ -481,7 +525,21 @@ test("a stopped call's group is signalled only while its process is unreaped, an
   assert.equal(stuckResult.code, null);
   assert.match(stuckResult.stopped ?? "", /count\.mjs was still running 0 s after it was stopped, so it was left and its output released/);
   assert.ok(stuck.stdout.destroyed && stuck.stderr.destroyed && stuck.unrefs === 1);
+  assert.equal(stuckResult.live, true);
   assert.notEqual(countHalt(stuckResult), null);
+});
+
+test("a real call that could not be started settles with why, never as an exit, though Node has set its exit code", async () => {
+  const child = spawn(join(tmpdir(), "corten-no-such-command-i2151"), [], { stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+  /** @type {string[]} */
+  const signals = [];
+  const result = await superviseCall(child, { label: "count.mjs", limitMs: Infinity, idleMs: Infinity, signalGroup: (_, s) => signals.push(s), write: () => {}, releaseMs: 500 });
+  assert.equal(child.pid, undefined);
+  assert.equal(result.code, null);
+  assert.equal(result.live, false);
+  assert.match(result.stopped ?? "", /^count\.mjs could not be started: spawn .*ENOENT/);
+  assert.notEqual(countHalt(result), null);
+  assert.deepEqual(signals, []);
 });
 
 test("a real call that exits 4 while a detached descendant holds its output settles within the release bound", async () => {
@@ -781,7 +839,14 @@ test("a count's events are summed over each CPU perf was given, and kept only wh
     [two("CPU1,23,,instructions:k,app.scope,7000,101.00,,"), [0, 1], "CPU 1: running percentage 101.00 is outside 0 to 100"],
     [`CPU0,100,,instructions:k,app.scope,5000,100.01,,\nCPU1,23,,instructions:k,app.scope,7000,100.00,,`, [0, 1], "CPU 0: running percentage 100.01 is outside 0 to 100"],
     [two(`CPU1,23,,instructions:k,app.scope,7000,${"9".repeat(400)},,`), [0, 1], `CPU 1: running percentage ${"9".repeat(400)} is outside 0 to 100`],
+    // Read from its digits, not its conversion: a hair above 100, or below it, converts to exactly 100.
+    [two("CPU1,23,,instructions:k,app.scope,7000,100.000000000000001,,"), [0, 1], "CPU 1: running percentage 100.000000000000001 is outside 0 to 100"],
+    [two("CPU1,23,,instructions:k,app.scope,7000,0100.0000000000000001,,"), [0, 1], "CPU 1: running percentage 0100.0000000000000001 is outside 0 to 100"],
+    [two("CPU1,23,,instructions:k,app.scope,7000,99.99999999999999999,,"), [0, 1], "CPU 1: running percentage 99.99999999999999999 is below 100 but converts to 100"],
   ]) assert.equal(parsePerCpuCounts(/** @type {string} */ (text), /** @type {number[]} */ (cpus)).get("instructions:k")?.error, error, String(text));
+  // The controls: exactly 100 however it is written, and a percentage below 100 kept as such.
+  for (const text of ["100", "100.00", "0100.000", "100.000000000000000000"]) assert.deepEqual(parsePerCpuCounts(two(`CPU1,23,,instructions:k,app.scope,7000,${text},,`), [0, 1]).get("instructions:k"), { count: 123, runningPct: 100, error: null }, text);
+  assert.deepEqual(parsePerCpuCounts(two("CPU1,23,,instructions:k,app.scope,7000,99.99,,"), [0, 1]).get("instructions:k"), { count: 123, runningPct: 99.99, error: null });
   // A total (no CPU column) is not a count's row at all.
   assert.equal(parsePerCpuCounts("123,,instructions:k,app.scope,7000,100.00,,", [1]).get("instructions:k"), undefined);
   // The row a count keeps from such a CPU is none: the counter is unusable and named.
@@ -855,6 +920,27 @@ test("perf's acknowledgments are bound to its commands: one to each, in order, a
   cut.end();
   assert.equal(await cutAsked, "closed");
   assert.match(String(cut.error()), /perf left "ac" on its acknowledgment descriptor/);
+  // Part of a line written before a command is given cannot answer it, however the rest arrives:
+  // "ack\n\0ac" during enable, then disable, then "k\n\0" is a fault, not an ack for both.
+  const split = acknowledgments(1000);
+  const splitEnable = split.command();
+  split.data("ack\n\0ac");
+  assert.equal(await splitEnable, "ack");
+  const splitDisable = split.command();
+  split.data("k\n\0");
+  assert.equal(await splitDisable, "fault");
+  assert.match(String(split.error()), /perf wrote "\\u0000ac" on its acknowledgment descriptor before command 2 was given/);
+  // The control: the NUL after an "ack\n", alone or split from it, is no fragment.
+  const nul = acknowledgments(1000);
+  const nulEnable = nul.command();
+  nul.data("ack\n");
+  assert.equal(await nulEnable, "ack");
+  nul.data("\0");
+  const nulDisable = nul.command();
+  nul.data("ack\n\0");
+  assert.equal(await nulDisable, "ack");
+  nul.end();
+  assert.equal(nul.error(), null);
   // One command at a time.
   const busy = acknowledgments(30);
   const pending = busy.command();

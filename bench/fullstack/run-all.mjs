@@ -232,8 +232,9 @@ try {
   // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
   const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
   const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES), pageOnly);
-  // A count call that exits 4 or is stopped ends the round there (round.mjs, countHalt): no later
-  // step, clean slate or summary, and the round is recorded failed.
+  // A count call that exits 4 or is stopped (round.mjs, countHalt), or any call left running after
+  // its stop, ends the round there: no later step, clean slate or summary, and the round is
+  // recorded failed.
   await runSteps(first ? stepsUntil(first, until).steps : [], all, {
     call,
     progress,

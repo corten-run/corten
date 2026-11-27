@@ -133,7 +133,10 @@ export const killGraceMs = 30_000;
  * `close` then never comes. The output gets `releaseMs` after the exit to close; then it is
  * destroyed and the call settles with its exit code and a reason, so a released output never
  * reads as a clean success. A stopped call whose process does not exit at all is released
- * `graceMs + releaseMs` after the stop, left running unreferenced, and settles the same way.
+ * `graceMs + releaseMs` after the stop, left running unreferenced, and settles the same way,
+ * with `live` true: its stop was not confirmed, and the caller starts no more work on the host
+ * (runSteps, buildStep). A process that could not be started (it has no PID; Node sets its exit
+ * code before the error comes) settles with a reason, never as an exit.
  * The effects are passed in so round.test.mjs runs this with its own.
  * @param {import("node:events").EventEmitter & { pid?: number, exitCode: number | null, signalCode: string | null, stdout?: any, stderr?: any, unref: () => void }} child
  * @param {{
@@ -146,7 +149,7 @@ export const killGraceMs = 30_000;
  *   graceMs?: number,
  *   releaseMs?: number,
  * }} options
- * @returns {Promise<{ stopped: string | null, code: number | null }>}
+ * @returns {Promise<{ stopped: string | null, code: number | null, live: boolean }>}
  */
 export function superviseCall(child, { label, limitMs, idleMs, signalGroup, write, tickMs = 15_000, graceMs = killGraceMs, releaseMs = outputReleaseMs }) {
   return new Promise((done) => {
@@ -161,6 +164,7 @@ export function superviseCall(child, { label, limitMs, idleMs, signalGroup, writ
     let grace;
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let release;
+    let live = false;
     const reaped = () => child.exitCode !== null || child.signalCode !== null;
     // Checked and sent in one step, from a timer: never for a process already reaped.
     const signal = (/** @type {NodeJS.Signals} */ s) => {
@@ -171,14 +175,14 @@ export function superviseCall(child, { label, limitMs, idleMs, signalGroup, writ
       if (settled) return;
       settled = true;
       clearInterval(watch); clearTimeout(grace); clearTimeout(release);
-      done({ stopped: stopped && why ? `${stopped}; ${why}` : stopped ?? why, code });
+      done({ stopped: stopped && why ? `${stopped}; ${why}` : stopped ?? why, code, live });
     };
     const arm = (/** @type {number} */ ms) => {
       if (release !== undefined) return;
       release = setTimeout(() => {
         const running = !reaped();
         child.stdout?.destroy(); child.stderr?.destroy();
-        if (running) child.unref();
+        if (running) { child.unref(); live = true; }
         settle(running ? `${label} was still running ${Math.round(ms / 1000)} s after it was stopped, so it was left and its output released`
           : `${label} exited ${code ?? child.signalCode} but its output stayed open ${Math.round(ms / 1000)} s after, so it was released`);
       }, ms);
@@ -200,8 +204,9 @@ export function superviseCall(child, { label, limitMs, idleMs, signalGroup, writ
       arm(releaseMs);
     });
     child.on("close", (exit) => { code ??= exit; settle(null); });
-    // A process that could not be started: no exit comes, only this and its close.
-    child.on("error", (/** @type {Error} */ e) => { if (!reaped() && child.pid === undefined) settle(`${label} could not be started: ${e.message}`); });
+    // A process that could not be started: no PID, and no exit comes, only this and its close. Node
+    // has already set its exit code (a negative errno), so the PID alone tells it from an exit.
+    child.on("error", (/** @type {Error} */ e) => { if (child.pid === undefined) settle(`${label} could not be started: ${e.message}`); });
   });
 }
 
@@ -361,7 +366,7 @@ export const buildsLeft = (all, built) => all.filter(([step]) => step === "build
  * @param {string[]} built
  * @param {{
  *   minutes: () => number,
- *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null }>,
+ *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null, live?: boolean }>,
  *   progress: (what: string) => void,
  *   skip: (step: string, why: string) => void,
  *   reset: () => void,
@@ -378,7 +383,9 @@ export async function buildStep(all, built, { minutes, call, progress, skip, res
     }
     progress(`build ${app}`);
     built.push(app);
-    const { stopped, code } = await call(limit, args);
+    const result = await call(limit, args);
+    leftRunning("build", result, skip);
+    const { stopped, code } = result;
     if (stopped) {
       skip("build", `${stopped} (${app}; the next app's build goes on)`);
       reset();
@@ -387,6 +394,21 @@ export async function buildStep(all, built, { minutes, call, progress, skip, res
       reset();
     }
   }
+}
+
+/**
+ * Stops the round where a call was left running (superviseCall's `live`): it was stopped and not
+ * seen to exit, so it may still hold the host's cores, containers or counters, and no clean slate,
+ * later call or step may run beside it. Records why as `step`'s skip and throws.
+ * @param {string} step
+ * @param {{ stopped: string | null, live?: boolean }} result
+ * @param {(step: string, why: string) => void} skip
+ */
+function leftRunning(step, { stopped, live }, skip) {
+  if (!live) return;
+  const why = stopped ?? "a call was left running";
+  skip(step, `${why}, so the round stops here and nothing more runs on this host`);
+  throw new Error(`${why}; the round stopped in its ${step} step`);
 }
 
 /**
@@ -410,15 +432,15 @@ export function countHalt({ stopped, code }) {
  * its step and asks for `reset`; `build` runs the build step (buildStep), `open` and `close` start
  * and stop what a step needs (the browser step's apps; `open` gives why browser.mjs cannot run, or
  * null), and `done` is called once the summary has run, before the round is recorded finished. A
- * count call whose end stops the round (countHalt) stops it there: the reason is recorded as the
- * step's skip, and no later call, clean slate, step or summary runs, nor is the step's end or the
- * round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
+ * count call whose end stops the round (countHalt), or any call left running after its stop
+ * (superviseCall's `live`), stops it there: the reason is recorded as the step's skip, and no later
+ * call, clean slate, step or summary runs, nor is the step's end or the round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
  * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
  * loop itself.
  * @param {string[]} list
  * @param {ReturnType<typeof calls>} all
  * @param {{
- *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null }>,
+ *   call: (limit: number, args: string[]) => Promise<{ stopped: string | null, code: number | null, live?: boolean }>,
  *   progress: (what: string) => void,
  *   skip: (step: string, why: string) => void,
  *   reset: () => void,
@@ -442,6 +464,7 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
     if (step === "build") await build(clock());
     else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
       const result = await call(limit, args);
+      leftRunning(step, result, skip);
       const halt = step === "count" ? countHalt(result) : null;
       if (halt) {
         skip(step, `${halt}, so the round stops here and nothing more runs on this host`);
@@ -459,6 +482,7 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
   progress("start summary");
   // A round whose summary failed has not finished.
   const result = await call(10, summary);
+  leftRunning("summary", result, skip);
   if (result.stopped || result.code !== 0) throw new Error(result.stopped ?? `summarize.mjs exited with ${result.code}`);
   done();
   progress("finished");

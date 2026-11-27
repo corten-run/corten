@@ -1388,7 +1388,10 @@ three runs:
    or prints nothing for an hour (SIGTERM to its process group, SIGKILL 30 s later, neither once
    its process has been reaped). A call ends when its process exits: output that something it
    started holds open is released 10 s after the exit, and the call is then taken as stopped, never
-   as a clean exit. A kernel lockup (r8's) panics the kernel, which reboots the
+   as a clean exit. A stopped call whose process is still running 40 s after its SIGTERM is left
+   and ends the round in whatever step it is, with the reason in `skipped.txt`: no clean slate,
+   later call, step or summary runs beside it, and the round is recorded failed. A call that could
+   not be started (no process) is taken as stopped, never as an exit. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step.
    The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
    seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
@@ -1517,16 +1520,17 @@ three runs:
    control descriptor (`--control fd:3,4`), and once the load has ended `perf` must not have exited
    and must acknowledge `disable` before it is asked to stop, each within 10 s, one
    acknowledgment to each command in turn; a `perf` that ends before its load did, does not
-   acknowledge, or acknowledges a command it was not given (or writes anything else there), fails
-   that pass
+   acknowledge, or acknowledges a command it was not given (or writes anything else there,
+   including part of a line before the command it would answer), fails that pass
    ([#2183 The catalog count reads a perf that ended before its load did as one that counted the whole load](https://github.com/corten-run/corten/issues/2183)).
    `perf` is given its CPUs as `-a` or `-C` with a CPU list and nothing else, and prints each
    CPU's count on a row of its own (`-A`), which `count.mjs` sums: `perf` 6.1 goes on past a CPU
    whose counter it could not enable, and its own total sums the enabled and running times of every
    CPU, so a total at 100% does not show that each CPU counted. An event is usable only when every
    CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
-   count, a running time above zero and 100% of its enabled time (a percentage above 100 is
-   refused, not read as 100), and no other CPU did. A CPU the
+   count, a running time above zero and 100% of its enabled time (read from the digits perf
+   printed: a percentage above 100 is refused, not read as 100, and one just below 100 is not taken
+   as 100), and no other CPU did. A CPU the
    app never ran on during the load gives no running time either and cannot be told from one whose
    counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
    CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where
