@@ -382,7 +382,8 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
     let got = ask("POST", "/text", "content-type: text/plain\r\ncontent-length: 0\r\n", "").await;
     assert!(got.starts_with("HTTP/1.1 200") && got.ends_with("\"\""), "read whole by an extractor: {got}");
     // A request that asks to switch protocols has no body either, and still brings what switches.
-    let got = answer("GET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close, Upgrade\r\nupgrade: websocket\r\n\r\n".into()).await;
+    let got =
+        answer("GET /told HTTP/1.1\r\nhost: localhost\r\nconnection: close, Upgrade\r\nupgrade: websocket\r\n\r\n".into()).await;
     let switching = ENDED.replace("switches false", "switches true");
     assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&switching), "{got}");
     // The connection goes on to its next request.
