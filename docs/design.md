@@ -3296,8 +3296,16 @@ rules something out.
 
     Last checked: 2026-11-26, the tag of an answer that took the pass at `10bfc8a21` against
     `e87ad02da`, instructions and allocations a request and idle memory by
-    `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), and a scope's size and
-    its fields' offsets on both;
+    `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), a scope's size and
+    its fields' offsets on both, and the crate's tests against eleven ways of breaking it. Ten
+    fail a test: the type left out of such an answer's tag or hashed under another name, every
+    scope's lines said to need no search, a line that is part of a tag or one that leaves an
+    answer untagged not looked for in a scope's lines, what the lines say not read, no answer
+    searched and no answer spared the search each fail one of its two tests or the pass's
+    second, and every answer tagged as one that took the pass, or only those that did not,
+    fails two of the tag's own. The eleventh, a scope told of other lines than its own, fails
+    none while no scope's lines matter to a tag, and the first of the two tests fails once
+    one's do;
     2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
     instructions and allocations a request by `bench/request-cost` in the hosted Request Cost job
     ([run 45924572746](https://github.com/corten-run/corten/actions/runs/45924572746), AMD EPYC
