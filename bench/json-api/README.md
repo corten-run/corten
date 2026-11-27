@@ -63,8 +63,44 @@ The default axum image answered gzip negotiation with identity. Each adapter
 had at least one missing offer or inadequate generator headroom in an identity
 or comparison pass, so **none produced a three-pass paired estimate**. The pilot
 does not support ranking these apps by CPU or latency or quantifying the cost of
-reconnecting. Run the same command on an idle native Linux host before publishing
-a paired comparison; an official group round also requires the exact-image audits.
+reconnecting.
+
+**Paired follow-up, 2026-11-27.** The three release images from `a8ddd78d3`
+ran sequentially with the marketplace fixture, the same one-CPU pin and 1 GiB.
+Node 26.13.1 ran on two other logical CPUs in Linux (WSL2); the machine was
+shared. At 30 offers/s axum completed its supported arms, but Corten and ntex
+dropped eight and three identity offers respectively. At **10 offers/s**
+(`f8709c010`), all supported arms passed all three rotated passes, with no
+failures or drops in warmup or measurement. Each measured pass made 120 GETs:
+four sockets with 30 requests each for persistent identity/gzip, versus twelve
+with ten each for turnover. All opened sockets closed. The default axum gzip
+arm returned correct identity bodies in all 360 measured responses; it is
+unsupported, not zero-cost.
+
+Medians [min, max] across those three 10/s passes. Body bytes are per successful
+response, excluding headers; CPU is counted app microseconds per success.
+
+| App | Arm | Body bytes | App CPU µs | p99 ms | Successful requests/s |
+|---|---|---:|---:|---:|---:|
+| Corten | Identity | 5,948 | 530 [446, 552] | 90.0 [22.7, 252.1] | 10.08 [10.07, 10.08] |
+| Corten | Gzip | 1,361 | 512 [436, 528] | 139.6 [20.8, 298.4] | 10.07 [10.06, 10.08] |
+| Corten | Reconnect | 5,948 | 483 [418, 646] | 25.0 [22.6, 28.8] | 10.08 [10.07, 10.08] |
+| axum | Identity | 5,948 | 516 [446, 665] | 41.6 [25.4, 164.6] | 10.08 [10.04, 10.08] |
+| axum | Reconnect | 5,948 | 576 [552, 691] | 55.3 [44.5, 66.8] | 10.08 [10.08, 10.08] |
+| ntex | Identity | 5,948 | 827 [645, 1,021] | 23.4 [21.5, 44.9] | 10.08 [10.07, 10.08] |
+| ntex | Gzip | 1,542 | 855 [692, 864] | 20.1 [17.9, 65.7] | 10.08 [10.05, 10.08] |
+| ntex | Reconnect | 5,948 | 850 [800, 1,222] | 20.6 [19.0, 29.9] | 10.08 [10.08, 10.08] |
+
+Gzip saved **77%** of Corten's body bytes and **74%** of ntex's, unchanged
+across passes. Its within-pass app CPU differences were −18 [−116, +82] and
++37 [−329, +210] µs/success respectively. Reconnecting instead of keeping the
+connection changed app CPU by −29 [−70, +116] for Corten, +105 [−89, +175]
+for axum and +155 [−171, +395] for ntex. Those intervals span both directions.
+This pilot shows bytes saved and the connections actually replaced; it does
+not establish a CPU advantage, a saturation rate or a framework ranking.
+The [per-pass summary](transport-pilot-2026-11-27.json) retains both rates,
+image identities, failures, paired inputs and generator headroom. An official
+group round still requires the independent exact-image audits.
 
 ```sh
 node --test bench/json-api/*.test.mjs
