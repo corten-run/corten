@@ -417,7 +417,7 @@ edit starts no run, since it would count the same commits again and so draw them
 red check on a pull request that has since declared `measured` stands, with its reason in its
 summary, until such a run: a maintainer reads the summary and the description as it now is,
 and the check's color only for the commit and description it ran with. The check is required
-on `main` from 2026-11-27, so that pull request merges only once such a run has read the line;
+on `main`, so that pull request merges only once such a run has read the line;
 under `measured` the figures decide nothing, so that run is not a count taken again for its
 result.
 
@@ -425,8 +425,7 @@ A green check is evidence for a reviewer to read, not an attestation: the counts
 pull request's own tree, by its own workflow, scope, kit and comparison. A pull request that
 changes any of those has that change reviewed for what it does to the verdict. Being required
 makes the check no more than that: it is green for a pull request it did not count, for one
-declared `measured` whatever its counts, and for one that declares no way when the rule holds,
-so the way and what the measured way gives are still the review's to accept
+declared `measured` whatever its counts, and for one that declares no way when the rule holds
 ([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2.1, Counted).
 
 The same comparison of two builds counted on a host of one's own, each run's `--json` output in
