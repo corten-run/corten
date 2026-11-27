@@ -28,11 +28,12 @@
 .picks { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 8px; color: var(--muted); }
 .picks output { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .picks button:first-of-type { margin-left: auto; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-/* Controls that need the script, and those only a browser without it needs. */
+/* Controls that need the script. The Filter and Save buttons are drawn either way: they are the
+   visible way to send the server's filter and save, and a browser that allows scripts may still
+   not run the builder's (a module that did not load). */
 @media (scripting: none) {
   .script, .history, .table td:nth-child(2), .table th:nth-child(2), .lines button, .curve svg { display: none; }
 }
-@media (scripting: enabled) { .no-script { display: none; } }
 .hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* The collection: rows scroll inside their box, under a header that stays. */

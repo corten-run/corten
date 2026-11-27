@@ -504,6 +504,18 @@ export function retry(parts) {
   save(s, parts);
 }
 
+/**
+ * The Save button. Every change is saved as it is made, so Save keeps the page and sends only a
+ * change not saved yet (after the server could not be reached, as Try again does). Where this
+ * module does not run (no JavaScript, or it did not load) the button sends the form.
+ * @param {MouseEvent} event @param {Parts} parts
+ */
+export function saveNow(event, parts) {
+  event.preventDefault();
+  if (parts.status.dataset.state === "offline") retry(parts);
+  else save(kept(), parts);
+}
+
 /** @param {Parts} parts */
 export function undo(parts) {
   step(kept(), parts, true);
@@ -885,7 +897,12 @@ export function filter(input, browse) {
   tally(browse);
 }
 
-/** With JavaScript the filter applies as it is typed: Enter sends nothing. @param {SubmitEvent} event */
+/**
+ * The rows already filter as the player types, so a submit (Enter, or the Filter button) keeps the
+ * page. Where this module does not run (no JavaScript, or it did not load) the form is sent and the
+ * server filters the page.
+ * @param {SubmitEvent} event
+ */
 export function stay(event) {
   event.preventDefault();
 }

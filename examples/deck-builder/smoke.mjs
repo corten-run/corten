@@ -1,8 +1,9 @@
 // Browser smoke test and timings for the deck builder: every move in the browser, autosave with
-// its refusals, another tab's edits, and the same deck built without JavaScript.
+// its refusals, another tab's edits, the same deck built without JavaScript, and filtered and saved
+// with JavaScript on but the builder's module not loading, in Chromium, Firefox and WebKit.
 // Usage: node examples/deck-builder/smoke.mjs http://localhost:18487
 import http from "node:http";
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
 
@@ -160,6 +161,30 @@ try {
   await page.keyboard.press("Control+Shift+z");
   check("Ctrl+Shift+Z redoes", (await deck(page))["undertow-serpent"] === 1);
   await settled(page);
+
+  // The Filter and Save buttons stay drawn with JavaScript (a page whose builder module did not
+  // load needs them, below); with the module, both keep the page: the rows are already filtered as
+  // typed, and the deck already saved.
+  const saveButton = 'form[method=post] button:text-is("Save")';
+  await page.fill("input[type=search]", "drake");
+  const typedRows = await page.locator("tbody tr:not([hidden])").count();
+  const drawnWithScripts = [await page.isVisible("form[role=search] button"), await page.isVisible(saveButton)];
+  const savedVersion = await version(page);
+  let posted = 0;
+  /** @param {import("@playwright/test").Request} r */
+  const countPost = (r) => r.method() === "POST" && new URL(r.url()).pathname === "/deck" && (posted += 1);
+  page.on("request", countPost);
+  if (drawnWithScripts[0]) await page.click("form[role=search] button");
+  if (drawnWithScripts[1]) await page.click(saveButton);
+  await page.waitForTimeout(300);
+  page.off("request", countPost);
+  const kept = { url: page.url(), rows: await page.locator("tbody tr:not([hidden])").count(), version: await version(page), state: (await status(page)).state };
+  check(
+    "with JavaScript the Filter and Save buttons are drawn and keep the page, filtered and saved",
+    drawnWithScripts.every(Boolean) && kept.url === `${base}/` && kept.rows === typedRows && typedRows === 1 && posted === 0 && kept.version === savedVersion && kept.state === "",
+    `drawn: ${drawnWithScripts.join()}; ${kept.url}; ${kept.rows} of ${typedRows} rows; ${posted} saves sent; version ${savedVersion} then ${kept.version}; state "${kept.state}"`,
+  );
+  await page.fill("input[type=search]", "");
 
   // Select several and add them.
   await row(page, "lantern-warden").locator("input[type=checkbox]").check();
@@ -493,6 +518,73 @@ try {
   await row(reduced, "pearl-diver").locator("button", { hasText: "Add" }).click();
   check("reduced motion keeps the change without animation markers", !(await reduced.locator("[data-motion]").count()));
   await reducedContext.close();
+
+  // With JavaScript but the builder's module never loading (every request for it, the runtime's
+  // retries too, aborted), in each engine: `scripting` still matches `enabled`, so the Filter and
+  // Save buttons must not depend on it to be drawn. The runtime (a module of its own) still sends
+  // both forms; the server filters the page and saves the counts as typed.
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const blockedContext = await (own ?? browser).newContext();
+    const saveCase = `${name} with JavaScript and the builder's module not loading: the Save button is drawn and the server saves the counts as typed`;
+    const filterCase = `${name} with JavaScript and the builder's module not loading: the Filter button is drawn and sends the GET the server filters`;
+    try {
+      const blocked = await blockedContext.newPage();
+      let aborted = 0;
+      await blocked.route((url) => url.pathname.endsWith("/deck_builder.js"), (route) => (aborted += 1, route.abort()));
+      await blocked.goto(base);
+      // The runtime ran, and it found no builder module to hand events to.
+      const ran = await blocked.evaluate(async () => {
+        const { ready } = await import("corten");
+        await ready;
+        return document.querySelectorAll('script[type="module"][src$="/deck_builder.js"]').length;
+      });
+      const first = (await blocked.getAttribute("ul li[data-key]", "data-key")) ?? "";
+      if (!(await blocked.isVisible(saveButton))) {
+        check(saveCase, false, `aborted ${aborted}; the Save button is not drawn`);
+      } else {
+        await blocked.fill(`li[data-key="${first}"] input[type=number]`, "");
+        const [response] = await Promise.all([
+          blocked.waitForResponse((r) => new URL(r.url()).pathname === "/deck" && r.request().method() === "POST", { timeout: 15_000 }),
+          blocked.click(saveButton),
+        ]);
+        // The deck the server now has, as a new page draws it.
+        const fresh = await (await blockedContext.request.get(base)).text();
+        const inDeck = new RegExp(`<li[^>]*data-key="${first}"`).test(fresh);
+        check(
+          saveCase,
+          aborted > 0 && ran === 1 && first !== "" && response.status() === 200 && !inDeck,
+          `aborted ${aborted}; ${response.request().method()} ${response.status()}; ${first} still in the saved deck: ${inDeck}`,
+        );
+      }
+      const button = "form[role=search] button";
+      await blocked.fill("input[type=search]", "oracle");
+      // Typing filtered nothing: no builder handler ran.
+      const before = await blocked.locator("tbody tr:not([hidden])").count();
+      const all = await blocked.locator("tbody tr").count();
+      if (!(await blocked.isVisible(button))) {
+        check(filterCase, false, `aborted ${aborted}; the Filter button is not drawn`);
+      } else {
+        // The runtime sends a GET form itself (a client navigation), so the answer may be a fetch
+        // rather than a document load: either is the server's filter.
+        const answered = blocked.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === "oracle", { timeout: 15_000 });
+        const [response] = await Promise.all([answered, blocked.waitForURL(/[?&]q=oracle/), blocked.click(button)]);
+        // A client navigation draws the answer after its response; give it a moment, then read it.
+        await blocked.waitForFunction(() => document.querySelectorAll("tbody tr:not([hidden])").length === 1, null, { timeout: 5_000 }).catch(() => {});
+        const shownRows = await blocked.locator("tbody tr:not([hidden])").count();
+        check(
+          filterCase,
+          aborted > 0 && ran === 1 && before === all && response.request().method() === "GET" && response.status() === 200 && shownRows === 1,
+          `aborted ${aborted}; ${before} of ${all} shown before; ${response.request().method()} ${response.request().resourceType()} ${response.status()}; ${shownRows} rows; ${blocked.url()}`,
+        );
+      }
+    } catch (error) {
+      check(`${name} with JavaScript and the builder's module not loading`, false, String(error));
+    } finally {
+      await blockedContext.close();
+      await own?.close();
+    }
+  }
 
   // The refused, stale, unreachable and cut-off saves above are the browser's own lines for those
   // answers.

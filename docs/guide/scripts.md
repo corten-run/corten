@@ -188,7 +188,10 @@ to do it. A control that also needs something the browser may lack (the clipboar
 `hidden` and shown by its `on:connect` handler once it knows, as corten-ui's `CopyButton` is.
 Not `<noscript>`: it can only add markup when scripts are off, not leave out a control that needs
 them, and the media query does both in the component's stylesheet. `examples/deck-builder`'s
-stylesheet has both rules. `examples/seller-desk`'s grid keeps both its controls without scripts:
+stylesheet has the first rule; its Filter and Save buttons stay drawn with scripts on, since a
+module that did not load still matches `enabled`, and [its smoke](../../examples/deck-builder/smoke.mjs)
+filters the collection and saves a typed count with the builder's module blocked, in Chromium,
+Firefox and WebKit. `examples/seller-desk`'s grid keeps both its controls without scripts:
 its filter is a `GET` form whose Filter button is not drawn with them, and its sort headers are
 links to the sorted page, which the handlers sort in place instead of following. The query
 follows whether scripts are on, not whether this one ran: with JavaScript off for the site it matches `none`, but a script an extension blocks or that

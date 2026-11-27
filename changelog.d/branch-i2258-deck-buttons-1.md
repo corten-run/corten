@@ -1,0 +1,3 @@
+- deck-builder keeps its Filter and Save buttons drawn with scripts on, so a page whose builder
+  module did not load can still filter and save; with the module, both keep the page.
+  ([#2258 Keep deck-builder's Filter and Save buttons drawn when its module fails to load](https://github.com/corten-run/corten/issues/2258))

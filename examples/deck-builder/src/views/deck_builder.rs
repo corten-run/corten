@@ -48,7 +48,9 @@ const BAR: u32 = 48;
 ///
 /// Without JavaScript the same form works: Add and Add selected post the deck with the cards
 /// added, and Save posts the counts as typed. The filter is a `GET` form and the column headers
-/// are links, which the server answers in the order asked.
+/// are links, which the server answers in the order asked. The Filter and Save buttons are drawn
+/// either way, so they still work when the builder's script did not load; with the script, Filter
+/// keeps the page (the rows are filtered as typed) and Save sends only a change not saved yet.
 #[component(css, js)]
 pub fn DeckBuilder<'a>(
     t: Msg,
@@ -150,7 +152,7 @@ pub fn DeckBuilder<'a>(
                         on:input={js::filter(target, browse)}
                     >
                     if let Some(sort) = view.sort { <input type="hidden" name={q.sort} value={sort}> }
-                    <button class={NoScript}>"Filter"</button>
+                    <button>"Filter"</button>
                 </form>
                 <div class={Picks}>
                     <span><output ref={picked}>"0"</output>" selected"</span>
@@ -326,7 +328,7 @@ pub fn DeckBuilder<'a>(
                         }
                     </ul>
                     <p ref={empty} class={Empty} hidden={!lines.is_empty()}>"Drag cards here, or press Add."</p>
-                    <button class={NoScript}>"Save"</button>
+                    <button on:click={js::saveNow(event, parts)}>"Save"</button>
                 </form>
                 <template ref={template}>
                     <DeckLine id="" name="" kind="" cost={0} count={0} owned={0} lift={lift} copies={copies} />
