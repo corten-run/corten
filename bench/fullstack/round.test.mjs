@@ -812,7 +812,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.ok(dropped.started, dropped.units.join("; "));
     const starts = dropped.calls.filter((c) => c.includes("systemctl start corten-bench-r1") || c.includes("start settled"));
     assert.equal(starts.length, 1, starts.join("\n---\n"));
-    assert.match(starts[0], /flock -w \d+ \/tmp\/droplet\.lock/);
+    assert.match(starts[0], /flock -E 75 -w \d+ \/tmp\/droplet\.lock/);
     assert.ok(starts[0].includes("no longer holds"), starts[0]);
     assert.match(dropped.stdout, /the start of corten-bench-r1 on the droplet at 203\.0\.113\.9 was not acknowledged, so whether round r1 is running is not known and the launch lock \/var\/lib\/corten-bench\/launch-r1\.lock is left there/);
     assert.match(dropped.stdout, /systemctl status corten-bench-r1/);
