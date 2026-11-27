@@ -639,6 +639,49 @@ const LINES: &[&str] = &[
     "origin: http://other.example",
     "sec-fetch-site: cross-site",
 ];
+/// Lines a browser sends, each name in the two spellings Corten's connection takes it in by its
+/// bytes (all lower case, and a browser's capitals), and some in spellings it leaves to `http`.
+/// (`host` and `connection` are in both in their own lists.)
+const BROWSER_LINES: &[&str] = &[
+    "user-agent: Mozilla/5.0",
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "accept: text/html",
+    "Accept: */*",
+    "accept-language: en",
+    "Accept-Language: en-US,en;q=0.5",
+    "accept-encoding: gzip",
+    "Accept-Encoding: gzip, deflate, br, zstd",
+    "cookie: a=b",
+    "Cookie: a=b; c=d",
+    "referer: http://localhost/",
+    "Referer: http://other.example/",
+    "upgrade-insecure-requests: 1",
+    "Upgrade-Insecure-Requests: 1",
+    "if-none-match: \"v1\"",
+    "If-None-Match: *",
+    "sec-fetch-site: same-origin",
+    "Sec-Fetch-Site: cross-site",
+    "sec-fetch-mode: navigate",
+    "Sec-Fetch-Mode: cors",
+    "sec-fetch-dest: document",
+    "Sec-Fetch-Dest: empty",
+    "sec-fetch-user: ?1",
+    "Sec-Fetch-User: ?1",
+    "sec-ch-ua: \"Chromium\";v=\"142\"",
+    "Sec-CH-UA: \"Chromium\";v=\"142\"",
+    "sec-ch-ua-mobile: ?0",
+    "Sec-CH-UA-Mobile: ?0",
+    "sec-ch-ua-platform: \"Linux\"",
+    "Sec-CH-UA-Platform: \"Linux\"",
+    "priority: u=0, i",
+    "Priority: u=0, i",
+    "corten: nav",
+    "Corten: nav",
+    "ACCEPT: */*",
+    "Sec-fetch-site: none",
+    "SEC-CH-UA-MOBILE: ?1",
+    "cOrTeN: nav",
+];
 /// A chunked body, as the grammar has it and as it does not.
 const CHUNKED: &[&str] = &[
     "5\r\nhello\r\n0\r\n\r\n",
@@ -789,6 +832,9 @@ fn request(dice: &mut Dice, wild: bool, bodied: bool) -> Vec<u8> {
     headers.extend(asks.into_iter().filter(|line| !line.is_empty()).map(str::to_owned));
     for _ in 0..dice.below(4) {
         headers.push(of(dice, LINES, 11).to_owned());
+    }
+    for _ in 0..dice.below(3) {
+        headers.push(pick(dice, BROWSER_LINES).to_owned());
     }
     // A long line, of a length around the lower of the two limits on a head.
     if chance(dice, 6) {

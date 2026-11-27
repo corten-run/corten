@@ -2510,6 +2510,234 @@ async fn a_header_name_longer_than_http_takes_is_refused_as_hyper_refuses_it() {
     own.stop().await;
 }
 
+/// The names `h1::head` takes by their bytes, each in the two spellings it takes them in: all
+/// lower case, and the capitals a browser writes.
+const USUAL_NAMES: &[(&str, &str)] = &[
+    ("host", "Host"),
+    ("user-agent", "User-Agent"),
+    ("accept", "Accept"),
+    ("accept-language", "Accept-Language"),
+    ("accept-encoding", "Accept-Encoding"),
+    ("connection", "Connection"),
+    ("cookie", "Cookie"),
+    ("referer", "Referer"),
+    ("upgrade-insecure-requests", "Upgrade-Insecure-Requests"),
+    ("if-none-match", "If-None-Match"),
+    ("sec-fetch-site", "Sec-Fetch-Site"),
+    ("sec-fetch-mode", "Sec-Fetch-Mode"),
+    ("sec-fetch-dest", "Sec-Fetch-Dest"),
+    ("sec-fetch-user", "Sec-Fetch-User"),
+    ("sec-ch-ua", "Sec-CH-UA"),
+    ("sec-ch-ua-mobile", "Sec-CH-UA-Mobile"),
+    ("sec-ch-ua-platform", "Sec-CH-UA-Platform"),
+    ("priority", "Priority"),
+    ("corten", "Corten"),
+];
+
+/// The request Corten's connection makes of `head`, a whole head, scanned as the connection
+/// scans one.
+fn built(head: &str) -> Result<crate::h1::head::Head, crate::h1::head::Refusal> {
+    let bytes = Bytes::copy_from_slice(head.as_bytes());
+    let mut indices = Vec::new();
+    let scanned = crate::h1::head::scan(&bytes, 64 * 1024, &mut indices)?.expect("a whole head");
+    assert_eq!(scanned.len, bytes.len(), "{head:?} is one head");
+    crate::h1::head::build(&bytes, scanned, &indices, &mut None)
+}
+
+/// A head's lines as a request's map holds them: each name's text and each value, in the map's
+/// order.
+fn lines(headers: &::http::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), String::from_utf8_lossy(value.as_bytes()).into_owned()))
+        .collect()
+}
+
+/// Every name the connection takes by its bytes, in both spellings it takes and in two it leaves
+/// to `http` (upper case and mixed), and names it does not take, those close to one it does
+/// included, is the `HeaderName` `http` makes of it: equal to it, with its text, and found in the
+/// map by it, so a request reads as it did when `HeaderName::from_bytes` made every name.
+#[test]
+fn a_header_name_is_the_one_http_makes_of_it_however_it_is_spelled() {
+    let mixed = |name: &str| -> String {
+        name.chars().enumerate().map(|(at, c)| if at % 2 == 1 { c.to_ascii_uppercase() } else { c }).collect()
+    };
+    let mut names: Vec<String> = Vec::new();
+    for (lower, capitals) in USUAL_NAMES {
+        names.extend([lower.to_string(), capitals.to_string(), lower.to_ascii_uppercase(), mixed(lower)]);
+    }
+    let others = [
+        "x-a",
+        "X-Trace-Number",
+        "origin",
+        "Origin",
+        "cache-control",
+        "Cache-Control",
+        "pragma",
+        "if-modified-since",
+        "content-type",
+        "Content-Type",
+        "Sec-Fetch-Sit",
+        "sec-fetch-sites",
+        "Sec-Ch-Ua",
+        "sec-ch-ua-model",
+        "hosts",
+        "Hos",
+        "corten-page",
+    ];
+    names.extend(others.map(str::to_owned));
+    for name in names {
+        let head = built(&format!("GET / HTTP/1.1\r\n{name}: v\r\n\r\n")).ok().expect(&name);
+        let made = ::http::HeaderName::from_bytes(name.as_bytes()).unwrap();
+        let (got, value) = head.parts.headers.iter().next().expect(&name);
+        assert_eq!(got, &made, "{name}");
+        assert_eq!(got.as_str(), made.as_str(), "{name}");
+        assert_eq!(value, "v", "{name}");
+        assert_eq!(head.parts.headers.get(&made), Some(value), "{name}");
+        assert_eq!(head.parts.headers.len(), 1, "{name}");
+    }
+}
+
+/// A name `http` has no `HeaderName` for is refused where the connection makes the request (400),
+/// as before, those that differ from a name the connection takes by its bytes by one byte
+/// included. On a socket `httparse` refuses each of these first; here the head's places are given
+/// as `scan` gives them, so the refusal read is `build`'s own.
+#[test]
+fn a_header_name_http_refuses_is_refused() {
+    use crate::h1::head::{build, Refusal, Scanned};
+    let refused = [
+        "",
+        "x a",
+        "x\0a",
+        "x(a)",
+        "caf\u{e9}",
+        "Host ",
+        " Host",
+        "host\t",
+        "Sec-Fetch-Site\0",
+        "sec-ch-ua:",
+        "Accept\r",
+        "user agent",
+        "Corten\u{7f}",
+    ];
+    for name in refused {
+        assert!(::http::HeaderName::from_bytes(name.as_bytes()).is_err(), "{name:?}");
+        let request = "GET / HTTP/1.1\r\n";
+        let bytes = Bytes::from(format!("{request}{name}: v\r\n\r\n"));
+        let (at, end) = (request.len(), request.len() + name.len());
+        let scanned = Scanned { len: bytes.len(), method: ::http::Method::GET, target: (4, 5), http11: true, hypers: false };
+        let made = build(&bytes, scanned, &[(at, end, end + 2, end + 3)], &mut None);
+        assert!(matches!(made, Err(Refusal::Bad)), "{name:?}");
+    }
+}
+
+/// The heads three browsers sent over HTTP/1.1 (Playwright 1.65.1's Chromium, Firefox and WebKit:
+/// a navigation, and the fetch Corten's runtime makes for one), with a line of each sent twice,
+/// once in each spelling the connection takes, are made into the request `http`'s own
+/// constructors make of their lines: every line in its order, with its value, and the connection
+/// kept.
+#[test]
+fn a_browsers_head_is_made_into_the_request_it_was_before() {
+    let chromium = [
+        "Host: localhost",
+        "Connection: keep-alive",
+        "sec-ch-ua: \"Chromium\";v=\"142\", \"Not_A Brand\";v=\"99\"",
+        "sec-ch-ua-mobile: ?0",
+        "sec-ch-ua-platform: \"Linux\"",
+        "Upgrade-Insecure-Requests: 1",
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Sec-Fetch-Site: same-origin",
+        "Sec-Fetch-Mode: navigate",
+        "Sec-Fetch-User: ?1",
+        "Sec-Fetch-Dest: document",
+        "Referer: http://localhost/",
+        "Accept-Encoding: gzip, deflate, br, zstd",
+        "Accept-Language: en-US,en;q=0.9",
+        "Cookie: a=1",
+        "If-None-Match: \"v1\"",
+    ];
+    let firefox_fetch = [
+        "Host: localhost",
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+        "Accept: */*",
+        "Accept-Language: en-US,en;q=0.5",
+        "Accept-Encoding: gzip, deflate, br, zstd",
+        "Referer: http://localhost/",
+        "corten: nav",
+        "Connection: keep-alive",
+        "Cookie: a=1",
+        "Sec-Fetch-Dest: empty",
+        "Sec-Fetch-Mode: cors",
+        "Sec-Fetch-Site: same-origin",
+        "Priority: u=4",
+    ];
+    let webkit = [
+        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Upgrade-Insecure-Requests: 1",
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        "Accept-Encoding: gzip, deflate",
+        "Accept-Language: en-US,en;q=0.9",
+        "Connection: keep-alive",
+        "Host: localhost",
+        "Sec-Fetch-Dest: document",
+        "Sec-Fetch-Mode: navigate",
+        "Sec-Fetch-Site: none",
+    ];
+    // Each line again, last, in the other spelling the connection takes, and once more as `http`
+    // alone reads it, in upper case.
+    let twice = |sent: &[&str]| -> Vec<String> {
+        let mut all: Vec<String> = sent.iter().map(|line| line.to_string()).collect();
+        for line in sent {
+            let (name, value) = line.split_once(':').unwrap();
+            let other = USUAL_NAMES.iter().find_map(|(lower, capitals)| match name {
+                _ if name == *lower => Some(*capitals),
+                _ if name == *capitals => Some(*lower),
+                _ => None,
+            });
+            all.push(format!("{}:{value}", other.expect(name)));
+            all.push(format!("{}:{value}", name.to_ascii_uppercase()));
+        }
+        all
+    };
+    for head in [twice(&chromium[..]), twice(&firefox_fetch[..]), twice(&webkit[..])] {
+        let mut made = ::http::HeaderMap::new();
+        for line in &head {
+            let (name, value) = line.split_once(':').unwrap();
+            let name = ::http::HeaderName::from_bytes(name.as_bytes()).unwrap();
+            made.append(name, ::http::HeaderValue::from_str(value.trim_start()).unwrap());
+        }
+        let got = built(&format!("GET / HTTP/1.1\r\n{}\r\n\r\n", head.join("\r\n"))).ok().expect("taken");
+        assert_eq!(lines(&got.parts.headers), lines(&made), "{head:?}");
+        assert!(got.keep_alive, "{head:?}");
+    }
+}
+
+/// The names that decide what becomes of a request and its connection are read in any spelling
+/// as before: `Content-Length`, `Transfer-Encoding`, `Expect` and `Upgrade` make it hyper's
+/// (`scan`, by the name's bytes and no `HeaderName`), and `Connection` is read for keep-alive
+/// (`build`, by the `HeaderName` made of it).
+#[test]
+fn the_names_that_frame_a_request_or_its_connection_are_read_in_any_spelling() {
+    let spell = |name: &str| [name.to_owned(), name.to_ascii_uppercase(), name[..1].to_ascii_uppercase() + &name[1..]];
+    for name in ["content-length", "Content-Length", "transfer-encoding", "Transfer-Encoding", "expect", "upgrade"]
+        .iter()
+        .flat_map(|name| spell(name))
+    {
+        let bytes = format!("GET / HTTP/1.1\r\n{HOST}{name}: 0\r\n\r\n");
+        let scanned = crate::h1::head::scan(bytes.as_bytes(), 64 * 1024, &mut Vec::new()).ok().flatten().expect(&name);
+        assert!(scanned.hypers, "{name}");
+    }
+    for name in ["connection", "Connection", "CONNECTION", "cOnNeCtIoN"] {
+        let closes = built(&format!("GET / HTTP/1.1\r\n{HOST}{name}: close\r\n\r\n")).ok().expect(name);
+        assert!(!closes.keep_alive, "{name}");
+        let keeps = built(&format!("GET / HTTP/1.0\r\n{HOST}{name}: keep-alive\r\n\r\n")).ok().expect(name);
+        assert!(keeps.keep_alive, "{name}");
+        let alone = built(&format!("GET / HTTP/1.0\r\n{HOST}\r\n")).ok().expect(name);
+        assert!(!alone.keep_alive, "{name}");
+    }
+}
+
 /// A connection over an IO of the app's own (the step `serve_wrapped` takes), one that holds what
 /// it is written and gives it to the socket as it is flushed, as a TLS stream does, is handed to
 /// hyper as a plain one is: requests with a body, behind requests without and in front of them,
