@@ -1,0 +1,8 @@
+comparison aa-unstaged placement 5 workload unstaged
+A base-p10304 093d9ecd938d1faf5af730e7d3f3cf5a0235ab4db5d7f2ad2c4441a7dd3b4d15
+B base-p12880 5e9f89a825fc8dc62efaec5f64d7475e745bafd776bac94b0858715ab8182109
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 5
+started 2026-11-26T23:58:16Z
+ended 2026-11-26T23:59:18Z

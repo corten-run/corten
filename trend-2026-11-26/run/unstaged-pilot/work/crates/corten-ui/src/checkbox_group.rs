@@ -1,0 +1,55 @@
+use corten::prelude::*;
+
+/// Checkboxes that share a name, of which at least one must be checked: the items a report is
+/// about, the regions a seller ships to. HTML's `required` on a checkbox means that one box, so
+/// the platform cannot say this about a group.
+///
+/// A `<fieldset>` with its `legend` and the boxes the app puts in it (`children`). Its script
+/// (`checkbox_group.js`) keeps the first enabled box invalid with `missing` (the app's message,
+/// in the page's language) while no enabled box is checked, so the browser stops the submit and
+/// says so at that box, as it does for a required text field; a form reset checks again. The
+/// message is shown at the first box, and `:user-invalid` styles that box alone. Without the script the form is sent with none
+/// checked, so the handler checks too (`errors.add(f.ships, ..)` when the list is empty): it is
+/// the authority, the script only saves the round trip.
+///
+/// The group checks again on `change`, which the browser sends when the user checks a box but not
+/// when a script sets `checked` (a "Select all" or "Clear" button). Such a script dispatches
+/// `input` and `change` on each box it set, as the kit's own scripts do for a field they set
+/// (`box.dispatchEvent(new Event("change", { bubbles: true }))`, and `"input"` before it):
+/// without them the group keeps its old answer (a group the script cleared is sent and only the
+/// handler refuses it, and one it filled after the user cleared it is still refused by the browser
+/// with `missing`), and the runtime, which keeps a field for back/forward once it has seen one of
+/// them on it, brings a box the user has not changed back as it was drawn when it swapped the page
+/// in.
+///
+/// Parts: the `fieldset`, its `legend`, and the app's boxes.
+///
+/// ```
+/// use corten::prelude::*;
+/// use corten_ui::CheckboxGroup;
+///
+/// #[derive(Fields)]
+/// struct Pick {
+///     #[serde(default)]
+///     ids: Vec<String>,
+/// }
+///
+/// let f = Pick::FIELDS;
+/// let html = html! {
+///     <CheckboxGroup legend="Affected items" missing="Choose at least one item.">
+///         <label><input type="checkbox" name={f.ids} value="a">"A"</label>
+///         <label><input type="checkbox" name={f.ids} value="b">"B"</label>
+///     </CheckboxGroup>
+/// }
+/// .to_html();
+/// assert!(html.starts_with(r#"<fieldset data-on="connect:ui.checkbox_group.connect($t,&quot;Choose at least one item.&quot;,$s) change:ui.checkbox_group.check($t,&quot;Choose at least one item.&quot;)"><legend>Affected items</legend>"#), "{html}");
+/// ```
+#[component(js)]
+pub fn CheckboxGroup<'a, L: Render, C: Render>(legend: L, missing: &'a str, children: C) -> impl Render {
+    html! {
+        <fieldset on:connect={js::connect(target, missing, signal)} on:change={js::check(target, missing)}>
+            <legend>{legend}</legend>
+            {children}
+        </fieldset>
+    }
+}

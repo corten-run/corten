@@ -1,0 +1,1785 @@
+//! Styles: a stylesheet next to each component, design tokens, and class names that are checked.
+//!
+//! `#[component(css)]` gives a component the stylesheet with its name in
+//! snake_case, next to its source file: `OfferList` has `offer_list.css`. At compile time every
+//! class in the file is prefixed with the component's name, so `.title` is `.offer-list__title`
+//! and two components can both have a `.title`. The markup names classes with constants:
+//!
+//! ```css
+//! /* src/views/offer_list.css */
+//! .list { display: grid; gap: var(--space-2); }
+//! .row:hover { background: var(--color-surface-2); }
+//! .row.selected { outline: 2px solid var(--color-accent); }
+//! ```
+//!
+//! ```ignore
+//! #[component(css)]
+//! pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Render {
+//!     html! {
+//!         <ul class={List}>
+//!             for o in offers {
+//!                 <li class={(Row, (selected == Some(&o.id)).then_some(Selected))}>{o.price}</li>
+//!             }
+//!         </ul>
+//!     }
+//! }
+//! ```
+//!
+//! - `class={List}` and `class={[List, Wide]}` are static markup: `class="offer-list__list"`.
+//!   Anything else (a tuple, an `Option`, a variable) is written when the page renders; see
+//!   [`ClassList`].
+//! - A class the file does not have is a compile error, and so is a class of the file written as
+//!   text (`class="list"`), which would not match the scoped rule.
+//! - Every selector must match only elements the component owns: the element it styles, or one
+//!   that element is inside (by a descendant or child combinator), has one of the file's classes.
+//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine, and so is `.list li + li`,
+//!   whose siblings share the list, but not `.list + main`, which is beside it. A class in
+//!   `:is()` or `:where()` counts only if every matchable selector in it does; classes inside other
+//!   functions, such as `:not()` or `:has()`, are prefixed but only filter. A nested selector is
+//!   checked where its `&` stands (`.list { :not(&) { .. } }` does not compile).
+//!   Element defaults, resets and fonts belong in the app's `static/style.css`.
+//! - An `@scope` rule's root and limit (CSS Cascade 6) are prefixed as any selector is:
+//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When its root matches
+//!   only elements the component owns, its rules can start anywhere (`:scope`, `li`, `> li`);
+//!   under any other root, such as `@scope ([data-theme="dark"])` or, in a rule,
+//!   `@scope (& + main)`, the scope only filters, and its rules still need proof of ownership.
+//!   An inner root there supplies proof only with its own class anchor, not from `&` or implicit
+//!   nesting alone.
+//! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
+//!   a class, so a variant without a rule does not compile.
+//! - A helper component shares another's stylesheet: `#[component(css = OfferList)]` in the same
+//!   module, `#[component(css = super::offers::OfferList)]` from another (a screen's panels in
+//!   files of their own). Any module of the same crate that can see the owner shares its sheet,
+//!   naming it by its path (not through a `use` of it); its classes are in scope in the helper as
+//!   in the owner, and its uses count for the owner. Classes are in scope only in a component: a
+//!   plain `fn` that picks a class is a helper component, or a `match` in the markup.
+//! - The component gets a constant with its own name, `OfferList: corten::Component`; list it
+//!   once in [`crate::App::components`]. Corten joins every listed stylesheet, in order, into one
+//!   file at a content-versioned URL, `components.css`, linked from `<head>` after the shell's
+//!   own tags. The file starts with `[hidden] { display: none !important }` (except
+//!   `hidden="until-found"`, in any case), so an element hidden with the attribute stays hidden whatever
+//!   `display` a component's rule gives it, and with the same rule for a closed popover and a closed
+//!   `<dialog>`, so one drawn with a class that sets `display` shows only while open. In a debug
+//!   build (a router test, `cargo run`, `corten dev`), a page that renders a component the app did
+//!   not list is an error that names it.
+//!
+//! [`tokens!`] reads a design-token file (JSON) into CSS custom properties, theme overrides,
+//! typed scales and responsive utility classes, so a design system has one source for its tokens.
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! /// Its stylesheet is badge_list.css, next to this file.
+//! #[component(css)]
+//! fn BadgeList<'a>(badges: &'a [&'a str], hot: bool) -> impl Render {
+//!     html! {
+//!         <ul class={List}>
+//!             for b in badges { <li class={(Badge, hot.then_some(Hot))}>{b}</li> }
+//!         </ul>
+//!     }
+//! }
+//!
+//! let html = BadgeList { badges: &["Foil"], hot: true }.to_html();
+//! assert_eq!(html, r#"<ul class="badge-list__list"><li class="badge-list__badge badge-list__hot">Foil</li></ul>"#);
+//! let style = BadgeList.style.unwrap();
+//! assert!(style.css.starts_with(".badge-list__list{"));
+//! assert_eq!(style.classes, ["list", "badge", "hot"]);
+//! ```
+//!
+//! A screen whose views are in several modules shares one stylesheet by naming its owner by path:
+//!
+//! ```
+//! mod lists {
+//!     use corten::prelude::*;
+//!
+//!     #[component(css)]
+//!     pub fn BadgeList<'a>(badges: &'a [&'a str]) -> impl Render {
+//!         html! { <ul class={List}> for b in badges { <li class={Badge}>{b}</li> } </ul> }
+//!     }
+//! }
+//!
+//! mod panels {
+//!     use corten::prelude::*;
+//!
+//!     #[component(css = super::lists::BadgeList)]
+//!     pub fn HotBadge<'a>(label: &'a str) -> impl Render {
+//!         html! { <b class={[Badge, Hot]}>{label}</b> }
+//!     }
+//! }
+//!
+//! fn main() {
+//!     use corten::view::Render;
+//!     assert_eq!(lists::BadgeList { badges: &["Foil"] }.to_html(), r#"<ul class="badge-list__list"><li class="badge-list__badge">Foil</li></ul>"#);
+//!     assert_eq!(panels::HotBadge { label: "Foil" }.to_html(), r#"<b class="badge-list__badge badge-list__hot">Foil</b>"#);
+//! }
+//! ```
+//!
+//! A component named as the owner must have a stylesheet of its own:
+//!
+//! ```compile_fail
+//! mod plain {
+//!     use corten::prelude::*;
+//!     #[component]
+//!     pub fn Plain() -> impl Render {
+//!         html! { <p></p> }
+//!     }
+//! }
+//!
+//! use corten::prelude::*;
+//! #[component(css = plain::Plain)]
+//! fn Helper() -> impl Render {
+//!     html! { <p></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor can a module that cannot see the owner share its sheet:
+//!
+//! ```compile_fail,E0603
+//! mod screen {
+//!     use corten::prelude::*;
+//!     #[component(css)]
+//!     fn BadgeList() -> impl Render {
+//!         html! { <ul class={(List, Badge, Hot)}></ul> }
+//!     }
+//! }
+//!
+//! use corten::prelude::*;
+//! #[component(css = screen::BadgeList)]
+//! fn Helper() -> impl Render {
+//!     html! { <p class={Badge}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A look (`-> impl ClassList`) is classes the caller puts on its own element, alone or with its own:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn BadgeList(hot: bool) -> impl ClassList {
+//!     (List, hot.then_some(Hot))
+//! }
+//!
+//! let html = html! { <li class={(BadgeList { hot: true }, "mine")}>"Foil"</li> }.to_html();
+//! assert_eq!(html, r#"<li class="badge-list__list badge-list__hot mine">Foil</li>"#);
+//! ```
+//!
+//! It has no markup, so it is not an element:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn BadgeList() -> impl ClassList {
+//!     List
+//! }
+//!
+//! let _ = html! { <ul><BadgeList /></ul> };
+//! ```
+//!
+//! nor has refs or a scope for a script:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn BadgeList() -> impl ClassList {
+//!     let row = refs();
+//!     List
+//! }
+//! ```
+//!
+//! and its classes are a stylesheet's:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component]
+//! fn BadgeList() -> impl ClassList {
+//!     "list"
+//! }
+//! ```
+//!
+//! A class the stylesheet does not have does not compile:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn BadgeList() -> impl Render {
+//!     html! { <ul class={Lsit}></ul> }
+//! }
+//! ```
+//!
+//! nor does one of its classes written as text:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn BadgeList() -> impl Render {
+//!     html! { <ul class="list"></ul> }
+//! }
+//! ```
+//!
+//! Its classes are global to the app (`.badge-list__*`), so two components with one name in
+//! different modules (each feature's `SettingsForm`) fail to build, at link, rather than the app
+//! when it starts; the error names the symbol `corten__two_components_style__badge_list`. Rename
+//! one (`ShippingSettingsForm`):
+//!
+//! ```compile_fail
+//! mod shipping {
+//!     use corten::prelude::*;
+//!     #[component(css)]
+//!     pub fn BadgeList() -> impl Render {
+//!         html! { <ul class={(List, Badge, Hot)}></ul> }
+//!     }
+//! }
+//! mod settings {
+//!     use corten::prelude::*;
+//!     #[component(css)]
+//!     pub fn BadgeList() -> impl Render {
+//!         html! { <ul class={(List, Badge, Hot)}></ul> }
+//!     }
+//! }
+//! fn main() {
+//!     let _ = (shipping::BadgeList, settings::BadgeList);
+//! }
+//! ```
+//!
+//! and a class belongs to its component; another one cannot use it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn BadgeList() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//!
+//! #[component]
+//! fn Other() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//! ```
+//!
+//! A rule that reaches outside the component does not compile either (`leaky_list.css` has
+//! `h2 { margin: 0 }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn LeakyList() -> impl Render {
+//!     html! { <ul></ul> }
+//! }
+//! ```
+//!
+//! A class under `:not()` does not make a rule local (`negated_list.css` has `:not(.list) p`;
+//! for a `p` in the list, write `.list p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedList() -> impl ClassList { List }
+//! ```
+//!
+//! Neither does an optional class (`optional_list.css` has `:is(.list, main) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn OptionalList() -> impl ClassList { List }
+//! ```
+//!
+//! Nor does a class that the matching element only has elsewhere
+//! (`related_list.css` has `main:has(.list) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn RelatedList() -> impl ClassList { List }
+//! ```
+//!
+//! Nor does a class on a sibling, which is beside the element, not around it
+//! (`sibling_list.css` has `.list + main`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn SiblingList() -> impl ClassList { List }
+//! ```
+//!
+//! A nested selector is checked where its `&` is, so `:not(&)` leaves the component
+//! (`negated_nest.css` has `.list { :not(&) { .. } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedNest() -> impl ClassList { List }
+//! ```
+//!
+//! An `@scope` rule's root and limit are prefixed as any selector is (`scoped_list.css` has
+//! `@scope (.list) to (.slot) { li { padding: 0; } }` and
+//! `@scope ([data-theme="dark"]) { .list { color: plum; } }`):
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn ScopedList() -> impl Render {
+//!     html! { <ul class={List}><li class={Slot}></li></ul> }
+//! }
+//!
+//! let style = ScopedList.style.unwrap();
+//! assert_eq!(
+//!     style.css,
+//!     r#"@scope (.scoped-list__list) to (.scoped-list__slot){li{padding:0}}@scope ([data-theme="dark"]){.scoped-list__list{color:plum}}"#
+//! );
+//! assert_eq!(style.classes, ["list", "slot"]);
+//! assert_eq!(ScopedList {}.to_html(), r#"<ul class="scoped-list__list"><li class="scoped-list__slot"></li></ul>"#);
+//! ```
+//!
+//! but under a root that can match elements outside the component, a rule that names none of
+//! the file's classes would style elements the component does not render
+//! (`leaky_scope.css` has `@scope (main) { li { .. } }`), so it does not compile:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn LeakyScope() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//! ```
+//!
+//! The same check applies to whether an `@scope` root is owned
+//! (`negated_scope.css` has `@scope (:not(.list)) { p { .. } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedScope() -> impl ClassList { List }
+//! ```
+//!
+//! A root nested in a rule is checked the same way, from the rule's elements
+//! (`sibling_scope.css` has `.list { @scope (& + main) { p { .. } } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn SiblingScope() -> impl ClassList { List }
+//! ```
+//!
+//! An unescaped `&` in an invalid arm can suppress implicit nesting but cannot supply an
+//! anchor. Here the browser can match an outside `main` or its paragraphs
+//! (`invalid_nest_ampersand.css` and `invalid_scope_ampersand.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidNestAmpersand() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidScopeAmpersand() -> impl ClassList { (List, Slot) }
+//! ```
+//!
+//! The compiler refuses malformed URL and string tokens before it drops any forgiving arm.
+//! The fixtures have an apostrophe in an unquoted URL, a raw form feed and a raw carriage
+//! return in a string, respectively:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorUrl() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorFf() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorCr() -> impl ClassList { List }
+//! ```
+//!
+//! Mismatched delimiters are also refused in declaration values. The unclosed `f(` in
+//! `crossed_declaration_blocks.css` would make the browser consume later components' rules.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedDeclarationBlocks() -> impl ClassList { List }
+//! ```
+//!
+//! A line break can end a hex escape without becoming a descendant combinator. In
+//! `escaped_sibling.css` a carriage return ends the escape in `.list:empty + p`, which
+//! would style a sibling outside the component:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn EscapedSibling() -> impl ClassList { List }
+//! ```
+//!
+//! A closer must match the innermost open selector block, even in a forgiving arm.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedSelectorBlocks() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedSelectorAfterNot() -> impl ClassList { List }
+//! ```
+//!
+//! A nonbreaking space is part of a CSS name, not a combinator. Component class names
+//! cannot contain it or other non-ASCII characters.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NonAsciiClass() -> impl ClassList { List }
+//! ```
+//!
+//! The scoper cannot keep or remove a comment directly between two parts of a selector
+//! safely. Write the intended selector without the comment, such as `.list.selected` for
+//! a compound selector, not `.list/**/.selected`.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn JoinedSelectorComment() -> impl ClassList { (List, Selected) }
+//! ```
+//!
+//! A custom property value with a `{ ... }` block at its outer level is refused rather
+//! than read as a nested rule. Put such a declaration in the app's `static/style.css`.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn BracedCustomProperty() -> impl ClassList { List }
+//! ```
+//!
+//! An inner scope under an unowned outer scope cannot take its proof from an intervening
+//! style rule. Browsers can resolve the inner root through the outer scope instead, whether
+//! the root uses an explicit `&` or implicit nesting.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn LeakyNestedScopeAmpersand() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn LeakyNestedScopeRelative() -> impl ClassList { List }
+//! ```
+//!
+//! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which
+//! scopes its rules to the element around the page's stylesheet link:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn RootlessScope() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//! ```
+//!
+//! Named position options are local too (`popup_styles.css`):
+//!
+//! ```
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn PopupStyles() -> impl ClassList { Popup }
+//! let css = PopupStyles.style.unwrap().css;
+//! assert_eq!(css, "@layer popups;@position-try --popup-styles__above{position-area:block-start span-inline-end}.popup-styles__popup{position-try-fallbacks:--popup-styles__above, flip-inline;position-try:most-width --popup-styles__above}");
+//! ```
+//!
+//! Imported CSS is not owned or checked by the component (`imported_styles.css` has `@import`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn ImportedStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Breakpoints come from tokens, not `@custom-media` (`custom_media_styles.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CustomMediaStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Unknown statement at-rules, such as `@namespace` (`namespaced_styles.css`), have no scoping rule:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NamespacedStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Nor do unknown block at-rules, such as `@document` (`document_styles.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn DocumentStyles() -> impl ClassList { () }
+//! ```
+//!
+//! An unnamed `@page` affects every printed page (`unnamed_page.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn UnnamedPage() -> impl ClassList { () }
+//! ```
+//!
+//! A global page name must start with this component's name and `-` (`global_page.css` does not):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn GlobalPage() -> impl ClassList { () }
+//! ```
+//!
+//! A browser ignores name-defining `@property` and `@position-try` rules inside style rules
+//! (`nested_property.css` and `nested_position.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedProperty() -> impl ClassList { () }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedPosition() -> impl ClassList { () }
+//! ```
+//!
+//! A position option needs a dashed name (`invalid_position.css` lacks `--`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidPosition() -> impl ClassList { () }
+//! ```
+//!
+//! `__` is reserved for the component prefix (`reserved_position.css` uses it in a name):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn ReservedPosition() -> impl ClassList { () }
+//! ```
+//!
+//! Nor does a stylesheet with a merge conflict's markers left in it (`conflicted_list.css`, as
+//! `corten ui add --merge` or git leaves one), whose `.row` rule a browser would drop:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn ConflictedList() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//! ```
+//!
+//! # Breakpoints
+//!
+//! An `@media` rule names a breakpoint of the token file ([`tokens!`],
+//! `$extensions."run.corten".breakpoints`) as a custom media query of Media Queries 5:
+//! `@media (--md)` from `md` up, as its `md:` utility classes apply, and `@media not (--md)` below
+//! it. Browsers do not read custom media yet, and a component is compiled without the app's token
+//! file (a kit's may be in a crate several apps share), so each name becomes its width when the app
+//! starts, `(min-width:48rem)`. A name no token file in `App::components` makes stops the app,
+//! naming the stylesheet, and so does one two token files give different widths. A component and
+//! the utilities beside it then switch at one width, the token file's.
+//!
+//! ```css
+//! /* phone_list.css */
+//! .list { display: grid; }
+//! @media not (--md) { .list { display: block; } }
+//! ```
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn PhoneList() -> impl Render {
+//!     html! { <ul class={List}></ul> }
+//! }
+//!
+//! assert_eq!(PhoneList.style.unwrap().media.len(), 1);
+//! ```
+//!
+//! A name no token file can make does not compile: a breakpoint is lowercase letters, digits and
+//! `-`, starting with a letter, so `phone_menu.css`'s `@media not (--Phone)` is an error. A name
+//! also stands alone in its parentheses (`(--md and (hover))` is an error), and the token file
+//! defines the widths, so `@custom-media` in a stylesheet does not compile either.
+//!
+//! ```css
+//! /* phone_menu.css */
+//! .menu { display: flex; }
+//! @media not (--Phone) { .menu { display: block; } }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn PhoneMenu() -> impl Render {
+//!     html! { <nav class={Menu}></nav> }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! // phone_hover.css: @media (--md and (hover))
+//! #[component(css)]
+//! fn PhoneHover() -> impl Render {
+//!     html! { <nav class={Menu}></nav> }
+//! }
+//! ```
+//!
+//! An `@property` of the stylesheet's own named as a breakpoint does not compile either, as the
+//! two would read alike:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! // phone_width.css: @property --md { .. } and @media (--md)
+//! #[component(css)]
+//! fn PhoneWidth() -> impl Render {
+//!     html! { <nav class={Menu}></nav> }
+//! }
+//! ```
+//!
+//! # Values from data
+//!
+//! A size or position computed as the page renders (a meter's fill, a bar's length, a mark on a
+//! timeline) is a custom property the stylesheet registers with `@property` and reads with
+//! `var()`, set in the markup with `style={..}`:
+//!
+//! ```css
+//! /* meter.css */
+//! @property --fill { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+//! .meter { background: linear-gradient(to right, currentColor var(--fill), transparent var(--fill)); }
+//! ```
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn Meter(used: f64, nudge: Option<f64>) -> impl Render {
+//!     html! { <div class={Meter} style={(FILL.pct(used), nudge.map(|px| NUDGE.px(px)))}></div> }
+//! }
+//!
+//! assert_eq!(
+//!     Meter { used: 42.5, nudge: None }.to_html(),
+//!     r#"<div class="meter__meter" data-vars="--meter__fill:42.5%"></div>"#
+//! );
+//! assert!(Meter.style.unwrap().css.starts_with("@property --meter__fill{syntax:\"<percentage>\""));
+//! ```
+//!
+//! - Each `@property` whose `syntax` is a number (`<number>`, `<integer>`, `<percentage>`,
+//!   `<length>`, `<length-percentage>`, `<angle>`, `<time>`) is a constant named in capitals,
+//!   `--fill` is `FILL` (a [`Var`]), whose methods are the units its syntax allows:
+//!   `FILL.pct(42.0)`, `GAP.px(4.0)`, `SPAN.set(3)`. A value is a number and a unit, so no CSS
+//!   text from data reaches the page, and a number that is not finite sets nothing.
+//! - The property is the component's, as its classes are: `--fill` is `--meter__fill` where it
+//!   names that custom property, so two components can both register a `--fill`. A rule the
+//!   browser would ignore (no `syntax`, `inherits` or `initial-value`, or for a number syntax an
+//!   `initial-value` that is not one, or depends on the font or a container, `1em`) does not compile.
+//! - `style={..}` takes one value, an `Option` (`None` sets nothing) or a tuple or array of them,
+//!   and writes `data-vars`. A full page gets one `<style>` at `<Corten />` with a rule for each
+//!   distinct value (`[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}`, which wins
+//!   over the component's rules, as the runtime's inline `!important` values do; an `!important`
+//!   declaration of a property markup sets does not compile), allowed by its
+//!   hash in that response's CSP, so it paints with the sizes and no script, and no style
+//!   attribute is allowed anywhere. A patch, a client navigation and a `<corten-live>` fragment
+//!   arrive under the policy the document loaded with, so the runtime sets their values through
+//!   the CSSOM, which the policy allows. A style attribute written as text (`style="width: 4px"`)
+//!   stays blocked unless the area allows them.
+//!
+//! CSS text is not a value:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn Meter(used: f64) -> impl Render {
+//!     html! { <div class={Meter} style={format!("width: {used}%")}></div> }
+//! }
+//! ```
+//!
+//! nor is a unit the property's syntax does not allow (`--fill` is a `<percentage>`):
+//!
+//! ```compile_fail,E0599
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn Meter(used: f64) -> impl Render {
+//!     html! { <div class={Meter} style={FILL.px(used)}></div> }
+//! }
+//! ```
+//!
+//! An escaped percent sign is a dimension unit, not a percentage token
+//! (`escaped_percent.css` gives `--fill` an `initial-value: 10\%`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn EscapedPercent() -> impl ClassList { Meter }
+//! ```
+//!
+//! Another component cannot set a component's property:
+//!
+//! ```compile_fail,E0425
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn Meter(used: f64) -> impl Render {
+//!     html! { <div class={Meter} style={FILL.pct(used)}></div> }
+//! }
+//!
+//! #[component]
+//! fn Other(used: f64) -> impl Render {
+//!     html! { <div style={FILL.pct(used)}></div> }
+//! }
+//! ```
+//!
+//! Markup's values win over the component's rules, so its stylesheet may not mark a property it
+//! registers `!important` (`pinned_meter.css` has `.meter.full { --fill: 100% !important }`, which
+//! would win on a full page and lose after a patch):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn PinnedMeter(used: f64) -> impl Render {
+//!     html! { <div class={Meter} style={FILL.pct(used)}></div> }
+//! }
+//! ```
+//!
+//! The same rule applies to declarations that follow a nested rule:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedPinnedMeter() -> impl ClassList { Meter }
+//! ```
+//!
+//! One `style={..}` per element (a browser keeps the first of two attributes); a tuple sets several:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(css)]
+//! fn Meter(used: f64) -> impl Render {
+//!     html! { <div class={Meter} style={FILL.pct(used)} style={NUDGE.px(2.0)}></div> }
+//! }
+//! ```
+//!
+//! `style` is checked only as written in lowercase, so `STYLE` does not compile either:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! let width = 4;
+//! let view = html! { <div STYLE={format!("width: {width}px")}></div> };
+//! ```
+//!
+//! `data-vars` is Corten's to write, in any case (HTML names are case-insensitive):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! let view = html! { <div data-vars="--fill:4px"></div> };
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! let view = html! { <div data-Vars="--fill:4px"></div> };
+//! ```
+//!
+//! and only Corten's types are values, so no type of the app's writes CSS text there:
+//!
+//! ```compile_fail,E0277
+//! struct Css(String);
+//! impl corten::style::Vars for Css {
+//!     fn write_vars(&self, out: &mut String) {
+//!         out.push_str(&self.0)
+//!     }
+//! }
+//! ```
+
+use std::cell::RefCell;
+
+mod vars;
+pub(crate) use vars::{capture as capture_vars, collect as collect_vars, replay as replay_vars, Written};
+pub use vars::{syntax, Declaration, Var, Vars};
+
+/// Design tokens as CSS and Rust, from W3C Design Tokens files (DTCG 2025.10). See [the module](self)
+/// and `examples/card-market/tokens/`.
+///
+/// `tokens!("tokens/tokens.resolver.json")` (the path from the crate's root) reads a resolver
+/// document and the token files it names; `tokens!("tokens/base.tokens.json")` reads one token file,
+/// for tokens with no themes.
+///
+/// - Each top-level group's tokens are a scale (its `$root` is a custom property alone): `{"space": {"$type": "dimension", "1": {"$value": {"value":
+///   4, "unit": "px"}}}}` is the custom property `--space-1: 4px` and the enum `Space`
+///   (`Space::_1`), with `var()` (`"var(--space-1)"`) and `value()`. A nested group joins its
+///   names with `-` (`--color-brand-primary`, `Color::BrandPrimary`), and a name is written as
+///   CSS writes one (`Brand Primary` is `brand-primary`). A token at the top of the file is a
+///   custom property with no enum.
+/// - Values are written in CSS: colors in CSS Color 4 (an sRGB color whose `hex` agrees with its
+///   components is the hex), dimensions and durations with their unit, shadows, borders,
+///   transitions, cubic Béziers, font families and weights. A reference, `"{color.accent}"`, is
+///   `var(--color-accent)`; a JSON pointer into a value is the value it points at, following a
+///   token that is itself a reference to the one with a value (a chain of more than 256 is an
+///   error, so a file cannot make the compiler work without end). A gradient
+///   (no direction) and a typography token (several properties) have no one CSS value and are
+///   errors; a stroke style of dashes and caps is `dashed`, the Format module's fallback, as CSS
+///   sets no dash pattern.
+/// - A resolver's modifiers are the themes. A modifier's `default` context (required here) is the
+///   values on `:root`; each context's values apply under `[data-{modifier}="{context}"]` (the
+///   default's for the tokens the others change, so it applies inside one of them). A context
+///   that defines a token the defaults lack, or changes a token's type, does not compile:
+///
+/// ```compile_fail
+/// // `dark` adds `color.link`, which would have no value when the page chooses no theme.
+/// corten::style::tokens!("src/style/tokens/adds-a-token.resolver.json");
+/// ```
+///
+/// Contexts of two modifiers on one element follow in resolutionOrder, the later winning; a file
+/// whose rules would give, with two or more of them, other values than the resolver does not
+/// compile:
+///
+/// ```compile_fail
+/// // `roomy` sets `space.gap`, and `compact`'s and `normal`'s rules declare it `var(--space-1)`
+/// // again (it reads `space.1`, which `compact` changes), so with `roomy` and either one chosen
+/// // the gap would not be the 12px the resolver gives.
+/// corten::style::tokens!("src/style/tokens/two-modifiers.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // `dark` makes `color.ink` a dimension, which `Color::Ink` and every `var(--color-ink)` are not.
+/// corten::style::tokens!("src/style/tokens/retypes-a-token.resolver.json");
+/// ```
+///
+/// So do a reference to a group (its root token is `{brand.ratio.$root}`), references that go
+/// round in a circle, two names that are one CSS name, breakpoints out
+/// of order, a modifier with no default, a token with no one CSS value, a media condition for
+/// the default context, and a group over a token or a token over a group with tokens in it, in
+/// two sources or in a group and the group it `$extends`, which would drop one side's tokens:
+///
+/// ```compile_fail
+/// // `{brand.ratio}` is a group; a reference names a token.
+/// corten::style::tokens!("src/style/tokens/reference-to-a-group.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `space.a` is `space.b`'s value, which is `space.a`'s: neither has a value.
+/// corten::style::tokens!("src/style/tokens/circular-reference.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `font-size` and `FONT-SIZE` are both `--color-font-size`.
+/// corten::style::tokens!("src/style/tokens/one-css-name.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `md` after `lg`: its rules would come later and win at every width `lg` covers.
+/// corten::style::tokens!("src/style/tokens/breakpoints-out-of-order.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `wider` names `wide`, which names `md`: a breakpoint names one with a width, not a chain.
+/// corten::style::tokens!("src/style/tokens/breakpoint-names-a-name.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `theme` has no default, so a page that chooses no theme would have no values.
+/// corten::style::tokens!("src/style/tokens/no-default.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // A gradient token has no direction, which CSS needs.
+/// corten::style::tokens!("src/style/tokens/gradient.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // 300 pointers, each into the value before: past the 256 `tokens!` follows in a chain.
+/// corten::style::tokens!("src/style/tokens/long-pointer-chain.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // Each set names the next twice: 2^20 copies, past the 100,000 references, `$extends` and sets
+/// // `tokens!` follows in all.
+/// corten::style::tokens!("src/style/tokens/repeated-sets.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // Two modifiers of 16 contexts: 17 x 17 combinations (each attribute absent or chosen), past
+/// // the 256 `tokens!` resolves to check their CSS.
+/// corten::style::tokens!("src/style/tokens/many-contexts.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // Groups nested 131 deep: past the 128 levels of objects and arrays `tokens!` reads, so a
+/// // file cannot overflow the compiler's stack.
+/// corten::style::tokens!("src/style/tokens/too-deep.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // 1e400 is past any number CSS holds; a browser would clamp it to a value of its own.
+/// corten::style::tokens!("src/style/tokens/too-large.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // A resolver with nothing in its resolutionOrder has no tokens to give.
+/// corten::style::tokens!("src/style/tokens/empty-order.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // A `$root` on the file itself has no group name to be its custom property's.
+/// corten::style::tokens!("src/style/tokens/top-level-root.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // A file is a path relative to the one naming it, not a URL or an absolute path.
+/// corten::style::tokens!("src/style/tokens/absolute-path.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // An sRGB color's `hex` is its components at 8 bits: `#ff0000` and `[0.1137, 0.1059, 0.149]`
+/// // (`#1d1b26`) are two colors.
+/// corten::style::tokens!("src/style/tokens/hex-disagrees.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // A hex alone is not a color in the format; the error is the object to write.
+/// corten::style::tokens!("src/style/tokens/hex-alone.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `.2xl\:gap-1` is no CSS class without escapes: a breakpoint or utility starts with a letter.
+/// corten::style::tokens!("src/style/tokens/digit-breakpoint.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // A typography token is five CSS properties, and a custom property holds one value.
+/// corten::style::tokens!("src/style/tokens/typography.tokens.json");
+/// ```
+///
+/// ```compile_fail
+/// // `light` is the default, the values a page has when it chose no theme: no condition applies it.
+/// corten::style::tokens!("src/style/tokens/media-for-the-default.resolver.json");
+/// ```
+///
+/// ```compile_fail
+/// // `card-color.tokens.json`'s `card` token would replace `card-sizes.tokens.json`'s `card`
+/// // group, and `--card-padding` with it. A token with a group's name is the group's `$root`.
+/// corten::style::tokens!("src/style/tokens/token-over-group.resolver.json");
+/// ```
+///
+/// Each fails for the reason given (a unit test reads the same files and checks the message).
+///
+/// Corten's own settings are under `$extensions`, key `"run.corten"`:
+///
+/// - On a token file's root group, `breakpoints` (`{"md": {"value": 48, "unit": "rem"}}`,
+///   wider than 0, smallest first) and `utilities`: classes for one property, from a top-level
+///   group of tokens named as the file writes it (`{"gap": {"property": "gap", "group": "space"}}`)
+///   or from their own values
+///   (`{"direction": {"property": "flex-direction", "values": {"row": "row", "column": "column"}}}`).
+///   Each value is a function of its own, `gap_2()` and `direction_row()` (`gap-2`,
+///   `direction-row`), for `class={..}`. The utility's function takes a value chosen as the page
+///   renders, `gap(space)`, or one per breakpoint, `gap(Responsive::new(Space::_2).md(Space::_4))`
+///   (`gap-2 md:gap-4`). Two that would have one name (a utility `border-b` and `border`'s value
+///   `b`) are a compile error that names both. Inline `style=` attributes are blocked by the
+///   content security policy; these are the typed way to set one value per use.
+/// - On a modifier, `media`: a context the page follows under a media condition when it chose
+///   none, `{"dark": "(prefers-color-scheme: dark)"}` (`:where(:root):not([data-theme])` in that
+///   condition), so the system's dark mode needs no second copy of the values.
+///
+/// It defines `TOKENS: corten::Component` with the generated stylesheet; list it first in
+/// `App::components` so the components' rules come after it.
+pub use corten_macros::tokens;
+
+/// A component's stylesheet, scoped by `#[component(css)]`, or a token file's, from [`tokens!`].
+#[derive(Clone, Copy, Debug)]
+pub struct Style {
+    /// The class prefix, `"offer-list"`, or the token file's path.
+    pub name: &'static str,
+    /// `"offer_list.css"`.
+    pub file: &'static str,
+    /// The CSS, scoped and without comments.
+    pub css: &'static str,
+    /// The classes, as the file writes them.
+    pub classes: &'static [&'static str],
+    /// Each token breakpoint an `@media` rule of a component's names (`@media not (--sm)`): where
+    /// its `(--sm)` starts in `css`, and the name. Written in as the app starts, from
+    /// `breakpoints`.
+    pub media: &'static [(usize, &'static str)],
+    /// A token file's breakpoints, smallest first: each name and its width (`("md", "48rem")`),
+    /// then each that names another (`"wide": "{md}"`) with that one's width.
+    pub breakpoints: &'static [(&'static str, &'static str)],
+}
+
+impl Style {
+    /// True for a token file's stylesheet: custom properties, themes and utilities that apply to
+    /// every page, where a component's rules apply only to its own classes.
+    pub(crate) fn global(&self) -> bool {
+        self.name == self.file
+    }
+}
+
+/// One class of a component's stylesheet: the constants `#[component(css)]` makes, `Title`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Class(&'static str);
+
+impl Class {
+    #[doc(hidden)]
+    pub const fn __new(name: &'static str) -> Self {
+        Class(name)
+    }
+
+    /// The scoped name, `"offer-list__title"`.
+    pub const fn name(self) -> &'static str {
+        self.0
+    }
+}
+
+/// Utility classes for one value per breakpoint, from a [`tokens!`] utility:
+/// `gap(Responsive::new(Space::_2).md(Space::_4))`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Classes<const N: usize>([Option<&'static str>; N]);
+
+impl<const N: usize> Classes<N> {
+    #[doc(hidden)]
+    pub const fn __new(names: [Option<&'static str>; N]) -> Self {
+        Classes(names)
+    }
+
+    /// The class names, smallest breakpoint first.
+    pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.0.iter().flatten().copied()
+    }
+}
+
+/// What `class={..}` takes: a [`Class`], [`Classes`], text, an `Option` of one (`None` adds
+/// nothing), or a tuple of them, written space-separated. With nothing to write, the attribute is
+/// left out.
+#[diagnostic::on_unimplemented(
+    message = "class={{..}} takes classes: a class of the component's stylesheet (Title), utility classes, text, an Option or a tuple of them",
+    label = "not a class list"
+)]
+pub trait ClassList {
+    /// Writes each class with a space after it: `class={..}` drops the last space, which is at
+    /// the end of the page so far, so the list is never moved.
+    fn write_classes(&self, out: &mut String);
+}
+
+impl ClassList for Class {
+    #[inline]
+    fn write_classes(&self, out: &mut String) {
+        out.push_str(self.0);
+        out.push(' ');
+    }
+}
+
+/// No classes: for a component that takes a `class` (corten-ui's `PrintButton`) and is given none.
+impl ClassList for () {
+    #[inline]
+    fn write_classes(&self, _: &mut String) {}
+}
+
+impl<const N: usize> ClassList for Classes<N> {
+    #[inline]
+    fn write_classes(&self, out: &mut String) {
+        for name in self.0.iter().flatten() {
+            out.push_str(name);
+            out.push(' ');
+        }
+    }
+}
+
+impl ClassList for str {
+    fn write_classes(&self, out: &mut String) {
+        if !self.trim().is_empty() {
+            crate::view::escape_into(self.trim(), out);
+            out.push(' ');
+        }
+    }
+}
+
+impl ClassList for String {
+    fn write_classes(&self, out: &mut String) {
+        self.as_str().write_classes(out)
+    }
+}
+
+impl<T: ClassList + ?Sized> ClassList for &T {
+    #[inline]
+    fn write_classes(&self, out: &mut String) {
+        (**self).write_classes(out)
+    }
+}
+
+impl<T: ClassList> ClassList for Option<T> {
+    #[inline]
+    fn write_classes(&self, out: &mut String) {
+        if let Some(value) = self {
+            value.write_classes(out)
+        }
+    }
+}
+
+impl<T: ClassList> ClassList for [T] {
+    fn write_classes(&self, out: &mut String) {
+        for value in self {
+            value.write_classes(out)
+        }
+    }
+}
+
+impl<T: ClassList, const N: usize> ClassList for [T; N] {
+    fn write_classes(&self, out: &mut String) {
+        self.as_slice().write_classes(out)
+    }
+}
+
+macro_rules! tuples {
+    ($(($($name:ident),+)),*) => {$(
+        impl<$($name: ClassList),+> ClassList for ($($name,)+) {
+            #[allow(non_snake_case)]
+            #[inline]
+            fn write_classes(&self, out: &mut String) {
+                let ($($name,)+) = self;
+                $($name.write_classes(out);)+
+            }
+        }
+    )*};
+}
+tuples!((A, B), (A, B, C), (A, B, C, D), (A, B, C, D, E), (A, B, C, D, E, F), (A, B, C, D, E, F, G), (A, B, C, D, E, F, G, H));
+
+thread_local! {
+    static RENDERED: RefCell<Option<Vec<&'static crate::Component>>> = const { RefCell::new(None) };
+}
+
+/// Runs `render` and returns the components with a script or stylesheet it rendered (debug
+/// builds of the app only; release builds record nothing).
+pub(crate) fn collect<T>(render: impl FnOnce() -> T) -> (T, Vec<&'static crate::Component>) {
+    let (value, list) = crate::gather(&RENDERED, Vec::new(), render);
+    (value, list.unwrap_or_default())
+}
+
+mod scan;
+#[cfg(test)]
+use scan::custom_properties;
+pub(crate) use scan::{stylesheet_text, Scanner};
+
+#[doc(hidden)]
+pub mod __private {
+    pub use super::vars::__private::vars_attr;
+    use super::{ClassList, RENDERED};
+
+    /// ` class="a b"`, or nothing when the list is empty.
+    #[inline]
+    pub fn class_attr<T: ClassList + ?Sized>(classes: &T, out: &mut String) {
+        let start = out.len();
+        out.push_str(" class=\"");
+        let names = out.len();
+        classes.write_classes(out);
+        if out.len() == names {
+            out.truncate(start);
+        } else {
+            // Each class is written with a space after it, so the last one's is at the end and
+            // nothing moves when it goes.
+            if out.ends_with(' ') {
+                out.pop();
+            }
+            out.push('"');
+        }
+    }
+
+    /// A component with a script or stylesheet rendered (debug builds only).
+    pub fn rendered(component: &'static crate::Component) {
+        RENDERED.with(|r| {
+            if let Some(list) = r.borrow_mut().as_mut() {
+                if !list.iter().any(|c| c.name == component.name) {
+                    list.push(component);
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::*;
+
+    mod theme {
+        crate::style::tokens!("src/style/tokens/tokens.resolver.json");
+    }
+    use theme::{direction, direction_column, gap, gap_2, Direction, Responsive, Space};
+
+    #[test]
+    fn a_stylesheet_names_the_custom_properties_it_declares_and_reads() {
+        let css = "/* var(--commented) */ :root{--ink:#111;--space-1 : 4px}.a--b:hover{color:var(--ink)}
+.x { padding: var( --space-1 ); margin: var(--gap, var(--nope)); content: \"var(--quoted)\"; background: VAR(--bg) }
+@PROPERTY --angle { syntax: '<angle>'; inherits: false; initial-value: 0deg }
+@supports (--x: 1) { .y { width: calc(var(--w) * 2); --é-ä: 1 } }";
+        let (declared, needed) = custom_properties(css);
+        assert_eq!(declared, ["--ink", "--space-1", "--angle", "--é-ä"]);
+        assert_eq!(needed, ["--ink", "--space-1", "--bg", "--w"]);
+    }
+
+    #[test]
+    fn an_escaped_var_still_checks_required_reads_and_skips_fallbacks() {
+        assert_eq!(custom_properties(r".a{color:\var(--missing)}").1, ["--missing"]);
+        assert_eq!(custom_properties(r".a{color:\var(--opt,var(--fallback))}"), (vec![], vec![]));
+    }
+
+    #[component(css)]
+    fn PositionComments() -> impl Render {
+        html! { <p class={Popup}></p> }
+    }
+
+    #[test]
+    fn position_comments_do_not_change_startup_stylesheet_checks() {
+        let html = html! { <PositionComments /> }.to_html();
+        assert_eq!(html, r#"<p class="position-comments__popup"></p>"#);
+        let style = PositionComments.style.unwrap();
+        assert!(style.media.is_empty());
+        assert_eq!(custom_properties(style.css).1, ["--missing"]);
+    }
+
+    #[component(css)]
+    fn UrlScan() -> impl ClassList {
+        A
+    }
+
+    #[test]
+    fn a_compiled_url_cannot_hide_a_missing_custom_property_at_startup() {
+        let mut class = String::new();
+        UrlScan {}.write_classes(&mut class);
+        assert_eq!(class, "url-scan__a ");
+        let err = crate::assets::Assets::build(None, &[UrlScan], "/assets").err().expect("missing property");
+        assert!(err.to_string().contains("reads var(--fake), which no stylesheet declares"), "{err}");
+    }
+
+    #[component(css)]
+    fn ScopeScan() -> impl ClassList {
+        (A, B)
+    }
+
+    #[component(css)]
+    fn ScopeMissing() -> impl ClassList {
+        A
+    }
+
+    #[test]
+    fn scoped_declarations_supply_and_read_custom_properties_at_startup() {
+        let mut classes = String::new();
+        ScopeScan {}.write_classes(&mut classes);
+        ScopeMissing {}.write_classes(&mut classes);
+        assert_eq!(classes, "scope-scan__a scope-scan__b scope-missing__a ");
+        crate::assets::Assets::build(None, &[ScopeScan], "/assets").unwrap();
+        let error = crate::assets::Assets::build(None, &[ScopeMissing], "/assets").err().expect("missing scoped property");
+        assert!(error.to_string().contains("reads var(--scope-missing), which no stylesheet declares"), "{error}");
+    }
+
+    #[test]
+    fn tokens_are_typed_scales_and_utilities_are_classes_per_breakpoint() {
+        assert_eq!(Space::_4.var(), "var(--space-4)");
+        assert_eq!(theme::Color::Accent.value(), "#6b3fd4");
+        assert_eq!(Space::ALL.len(), 3);
+        let classes = (gap(Space::_2), direction(Responsive::new(Direction::Column).md(Direction::Row)));
+        let html = html! { <div class={classes}></div> }.to_html();
+        assert_eq!(html, r#"<div class="gap-2 direction-column md:direction-row"></div>"#);
+        let css = theme::TOKENS.style.unwrap().css;
+        assert!(css.starts_with(":root{--color-ink:#1d1b26;"), "{css}");
+        assert!(css.contains(".md\\:direction-row{flex-direction:row}"), "{css}");
+        assert!(html! { <p class={gap(Responsive::default())}></p> }.to_html() == "<p></p>", "no value, no attribute");
+        // A value at every width is its own function: the class as static text.
+        assert_eq!(
+            html! { <p class={(gap_2(), direction_column())}></p> }.to_html(),
+            r#"<p class="gap-2 direction-column"></p>"#
+        );
+        assert_eq!(gap_2().name(), gap(Space::_2).names().next().unwrap());
+    }
+
+    #[component(css)]
+    fn BadgeList<'a>(badges: &'a [&'a str], hot: bool, extra: Option<&'a str>) -> impl Render {
+        html! {
+            <ul class={[List, Hot]}>
+                for b in badges { <li class={(Badge, hot.then_some(Hot), extra)}>{b}</li> }
+            </ul>
+            <p class={None::<Class>}>"none"</p>
+        }
+    }
+
+    /// A helper with the stylesheet of BadgeList.
+    #[component(css = BadgeList)]
+    fn BadgeCount(n: usize) -> impl Render {
+        html! { <span class={Badge}>{n}</span> }
+    }
+
+    /// A look with the stylesheet of BadgeList: classes the caller puts on its own element.
+    #[component(css = BadgeList)]
+    fn BadgeLook(hot: bool) -> impl ClassList {
+        (Badge, hot.then_some(Hot))
+    }
+
+    #[test]
+    fn classes_are_scoped_static_where_possible_and_lists_skip_empty_values() {
+        let html = BadgeList { badges: &["a", "b"], hot: false, extra: Some("x<y") }.to_html();
+        assert_eq!(
+            html,
+            r#"<ul class="badge-list__list badge-list__hot"><li class="badge-list__badge x&lt;y">a</li><li class="badge-list__badge x&lt;y">b</li></ul><p>none</p>"#
+        );
+        assert_eq!(BadgeCount { n: 2 }.to_html(), r#"<span class="badge-list__badge">2</span>"#);
+        let style = BadgeList.style.expect("own stylesheet");
+        assert_eq!((style.name, style.file), ("badge-list", "badge_list.css"));
+        assert!(BadgeList.script.is_none());
+    }
+
+    /// `Card` with `.card`: inside the markup `{Card}` is the class.
+    #[component(css)]
+    fn Card<'a>(title: &'a str) -> impl Render {
+        html! { <section class={Card}><h2 class={Title}>{title}</h2></section> }
+    }
+
+    /// An `@media` rule that names the token file's `md`.
+    #[component(css)]
+    fn PhoneList() -> impl Render {
+        html! { <ul class={List}></ul> }
+    }
+
+    /// An `@media` rule that names `wide`, which a token file makes from its `md`.
+    #[component(css)]
+    fn WideList() -> impl Render {
+        html! { <ul class={List}></ul> }
+    }
+
+    mod aliased {
+        crate::style::tokens!("src/style/tokens/breakpoint-alias.tokens.json");
+    }
+
+    /// A breakpoint that names another (`"wide": "{md}"`) is its width wherever a component names
+    /// it, and makes no utility method of its own.
+    #[tokio::test]
+    async fn a_breakpoint_that_names_another_is_its_width() {
+        assert_eq!(html! { <WideList /> }.to_html(), r#"<ul class="wide-list__list"></ul>"#);
+        let made = aliased::TOKENS.style.unwrap().breakpoints;
+        assert_eq!(made, [("sm", "40rem"), ("md", "48rem"), ("wide", "48rem")]);
+        assert!(!aliased::TOKENS.style.unwrap().css.contains("wide"), "{}", aliased::TOKENS.style.unwrap().css);
+        let assets = crate::assets::Assets::build(None, &[aliased::TOKENS, WideList], "/assets").unwrap();
+        let url = assets.stylesheet().unwrap().to_string();
+        let res = tower::ServiceExt::oneshot(
+            crate::Router::from(std::sync::Arc::new(assets).routes()),
+            http::Request::get(url).body(crate::body::Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+        let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        let css = std::str::from_utf8(&body).unwrap();
+        assert!(css.ends_with("@media not (min-width:48rem){.wide-list__list{display:block}}"), "{css}");
+    }
+
+    #[tokio::test]
+    async fn a_component_names_a_breakpoint_of_the_token_file() {
+        assert_eq!(theme::TOKENS.style.unwrap().breakpoints, [("md", "48rem")]);
+        assert_eq!(html! { <PhoneList /> }.to_html(), r#"<ul class="phone-list__list"></ul>"#);
+        let style = PhoneList.style.unwrap();
+        assert_eq!(style.css, ".phone-list__list{display:grid}@media not (--md){.phone-list__list{display:block}}");
+        assert_eq!(style.media, [(42, "md")]);
+        let assets = std::sync::Arc::new(crate::assets::Assets::build(None, &[theme::TOKENS, PhoneList], "/assets").unwrap());
+        let url = assets.stylesheet().unwrap().to_string();
+        let res = tower::ServiceExt::oneshot(
+            crate::Router::from(assets.routes()),
+            http::Request::get(url).body(crate::body::Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+        let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+        let css = std::str::from_utf8(&body).unwrap();
+        assert!(
+            css.ends_with("\n.phone-list__list{display:grid}@media not (min-width:48rem){.phone-list__list{display:block}}"),
+            "{css}"
+        );
+        let alone = crate::assets::Assets::build(None, &[PhoneList], "/assets").err().unwrap().to_string();
+        assert!(alone.contains("phone_list.css (PhoneList) names the breakpoint --md"), "{alone}");
+    }
+
+    #[test]
+    fn a_class_can_be_named_like_its_component() {
+        let html = html! { <Card title="Policies" /> }.to_html();
+        assert_eq!(html, r#"<section class="card__card"><h2 class="card__title">Policies</h2></section>"#);
+        assert_eq!(Card.style.expect("own stylesheet").file, "card.css");
+    }
+
+    /// A list is written in place: each class with a space after it, the last space dropped, the
+    /// classes in order, with an empty part adding nothing and an empty list no attribute.
+    #[test]
+    fn a_class_list_is_written_in_place() {
+        let attr = |list: &dyn Fn(&mut String)| {
+            let mut out = String::from("<p");
+            list(&mut out);
+            out
+        };
+        assert_eq!(attr(&|out| __private::class_attr(&Class::__new("a__x"), out)), r#"<p class="a__x""#);
+        let parts = (
+            Class::__new("a__x"),
+            " b c ",
+            None::<Class>,
+            Some(Class::__new("a__y")),
+            Classes::__new([Some("u"), None, Some("v")]),
+        );
+        assert_eq!(attr(&|out| __private::class_attr(&parts, out)), r#"<p class="a__x b c a__y u v""#);
+        assert_eq!(
+            attr(&|out| __private::class_attr(&[Class::__new("a__x"), Class::__new("a__y")][..], out)),
+            r#"<p class="a__x a__y""#
+        );
+        assert_eq!(attr(&|out| __private::class_attr(&(None::<Class>, "", " "), out)), "<p");
+    }
+
+    // Rendering records components in debug builds only, and every debug build checks them.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn in_a_debug_build_a_page_with_an_unlisted_styled_component_fails_and_names_it() {
+        use crate::body::Body;
+        use crate::{
+            router::{get, Table},
+            Router,
+        };
+        use http::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let page = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badges", BadgeCount { n: 1 }) };
+        let routes = || Table::new().route("/", get(page));
+        let get_page = |app: Router| async move {
+            let res = app.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
+            let status = res.status();
+            (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        };
+        let (status, body) = get_page(App::new(Routes::from(routes())).dev(true).router()).await;
+        assert_eq!(status, 500);
+        assert!(body.contains("renders BadgeList, which the app does not list"), "{body}");
+        let (status, body) =
+            get_page(App::new(Routes::from(routes())).dev(true).components(&[theme::TOKENS, BadgeList]).router()).await;
+        assert_eq!(status, 200);
+        let link = body.split_once(r#"<link rel="stylesheet" href=""#).expect("the stylesheet is linked").1;
+        assert!(link.split_once('"').unwrap().0.ends_with("/components.css"), "{body}");
+        // A router test or `cargo run` checks it too, without corten dev (whose error page shows
+        // the message; this one logs it).
+        let (status, _) = get_page(App::new(Routes::from(routes())).dev(false).router()).await;
+        assert_eq!(status, 500);
+    }
+
+    #[derive(crate::Route)]
+    #[route("/admin")]
+    struct Admin;
+
+    #[derive(crate::Route)]
+    #[route("/admin/reports")]
+    struct Reports;
+
+    #[derive(crate::Route)]
+    #[route("/admin/reports/{id}")]
+    struct Report<'a> {
+        id: &'a str,
+    }
+
+    #[tokio::test]
+    async fn an_area_links_its_stylesheet_from_its_pages_only() {
+        use crate::body::Body;
+        use crate::{
+            router::{get, Table},
+            Router,
+        };
+        use http::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        const REPORT: crate::Component = crate::Component {
+            name: "Report",
+            script: None,
+            style: Some(Style {
+                name: "report",
+                file: "report.css",
+                css: ".report__a{}",
+                classes: &["a"],
+                media: &[],
+                breakpoints: &[],
+            }),
+            event: None,
+            view: None,
+            anchor: &0,
+        };
+        let page = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badges", BadgeCount { n: 1 }) };
+        let plain = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Plain", "No badges") };
+        let app = |dev: bool| {
+            App::new(Routes::from(
+                Table::new().route("/", get(plain)).route("/administrator", get(plain)).route("/badges", get(page)),
+            ))
+            .dev(dev)
+            .components(&[theme::TOKENS])
+            .area::<Admin>(|admin| admin.route::<Admin>(crate::Methods::reads(get(page))).components(&[BadgeList]))
+            .area::<Reports>(|reports| reports.route::<Report>(crate::Methods::reads(get(page))).components(&[REPORT]))
+            .router()
+        };
+        let get_page = |app: Router, path: &str, nav: bool| {
+            let mut req = Request::get(path);
+            if nav {
+                req = req.header("corten", "nav");
+            }
+            let req = req.body(Body::empty()).unwrap();
+            async move {
+                let res = app.oneshot(req).await.unwrap();
+                let status = res.status();
+                (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+            }
+        };
+        let links = |body: &str| -> Vec<String> {
+            body.split(r#"<link rel="stylesheet" href=""#)
+                .skip(1)
+                .map(|rest| rest.split_once('"').unwrap().0.rsplit_once('/').unwrap().1.to_string())
+                .collect()
+        };
+
+        let (status, body) = get_page(app(true), "/admin", false).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(links(&body), ["components.css", "admin.css"], "the area's stylesheet after the shared one");
+        assert!(body.contains(r#"/sections/admin.css" data-corten-style>"#), "{body}");
+        let (_, body) = get_page(app(true), "/admin/reports/7", false).await;
+        assert_eq!(links(&body), ["components.css", "admin.css", "reports.css"], "a page links every area it is under");
+        let (status, body) = get_page(app(true), "/admin/reports/7", true).await;
+        assert_eq!(status, 200);
+        assert!(body.starts_with("<title>Badges</title><link"), "a navigation carries the links: {body}");
+        assert_eq!(links(&body), ["admin.css", "reports.css"], "and not the shared stylesheet, which the page has");
+
+        let (status, body) = get_page(app(false), "/administrator", false).await;
+        assert_eq!(
+            (status, links(&body)),
+            (http::StatusCode::OK, vec!["components.css".to_string()]),
+            "a prefix is whole segments"
+        );
+        let (status, body) = get_page(app(false), "/", true).await;
+        assert!(status == 200 && links(&body).is_empty(), "no area, no link: {body}");
+
+        // A page outside the area that renders its component: an error in a debug build, with or
+        // without corten dev.
+        #[cfg(debug_assertions)]
+        for dev in [true, false] {
+            let (status, body) = get_page(app(dev), "/badges", false).await;
+            assert_eq!(status, 500);
+            assert!(
+                !dev || body.contains("/badges renders BadgeList, whose stylesheet is linked from the area /admin only"),
+                "{body}"
+            );
+        }
+
+        let twice = std::panic::catch_unwind(|| App::new(Routes::new()).area::<Admin>(|a| a).area::<Admin>(|a| a));
+        assert!(twice.is_err(), "an area is given once");
+    }
+
+    #[derive(crate::Route)]
+    #[route("/admin/badge")]
+    struct AdminBadge;
+
+    #[derive(crate::Route)]
+    #[route("/admin/refused")]
+    struct AdminRefused;
+
+    #[derive(crate::view::Id)]
+    struct BadgeNoteId;
+
+    /// A badge as a patch sends it, with the stylesheet of BadgeList.
+    #[component(css = BadgeList)]
+    fn BadgeNote() -> impl crate::view::Patch {
+        html! { <p id={BadgeNoteId} class={Badge}>"Saved"</p> }
+    }
+
+    /// The same element with no stylesheet.
+    #[component]
+    fn PlainNote() -> impl crate::view::Patch {
+        html! { <p id={BadgeNoteId}>"Saved"</p> }
+    }
+
+    /// A patch brings the stylesheets of its handler's area, as a navigation into the area does:
+    /// the page it lands on may be outside the area (a form on `/` whose action is
+    /// `/admin/badge`), and the runtime adds the ones that page lacks before putting the patch in
+    /// place. A patch from outside every area links nothing, and one there that renders an area's
+    /// component is an error in a debug build.
+    #[tokio::test]
+    async fn a_patch_links_the_stylesheets_of_its_handlers_area() {
+        use crate::body::Body;
+        use crate::router::{get, Table};
+        use http::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        async fn badge(req: crate::Req) -> crate::HtmlResult {
+            req.action().ok_or_else(crate::Error::not_found)?.patch(BadgeNote {})
+        }
+        async fn refused(req: crate::Req) -> crate::HtmlResult {
+            let mut errors = crate::Errors::new();
+            errors.refuse(crate::Refusal::Conflict, "The badge moved on.");
+            req.invalid_with(
+                &errors,
+                |form| async move { form.draw(BadgeNote {}) },
+                || async { req.redirect(&crate::Local::parse("/").unwrap()) },
+            )
+            .await
+        }
+        async fn plain(req: crate::Req) -> crate::HtmlResult {
+            req.action().ok_or_else(crate::Error::not_found)?.patch(PlainNote {})
+        }
+        let app = |dev: bool| {
+            App::new(Routes::from(Table::new().route("/note", get(plain)).route("/stray", get(badge))))
+                .dev(dev)
+                .components(&[theme::TOKENS])
+                .area::<Admin>(|admin| {
+                    admin
+                        .route::<AdminBadge>(crate::Methods::reads(get(badge)))
+                        .route::<AdminRefused>(crate::Methods::reads(get(refused)))
+                        .components(&[BadgeList])
+                })
+                .router()
+        };
+        let action = |app: crate::Router, path: &'static str| async move {
+            let req = Request::get(path).header("corten", "action").body(Body::empty()).unwrap();
+            let res = app.oneshot(req).await.unwrap();
+            let status = res.status();
+            (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        };
+        let link = r#"/sections/admin.css" data-corten-style>"#;
+
+        let (status, body) = action(app(true), "/admin/badge").await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.starts_with(r#"<p id=""#) && body.contains(r#"class="badge-list__badge">Saved</p>"#), "{body}");
+        assert_eq!(body.matches(link).count(), 1, "the patch links its area's stylesheet: {body}");
+        let (status, body) = action(app(true), "/admin/refused").await;
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(body.matches(link).count(), 1, "and so does a refused form's: {body}");
+        let (status, body) = action(app(true), "/note").await;
+        assert!(status == 200 && !body.contains("data-corten-style"), "no area, no link: {body}");
+
+        #[cfg(debug_assertions)]
+        for dev in [true, false] {
+            let (status, body) = action(app(dev), "/stray").await;
+            assert_eq!(status, 500);
+            assert!(
+                !dev || body.contains(
+                    "/stray answers with a patch that renders BadgeList, whose stylesheet is linked from the area /admin only"
+                ),
+                "{body}"
+            );
+        }
+        // A component no list names is the patch's in its message, not the page's.
+        #[cfg(debug_assertions)]
+        {
+            let unlisted =
+                App::new(Routes::from(Table::new().route("/stray", get(badge)))).dev(true).components(&[theme::TOKENS]);
+            let (status, body) = action(unlisted.router(), "/stray").await;
+            assert!(status == 500 && body.contains("the patch renders BadgeList, which the app does not list"), "{body}");
+        }
+    }
+
+    #[derive(crate::Route)]
+    #[route("/shop")]
+    struct Shop;
+
+    /// One screen at two addresses (`/search` and `/categories/{slug}`) is two areas listing the
+    /// same components: their rules are in a file the two share, linked from their pages only.
+    #[tokio::test]
+    async fn areas_that_list_the_same_component_share_its_stylesheet() {
+        use crate::body::Body;
+        use crate::router::get;
+        use http::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        const REPORT: crate::Component = crate::Component {
+            name: "Report",
+            script: None,
+            style: Some(Style {
+                name: "report",
+                file: "report.css",
+                css: ".report__a{}",
+                classes: &["a"],
+                media: &[],
+                breakpoints: &[],
+            }),
+            event: None,
+            view: None,
+            anchor: &0,
+        };
+        let page = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badges", BadgeCount { n: 1 }) };
+        let app = || {
+            App::new(Routes::from(crate::router::Table::new().route("/", get(|| async { "home" }))))
+                .dev(true)
+                .components(&[theme::TOKENS])
+                .area::<Admin>(|admin| admin.route::<Admin>(crate::Methods::reads(get(page))).components(&[BadgeList]))
+                .area::<Shop>(|shop| shop.route::<Shop>(crate::Methods::reads(get(page))).components(&[BadgeList, REPORT]))
+                .router()
+        };
+        let get_page = |path: &str| {
+            let req = Request::get(path).body(Body::empty()).unwrap();
+            async move {
+                let res = app().oneshot(req).await.unwrap();
+                let status = res.status();
+                (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+            }
+        };
+        let links = |body: &str| -> Vec<String> {
+            body.split(r#"<link rel="stylesheet" href=""#)
+                .skip(1)
+                .map(|rest| {
+                    rest.split_once('"').unwrap().0.split_once("/sections/").map_or("components.css", |s| s.1).to_string()
+                })
+                .collect()
+        };
+        let (status, admin) = get_page("/admin").await;
+        assert_eq!(status, 200, "a page of either area renders the shared component: {admin}");
+        assert_eq!(links(&admin), ["components.css", "admin+shop.css"]);
+        let (status, shop) = get_page("/shop").await;
+        assert_eq!(status, 200, "{shop}");
+        assert_eq!(links(&shop), ["components.css", "admin+shop.css", "shop.css"], "its own after the shared one");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn rendering_records_listed_components_in_debug_builds() {
+        let (html, used) = collect(|| BadgeCount { n: 1 }.to_html());
+        assert!(html.contains("badge-list__badge"));
+        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["BadgeList"], "a helper reports its stylesheet's owner");
+        // A look counts as rendered where its classes are written, as its stylesheet's owner.
+        let (html, used) = collect(|| html! { <li class={BadgeLook { hot: true }}>"Foil"</li> }.to_html());
+        assert_eq!(html, r#"<li class="badge-list__badge badge-list__hot">Foil</li>"#);
+        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["BadgeList"], "a look reports its stylesheet's owner");
+    }
+}

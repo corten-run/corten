@@ -1,0 +1,328 @@
+//! `corten new`: writes the starter app from `template/`, embedded in the binary.
+
+use std::path::{Path, PathBuf};
+
+use crate::option;
+
+const FILES: &[(&str, &str)] = &[
+    ("Cargo.toml", include_str!("../template/Cargo.toml.txt")),
+    ("src/lib.rs", include_str!("../template/src/lib.rs")),
+    ("src/main.rs", include_str!("../template/src/main.rs")),
+    ("src/views.rs", include_str!("../template/src/views.rs")),
+    ("static/style.css", include_str!("../template/static/style.css")),
+    ("static/favicon.svg", include_str!("../template/static/favicon.svg")),
+    ("src/click_counter.js", include_str!("../template/src/click_counter.js")),
+    ("src/click_counter.css", include_str!("../template/src/click_counter.css")),
+    ("AGENTS.md", include_str!("../template/AGENTS.md")),
+    ("README.md", include_str!("../template/README.md")),
+    ("Dockerfile", include_str!("../template/Dockerfile")),
+    (".gitignore", include_str!("../template/gitignore.txt")),
+    (".dockerignore", include_str!("../template/dockerignore.txt")),
+];
+
+pub fn run(args: &[String]) -> Result<(), String> {
+    let (dir, name) = write_app(args)?;
+    lock(&dir).map_err(|e| format!("created {name} in {}, but {e}", dir.display()))?;
+    println!("Created {name} in {}.\n\n  cd {}\n  corten dev\n\nthen open http://localhost:3000.", dir.display(), dir.display());
+    Ok(())
+}
+
+/// Writes the app's files into `args`' directory, and returns it with the crate's name.
+fn write_app(args: &[String]) -> Result<(PathBuf, String), String> {
+    let dir = args.first().filter(|a| !a.starts_with('-')).ok_or("usage: corten new <dir>")?;
+    let dir = PathBuf::from(dir);
+    let name = match option(args, "--name")? {
+        Some(name) => name.to_string(),
+        None => crate_name(&dir)?,
+    };
+    check_name(&name)?;
+    let dependency = dependency(option(args, "--corten-path")?)?;
+    if dir.exists() && std::fs::read_dir(&dir).map_err(|e| e.to_string())?.next().is_some() {
+        return Err(format!("{} exists and is not empty", dir.display()));
+    }
+    for (path, text) in FILES {
+        // `{{version}}`: the release of `corten` the Dockerfile's profiled build installs, by this
+        // command's number, as `{{corten}}` names the library's.
+        let text = text
+            .replace("{{name}}", &name)
+            .replace("{{crate}}", &name.replace('-', "_"))
+            .replace("{{corten}}", &dependency)
+            .replace("{{version}}", env!("CARGO_PKG_VERSION"));
+        write(&dir.join(path), &text)?;
+    }
+    Ok((dir, name))
+}
+
+/// Writes or updates the `Cargo.lock` of the app in `dir` after this command (or `corten ui add`)
+/// wrote its manifest, so its next `corten check`, which refuses a missing or stale lock, passes.
+/// Cargo runs in the app's directory, so it reads the configuration a build there would
+/// (`net.offline`, source replacement) and writes the lock where a build would: the app's own, or
+/// its workspace's root. `--workspace` adds what the lock lacks and moves no package it already
+/// has, so an app in an existing workspace leaves that workspace's versions as they were, where
+/// `cargo generate-lockfile` would move every one to its newest.
+pub(crate) fn lock(dir: &Path) -> Result<(), String> {
+    let what_to_run = |why: String| {
+        format!(
+            "{why}\nIn {}, run cargo build or corten dev, then commit Cargo.lock (at the workspace root if the app is in one) \
+             before running corten check.",
+            dir.display()
+        )
+    };
+    let output = std::process::Command::new("cargo")
+        .args(["update", "--workspace"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| what_to_run(format!("could not run cargo to write Cargo.lock: {e}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let error = String::from_utf8_lossy(&output.stderr);
+        Err(what_to_run(format!("cargo update --workspace could not write Cargo.lock:\n{}", error.trim())))
+    }
+}
+
+/// The app is a library its `main.rs` names (`my_app::app()`), so its name with `-` as `_` must
+/// be a path that reaches it: not a keyword, a crate the compiler provides, or one of the
+/// template's dependencies.
+fn check_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || !name.starts_with(|c: char| c.is_ascii_lowercase())
+        || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+    {
+        return Err(format!(
+            "{name:?} is not a crate name: lowercase letters, digits, - and _, starting with a letter (use --name)"
+        ));
+    }
+    const KEYWORDS: &[&str] = &[
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate", "do", "dyn", "else", "enum",
+        "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move",
+        "mut", "override", "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "try", "type",
+        "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+    ];
+    // `corten_run`: the framework's package (`corten-run`), which an app of that name would depend on.
+    const TAKEN: &[&str] = &["std", "core", "alloc", "test", "proc_macro", "corten", "corten_run", "serde", "tokio"];
+    let path = name.replace('-', "_");
+    if KEYWORDS.contains(&path.as_str()) {
+        return Err(format!("{name:?} is a Rust keyword, and the app's main.rs names it as a path (use --name)"));
+    }
+    if TAKEN.contains(&path.as_str()) {
+        return Err(format!(
+            "{name:?} is the name of a crate the app already uses, and its main.rs names the app by it (use --name)"
+        ));
+    }
+    Ok(())
+}
+
+/// The app's `corten` dependency: the release this command was built with (the crates share one
+/// version), or a local checkout with `--corten-path`: the corten crate, or the root of the
+/// workspace it is in. Anything else is refused before a file is written. The key is `corten`,
+/// with the package named when it is `corten-run` (a checkout from before the rename is
+/// `corten`), so the app's code names the library `corten` either way.
+fn dependency(path: Option<&str>) -> Result<String, String> {
+    let own = crate::pin::PACKAGES[0];
+    match path {
+        Some(given) => {
+            let path = std::fs::canonicalize(given).map_err(|e| format!("--corten-path {given}: {e}"))?;
+            let (corten, name) = corten_crate(&path).map_err(|e| format!("--corten-path {given}: {e}"))?;
+            let path = format!("path = {:?}", corten.to_string_lossy().trim_start_matches(r"\\?\"));
+            Ok(if name == "corten" { path } else { format!("package = {name:?}, {path}") })
+        }
+        None => Ok(format!("package = {own:?}, version = {:?}", env!("CARGO_PKG_VERSION"))),
+    }
+}
+
+/// The directory and package name of the corten package (either name, [`crate::pin::PACKAGES`])
+/// that `dir` is, or whose workspace root `dir` is, read by `cargo metadata` as `corten check`
+/// reads an app's packages. Its directory is named `corten`, since `corten ui add` finds
+/// corten-ui beside it.
+fn corten_crate(dir: &Path) -> Result<(PathBuf, String), String> {
+    let manifest = dir.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err("has no Cargo.toml".into());
+    }
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
+        .arg(&manifest)
+        .output()
+        .map_err(|e| format!("could not run cargo metadata: {e}"))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("cargo metadata could not read it: {}", error.trim()));
+    }
+    let metadata = crate::json::parse(&String::from_utf8_lossy(&output.stdout)).map_err(|e| format!("cargo metadata: {e}"))?;
+    let canonical = |p: &str| std::fs::canonicalize(p).ok();
+    let root = metadata.get("workspace_root").and_then(|v| v.as_str()).and_then(canonical);
+    let found = metadata.get("packages").map_or(&[][..], |p| p.items()).iter().find_map(|package| {
+        let name = package.get("name")?.as_str()?;
+        let dir = canonical(package.get("manifest_path")?.as_str()?)?.parent().map(Path::to_path_buf);
+        crate::pin::is_framework(name).then_some((dir?, name.to_string()))
+    });
+    match found {
+        Some((corten, name)) if corten == dir || root.as_deref() == Some(dir) => match corten.file_name() {
+            Some(directory) if directory == "corten" => Ok((corten, name)),
+            _ => Err(format!(
+                "its corten crate is in {}, and corten ui add finds corten-ui beside a directory named corten",
+                corten.display()
+            )),
+        },
+        _ => Err("not the corten crate nor the root of a workspace that has it".into()),
+    }
+}
+
+fn crate_name(dir: &Path) -> Result<String, String> {
+    let base = dir.file_name().and_then(|n| n.to_str()).ok_or("the directory needs a name")?;
+    Ok(base.to_ascii_lowercase().replace(' ', "-"))
+}
+
+fn write(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_name, dependency, lock, write_app};
+
+    #[test]
+    fn a_name_the_app_cannot_be_reached_by_is_refused() {
+        for name in ["shop", "demo-app", "a_b-c", "views", "main", "app2"] {
+            assert_eq!(check_name(name), Ok(()), "{name}");
+        }
+        for name in ["", "2app", "My-App", "fn", "self", "async", "test", "std", "core", "tokio", "serde", "corten", "corten-run"]
+        {
+            assert!(check_name(name).unwrap_err().ends_with("(use --name)"), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_new_app_depends_on_the_release_the_command_came_from() {
+        assert_eq!(dependency(None).unwrap(), format!("package = \"corten-run\", version = \"{}\"", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn a_new_apps_dockerfile_names_its_target_cache_for_the_app() {
+        // Without an id of the app's own, every app's build on a host would wait for every other's.
+        let dir = std::env::temp_dir().join(format!("corten-new-dockerfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_app(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
+        let dockerfile = std::fs::read_to_string(dir.join("Dockerfile")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!dockerfile.contains("{{"), "a placeholder is left in the Dockerfile:\n{dockerfile}");
+        assert!(dockerfile.contains("id=shop-front-target,target=/src/target"), "{dockerfile}");
+        assert!(dockerfile.contains("cargo build --release --locked"), "{dockerfile}");
+    }
+
+    #[test]
+    fn a_new_apps_dockerfile_installs_the_command_of_this_number_for_a_profiled_build() {
+        // The image's profiled build installs the release with this command's number, as the
+        // app's manifest names the library's, and says so where it refuses one without the
+        // option. A command built between releases has an earlier release's number, so its
+        // Dockerfile installs that release; the refusal is for one without `--profile-from`
+        // (0.2.0, which a command built before 0.3.0 wrote).
+        let dir = std::env::temp_dir().join(format!("corten-new-profiled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_app(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
+        let dockerfile = std::fs::read_to_string(dir.join("Dockerfile")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let install = format!("cargo install corten-cli --version {} --locked --root /usr/local", env!("CARGO_PKG_VERSION"));
+        assert!(dockerfile.contains(&install), "{dockerfile}");
+        let refused = format!("corten-cli {} has no --profile-from", env!("CARGO_PKG_VERSION"));
+        assert!(dockerfile.contains(&refused), "{dockerfile}");
+        assert!(dockerfile.contains("corten build --locked --profile-from sh -- \"$PROFILE_FROM\""), "{dockerfile}");
+    }
+
+    #[test]
+    fn a_new_app_gets_the_lock_its_first_check_requires() {
+        let base = std::env::temp_dir().join(format!("corten-new-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let write = |path: &str, text: &str| {
+            let path = base.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let package = |name: &str| format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+        let locked = |dir: &str| {
+            let out = std::process::Command::new("cargo")
+                .args(["metadata", "--format-version", "1", "--locked", "--offline"])
+                .current_dir(base.join(dir))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        // Cargo's configuration in the app's directory applies: offline, it needs no registry.
+        write(".cargo/config.toml", "[net]\noffline = true\n");
+        write("alone/Cargo.toml", &format!("{}\n[workspace]\n", package("alone")));
+        write("alone/src/lib.rs", "");
+        assert_eq!(lock(&base.join("alone")), Ok(()));
+        locked("alone");
+        // A member of a workspace: the lock at its root gains the new member.
+        write("ws/Cargo.toml", "[workspace]\nmembers = [\"apps/*\"]\nresolver = \"3\"\n");
+        write("ws/apps/old/Cargo.toml", &package("old"));
+        write("ws/apps/old/src/lib.rs", "");
+        assert_eq!(lock(&base.join("ws/apps/old")), Ok(()));
+        let before = std::fs::read_to_string(base.join("ws/Cargo.lock")).unwrap();
+        write("ws/apps/new/Cargo.toml", &format!("{}\n[dependencies]\nold = {{ path = \"../old\" }}\n", package("new")));
+        write("ws/apps/new/src/lib.rs", "");
+        assert_eq!(lock(&base.join("ws/apps/new")), Ok(()));
+        assert!(!base.join("ws/apps/new/Cargo.lock").exists(), "the member uses its workspace's lock");
+        let after = std::fs::read_to_string(base.join("ws/Cargo.lock")).unwrap();
+        assert!(after.contains("name = \"new\"") && after.contains("name = \"old\""), "{before}\n{after}");
+        locked("ws/apps/new");
+        // When Cargo cannot write it, the error says what to run.
+        write("broken/Cargo.toml", "[package]\nname = \n");
+        let error = lock(&base.join("broken")).unwrap_err();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(error.contains("cargo update --workspace could not write Cargo.lock"), "{error}");
+        assert!(error.contains("run cargo build or corten dev, then commit Cargo.lock"), "{error}");
+    }
+
+    #[test]
+    fn corten_path_points_the_app_at_a_local_checkout() {
+        // A workspace like a checkout, read as cargo reads it: a literal-string name and a
+        // commented table header are a manifest like any other.
+        let base = std::env::temp_dir().join(format!("corten-new-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let write = |path: &str, text: &str| {
+            let path = base.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("ws/Cargo.toml", "[workspace]\nmembers = [\"crates/corten\", \"crates/other\"]\nresolver = \"2\"\n");
+        write(
+            "ws/crates/corten/Cargo.toml",
+            "[ package ] # the framework\nname = 'corten'\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        );
+        write("ws/crates/corten/src/lib.rs", "");
+        write("ws/crates/other/Cargo.toml", "[package]\nname = \"other\"\nversion = \"0.0.0\"\nedition = \"2021\"\n");
+        write("ws/crates/other/src/lib.rs", "");
+        write("fork/Cargo.toml", "[workspace]\n\n[package]\nname = \"corten\"\nversion = \"0.0.0\"\nedition = \"2021\"\n");
+        write("fork/src/lib.rs", "");
+        std::fs::create_dir_all(base.join("empty")).unwrap();
+        let at = |p: &str| base.join(p).to_string_lossy().into_owned();
+        let corten = std::fs::canonicalize(base.join("ws/crates/corten")).unwrap();
+        let expected = format!("path = {:?}", corten.to_string_lossy().trim_start_matches(r"\\?\"));
+        assert_eq!(dependency(Some(&at("ws/crates/corten"))).unwrap(), expected);
+        assert_eq!(dependency(Some(&at("ws"))).unwrap(), expected, "a checkout's root: its corten crate");
+        let other = dependency(Some(&at("ws/crates/other"))).unwrap_err();
+        assert!(other.contains("not the corten crate"), "another member is not its workspace's root: {other}");
+        assert!(dependency(Some(&at("empty"))).unwrap_err().ends_with("has no Cargo.toml"));
+        // A checkout since the rename: the package is named beside the path.
+        write("renamed/Cargo.toml", "[workspace]\nmembers = [\"crates/corten\"]\nresolver = \"2\"\n");
+        write(
+            "renamed/crates/corten/Cargo.toml",
+            "[package]\nname = \"corten-run\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"corten\"\n",
+        );
+        write("renamed/crates/corten/src/lib.rs", "");
+        let renamed = std::fs::canonicalize(base.join("renamed/crates/corten")).unwrap();
+        assert_eq!(
+            dependency(Some(&at("renamed"))).unwrap(),
+            format!("package = \"corten-run\", path = {:?}", renamed.to_string_lossy().trim_start_matches(r"\\?\"))
+        );
+        let fork = dependency(Some(&at("fork"))).unwrap_err();
+        assert!(fork.contains("a directory named corten"), "{fork}");
+        assert!(dependency(Some("no/such/dir")).unwrap_err().starts_with("--corten-path no/such/dir: "));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

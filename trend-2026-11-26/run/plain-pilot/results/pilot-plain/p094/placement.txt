@@ -1,0 +1,8 @@
+comparison pilot-plain placement 94 workload plain
+A base-p39952 b1365ca124d7b89dd98ed92a758bc3c65d98463f8b5b6e80436b600d1eca49a6
+B base-p25072 52db2927fbe3957dca46a396af4f9cb0a08d0202ff8fb5709912c2c0ff9e4515
+run 77b3ffac-4148-4e50-9335-f7f1d9429c18
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 38
+started 2026-11-26T18:47:28Z
+ended 2026-11-26T18:48:30Z

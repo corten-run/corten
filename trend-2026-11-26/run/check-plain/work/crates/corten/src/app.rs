@@ -1,0 +1,3020 @@
+//! [`App`]: an app's routes with the production pieces around them, configured by defaults.
+
+use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+
+use futures_util::{stream, StreamExt};
+use http::header;
+
+use crate::{
+    api::{Api, Mount},
+    assets::Assets,
+    cache::{self, Seen},
+    client::Peer,
+    handler::Request,
+    listener::Listener,
+    middleware::Middleware,
+    page::{self, default_error_page, error_page_fn, Asked, ErrorPageFn, Failure, RequestPage, Shared},
+    pwa::Pwa,
+    response::Response,
+    route::{Methods, Prefix, Route as TypedRoute, Routes},
+    router::{get, Route, Router, Table},
+    security::{Applied, Csp, NonceSlot, Origin, Policy},
+    signal::{self, Watch},
+    sse::Event,
+    task::{Finishing, Running, Task},
+    Mode, Signal,
+};
+
+type ReadyFn = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
+/// A part of an app under the prefix `P` (a [`Prefix`]: a route's path, or a prefix with no page), filled in by the
+/// function given to [`App::area`]: its routes and the components only its pages render. Who may
+/// use its routes is in their handlers' types: a routes module with `caller = Staff` holds every
+/// handler in it to taking `Caller<Staff>` ([`crate::routes`]).
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Route)]
+/// #[route("/admin")]
+/// struct Admin;
+///
+/// #[derive(Route)]
+/// #[route("/admin/users/{id}")]
+/// struct AdminUser<'a> { id: &'a str }
+///
+/// async fn dashboard(req: Req) -> HtmlResult {
+///     req.page(html! { <Layout req={&req} title="Admin"><h1>"Admin"</h1></Layout> })
+/// }
+/// # #[component]
+/// # fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
+/// #     html! { <html lang={req.lang()}><head><title>{title}</title><Corten /></head><body><main>{children}</main></body></html> }
+/// # }
+///
+/// fn app(pages: Routes) -> App {
+///     App::new(pages).area::<Admin>(|admin| admin.route::<Admin>(get(dashboard)).route::<AdminUser>(get(dashboard)))
+/// }
+/// # let _ = app(Routes::new()).router();
+/// ```
+///
+/// A library that ships an area is a function, `pub fn admin(area: Area<Admin>) -> Area<Admin>`,
+/// that the app passes to [`App::area`].
+pub struct Area<P> {
+    routes: Table,
+    pages: Vec<(&'static str, bool)>,
+    /// Its routes with text after a parameter, for [`crate::route::assert_no_clash_with`].
+    with_text: Vec<&'static str>,
+    components: Vec<crate::Component>,
+    deadline: Option<Option<Duration>>,
+    body_limit: Option<usize>,
+    sources: crate::security::Sources,
+    middleware: Vec<Arc<dyn crate::middleware::Erased>>,
+    /// Corten's own routes served with its routes (an MCP endpoint's metadata), outside its
+    /// prefix, so neither its stylesheet nor its middleware applies to them.
+    companions: Vec<(String, crate::router::MethodSet)>,
+    /// Its routes that say `unstaged`, which the app serves outside its stages.
+    unstaged: crate::route::UnstagedRoutes,
+    types: PhantomData<fn() -> P>,
+}
+
+impl<P: Prefix> Area<P> {
+    /// A route of the area, at `R::PATH`: `.route::<AdminUser>(get(user).post(save))`, with
+    /// `.with_state(state)` on the [`Methods`] when its handlers take `State`. `R`'s path is at
+    /// or under the area's prefix, or the app does not build, so no route of the area is served
+    /// outside its stylesheet:
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admn/users")]
+    /// struct Users;
+    ///
+    /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Users>(get(|| async { "users" })));
+    /// # let _ = app.router();
+    /// ```
+    ///
+    /// A `Route` written by hand has a path of the shape `#[derive(Route)]` writes (each parameter
+    /// a whole segment, the text characters a browser sends as they are, here not `|`), so
+    /// [`crate::Req::serves`] knows which route the router picks. Text after a parameter in its
+    /// segment (`/feeds/{name}.atom`) takes `#[derive(Route)]`:
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// struct Item;
+    /// impl corten::Route for Item {
+    ///     type Data = corten::route::NoData;
+    ///     const PATH: &'static str = "/admin/a|b";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("/admin/a|b");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Item>(get(|| async { "item" })));
+    /// # let _ = app.router();
+    /// ```
+    ///
+    /// Nor has it a `.` or `..` segment, which a browser resolves away before it asks, so no link
+    /// would reach the route (docs/design.md#limit-path-values):
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// struct Item;
+    /// impl corten::Route for Item {
+    ///     type Data = corten::route::NoData;
+    ///     const PATH: &'static str = "/admin/a/../b";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("/admin/b");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Item>(get(|| async { "item" })));
+    /// # let _ = app.router();
+    /// ```
+    ///
+    /// A route that says `data = T` (its `Route::Data` is `HasData<T>`) takes only a `get` that
+    /// answers a screen of `T`, here as in its routes module, so mounted again by hand with one that
+    /// answers a page, whose read would get no data, it does not compile:
+    ///
+    #[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct Order { id: u32 }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/admin/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// async fn mounted(req: Req) -> HtmlResult {
+    ///     req.page(doc("Sets"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = (sets, url::router);
+    ///     let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(mounted)));
+    ///     let _ = app.router();
+    /// }
+    /// ```
+    ///
+    /// Nor with one that answers a screen of other data, which a script's `ScreenUrl<SetListing>`
+    /// would take for the route's:
+    ///
+    #[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct Order { id: u32 }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/admin/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// async fn mounted(req: Req) -> HtmlResult<corten::Screen<Order>> {
+    ///     req.screen(&Order { id: 7 }, doc("Order"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = (sets, url::router);
+    ///     let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(mounted)));
+    ///     let _ = app.router();
+    /// }
+    /// ```
+    ///
+    /// With a `get` that answers a screen of `SetListing` it compiles, as the same app with
+    /// `get(sets)`:
+    ///
+    #[cfg_attr(feature = "json", doc = "```")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/admin/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = url::router;
+    ///     let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(sets)));
+    ///     let _ = app.router();
+    /// }
+    /// ```
+    pub fn route<R: TypedRoute>(
+        mut self,
+        methods: Methods<(), impl crate::answer::AnswerKind + crate::route::__private::DataMatches<R::Data>>,
+    ) -> Self {
+        crate::route::mounted_with::<R, _, _>(&methods);
+        self.place::<R>(methods.1);
+        if let Some(companion) = methods.2 {
+            self.companions.push((companion.0)(R::PATH));
+        }
+        self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
+        self
+    }
+
+    /// Used by `#[corten::routes(area = ..)]`: `R`'s handlers at its path, a route that says
+    /// `unstaged`, which the app serves outside its stages, the area's among them. Not a public
+    /// API.
+    #[doc(hidden)]
+    pub fn __unstaged_route<R: TypedRoute>(mut self, methods: crate::route::__private::UnstagedMethods) -> Self {
+        self.place::<R>(false);
+        self.unstaged.add::<R>(methods, Some(P::PREFIX));
+        self
+    }
+
+    /// Holds `R` to the area's prefix and the shape of a route's path, and adds it to the area's
+    /// paths (`get`: whether it has a `GET` page).
+    fn place<R: TypedRoute>(&mut self, get: bool) {
+        const {
+            assert!(
+                crate::api::under_const(P::PREFIX, R::PATH),
+                "corten: a route of an area is at or under its prefix (the note below names the area's prefix and the route)"
+            );
+            assert!(
+                crate::route::route_shaped(R::PATH),
+                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text, no . or .. segment (the note below names the route)"
+            );
+        };
+        // Before the router, which would merge the two or refuse them less clearly.
+        if R::WRITTEN != R::PATH || !self.with_text.is_empty() {
+            let earlier: Vec<&str> = self.pages.iter().map(|(p, _)| *p).collect();
+            crate::route::assert_no_clash_with(&earlier, &self.with_text, R::WRITTEN);
+        }
+        if R::WRITTEN != R::PATH {
+            self.with_text.push(R::WRITTEN);
+        }
+        self.pages.push((R::WRITTEN, get));
+    }
+
+    /// Components only this area's pages render: `.components(&[AdminTable, SalesChart])`. Their
+    /// stylesheets are joined into a file of the area's own (`sections/admin.css` for `/admin`),
+    /// linked after `components.css` from the pages at the prefix and under it, so other pages
+    /// do not download them, and from the patches the area's handlers answer, so a page outside
+    /// the area downloads it when such a patch lands there (whatever the patch renders); their
+    /// scripts are served as with [`App::components`].
+    ///
+    /// A client navigation into the area loads its stylesheet before it swaps the page in, and
+    /// the stylesheet stays (its rules only match its components' classes). A page under nested
+    /// areas (`/admin` and `/admin/reports`) links each one's stylesheet.
+    ///
+    /// A component that pages in several areas render is listed in each of them: its rules are
+    /// in one file those areas share (`sections/search+categories.css`), linked from their pages
+    /// only, with any other component the same areas list. One that most pages render belongs in
+    /// [`App::components`] instead (a component with a stylesheet is in one or the other), and so
+    /// does a token file (`tokens!`), which styles every page. In a debug build (a router test,
+    /// `corten dev`) a page outside an area that renders one of its components is an error that
+    /// names both; a patch is checked against its own URL. Without areas there is one stylesheet,
+    /// which is the right choice until a part of the app most visitors never open adds enough CSS
+    /// to measure (see the styles guide).
+    pub fn components(mut self, components: &[crate::Component]) -> Self {
+        self.components.extend_from_slice(components);
+        self
+    }
+
+    /// How long a request at the prefix or under it may take to start its answer, in place of
+    /// [`App::deadline`]: `.deadline(Duration::from_secs(120))` for reports that take a while, so
+    /// every other page keeps the app's. Past it the answer is the 503 error page and the
+    /// request's [`crate::Signal`] aborts with [`crate::Abort::Deadline`], as at the app's. In
+    /// nested areas the innermost that sets one decides. An [`App::api`] under the prefix with no
+    /// deadline of its own, nor one from an API around it, takes it too, answered with the JSON
+    /// 503. `None` removes it, for routes that bound themselves. A route that says `unstaged`
+    /// has no deadline.
+    pub fn deadline(mut self, deadline: impl Into<Option<Duration>>) -> Self {
+        self.deadline = Some(deadline.into());
+        self
+    }
+
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read at the prefix or under it, and what an [`crate::Upload`] keeps unless
+    /// its handler sets its own, in place of [`App::body_limit`]: `.body_limit(64 << 10)` for an
+    /// area of short forms, or `.body_limit(16 << 20)` for one that takes large documents, so
+    /// every other page keeps the app's. Over it the answer is a 413. In nested areas the
+    /// innermost that sets one decides, and an [`App::api`] under the prefix with no limit of its
+    /// own, nor one from an API around it, takes it too. A raised limit is held for a slow client
+    /// until the deadline ([`Area::deadline`]), so a prefix that raises one keeps a deadline.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = Some(bytes);
+        self
+    }
+
+    /// A step of the area's own in each request at its prefix or under it (a write limit, an
+    /// audit log): its routes but one that says `unstaged`, its nested areas' and an unknown URL
+    /// there, as with its
+    /// [`deadline`](Area::deadline) and [`policy`](Area::policy). It runs after the app's
+    /// middleware ([`App::middleware`]) and before the handler: `.middleware(WriteLimit::new(20))`,
+    /// or a tuple run in order. Given again, it runs after what was given before; an outer area's
+    /// runs before an inner one's. A request anywhere else never meets it. It refuses with a
+    /// [`crate::Refused`], answered as a [`crate::Caller`]'s refusal is; see
+    /// [`crate::middleware`].
+    pub fn middleware<M: Middleware>(mut self, middleware: M) -> Self {
+        self.middleware.push(Arc::new(middleware));
+        self
+    }
+
+    /// What the area's pages add to the app's [`Policy`] (its Content-Security-Policy, a looser
+    /// `Cross-Origin-Opener-Policy`, a powerful feature `Permissions-Policy` otherwise denies,
+    /// [`crate::security::Feature`]): a payment provider's scripts and frames on the payment pages,
+    /// style attributes on pages that show rich text written with them, and not on every other page
+    /// (a size drawn from data needs none: it is a custom property, [`crate::style::Var`]). Only adding is possible, so a page in the
+    /// area never allows less than the app; nested areas add up, outermost first. A stricter
+    /// `Referrer-Policy` ([`crate::security::Sources::referrer`]) is the one way an area sends
+    /// less, for every answer under it, an API's included, but a route's that says `unstaged`.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes(area = Payments)]
+    /// mod url {
+    ///     #[route("/pay")]
+    ///     pub struct Payments;
+    ///
+    ///     #[route("/pay/{id}", get = pay)]
+    ///     pub struct Pay<'a> {
+    ///         pub id: &'a str,
+    ///     }
+    /// }
+    /// # async fn pay(_: Params<url::Pay<'_>>) -> &'static str { "pay" }
+    ///
+    /// fn app(routes: Routes) -> App {
+    ///     App::new(routes).area(|area| {
+    ///         url::area(area).policy(|p| {
+    ///             p.script_src("https://js.stripe.com").frame_src("https://js.stripe.com").connect_src("https://api.stripe.com")
+    ///         })
+    ///     })
+    /// }
+    /// # let _ = app(Routes::new()).router();
+    /// ```
+    ///
+    /// Each area's header is built once, at startup. A document keeps the policy it loaded with,
+    /// so a client navigation into or out of such an area loads the page in full (its shell key
+    /// differs); a patch from the area's routes is applied under the policy of the page it lands
+    /// on, and a page that answers a form from a page under another policy reloads that page. A
+    /// request finds its area's policy once, by path, and only when some area adds something the
+    /// app's policy lacks (a source, a looser `Cross-Origin-Opener-Policy`, a feature or a stricter
+    /// `Referrer-Policy`). A policy for one route is an area of one page.
+    ///
+    /// What is the whole app's (the names it answers to, HSTS, other sites' writes) is not an
+    /// area's to change:
+    ///
+    /// ```compile_fail,E0599
+    /// # use corten::prelude::*;
+    /// # #[derive(Route)]
+    /// # #[route("/pay")]
+    /// # struct Pay;
+    /// let app = App::new(Routes::new()).area::<Pay>(|area| area.policy(|p| p.allow_origin("https://other.example")));
+    /// ```
+    pub fn policy(mut self, add: impl FnOnce(crate::security::Sources) -> crate::security::Sources) -> Self {
+        self.sources = add(std::mem::take(&mut self.sources));
+        self
+    }
+}
+
+/// An [`Area`] given to [`App::area`], without its type.
+struct Placed {
+    prefix: &'static str,
+    routes: Table,
+    pages: Vec<(&'static str, bool)>,
+    /// The paths of Corten's own routes served with its routes ([`Area`]'s `companions`).
+    companions: Vec<String>,
+    components: Vec<crate::Component>,
+    deadline: Option<Option<Duration>>,
+    body_limit: Option<usize>,
+    sources: crate::security::Sources,
+    middleware: Vec<Arc<dyn crate::middleware::Erased>>,
+}
+
+/// An app: its routes, plus everything around them that every production app needs, on by
+/// default. `M` is the app's own [`Middleware`] (`()` until [`App::middleware`]).
+/// `corten::serve(App::new(routes)).await` gives, in a fixed order ([`crate::middleware`]):
+///
+/// - security headers, a CSP (Corten's inline tags allowed by hash, a nonce only when the page
+///   asks for one), and a check that refuses cross-site writes ([`Policy::new`]; change it with
+///   [`App::policy`]);
+/// - `Cache-Control: private, no-cache` on what the app renders, unless a route answers
+///   [`crate::Public`] (see [`crate::cache`]);
+/// - error pages for failed requests, unknown URLs and handlers that panic, in the request's mode
+///   ([`App::error_page`], the app's own in its layout), with the error shown under `corten dev`,
+///   and JSON for a JSON route ([`crate::JsonResult`]);
+/// - the scripts of the app's components and its components' stylesheets joined into one file
+///   ([`App::components`]), at content-versioned, immutable URLs, each script preloaded on the
+///   pages whose handlers use it, and the same for the static files the app compiles in
+///   ([`App::assets`]);
+/// - `/health/live` and `/health/ready`, the runtime at a versioned URL;
+/// - compression of pages and static files (feature `compress`);
+/// - under `corten dev` (`CORTEN_DEV=1`): open pages reload when the server restarts.
+///
+/// Who is asking is not the app's: a handler that needs it takes a [`crate::Caller`].
+///
+/// ```ignore
+/// App::new(url::router())
+///     .error_page(views::error_page, db.clone())     // failed requests, in the app's layout
+///     .middleware((RequestId, RateLimit))            // the app's own steps, in this order
+///     .area(|area| admin::area(area).components(&[SalesChart]))
+///     .pwa(Pwa::new(Manifest::new("Shop", "Shop").icon(Static::ICONS_192_PNG, "192x192")))
+/// ```
+pub struct App<M = ()> {
+    routes: Table,
+    /// The app's route patterns and whether each has a `GET` handler ([`crate::Req::serves`]);
+    /// the areas' are added in `router`.
+    pages: Vec<(&'static str, bool)>,
+    /// The routes that say `unstaged`, the areas' and APIs' too: served outside the stages.
+    unstaged: crate::route::UnstagedRoutes,
+    error_page: Option<Box<page::ErrorPage>>,
+    policy: Policy,
+    /// The static directory `embed!` compiled in (`App::assets`): where it was read, and its files.
+    static_files: Option<StaticFiles>,
+    pwa: Option<Pwa>,
+    ready: Option<ReadyFn>,
+    /// How long `/health/ready` waits for the app's check (`App::ready_within`).
+    ready_within: Duration,
+    locales: Option<&'static [&'static str]>,
+    client_zone: bool,
+    #[cfg(feature = "zones")]
+    zoned_dates: bool,
+    dev: Option<bool>,
+    components: Vec<crate::Component>,
+    areas: Vec<Placed>,
+    deadline: Option<Duration>,
+    body_limit: usize,
+    apis: Vec<(Mount, Table)>,
+    /// The APIs' route paths as written, checked with the pages' when the router is built.
+    api_paths: Vec<&'static str>,
+    tasks: Vec<Task>,
+    grace: Duration,
+    /// Work its handlers finish whether or not they are dropped ([`Signal::finish`]), which
+    /// `serve` waits for at shutdown.
+    finishing: Arc<Finishing>,
+    connections: Connections,
+    layers: Vec<Box<dyn FnOnce(Router) -> Router + Send>>,
+    access_log: bool,
+    /// The values only the layout shows ([`App::layout_read`]).
+    layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
+    /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
+    kept: usize,
+    middleware: M,
+}
+
+/// How [`serve`] holds connections: how long a request's head may take, how large it may be,
+/// how long an answer may wait for the client to take it, how many may be open at once, and how
+/// long they may go on once shutdown begins.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Connections {
+    pub header_timeout: Option<Duration>,
+    pub head: usize,
+    pub send_timeout: Option<Duration>,
+    pub max: Option<usize>,
+    /// How long a connection may go on once shutdown begins, set by `run` (`App::drain`).
+    pub drain: Drain,
+}
+
+/// How long a connection still answering may go on once shutdown begins: the longer of the grace
+/// and the deadline of the request it is answering.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Drain {
+    /// [`App::shutdown_grace`].
+    pub grace: Duration,
+    /// The longer of the grace and the longest deadline: every connection's bound when every
+    /// route has the app's deadline, and the bound of one whose request's deadline is not known.
+    pub most: Duration,
+    /// Some area or API sets a deadline other than the app's, so each connection keeps the
+    /// deadline of the request it is answering ([`Bound`]).
+    pub each: bool,
+}
+
+/// The deadline of the request a connection is answering, when routes' deadlines differ
+/// ([`Drain::each`]): none before its first request, not yet known once a request arrives, set by
+/// the request's `Layer` (through [`crate::client::WithPeer`]), and read by the connection's task
+/// once shutdown begins. A request whose `Layer` runs on a task of its own (a layer of the app's
+/// that spawns the call), or that a layer of the app's holds or answers itself, leaves it not
+/// known: its connection has the grace, and [`Drain::most`] if it is still not known then. It
+/// keeps a request's deadline after its answer is written, which is never read for the next one:
+/// hyper reads no head while an answer is being written, and closes a connection waiting for one
+/// at shutdown.
+#[derive(Debug)]
+pub(crate) struct Bound(std::sync::atomic::AtomicU64);
+
+impl Bound {
+    /// No request yet: the grace.
+    const NONE: u64 = u64::MAX;
+    /// A request whose deadline is not known yet.
+    const UNKNOWN: u64 = u64::MAX - 1;
+    /// A request with no deadline (`None`): the longest, as when every route has the app's.
+    const MOST: u64 = u64::MAX - 2;
+
+    pub(crate) fn new() -> Self {
+        Bound(std::sync::atomic::AtomicU64::new(Self::NONE))
+    }
+
+    fn arrived(&self) {
+        self.0.store(Self::UNKNOWN, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn set(&self, deadline: Option<Duration>) {
+        let nanos = deadline.map_or(Self::MOST, |deadline| deadline.as_nanos().min(u128::from(Self::MOST - 1)) as u64);
+        self.0.store(nanos, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How long its connection may go on once shutdown begins; `settled` once the connection has
+    /// waited for the grace, after which a deadline still not known is taken as the longest.
+    fn drain(&self, drain: Drain, settled: bool) -> Duration {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::NONE => drain.grace,
+            Self::UNKNOWN if settled => drain.most,
+            Self::UNKNOWN => drain.grace,
+            Self::MOST => drain.most,
+            nanos => drain.grace.max(Duration::from_nanos(nanos)),
+        }
+    }
+}
+
+/// [`App::deadline`] unless set.
+const DEADLINE: Duration = Duration::from_secs(30);
+
+/// [`App::shutdown_grace`] unless set.
+const GRACE: Duration = Duration::from_secs(5);
+
+/// [`App::max_request_head`] unless set: 32 KiB (`docs/design.md`, Choices).
+pub(crate) const REQUEST_HEAD: usize = 32 * 1024;
+
+/// hyper's read buffer unless set (`DEFAULT_MAX_BUFFER_SIZE`), which also ends a head: a larger
+/// [`App::max_request_head`] raises it to match.
+const HYPER_BUFFER: usize = 8192 + 4096 * 100;
+
+impl Default for Connections {
+    fn default() -> Self {
+        Connections {
+            header_timeout: Some(Duration::from_secs(30)),
+            head: REQUEST_HEAD,
+            send_timeout: Some(Duration::from_secs(60)),
+            max: None,
+            drain: Drain { grace: GRACE, most: GRACE.max(DEADLINE), each: false },
+        }
+    }
+}
+
+impl App {
+    /// The app with these routes (a `#[corten::routes]` module's `router()`) and every default.
+    pub fn new(routes: Routes) -> Self {
+        App {
+            routes: routes.0,
+            pages: routes.1,
+            unstaged: routes.2,
+            error_page: None,
+            policy: Policy::new(),
+            static_files: None,
+            pwa: None,
+            ready: None,
+            ready_within: READY_WITHIN,
+            locales: None,
+            client_zone: false,
+            #[cfg(feature = "zones")]
+            zoned_dates: false,
+            dev: None,
+            components: Vec::new(),
+            areas: Vec::new(),
+            deadline: Some(DEADLINE),
+            body_limit: crate::extract::BODY_LIMIT,
+            apis: Vec::new(),
+            api_paths: Vec::new(),
+            tasks: Vec::new(),
+            grace: GRACE,
+            finishing: Arc::default(),
+            connections: Connections::default(),
+            layers: Vec::new(),
+            access_log: false,
+            layout_reads: Vec::new(),
+            kept: crate::kept::BOUND,
+            middleware: (),
+        }
+    }
+
+    /// The app's own steps in every request, run in order after Corten's checks and before the
+    /// handler: `.middleware((RequestId, RateLimit))`. What one answers still gets the error
+    /// page, the security headers and `Cache-Control`. See [`crate::middleware`]. Given once:
+    ///
+    /// ```compile_fail,E0599
+    /// # use corten::prelude::*;
+    /// let app = App::new(Routes::new()).middleware(((),)).middleware(());
+    /// ```
+    pub fn middleware<M: Middleware>(self, middleware: M) -> App<M> {
+        App {
+            routes: self.routes,
+            pages: self.pages,
+            unstaged: self.unstaged,
+            error_page: self.error_page,
+            policy: self.policy,
+            static_files: self.static_files,
+            pwa: self.pwa,
+            ready: self.ready,
+            ready_within: self.ready_within,
+            locales: self.locales,
+            client_zone: self.client_zone,
+            #[cfg(feature = "zones")]
+            zoned_dates: self.zoned_dates,
+            dev: self.dev,
+            components: self.components,
+            areas: self.areas,
+            deadline: self.deadline,
+            body_limit: self.body_limit,
+            apis: self.apis,
+            api_paths: self.api_paths,
+            tasks: self.tasks,
+            grace: self.grace,
+            finishing: self.finishing,
+            connections: self.connections,
+            layers: self.layers,
+            access_log: self.access_log,
+            layout_reads: self.layout_reads,
+            kept: self.kept,
+            middleware,
+        }
+    }
+}
+
+impl<M: Middleware> App<M> {
+    /// Writes one `INFO` event with target `corten::access` for each response, outside every
+    /// stage and app layer. Off unless set, in the app `corten new` writes too.
+    ///
+    /// Fields are `method`, `path` (never the query), `route` when matched, `status`, `bytes`
+    /// (the final body's known size, or `"stream"`), and `duration` (time to the finished
+    /// response, not time to send its body). Uses the app's tracing subscriber, including
+    /// Corten's default one under `serve`; no subscriber is installed by `router` or `test`.
+    pub fn access_log(mut self, enabled: bool) -> Self {
+        self.access_log = enabled;
+        self
+    }
+
+    /// A part of the app under `P::PREFIX`, with its own routes and, if it needs them, its own
+    /// stylesheet, given by `build`: `.area(admin::area)` for a `#[corten::routes(area = Admin)]`
+    /// module (`P` is inferred from it), with `.area(|area| admin::area(area).components(&[..]))`
+    /// for its stylesheet, or by hand, `.area::<Admin>(|admin| admin.route::<AdminUser>(get(user)))`.
+    /// See [`Area`]. The routes keep their full paths (`/admin/users/{id}`), so a
+    /// `#[derive(Route)]` struct names the same URL in the router and in links, and a route
+    /// outside the prefix does not compile.
+    ///
+    /// `P` is a route whose path is the prefix, like `/admin` (letters, digits, `-`, `_`, `.` and
+    /// `~` between slashes, no trailing slash, no parameters; anything else does not compile).
+    /// Areas may nest (`/admin` and `/admin/billing`, each with routes of its own); one under an
+    /// [`App::api`] prefix, or one given twice, is a startup error.
+    ///
+    /// `build` is called once, here.
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/items/{id}")]
+    /// struct Item<'a> { id: &'a str }
+    ///
+    /// let app = App::new(Routes::new()).area::<Item>(|items| items);
+    /// # let _ = app.router();
+    /// ```
+    pub fn area<P: Prefix>(mut self, build: impl FnOnce(Area<P>) -> Area<P>) -> Self {
+        const {
+            assert!(
+                crate::api::plain_prefix(P::PREFIX, false),
+                "corten: an area's prefix is a path like \"/admin\": letters, digits, -, _, . and ~ between slashes, without a trailing slash or parameters (the note below names the prefix's route)"
+            )
+        };
+        let prefix = P::PREFIX;
+        assert!(!self.areas.iter().any(|placed| placed.prefix == prefix), "corten: the area {prefix:?} is given twice");
+        let mut area = build(Area {
+            routes: Table::new(),
+            pages: Vec::new(),
+            with_text: Vec::new(),
+            components: Vec::new(),
+            deadline: None,
+            body_limit: None,
+            sources: crate::security::Sources::default(),
+            middleware: Vec::new(),
+            companions: Vec::new(),
+            unstaged: Default::default(),
+            types: PhantomData,
+        });
+        self.unstaged.0.append(&mut area.unstaged.0);
+        let mut companions = Vec::new();
+        for (path, methods) in std::mem::take(&mut area.companions) {
+            self.routes = self.routes.route(&path, methods);
+            companions.push(path);
+        }
+        self.areas.push(Placed {
+            prefix,
+            routes: area.routes,
+            pages: area.pages,
+            companions,
+            components: area.components,
+            deadline: area.deadline,
+            body_limit: area.body_limit,
+            sources: area.sources,
+            middleware: area.middleware,
+        });
+        self
+    }
+
+    /// Routes that answer only JSON (a webhook, an OAuth callback, a public API), under `P::PREFIX`,
+    /// given by `build`: `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module (`P` is
+    /// inferred from it), with [`Api`]'s settings in the same chain,
+    /// `.api(|routes| api::api(routes).allow_origin(..))`. The
+    /// routes keep their full paths (`/api/items/{id}`), so a `#[derive(Route)]` struct names the
+    /// same URL in the router and in links, and a route outside the prefix does not compile. A
+    /// prefix is `"/"` or a path as [`App::area`] takes, given once.
+    ///
+    /// APIs nest, as areas do: one whose prefix is under another's (a feature's `/api/orders` in
+    /// the app's `/api`) keeps its own routes and settings, takes those it leaves unset
+    /// ([`Api::deadline`], [`Api::errors`]) from the API around it, and meets that API's
+    /// middleware before its own. One it gives replaces the outer's; it cannot go back to Problem
+    /// Details once the outer sets [`Api::errors`]. Its [`Api::allow_origin`] sites are its own
+    /// alone: nesting grants the outer API's partners nothing under the inner prefix, so a site both
+    /// serve is named in both. No parameter or catch-all route outside an API (the outer `/api/{*rest}`, a
+    /// page's `/{*rest}`) answers a path under its prefix: the API's 404 does, and a route the
+    /// outer API writes under the inner prefix does not start. An API that sets no deadline, in
+    /// no API that does, takes that of the innermost area around it that sets one.
+    ///
+    /// Under the prefix every failure is an RFC 9457 Problem Details document
+    /// (`application/problem+json`, `{"title","status","detail"}`), whatever the
+    /// client accepts, and an unknown URL, a wrong method or a method no route in the app has
+    /// there is a JSON 404, 405 or 501. There is no
+    /// shell and no nonce; the deadline, the request signal,
+    /// compression and the same-origin check on writes stay. See [`crate::api`]. `"/"` makes the
+    /// whole app an API (Corten's own routes, like the health checks, keep their behavior).
+    pub fn api<P: Prefix>(mut self, build: impl FnOnce(Api<P>) -> Api<P>) -> Self {
+        const {
+            assert!(
+                crate::api::plain_prefix(P::PREFIX, true),
+                "corten: an API's prefix is \"/\" or a path like \"/api\": letters, digits, -, _, . and ~ between slashes, without a trailing slash or parameters (the note below names the prefix's route)"
+            )
+        };
+        let prefix = P::PREFIX;
+        assert!(!self.apis.iter().any(|(mount, ..)| mount.prefix == prefix), "corten: the API {prefix:?} is given twice");
+        let mut api = build(Api::new());
+        self.api_paths.extend(&api.written);
+        self.unstaged.0.append(&mut api.unstaged.0);
+        let mount = Mount::new(prefix.to_string(), &api);
+        // Corten's own routes for it (an MCP endpoint's metadata), outside its prefix.
+        for (path, methods) in std::mem::take(&mut api.companions) {
+            self.routes = self.routes.route(&path, methods);
+        }
+        self.apis.push((mount, api.routes));
+        self
+    }
+
+    /// A value only the layout shows, read beside each whole document's own reads and drawn
+    /// where the layout puts [`crate::later`]: `.layout_read(CartCount(carts.clone()))`. See
+    /// [`crate::LayoutRead`]. A read given twice is a startup error.
+    pub fn layout_read<T: crate::LayoutRead>(mut self, read: T) -> Self {
+        let read = crate::layout::Read(read);
+        let id = crate::layout::Erased::id(&read);
+        assert!(
+            !self.layout_reads.iter().any(|kept| kept.id() == id),
+            "corten: App::layout_read was given {} twice",
+            std::any::type_name::<T>()
+        );
+        self.layout_reads.push(Arc::new(read));
+        self
+    }
+
+    /// The app's components with a script or a stylesheet
+    /// (`#[component(js)]`, `#[component(css)]`, `script!`, `style::tokens!`), each listed by its constant: `.components(&[TOKENS, OfferList,
+    /// ListingSort])`, or a library's list, `.components(ui::COMPONENTS)`. Call it once per list;
+    /// the order is the stylesheets' order, so list tokens and libraries first.
+    ///
+    /// Scripts are served with the static files and preloaded on the pages whose handlers use them;
+    /// the stylesheets are one file, `components.css`, linked from every document's `<head>`.
+    /// A component listed twice counts once. The typed events (`#[event]`) a component's script
+    /// imports are served with it; an event only a file in the static directory imports is listed.
+    pub fn components(mut self, components: &[crate::Component]) -> Self {
+        self.components.extend_from_slice(components);
+        self
+    }
+
+    /// How long a handler may take to answer (30 seconds unless set). Past it the client gets
+    /// the 503 error page (a 408 when the handler was waiting for the client to send the body, as
+    /// for an upload that stopped: the request did not arrive in time; the 413 while a body over its
+    /// limit is read past), the handler's future is dropped, and the request's [`crate::Signal`]
+    /// aborts with [`crate::Abort::Deadline`] for work the handler spawned. It bounds the time to
+    /// the response's start, so a stream (a feed, server-sent events) runs as long as it needs;
+    /// reading the request body counts, so an app that takes large uploads raises it. `None`
+    /// removes it, for an app whose handlers bound themselves. An area or an API whose routes
+    /// need another sets its own ([`Area::deadline`], [`Api::deadline`]), so one slow route does
+    /// not lift it for every page.
+    pub fn deadline(mut self, deadline: impl Into<Option<Duration>>) -> Self {
+        self.deadline = deadline.into();
+        self
+    }
+
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read, and what an [`crate::Upload`] keeps unless its handler sets its own
+    /// ([`crate::Upload::limit`]): 2 MiB unless set. Over it the answer is a 413 (before the
+    /// handler runs for the readers, at the read that crosses it for an `Upload`), and the rest of
+    /// the body is read past by up to the limit again (at most 64 MiB) so a browser still sending
+    /// sees it (an `Upload` reads past by up to 64 MiB whatever its limit). The readers wait for a
+    /// slow client until the deadline, not an idle time as an `Upload` does, so a raised limit
+    /// keeps one ([`App::deadline`]); a proxy in front needs a body limit of at least twice the
+    /// app's, or the limit and 64 MiB where uploads take it (see the deploy guide). An area or an API whose
+    /// routes take more, or should take less, sets its own ([`Area::body_limit`],
+    /// [`Api::body_limit`]), so one route that takes large documents does not raise it for every
+    /// page. A handler that takes the whole request reads its body at a limit of its own
+    /// ([`crate::extract::bytes_up_to`]); an unstaged route reads no body.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = bytes;
+        self
+    }
+
+    /// The app's messages (a type from [`crate::i18n::messages!`]): `req.lang()`, for the layout's
+    /// `<html lang>`, is the locale negotiated from `Accept-Language`, as `req.t()` picks it, or the
+    /// one the page's URL names ([`crate::Req::set_locale`]), and each page says it in
+    /// `Content-Language`.
+    pub fn messages<T: crate::i18n::Messages>(mut self) -> Self {
+        self.locales = Some(T::LOCALES);
+        self
+    }
+
+    /// Learn each visitor's time zone, for [`ClientZone`](crate::ClientZone): the runtime keeps
+    /// the browser's (`America/Chicago`) in a cookie, `corten-zone`, set on the first page that
+    /// loads it, so the requests after that (a form's post, the next page) carry it. With the
+    /// `zones` feature, `req.zone()` gives it with its rules, and `App::zoned_dates` writes dates
+    /// in it. Off unless set: an app that writes every date in UTC or one zone of its own sets no
+    /// cookie.
+    pub fn client_zone(mut self) -> Self {
+        self.client_zone = true;
+        self
+    }
+
+    /// Write dates in the visitor's zone (`zones` feature): while Corten renders a request's
+    /// answer (a page, a patch, a live part's fragments), `t.date`, `t.time` and `t.date_time`
+    /// with no `.zone(..)` of their own are written in the zone the browser reported, and the
+    /// answer is private. Learns the zone ([`App::client_zone`]) too. A `Public` answer, the same
+    /// for everyone, is written in UTC (corten-ui's `LocalTime` writes it again in the browser).
+    ///
+    /// The app says so itself, not the feature: a crate that turns the feature on (a library, the
+    /// workspace's `--all-features`) changes no app's dates.
+    #[cfg(feature = "zones")]
+    pub fn zoned_dates(mut self) -> Self {
+        self.client_zone = true;
+        self.zoned_dates = true;
+        self
+    }
+
+    /// The page for a failed request from a browser: every [`Failure`] (an unknown URL, a wrong
+    /// method, a cross-site write, a missing caller, input that does not parse, a handler's error
+    /// or panic, the deadline, the PWA's offline page), in the app's layout, for who is asking.
+    /// An async function of the failure and then extractors, as a handler's are, with the state
+    /// they read (`()` for none): `.error_page(views::error_page, db)` for
+    /// `async fn error_page(failure: Failure, req: Req, viewer: Option<Caller<Viewer>>) -> HtmlResult`
+    /// ([`ErrorPageFn`]). Its caller is looked up only when it asks for one, so an unknown URL
+    /// costs a session lookup only for an error page that shows who is asking. It is sent in the
+    /// request's mode, like any page, with the failure's status; `failure.detail()` is the error,
+    /// set only under `corten dev`. A JSON route's failures, and a data client's, are JSON instead.
+    /// `corten new` writes one. Without it, Corten sends a plain document.
+    ///
+    /// In place of a handler's own failure the page keeps what a middleware wrote, a CDN's
+    /// caching headers included, so a middleware that tells a CDN to keep every answer must not
+    /// do so for an error page that reads the raw `Cookie` or `Authorization` itself: find who is
+    /// asking through a `Caller` (which makes the answer private) or leave failures uncached
+    /// (the guide's Error pages).
+    pub fn error_page<H, T, S>(mut self, page: H, state: S) -> Self
+    where
+        H: ErrorPageFn<T, S>,
+        S: Clone + Send + Sync + 'static,
+    {
+        self.error_page = Some(error_page_fn(page, state));
+        self
+    }
+
+    /// Dev mode (default: `CORTEN_DEV` is set, as `corten dev` does): error pages show the error,
+    /// and open pages reload when the server restarts. Never on in production.
+    pub fn dev(mut self, dev: bool) -> Self {
+        self.dev = Some(dev);
+        self
+    }
+
+    /// How many bytes of [`crate::Public`] answers the app keeps to give again (32 MiB unless
+    /// set; `0` keeps none): pages, and whole bodies of JSON, text or a file of 1,024 bytes or
+    /// more, whatever their type and the build's features. A route that says its
+    /// answer is the same for everyone names one any shared cache may keep for the lifetime it
+    /// gives, and the app is the first of them: the whole document, or such a body of a route
+    /// that answers JSON, text or a file, made for a `GET` with no cookie or `Authorization` is given to the
+    /// next such request in the handler's place until that lifetime ends (`s-maxage` where the
+    /// answer has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it,
+    /// the app's middleware too; what it saves is the handler, the render or the writing of the
+    /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
+    /// request, and what it reads may be that old when it is seen, as it already may be behind a
+    /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
+    /// a header the key does not cover. Neither is a relay, a stream or a feed, a file sent as
+    /// a stream or one at a URL
+    /// that names its content (`Public::immutable`); a file of a known size that a page route
+    /// answers in its page's place (`PageOr`) is kept as that page would be.
+    ///
+    /// Past the bound, a page not read since the last time room was made goes first, and one
+    /// larger than an eighth of the bound is not kept. Once the kept pages are within an
+    /// eighth of the bound, an answer is kept only when its URL was asked for before, so a
+    /// URL asked for once seldom takes a page's room and a page's handler runs twice before
+    /// its page is kept. A write to a page's path drops what is
+    /// kept there, whatever it is answered, and so does one that redirects to it; a
+    /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// under `corten dev`, where the log says instead, once for each route and verdict, whether a
+    /// release build would keep a `Public` route's answer to a `GET` that shows nothing about who
+    /// asks while its store has room, and if not the first reason (a bound of 0 among them); an
+    /// app with no `Public` route of a kind it keeps (a page, or JSON,
+    /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
+    /// compressed form made of it.
+    pub fn kept_answers(mut self, bytes: usize) -> Self {
+        self.kept = bytes;
+        self
+    }
+
+    /// The security policy (default [`Policy::new`]: same-origin everything).
+    pub fn policy(mut self, policy: Policy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// The static directory, compiled into the program by [`crate::assets::embed!`]:
+    /// `corten::assets::embed!(pub struct Static = "static");` and `.assets(Static)`. Pages name a
+    /// file by its constant, `req.asset(Static::STYLE_CSS)`. Under `corten dev` the directory is
+    /// read where the macro read it, so a file added since the build is served.
+    pub fn assets<E: crate::assets::Embed>(mut self, _files: E) -> Self {
+        self.static_files = Some(StaticFiles { dir: E::DIR, owner: E::OWNER, files: crate::assets::embedded::<E> });
+        self
+    }
+
+    /// Makes the app installable: the manifest, a generated service worker and an offline page
+    /// (Corten's own unless the app routes `/offline`). Relative icon and script paths are files
+    /// in the static directory.
+    pub fn pwa(mut self, pwa: Pwa) -> Self {
+        self.pwa = Some(pwa);
+        self
+    }
+
+    /// Work that lives as long as the app (a refresh loop, a queue consumer, a supervised child
+    /// process), started by [`serve`] once it listens. Its [`Signal`] aborts with
+    /// [`crate::Abort::Shutdown`] when shutdown begins, and `serve` waits for it to return, up to
+    /// [`App::shutdown_grace`], before it returns itself, so a write in progress is finished
+    /// rather than cut off at exit. A task still running at the bound is ended and logged by
+    /// name, and so is one that panics; restarting a task is the app's choice. [`App::router`]
+    /// starts none, so a test of the app does not run them.
+    ///
+    /// Work on a schedule is a task with tokio's intervals. Two jobs in one task's loop never
+    /// overlap. With `MissedTickBehavior::Skip` a run that overran a mark is followed by one late
+    /// run, and then the marks again (tokio's default, `Burst`, runs once for each mark missed,
+    /// back to back). `biased` puts the signal first, so no run starts once shutdown has begun; one
+    /// in progress has until [`App::shutdown_grace`], and a run that can take longer is given the
+    /// signal and stops its slow awaits there. A test aborts a task's signal as `serve` does with
+    /// [`Signal::task`]. A mark on the clock (:15 past the hour, UTC) is where the interval starts,
+    /// and the loop keeps what each job did for a status page:
+    ///
+    /// ```
+    /// use corten::{prelude::*, Signal};
+    /// use std::{
+    ///     collections::BTreeMap,
+    ///     sync::{Arc, Mutex},
+    ///     time::{Duration, SystemTime, UNIX_EPOCH},
+    /// };
+    /// use tokio::time::{interval, interval_at, Instant, MissedTickBehavior};
+    /// # #[derive(Clone)]
+    /// # struct Models { runs: Arc<Mutex<Vec<(Job, Duration)>>>, start: Instant }
+    /// # impl Models {
+    /// #     fn ran(&self, job: Job) { self.runs.lock().unwrap().push((job, self.start.elapsed())) }
+    /// #     async fn refresh(&self, signal: &Signal) -> Result<(), String> {
+    /// #         self.ran(Job::Refresh);
+    /// #         tokio::select! {
+    /// #             biased;
+    /// #             _ = signal.aborted() => return Err("stopped for shutdown".into()),
+    /// #             _ = tokio::time::sleep(Duration::from_secs(11 * 60)) => {}
+    /// #         }
+    /// #         Err("the provider answered 503".into())
+    /// #     }
+    /// #     async fn recheck(&self) -> Result<(), String> { self.ran(Job::Recheck); Ok(()) }
+    /// # }
+    ///
+    /// const HOUR: Duration = Duration::from_secs(3600);
+    ///
+    /// /// The next time the clock (UTC) is `past` a multiple of `period` (`past` under `period`).
+    /// fn next_mark(past: Duration, period: Duration) -> Instant {
+    ///     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    ///     let into = (now + period - past).as_nanos() % period.as_nanos();
+    ///     Instant::now() + period - Duration::from_nanos(into as u64)
+    /// }
+    ///
+    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    /// enum Job { Refresh, Recheck }
+    ///
+    /// /// A job's last run, for the app's status page.
+    /// struct Ran { started: SystemTime, took: Duration, outcome: Result<(), String> }
+    ///
+    /// type Status = Arc<Mutex<BTreeMap<Job, Ran>>>;
+    ///
+    /// /// The models' refresh hourly at :15 and their recheck every five minutes, one at a time.
+    /// async fn models(models: Models, status: Status, signal: Signal) {
+    ///     let mut hourly = interval_at(next_mark(Duration::from_secs(15 * 60), HOUR), HOUR);
+    ///     let mut recheck = interval(Duration::from_secs(5 * 60)); // the first tick is at once
+    ///     hourly.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ///     recheck.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ///     loop {
+    ///         let job = tokio::select! {
+    ///             biased;
+    ///             _ = signal.aborted() => return,
+    ///             _ = hourly.tick() => Job::Refresh,
+    ///             _ = recheck.tick() => Job::Recheck,
+    ///         };
+    ///         let (started, clock) = (SystemTime::now(), Instant::now());
+    ///         let outcome = match job {
+    ///             // Given the signal: its slow reads stop there, where its writes are whole.
+    ///             Job::Refresh => models.refresh(&signal).await,
+    ///             Job::Recheck => models.recheck().await,
+    ///         };
+    ///         let ran = Ran { started, took: clock.elapsed(), outcome };
+    ///         status.lock().expect("never poisoned").insert(job, ran);
+    ///     }
+    /// }
+    ///
+    /// fn app(shared: Models, status: Status) -> App {
+    ///     App::new(Routes::new()).task("models", move |signal| models(shared, status, signal))
+    /// }
+    /// # // Three hours on a paused clock, with a refresh that takes 11 minutes.
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap().block_on(async {
+    /// #     let _ = app; // the app's own is served; this runs the loop alone
+    /// #     let shared = Models { runs: Default::default(), start: Instant::now() };
+    /// #     let status = Status::default();
+    /// #     let wall = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    /// #     let (signal, shutdown) = Signal::task();
+    /// #     let task = tokio::spawn(models(shared.clone(), status.clone(), signal));
+    /// #     tokio::time::sleep(3 * HOUR).await;
+    /// #     let runs = shared.runs.lock().unwrap().clone();
+    /// #     let refreshes: Vec<_> = runs.iter().filter(|r| r.0 == Job::Refresh).map(|r| r.1).collect();
+    /// #     assert_eq!(refreshes.len(), 3, "{runs:?}");
+    /// #     assert!(refreshes.windows(2).all(|w| w[1] - w[0] == HOUR), "{refreshes:?}");
+    /// #     let at = (wall + refreshes[0]).as_secs() % 3600;
+    /// #     assert!((899..=901).contains(&at), "the first refresh ran {at} s past the hour");
+    /// #     // One at a time, and an overrun runs the recheck once, not once per missed mark.
+    /// #     assert!(runs.windows(2).all(|w| w[1].1 > w[0].1), "{runs:?}");
+    /// #     for r in &refreshes {
+    /// #         assert!(!runs.iter().any(|(_, at)| at > r && *at < *r + Duration::from_secs(11 * 60)), "{runs:?}");
+    /// #     }
+    /// #     let ran = status.lock().unwrap();
+    /// #     let refresh = &ran[&Job::Refresh];
+    /// #     assert!(refresh.took == Duration::from_secs(11 * 60) && refresh.outcome.is_err() && refresh.started <= SystemTime::now());
+    /// #     assert_eq!(ran[&Job::Recheck].outcome, Ok(()));
+    /// #     drop(ran);
+    /// #     // Shutdown begins 2 minutes into the fourth refresh: the loop returns at once.
+    /// #     tokio::time::sleep(refreshes[2] + HOUR + Duration::from_secs(120) - shared.start.elapsed()).await;
+    /// #     let at = Instant::now();
+    /// #     shutdown.begin();
+    /// #     task.await.unwrap();
+    /// #     assert_eq!(at.elapsed(), Duration::ZERO);
+    /// #     assert_eq!(status.lock().unwrap()[&Job::Refresh].outcome, Err("stopped for shutdown".into()));
+    /// # });
+    /// ```
+    ///
+    /// The interval keeps time on the monotonic clock, which a change of the wall clock does not
+    /// move and which some systems stop while asleep: after such a jump its marks are off the
+    /// clock's until the interval is made again from `next_mark` (when a tick comes a period
+    /// late, say). The next run's time, for the status page, is the app's to work out the same way.
+    /// Daily at 03:30 UTC is `next_mark(HOUR * 7 / 2, 24 * HOUR)`; at 03:30 in a zone with
+    /// daylight saving time takes a time-zone library, which is the app's. Jobs in separate tasks
+    /// that must not overlap share a `tokio::sync::Mutex`.
+    ///
+    /// The loop and the `Mutex` hold within one process. An app that runs as several (a blue/green
+    /// release while the old and the new both run, an app scaled out) runs each task in each of
+    /// them: a job that must not run twice across them claims each run in the store they share (a
+    /// row for the job and its mark, added by one instance only) and skips a run another instance
+    /// claimed (instances that all claim and whose intervals start on the clock's marks; a clock
+    /// ahead of the others makes runs come early by as much, and shortens or lengthens the gap when
+    /// the instance that runs changes); a lock alone would let the next instance's tick run it
+    /// again (the app guide, On a schedule).
+    pub fn task<F, Fut>(mut self, name: &'static str, task: F) -> Self
+    where
+        F: FnOnce(Signal) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.tasks.push(Task { name, start: Box::new(move |signal| Box::pin(task(signal))) });
+        self
+    }
+
+    /// How long [`serve`] waits, once shutdown begins, for the app's [tasks](App::task) to
+    /// return, and for work its handlers finish ([`crate::Signal::finish`]) whose handler is gone
+    /// (5 seconds unless set). A connection still answering has the longer of this and the
+    /// deadline of the request it is answering, then is closed; keep the platform's wait before
+    /// it kills the process above the longer of this and the deadline of every route whose
+    /// requests should finish (`docker stop`: 10 seconds unless Compose's `stop_grace_period`
+    /// sets it; Kubernetes: 30, `terminationGracePeriodSeconds`).
+    pub fn shutdown_grace(mut self, grace: Duration) -> Self {
+        self.grace = grace;
+        self
+    }
+
+    /// How long a connection may go on once shutdown begins: the longer of the grace and the
+    /// deadline of the request it is answering (the app's, or its area's or API's), so a request
+    /// that started before shutdown has its deadline, an answer still being written is closed by
+    /// the time the platform was told to wait, and one route with a long deadline holds shutdown
+    /// only while a request of its own is in progress. A deadline removed (`None`) adds nothing to
+    /// the longest: a request to such a route has the longest, and one still running then is
+    /// closed with its connection, as a download is. Only an app with an area or API whose
+    /// deadline is not the app's keeps each request's ([`Bound`]); in any other every route's is
+    /// the app's.
+    fn drain(&self) -> Drain {
+        let set = || {
+            let areas = self.areas.iter().filter_map(|area| area.deadline);
+            areas.chain(self.apis.iter().filter_map(|(mount, _)| mount.deadline))
+        };
+        Drain {
+            grace: self.grace,
+            most: self.deadline.into_iter().chain(set().flatten()).fold(self.grace, Duration::max),
+            each: set().any(|deadline| deadline != self.deadline),
+        }
+    }
+
+    /// How long a connection may take to send a request's head (the request line and headers)
+    /// before [`serve`] closes it: 30 seconds unless set, from when the connection opens or its
+    /// last answer was sent. A client that opens connections and never finishes a request
+    /// cannot hold them, and an idle keep-alive connection is closed after it too. A request
+    /// whose head has arrived is not bounded by it: a long upload and a live stream are the
+    /// [deadline](App::deadline)'s and their own, with [`App::send_timeout`] for their writes. A
+    /// connection that switches (a WebSocket's `101`, or a tunnel's `2xx` to `CONNECT`) is the
+    /// route's: neither this nor the deadline, which covers only the handler, bounds it, and
+    /// [`App::send_timeout`] bounds only a write that waits, so how long one may sit idle is the
+    /// route's to decide. `None` removes it, for a server that only a proxy which buffers heads
+    /// reaches.
+    pub fn header_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.connections.header_timeout = timeout.into();
+        self
+    }
+
+    /// How long a write may wait for room in the connection's send buffer before [`serve`]
+    /// closes the connection: 60 seconds unless set, as nginx's `send_timeout`. A client that
+    /// sends requests and stops reading their answers cannot hold its connection, and a live
+    /// stream, a feed or a WebSocket to one ends (the route sees its write fail). It counts only
+    /// while a write waits, from when the connection last reported room: a stream quiet between
+    /// events is not cut, and a download is cut only when its reader goes that long without the
+    /// system reporting room, which it does once a good part of the buffer is free, so a reader
+    /// that takes a little each minute can be. Over TLS a write or a flush stays pending while the
+    /// TLS library sends what it holds, and its wait starts over at each report of room too. What
+    /// decides how far apart the reports come is how the client takes bytes from its socket: one
+    /// that takes them in bursts (a TLS client reading whole records, `curl --limit-rate`) leaves
+    /// longer gaps than one that takes the same rate evenly, over TLS and plain HTTP alike, so a
+    /// short timeout can cut a slow reader that reads in bursts: with 16 KiB buffers and a
+    /// 2-second timeout, a tokio-rustls client taking 2 KiB every 125 ms was cut within 9 seconds,
+    /// and the same rate taken evenly from the socket was kept past 30, over TLS and plain HTTP.
+    /// While the connection's task has spent tokio's cooperative budget (a route reading a flood
+    /// of input), a report of room does not start the wait over. A TLS connection's last record,
+    /// written as it closes, is held to it too. `None` removes it, for a server that only a proxy
+    /// which reads answers as they come reaches; with [`App::header_timeout`] also `None`, the
+    /// clock and its per-request work are gone.
+    pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.connections.send_timeout = timeout.into();
+        self
+    }
+
+    /// The most bytes a request's head (the request line and headers) may take: 32 KiB unless
+    /// set. A larger head is answered `431 Request Header Fields Too Large` as soon as it passes
+    /// the limit, and its connection is closed; that answer is the HTTP server's, with no body
+    /// and none of Corten's headers, since no request was read to give it them, and a client
+    /// still sending the rest may see the connection reset instead. A URL past it gets the same
+    /// 431; with the limit raised above 64 KiB, a URL over 64 KiB gets 414. It also bounds a
+    /// chunked body's trailers. With [`App::header_timeout`] and [`App::max_connections`] it
+    /// bounds what clients that never finish a request can hold. Raise it for an app whose
+    /// requests carry more (many or large cookies, long query strings); a request also has at
+    /// most 100 headers.
+    pub fn max_request_head(mut self, bytes: usize) -> Self {
+        assert!(bytes > 0, "corten: max_request_head is at least 1 byte");
+        self.connections.head = bytes;
+        self
+    }
+
+    /// The most connections [`serve`] holds open at once, across its listeners (no limit unless
+    /// set). At the limit it accepts no more until one closes; the operating system queues the
+    /// rest. Bounds what many idle or slow clients can hold of the process's sockets and memory.
+    /// A switched connection (a WebSocket after its `101`, a tunnel after a `2xx` to `CONNECT`)
+    /// counts until its route drops the socket, so size the cap for the sockets an app keeps open
+    /// as well as for its requests, and end idle ones in the route, which no timeout of Corten's
+    /// does (`docs/design.md#limit-protocol-switch`).
+    pub fn max_connections(mut self, max: usize) -> Self {
+        assert!(max > 0, "corten: max_connections is at least 1");
+        self.connections.max = Some(max);
+        self
+    }
+
+    /// A tower layer around the whole app, outside the router and every stage of
+    /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
+    /// per address, a trace span. It sees the request before its route is matched (so with no
+    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router
+    /// empties a `HEAD`'s body after every layer, keeping its length, and the server writes any
+    /// other answer's `Content-Length` from the body it is handed, so a layer may change the
+    /// body. It is made once, around the whole app, so what it keeps (a concurrency
+    /// limit's count) is the app's, not a route's. Layers added later go outside earlier ones. A step inside Corten's order
+    /// (after its checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
+    /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,
+    /// or runs on a task of its own, has not told its connection its deadline when shutdown
+    /// begins: the connection has the grace, then the longest deadline
+    /// ([`App::shutdown_grace`]).
+    pub fn layer<L>(mut self, layer: L) -> Self
+    where
+        L: tower_layer::Layer<Router> + Send + 'static,
+        L::Service: tower_service::Service<Request> + Clone + Send + Sync + 'static,
+        <L::Service as tower_service::Service<Request>>::Response: crate::response::IntoResponse + 'static,
+        <L::Service as tower_service::Service<Request>>::Error: Into<Infallible> + 'static,
+        <L::Service as tower_service::Service<Request>>::Future: Send + 'static,
+    {
+        self.layers.push(Box::new(move |router: Router| router.layer(layer)));
+        self
+    }
+
+    /// What `/health/ready` checks (default: always ready): `.ready(move || db_reachable(pool.clone()))`.
+    /// A check that has not answered within 800 ms is `unavailable` ([`App::ready_within`]), so the
+    /// probe gets its answer inside its own timeout (Kubernetes': one second) even when the check
+    /// waits on a database that is down (sqlx's pool waits 30 seconds for a connection).
+    ///
+    /// ```
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap().block_on(async {
+    /// use corten::{prelude::*, Local};
+    ///
+    /// // A database that does not answer.
+    /// let app = App::new(Routes::new()).ready(|| std::future::pending::<bool>()).test();
+    /// let ready = app.get(&Local::parse("/health/ready").unwrap()).await;
+    /// assert_eq!(ready.status(), 503);
+    /// # });
+    /// ```
+    pub fn ready<F, Fut>(mut self, ready: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        self.ready = Some(Arc::new(move || Box::pin(ready())));
+        self
+    }
+
+    /// How long `/health/ready` waits for the app's [check](App::ready) before it answers
+    /// `unavailable` (800 ms unless set). Keep it under the probe's own timeout: Kubernetes waits
+    /// one second unless `timeoutSeconds` says, a `docker` healthcheck 30, most load balancers 5.
+    /// Past the limit the check is dropped, and one warning is logged until it answers again.
+    pub fn ready_within(mut self, limit: Duration) -> Self {
+        self.ready_within = limit;
+        self
+    }
+
+    /// A client that sends requests to the finished app in its tests, without a socket:
+    /// `app.test().get(&url::Home).await` ([`crate::testing`]). It starts none of the app's
+    /// [tasks](App::task).
+    pub fn test(self) -> crate::testing::Client {
+        crate::testing::Client::new(self.router())
+    }
+
+    /// The finished router: the app's routes with everything around them, its
+    /// [layers](App::layer) included. For serving it another way, and for a test that sends what
+    /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
+    /// app's [tasks](App::task). A connection loop of the app's own gives each request the client's
+    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from,
+    /// and writes each answer's `Content-Length` from its body's `size_hint`, as hyper's HTTP/1
+    /// server does: the router sets the header only on a `HEAD`, whose body it drops.
+    pub fn router(mut self) -> Router {
+        let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
+        let bounds = self.drain().each;
+        // An API inside another takes what it leaves unset from the nearest one around it, which
+        // took its own first (outermost first); then the innermost comes first, so the first
+        // whose prefix holds a path is the request's.
+        self.apis.sort_by_key(|(mount, _)| mount.prefix.len());
+        // A route an API writes under a longer API's prefix would be answered with that API's
+        // settings, not its own: named with the innermost API that holds it.
+        for (at, (outer, _)) in self.apis.iter().enumerate() {
+            for path in &outer.written {
+                let holder = self.apis[at + 1..].iter().rev().find(|(inner, _)| crate::api::under(&inner.prefix, path));
+                if let Some((inner, _)) = holder {
+                    panic!(
+                        "corten: the route {path:?} of App::api({:?}) is under App::api({:?}), whose settings would answer it; move it to that API (its routes module, or its .route)",
+                        outer.prefix, inner.prefix
+                    );
+                }
+            }
+        }
+        for at in 1..self.apis.len() {
+            let (outer, inner) = self.apis.split_at_mut(at);
+            let mount = &mut inner[0].0;
+            if let Some((around, _)) = outer.iter().rev().find(|(around, _)| crate::api::under(&around.prefix, &mount.prefix)) {
+                mount.inherit(around);
+            }
+        }
+        for (mount, _) in &self.apis {
+            mount.finish();
+        }
+        self.apis.reverse();
+        for area in &self.areas {
+            if let Some((mount, ..)) = self.apis.iter().find(|(mount, ..)| mount.contains(area.prefix)) {
+                panic!("corten: the area {:?} is under App::api({:?}), whose routes answer only JSON", area.prefix, mount.prefix);
+            }
+        }
+        // An unstaged route meets none of an area's or API's settings, so it is declared in the
+        // module of the innermost one whose prefix holds it, where a reader of that area or API
+        // sees it, and its parameter or catch-all cannot reach another one's prefix (`/pay/{id}`
+        // at `/pay/api`): a staged route that does is turned away per request, which an unstaged
+        // one never meets.
+        let prefixes: Vec<&str> =
+            self.areas.iter().map(|area| area.prefix).chain(self.apis.iter().map(|(mount, ..)| mount.prefix.as_str())).collect();
+        // Nor is its path routed again elsewhere (the app's routes and an area's share a path as
+        // one route): a method the unstaged route lacks would get its 405 (or the router's 501)
+        // there, with no stage.
+        let all_written: Vec<&str> = (self.pages.iter().map(|(p, _)| *p))
+            .chain(self.areas.iter().flat_map(|area| area.pages.iter().map(|(p, _)| *p)))
+            .chain(self.api_paths.iter().copied())
+            .collect();
+        // As the router matches it: a parameter's name and the text after it (`{n}.xml`) do not
+        // count, so `/x/{n}.xml` and `/x/{id}.json` are one route.
+        fn routed(path: &str) -> String {
+            let segments = path.split('/').map(|segment| match segment.strip_prefix('{') {
+                Some(rest) if rest.starts_with('*') => "{*}",
+                Some(_) => "{}",
+                None => segment,
+            });
+            segments.collect::<Vec<_>>().join("/")
+        }
+        let all_routed: Vec<String> = all_written.iter().map(|path| routed(path)).collect();
+        for route in &self.unstaged.0 {
+            let written = route.written;
+            let shape = routed(written);
+            if all_routed.iter().filter(|p| **p == shape).count() > 1 {
+                panic!("corten: the route {written:?} says unstaged and its path is routed again in another module, where its other methods would meet no stage; give the unstaged route a path of its own");
+            }
+            let holder = prefixes.iter().copied().filter(|prefix| crate::api::under(prefix, written)).max_by_key(|p| p.len());
+            if holder != route.declared_in {
+                let declared =
+                    route.declared_in.map_or("the app's routes".to_string(), |prefix| format!("the module of {prefix:?}"));
+                let holder = holder.map_or("the app's routes".to_string(), |prefix| format!("the module of {prefix:?}"));
+                panic!("corten: the route {written:?} says unstaged and is declared in {declared}, but its path is under {holder}, whose settings it would skip unseen; declare it there");
+            }
+            if let Some(reached) = prefixes.iter().find(|prefix| crate::api::reaches(written, prefix)) {
+                panic!("corten: the route {written:?} says unstaged and can answer under {reached:?}, whose settings it would skip; give it a segment of its own text before the parameter");
+            }
+        }
+        // An area's stylesheet is a section of the asset pipeline.
+        let sections: Vec<(&str, &[crate::Component])> = self
+            .areas
+            .iter()
+            .filter(|area| !area.components.is_empty())
+            .map(|area| (area.prefix, area.components.as_slice()))
+            .collect();
+        let assets = load_assets(self.static_files, dev, &self.components, &sections).map(Arc::new);
+        let mut head = String::new();
+        if let Some(href) = assets.as_ref().and_then(|a| a.stylesheet()) {
+            head.push_str(&format!(r#"<link rel="stylesheet" href="{href}">"#));
+        }
+        let mut routes = self.routes;
+        // Corten's own routes: an API prefix does not take them over.
+        let mut own = Own {
+            exact: vec!["/health/live", "/health/ready"],
+            prefixes: vec!["/corten/".to_string()],
+            companions: (self.apis.iter().flat_map(|(mount, _)| mount.own.iter().cloned()))
+                .chain(self.areas.iter().flat_map(|area| area.companions.iter().cloned()))
+                .collect(),
+        };
+        routes = routes.merge(crate::runtime_routes());
+        let mut offline = None;
+        if let Some(pwa) = self.pwa {
+            let pwa = pwa.resolve(assets.as_deref());
+            head.push_str(r#"<link rel="manifest" href="/manifest.webmanifest">"#);
+            if let Some(color) = pwa.theme_color() {
+                head.push_str(&format!(r#"<meta name="theme-color" content="{}">"#, crate::escape(color)));
+            }
+            if !dev {
+                head.push_str(&format!(r#"<meta name="corten-sw" content="{}">"#, crate::pwa::WORKER_PATH));
+            }
+            offline = Some(pwa.offline_path().to_string());
+            own.exact.extend([crate::pwa::MANIFEST_PATH, crate::pwa::WORKER_PATH]);
+            routes = routes.merge(pwa.routes());
+        }
+        if self.client_zone {
+            head.push_str(r#"<meta name="corten-zone">"#);
+        }
+        if dev {
+            let boot = format!(
+                "{:x}",
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+            );
+            head.push_str(&format!(r#"<meta name="corten-dev" content="{boot}">"#));
+            routes = routes.route(
+                "/corten/dev",
+                get(move || {
+                    let first = Event::new().retry(Duration::from_millis(250)).data(&boot);
+                    let events = stream::once(async move { first }).chain(stream::pending());
+                    async move { crate::sse::response(events) }
+                }),
+            );
+            // The runtime's checks that only a developer needs (js/dev.js), as the source: no
+            // production page loads it. With the two runtime modules it imports, so it reads
+            // `data-on` and finds a form field as the runtime does.
+            for (path, source) in [
+                ("/corten/dev.js", crate::DEV_JS),
+                ("/corten/on.js", crate::DEV_ON_JS),
+                ("/corten/field.js", crate::DEV_FIELD_JS),
+            ] {
+                routes = routes.route(
+                    path,
+                    get(move || async move {
+                        let head =
+                            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-store")];
+                        (head, source)
+                    }),
+                );
+            }
+        }
+        if let Some(assets) = &assets {
+            own.prefixes.push(assets.mount_prefix());
+            routes = routes.merge(assets.routes());
+        }
+        // The icon browsers ask for on their own, unless a route of the app's matches the path
+        // (a catch-all or a parameter one too, whatever its methods), as the router would pick it.
+        let favicon = crate::assets::FAVICON_PATH;
+        let api_paths: Vec<(&'static str, bool)> = self.api_paths.iter().map(|path| (*path, true)).collect();
+        let taken = std::iter::once(&self.pages[..])
+            .chain(self.areas.iter().map(|area| &area.pages[..]))
+            .chain(std::iter::once(&api_paths[..]))
+            .any(|routes| crate::route::chosen(routes, favicon).is_some());
+        if !taken {
+            own.exact.push(favicon);
+            routes = routes.merge(crate::assets::favicon(assets.as_ref()));
+        }
+        // An unstaged route is not where Corten's own paths are (`/corten/`, the assets, the health
+        // checks, the PWA's files and offline page, an API's or area's companions): one that can
+        // match one of them would answer there, or join Corten's route there, outside its stages
+        // (the service worker would show an unstaged answer as the offline page). A prefix is
+        // reached by any parameter before it; an exact path only by a route that can match that
+        // path itself (`/.well-known/{file}` cannot match `/.well-known/oauth-protected-resource/mcp`).
+        // The routes macro refuses what the path alone shows (a first segment that is a parameter,
+        // `/corten/..`, `/health/live`, `/health/{..}`); this is the rest.
+        for path in self.unstaged.paths() {
+            let reached = (own.prefixes.iter().map(|prefix| prefix.trim_end_matches('/')))
+                .find(|prefix| crate::api::under(prefix, path) || crate::api::reaches(path, prefix))
+                .or_else(|| own.exact.iter().copied().find(|exact| crate::route::routes_path(path, exact)))
+                .or_else(|| {
+                    (own.companions.iter().map(String::as_str)).find(|companion| crate::route::routes_path(path, companion))
+                })
+                .or_else(|| offline.as_deref().filter(|offline| crate::route::routes_path(path, offline)));
+            if let Some(corten_s) = reached {
+                panic!("corten: the route {path:?} says unstaged and can answer at {corten_s:?}, which is Corten's own; give it a first segment of its own text");
+            }
+        }
+        routes = routes.merge(match self.ready {
+            None => crate::health(|| async { true }),
+            Some(ready) => {
+                let limit = self.ready_within;
+                // Set while the check keeps running past its limit, so a probe every few seconds
+                // logs the hang once rather than each time.
+                let late = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                crate::health(move || {
+                    let check = ready();
+                    let late = late.clone();
+                    async move {
+                        match tokio::time::timeout(limit, check).await {
+                            Ok(ready) => {
+                                late.store(false, std::sync::atomic::Ordering::Relaxed);
+                                ready
+                            }
+                            Err(_) => {
+                                if !late.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    not_ready_in_time(limit);
+                                }
+                                false
+                            }
+                        }
+                    }
+                })
+            }
+        });
+
+        // An app with a design whose failures would leave it: said once, while it is developed.
+        #[cfg(debug_assertions)]
+        if self.error_page.is_none() && assets.as_ref().is_some_and(|assets| assets.styled()) {
+            no_error_page();
+        }
+        let error_page = self.error_page.unwrap_or_else(|| error_page_fn(default_error_page, ()));
+        let mut shared = Shared::new(error_page, assets, head);
+        shared.finishing = self.finishing.clone();
+        shared.offline = offline;
+        shared.locales = self.locales;
+        shared.client_zone = self.client_zone;
+        #[cfg(feature = "zones")]
+        {
+            shared.zoned_dates = self.zoned_dates;
+        }
+        shared.dev = dev;
+        shared.layout_reads = self.layout_reads.into();
+        // The same path routed in two places (the app's routes and an area's) is one route to the router,
+        // with the methods of both.
+        let mut pages: Vec<(&'static str, bool)> = Vec::new();
+        let written: Vec<&str> = self
+            .pages
+            .iter()
+            .chain(self.areas.iter().flat_map(|area| &area.pages))
+            .map(|(p, _)| *p)
+            .chain(self.api_paths.iter().copied())
+            .collect();
+        crate::route::assert_no_clash(&written);
+        for &(pattern, get) in self.pages.iter().chain(self.areas.iter().flat_map(|area| &area.pages)) {
+            match pages.iter_mut().find(|(p, _)| *p == pattern) {
+                Some((_, has)) => *has |= get,
+                None => pages.push((pattern, get)),
+            }
+        }
+        shared.pages = pages.into();
+        // What is not a page however the app's routes match it: Corten's own paths and the APIs.
+        shared.not_pages = NotPages { own: own.clone(), apis: self.apis.iter().map(|(mount, _)| mount.prefix.clone()).collect() };
+        shared.components = self.components.iter().chain(sections.iter().flat_map(|(_, c)| c.iter())).map(|c| c.name).collect();
+        if let Some(assets) = &shared.assets {
+            for section in assets.section_stylesheets() {
+                let index = shared.sections.len();
+                shared.section_of.extend(section.components.iter().map(|name| (*name, index)));
+                let link = format!(r#"<link rel="stylesheet" href="{}" data-corten-style>"#, crate::escape(&section.href));
+                shared.sections.push((section.prefixes.clone(), link));
+            }
+        }
+        let policy = proxies_from_env(hosts_from_env(self.policy));
+        let hosts = policy.host_check();
+        shared.proxies = policy.proxies().to_vec();
+        shared.allowed_origins = policy.allowed_origins().to_vec();
+        shared.https_only = policy.sends_hsts();
+        let area_sources: Vec<_> =
+            self.areas.iter().filter(|area| !area.sources.is_empty()).map(|area| (area.prefix, &area.sources)).collect();
+        let policy = Applied::new(policy, &shared.import_map, &area_sources);
+
+        // The routes of the APIs and areas: each is under its prefix, which the compiler checked.
+        let mut owned = Vec::with_capacity(self.apis.len() + self.areas.len());
+        let mut mounts = Vec::with_capacity(self.apis.len());
+        for (mut mount, api) in self.apis {
+            // Only the startup checks above read it.
+            mount.written = Vec::new();
+            mount.exposed = written.iter().any(|route| crate::api::reaches(route, &mount.prefix));
+            owned.push(api);
+            mounts.push(mount);
+        }
+        // The routes that say `unstaged`, each through a lane of its own in place of the stages,
+        // where under the innermost API whose prefix holds it a failure is the API's JSON. An app
+        // with none has none.
+        let mut lanes = Vec::new();
+        let unstaged = (!self.unstaged.0.is_empty()).then(|| {
+            let mut unstaged = Table::new();
+            for crate::route::UnstagedRoute { written, path, methods, .. } in self.unstaged.0 {
+                let json = mounts.iter().find(|mount| mount.contains(path)).map(|mount| (mount.errors.clone(), dev));
+                let lane = Arc::new(crate::route::Lane { hosts: hosts.clone(), json, written });
+                lanes.push(path);
+                unstaged = unstaged.unstaged(path, written, methods, lane);
+            }
+            unstaged
+        });
+        // What each area's and API's requests meet, resolved once and given to each route's entry.
+        let scopes = Arc::new(Scopes::new((self.deadline, self.body_limit), own, &self.areas, mounts, &policy));
+        shared.scopes = Some(scopes.clone());
+        owned.extend(self.areas.into_iter().map(|area| area.routes));
+        // One table: a path routed in two of them (the app's routes and an area's) is one route
+        // with the methods of both. The unstaged routes are beside the others, each in its lane
+        // (a wrong method at an unstaged route's path, or a segment without its suffix, is the
+        // router's answer in that lane); an unknown URL is the app's 404 inside the stages.
+        let mut table = Table::new();
+        for routes in owned {
+            table = table.merge(routes);
+        }
+        let mut table = table.merge(routes);
+        if let Some(unstaged) = unstaged {
+            table = table.merge(unstaged);
+        }
+        // An app with no route eligible to keep a page has none for a write to drop, so its writes
+        // are not counted. Under `corten dev` every load is the handler's, so a change shows on the
+        // next one: the store stands so the code that decides what it keeps runs as it does in a
+        // release build, but nothing is kept in it, and each `Public` route says in the log what
+        // a release build does with its answer (`crate::router::Telling`).
+        shared.kept = if !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        if dev {
+            table = table.telling();
+        }
+        // An app whose areas and APIs have no middleware of their own runs the app's alone.
+        let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
+        let shared = Arc::new(shared);
+        let access = self.access_log.then(|| scopes.clone());
+        let mut router = if plain {
+            staged(table, Layer { shared, bounds, policy, scopes, steps: Plain(self.middleware) })
+        } else {
+            staged(table, Layer { shared, bounds, policy, scopes, steps: Scoped(self.middleware) })
+        };
+        // A lane makes no API's check; a route whose scope its path finds may be another API's.
+        let names = access.map(|scopes| {
+            let foreign = |pattern: &str| !lanes.contains(&pattern) && scopes.of_route(pattern).is_none();
+            router.access_names(scopes.clone(), foreign)
+        });
+        // With app layers, the route is named inside them and carried out to the log.
+        let (inside, outside) = if self.layers.is_empty() { (None, names) } else { (names, None) };
+        if let Some(names) = inside {
+            router = router.record_route(names);
+        }
+        for wrap in self.layers {
+            router = wrap(router);
+        }
+        if self.access_log {
+            router.access_log(outside)
+        } else {
+            router
+        }
+    }
+}
+
+impl<M: Middleware> From<App<M>> for Router {
+    fn from(app: App<M>) -> Router {
+        app.router()
+    }
+}
+
+/// Serves an app on `HOST`:`PORT` until Ctrl-C or `SIGTERM`, ending live streams first so
+/// shutdown is quick: `corten::serve(App::new(routes)).await`. Without `HOST` it listens on the
+/// loopback addresses, `127.0.0.1` and `[::1]`, so `http://localhost:PORT` answers at once
+/// however the system resolves `localhost`; `PORT` defaults to 3000. With feature `log`, prints
+/// logs to stdout (`RUST_LOG` style filtering is the app's choice: set its own subscriber first).
+///
+/// Shutdown, on the first Ctrl-C or `SIGTERM`: the app's [tasks](App::task) are told to stop,
+/// live streams end, the listeners close, requests in progress finish (a connection still
+/// answering once the longer of [`App::shutdown_grace`] and its request's deadline has passed is
+/// closed), and `serve` returns once the tasks and work handlers finish
+/// ([`crate::Signal::finish`]) have too (or the grace has passed).
+///
+/// A tower layer of the app's own goes around it with [`App::layer`]. To serve it on listeners of
+/// the app's own (a Unix socket, a socket a supervisor hands over) with the same shutdown, see
+/// [`serve_on`]; for HTTPS, [`serve_wrapped`].
+pub async fn serve<M: Middleware>(app: App<M>) -> std::io::Result<()> {
+    let listeners = listeners(3000).await?;
+    let shown = match std::env::var("HOST").ok().as_deref() {
+        None | Some("0.0.0.0" | "::") => "localhost".to_string(),
+        Some(host) => host.to_string(),
+    };
+    println!("corten: listening on http://{shown}:{}", listeners[0].local_addr()?.port());
+    serve_on(listeners, app).await
+}
+
+/// The listeners [`serve`] uses: `HOST`:`PORT`, or without `HOST` both loopback addresses
+/// (`127.0.0.1` and `[::1]`) on one port, so `localhost` answers at once however it resolves;
+/// `port` when `PORT` is not set (`serve` passes 3000). For an app that serves HTTPS on them
+/// ([`serve_wrapped`]), or whose own default port is not 3000
+/// (`corten::serve_on(corten::listeners(8320).await?, app)`, with no `PORT` to set from the
+/// program). Each asks the system to hold 511 connections it has finished and the app not yet
+/// accepted, where `TcpListener::bind` asks for 128. The system may hold fewer: Linux caps it at
+/// `net.core.somaxconn`, macOS at `kern.ipc.somaxconn` (128 by default), and Windows 11 held 200.
+pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    let host = std::env::var("HOST").ok();
+    let port: u16 = match std::env::var("PORT") {
+        Ok(port) => port.parse().map_err(|_| std::io::Error::other(format!("PORT is not a port number: {port}")))?,
+        Err(_) => port,
+    };
+    bind(host.as_deref(), port).await
+}
+
+/// [`serve`] on listeners of the app's own: anything that implements
+/// [`Listener`](crate::Listener), such as a Unix socket or a socket a supervisor hands
+/// over. Shutdown is `serve`'s, across all of them: on Ctrl-C or `SIGTERM` the app's tasks are
+/// told, live streams end, every listener closes and finishes its requests, and it returns once
+/// the tasks and work handlers finish ([`crate::Signal::finish`]) have finished too. HTTPS is [`serve_wrapped`], which runs the handshake on each
+/// connection under the app's connection limits; a listener that ran it before handing the
+/// connection over would have it outside them.
+pub async fn serve_on<L, M>(listeners: Vec<L>, app: App<M>) -> std::io::Result<()>
+where
+    L: Listener,
+    L::Addr: std::fmt::Debug + 'static,
+    M: Middleware,
+{
+    #[cfg(feature = "log")]
+    crate::log::init();
+    if listeners.is_empty() {
+        return Err(std::io::Error::other("corten::serve_on: no listeners to serve on"));
+    }
+    run(listeners, plain, app, crate::shutdown_signal()).await
+}
+
+/// [`serve_on`] with a step of the app's own on each connection before HTTP, such as a TLS
+/// handshake: `corten::serve_wrapped(corten::listeners(443).await?, move |tcp| acceptor.accept(tcp), app)`.
+/// The step is held to what a connection is: it runs in the connection's own task, so a slow
+/// client holds up no other; it counts against [`App::max_connections`] from before the
+/// listener's accept; and [`App::header_timeout`] runs from the accept, so a client that stalls
+/// before the step is done or after it, before its request head, is closed at the same time. A
+/// step that fails closes the connection, and shutdown ends the steps in progress. The library
+/// (rustls, native-tls) stays the app's, and so does its configuration: ALPN offers `http/1.1`,
+/// what Corten speaks. A step whose future borrows from what it captures clones it first:
+/// `move |tcp| { let acceptor = acceptor.clone(); async move { acceptor.accept(tcp).await } }`.
+/// The step's error is not read: the connection closes. The IO's flush must complete only once
+/// the bytes it holds have been written (tokio-rustls's does): the header timeout counts from the
+/// first flush that completes after an answer's body has been taken. And while a write, a flush
+/// or a close waits, the IO must wake the waker it was given only when it can take more (as
+/// tokio's TCP stream and tokio-rustls do): [`App::send_timeout`] takes each such wake as the
+/// client making room and starts its wait over, so an IO that also woke it to read, or woke
+/// itself, could keep a client that has stopped reading open.
+pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
+where
+    L: Listener,
+    L::Addr: std::fmt::Debug + 'static,
+    W: Fn(L::Io) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<Io, E>> + Send + 'static,
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    M: Middleware,
+{
+    #[cfg(feature = "log")]
+    crate::log::init();
+    if listeners.is_empty() {
+        return Err(std::io::Error::other("corten::serve_wrapped: no listeners to serve on"));
+    }
+    run(
+        listeners,
+        move |io| {
+            let step = wrap(io);
+            async move { step.await.map(|io| (io, ())) }
+        },
+        app,
+        crate::shutdown_signal(),
+    )
+    .await
+}
+
+/// [`serve_wrapped`] with a value learned by the step, such as a verified client certificate,
+/// the SNI name or negotiated ALPN protocol. The step returns `(io, value)`: every request on
+/// that connection receives a clone as [`crate::ConnectionInfo<T>`] in its extensions. A
+/// handler or [`crate::Identify`] reads it with that extractor, which makes the answer private.
+/// Put several facts in one struct; use an `Arc` where cloning them would be expensive.
+///
+/// The handshake, HTTP and shutdown have the same connection limit, header and send timeouts,
+/// and drain as [`serve_wrapped`]. Apps that need no value keep using `serve_wrapped` or
+/// [`serve_on`], whose requests insert no connection-info extension.
+pub async fn serve_wrapped_with<L, W, F, Io, E, T, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
+where
+    L: Listener,
+    L::Addr: std::fmt::Debug + 'static,
+    W: Fn(L::Io) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<(Io, T), E>> + Send + 'static,
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    T: Clone + Send + Sync + 'static,
+    M: Middleware,
+{
+    #[cfg(feature = "log")]
+    crate::log::init();
+    if listeners.is_empty() {
+        return Err(std::io::Error::other("corten::serve_wrapped_with: no listeners to serve on"));
+    }
+    run(
+        listeners,
+        move |io| {
+            let step = wrap(io);
+            async move { step.await.map(|(io, info)| (io, crate::ConnectionInfo(info))) }
+        },
+        app,
+        crate::shutdown_signal(),
+    )
+    .await
+}
+
+/// The step on a connection that has none: the listener's IO itself.
+pub(crate) fn plain<I>(io: I) -> std::future::Ready<Result<(I, ()), std::convert::Infallible>> {
+    std::future::ready(Ok((io, ())))
+}
+
+/// Serves `app` on `listeners` with its tasks running until `stop` resolves; then tells the tasks
+/// and work handlers finish to stop, lets each listener finish its requests and waits for the
+/// tasks, then the work, up to the app's grace from when `stop` resolved. `wrap` is each connection's step before HTTP
+/// ([`serve_wrapped`]), [`plain`] for none.
+pub(crate) async fn run<L, W, F, Io, E, D, M>(
+    listeners: Vec<L>,
+    wrap: W,
+    mut app: App<M>,
+    stop: impl Future<Output = ()>,
+) -> std::io::Result<()>
+where
+    L: Listener,
+    L::Addr: std::fmt::Debug + 'static,
+    W: Fn(L::Io) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<(Io, D), E>> + Send + 'static,
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
+    M: Middleware,
+{
+    let (tasks, grace) = (std::mem::take(&mut app.tasks), app.grace);
+    let connections = Connections { drain: app.drain(), ..app.connections };
+    let finishing = app.finishing.clone();
+    // Built first: a startup panic (a misplaced area) starts no task.
+    let router = app.router();
+    let running = Running::start(tasks, finishing.signal().clone());
+    let stopped = std::sync::OnceLock::new();
+    serve_router(listeners, wrap, router, connections, async {
+        stop.await;
+        let _ = stopped.set(tokio::time::Instant::now());
+        running.stop();
+    })
+    .await;
+    let began = *stopped.get().expect("serving ends only after shutdown begins");
+    running.finish(began + grace, grace).await;
+    finishing.wait(began + grace, grace).await;
+    Ok(())
+}
+
+/// The listeners for `host`:`port`; without a host, the IPv4 and IPv6 loopback addresses on one
+/// port. Browsers resolve `localhost` to `::1` first on some systems (Windows does), and a server
+/// only on `127.0.0.1` then answers each new connection a fallback later, about 200 ms (measured
+/// on Windows with Chromium and curl). A system without IPv6 gets `127.0.0.1` alone, but a `[::1]`
+/// port another process holds is an error: `localhost` would reach that process instead (port 0,
+/// any free port, tries another pair).
+pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    if let Some(host) = host {
+        // Each address the host resolves to in turn, as `TcpListener::bind` tries them.
+        let mut last = None;
+        for addr in tokio::net::lookup_host((host, port)).await? {
+            match listen(addr) {
+                Ok(listener) => return Ok(vec![listener]),
+                Err(error) => last = Some(error),
+            }
+        }
+        return Err(last.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("HOST {host} resolves to no address"))
+        }));
+    }
+    let mut tries = 0;
+    loop {
+        let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
+        match listen(SocketAddr::from((Ipv6Addr::LOCALHOST, v4.local_addr()?.port()))) {
+            Ok(v6) => return Ok(vec![v4, v6]),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                tries += 1;
+                if port != 0 || tries == 8 {
+                    return Err(error);
+                }
+            }
+            Err(_) => return Ok(vec![v4]),
+        }
+    }
+}
+
+/// How many connections the kernel holds finished (handshake done) for the server to accept.
+/// `TcpListener::bind` asks for 128 (mio's, the standard library's number), which overflows when
+/// clients connect faster than the server accepts them: with 1,024 k6 clients starting at once
+/// against a page on one CPU (Docker Desktop's Linux 6.18 VM, 2026-11-08), the kernel counted 142
+/// and 485 listen-queue overflows (two runs) and the slowest connect took 1.27 and 2.08 s (a SYN
+/// resent after about a second, and the load generator's own delay); with 511, none and 0.28 and
+/// 0.24 s (4096 overflowed none either). 511 is Node's default and nginx's on Linux
+/// (`docs/design.md#choice-listen-backlog`). The system caps it: Linux at
+/// `net.core.somaxconn` (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by
+/// default), Windows 11 at 200 (one run on loopback), where a connection past it is refused. Past
+/// [`App::max_connections`] connections wait in this queue for as long as the cap holds, each with
+/// what it has sent so far in kernel memory (reasoned, not measured), so the queue is kept no
+/// deeper than the burst needs.
+const BACKLOG: u32 = 511;
+
+/// A listener on `addr` with [`BACKLOG`], otherwise as `TcpListener::bind` makes it
+/// (`SO_REUSEADDR` on Unix, so a restarted server binds a port its last connections still hold
+/// in `TIME_WAIT`).
+fn listen(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
+    #[cfg(unix)]
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(BACKLOG)
+}
+
+/// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
+/// resolves, then lets each finish its requests for as long as `connections.drain` gives it.
+pub(crate) async fn serve_router<L, W, F, Io, E, D>(
+    listeners: Vec<L>,
+    wrap: W,
+    router: Router,
+    connections: Connections,
+    stop: impl Future<Output = ()>,
+) where
+    L: Listener,
+    L::Addr: std::fmt::Debug + 'static,
+    W: Fn(L::Io) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<(Io, D), E>> + Send + 'static,
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
+{
+    use futures_util::future::{join, join_all};
+    // When shutdown begins: when it began, and how long connections may go on from then.
+    let (stopped, watch) = tokio::sync::watch::channel(None);
+    let held = Held {
+        clock: crate::watch::Clock::start(connections.header_timeout, connections.send_timeout),
+        open: connections.max.map(|max| Arc::new(tokio::sync::Semaphore::new(max))),
+        bounds: connections.drain.each,
+    };
+    let wrap = Arc::new(wrap);
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.max_header_size(connections.head);
+    if connections.head > HYPER_BUFFER {
+        http.max_buf_size(connections.head);
+    }
+    let servers = listeners.into_iter().map(|listener| {
+        let (wrap, http, router, held) = (wrap.clone(), http.clone(), router.clone(), held.clone());
+        serve_listener(listener, wrap, http, router, held, watch.clone())
+    });
+    let drain = connections.drain;
+    let stopping = async {
+        stop.await;
+        let _ = stopped.send(Some(Closing { began: tokio::time::Instant::now(), drain }));
+    };
+    let ((), counts) = join(stopping, join_all(servers)).await;
+    let cut: usize = counts.into_iter().sum();
+    if cut > 0 && drain.each {
+        let (grace, most) = (drain.grace, drain.most);
+        tracing::warn!("corten: closed {cut} connection(s) still answering after shutdown began, each once the longer of the grace ({grace:?}) and its request's deadline had passed (at most {most:?})");
+    } else if cut > 0 {
+        let most = drain.most;
+        tracing::warn!("corten: closed {cut} connection(s) still answering {most:?} after shutdown began");
+    }
+}
+
+/// What each connection on a listener is held to.
+#[derive(Clone)]
+struct Held {
+    /// For [`App::header_timeout`] and [`App::send_timeout`].
+    clock: Option<Arc<crate::watch::Clock>>,
+    /// For [`App::max_connections`].
+    open: Option<Arc<tokio::sync::Semaphore>>,
+    /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
+    bounds: bool,
+}
+
+/// When shutdown began, and how long connections may go on from then.
+#[derive(Clone, Copy)]
+struct Closing {
+    began: tokio::time::Instant,
+    drain: Drain,
+}
+
+impl Closing {
+    /// When a connection, with its request's deadline where it keeps one, is to close
+    /// ([`Bound::drain`]).
+    fn until(&self, bound: Option<&Bound>, settled: bool) -> tokio::time::Instant {
+        let drain = bound.map_or(self.drain.most, |bound| bound.drain(self.drain, settled));
+        // A deadline too long to add is none: tokio's own far future, 30 years.
+        self.began.checked_add(drain).unwrap_or_else(|| self.began + Duration::from_secs(86400 * 365 * 30))
+    }
+}
+
+/// The waker a connection's wait for shutdown is polled with: it notes that the wait was woken
+/// and wakes the connection's task, which polls the wait again only then. Whatever a poll of the
+/// wait did to be polled again, it did with this waker: left it with the channel, which wakes it
+/// when shutdown begins or the server is gone, or woke it itself to be polled again soon (tokio
+/// does when the task's budget is spent, and when a task dump polls the task). So the task does
+/// not rest on which of those a poll did.
+struct Heard {
+    woken: std::sync::atomic::AtomicBool,
+    task: std::task::Waker,
+}
+
+impl std::task::Wake for Heard {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, std::sync::atomic::Ordering::Release);
+        self.task.wake_by_ref();
+    }
+}
+
+/// Accepts connections on `listener` and serves each until `stop` holds a [`Closing`]; then
+/// stops accepting, lets each connection finish the request it is in (an idle one closes) until
+/// the time it gives that connection, closes those still open then, and returns once all have
+/// closed, with how many it closed. Each connection's step `wrap` runs in its own task before
+/// HTTP, then `http` (its limits) serves it. With `held.clock`, a connection waits for a
+/// request's head (the step included) only as long as it allows, and with `held.open`, a
+/// connection is accepted only once one of its permits is free.
+async fn serve_listener<L, W, F, Io, E, D>(
+    mut listener: L,
+    wrap: Arc<W>,
+    http: hyper::server::conn::http1::Builder,
+    router: Router,
+    held: Held,
+    mut stop: tokio::sync::watch::Receiver<Option<Closing>>,
+) -> usize
+where
+    L: Listener,
+    L::Addr: 'static,
+    W: Fn(L::Io) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<(Io, D), E>> + Send + 'static,
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
+{
+    // Each connection holds a sender; the listener is done when every one has dropped. One
+    // closed because shutdown's drain ran out sends first, to be counted.
+    let (alive, mut closed) = tokio::sync::mpsc::channel::<()>(1);
+    loop {
+        let permit = match &held.open {
+            None => None,
+            Some(open) => tokio::select! {
+                permit = open.clone().acquire_owned() => Some(permit.expect("the semaphore is never closed")),
+                _ = stop.wait_for(Option::is_some) => break,
+            },
+        };
+        let (io, addr) = tokio::select! {
+            accepted = listener.accept() => accepted,
+            _ = stop.wait_for(Option::is_some) => break,
+        };
+        let addr: &dyn std::any::Any = &addr;
+        let peer = match addr.downcast_ref::<std::net::SocketAddr>() {
+            Some(addr) => Peer::Ip(addr.ip()),
+            #[cfg(unix)]
+            None if addr.is::<tokio::net::unix::SocketAddr>() => Peer::Local,
+            None => Peer::Unknown,
+        };
+        let watch = held.clock.as_ref().map(crate::watch::Clock::watch);
+        let bound = held.bounds.then(|| Arc::new(Bound::new()));
+        let connection = Connection { router: router.clone(), peer, watch: watch.clone(), bound: bound.clone() };
+        let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
+        tokio::spawn(async move {
+            // `permit` is held by the task until the step is done, then by the IO (`Watched`).
+            // The step, until it is done, the clock expires the connection or shutdown begins.
+            let (io, data) = {
+                let mut step = std::pin::pin!(wrap(io));
+                let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
+                let stepped = std::future::poll_fn(|cx| {
+                    if let std::task::Poll::Ready(done) = crate::watch::bounded(watch.as_deref(), step.as_mut(), cx) {
+                        return std::task::Poll::Ready(done);
+                    }
+                    stopping.as_mut().poll(cx).map(|_| None)
+                });
+                match stepped.await {
+                    Some(Ok(io)) => io,
+                    _ => return,
+                }
+            };
+            let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
+            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
+            let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
+            // The wait for shutdown has a waker of its own ([`Heard`]) and is polled only when
+            // that waker has fired, and at first. So a wake of the task for the connection (every
+            // read and write) asks only whether it has, one load, where polling the wait again
+            // took a lock connections on every thread share: the mutex of one of the lists the
+            // channel keeps its waiters in (tokio has eight, and a wait is put on one at random).
+            // The task is spawned above, so the waker it is polled with here is its own for as
+            // long as it runs.
+            let closing = {
+                let task = std::future::poll_fn(|cx| std::task::Poll::Ready(cx.waker().clone())).await;
+                let heard = Arc::new(Heard { woken: std::sync::atomic::AtomicBool::new(true), task });
+                let waker = std::task::Waker::from(heard.clone());
+                let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
+                let stopped = std::future::poll_fn(|cx| {
+                    if conn.as_mut().poll(cx).is_ready() {
+                        return std::task::Poll::Ready(None);
+                    }
+                    if !heard.woken.load(std::sync::atomic::Ordering::Acquire) {
+                        return std::task::Poll::Pending;
+                    }
+                    // Cleared before the poll, so a wake during it or after it is kept.
+                    heard.woken.store(false, std::sync::atomic::Ordering::Release);
+                    let mut cx = std::task::Context::from_waker(&waker);
+                    // A channel whose sender is gone is an error here, and ends the wait.
+                    stopping.as_mut().poll(&mut cx).map(|closing| Some(closing.ok().and_then(|closing| *closing)))
+                });
+                match stopped.await {
+                    Some(closing) => closing,
+                    None => return,
+                }
+            };
+            conn.as_mut().graceful_shutdown();
+            // The server gone without a shutdown: close now.
+            let Some(closing) = closing else {
+                let _ = tokio::time::timeout_at(tokio::time::Instant::now(), conn.as_mut()).await;
+                return;
+            };
+            let until = |settled| closing.until(bound.as_deref(), settled);
+            let mut by = until(false);
+            // A client that stops reading, or a long download, would otherwise hold shutdown up.
+            while tokio::time::timeout_at(by, conn.as_mut()).await.is_err() {
+                // A request that arrived since (its head was still coming when shutdown began), or
+                // whose deadline is known now or still is not, may give it longer.
+                match until(true) {
+                    later if later > by => by = later,
+                    _ => {
+                        let _ = alive.send(()).await;
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    drop(listener);
+    drop(alive);
+    let mut cut = 0;
+    while closed.recv().await.is_some() {
+        cut += 1;
+    }
+    cut
+}
+
+/// One connection's service: the router, each of whose requests runs with the connection's
+/// peer at hand for [`ClientIp`](crate::ClientIp). Not a request extension: `http`'s extensions
+/// box each value, and one more cost every request 497 instructions whether anything read it or
+/// not; this costs 44 (callgrind, keep-alive requests over TCP).
+#[derive(Clone)]
+pub(crate) struct Connection {
+    router: Router,
+    peer: Peer,
+    /// For [`App::header_timeout`] and [`App::send_timeout`].
+    watch: Option<Arc<crate::watch::Watch>>,
+    /// The deadline of the request it is answering, for shutdown ([`Drain::each`]).
+    bound: Option<Arc<Bound>>,
+}
+
+/// Selects the service once, after the step. The ordinary service stays non-generic: making
+/// it generic changed hyper's inlining and added instructions even for unit data (callgrind).
+pub(crate) trait ConnectionData: Clone + Send + Sync + 'static {
+    type Service: tower_service::Service<
+            hyper::Request<hyper::body::Incoming>,
+            Response = http::Response<crate::watch::Answered>,
+            Error = Infallible,
+            Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
+        > + Clone
+        + Send
+        + 'static;
+
+    fn service(self, connection: Connection) -> Self::Service;
+}
+
+impl ConnectionData for () {
+    type Service = Connection;
+
+    fn service(self, connection: Connection) -> Connection {
+        connection
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> ConnectionData for crate::ConnectionInfo<T> {
+    type Service = Informed<T>;
+
+    fn service(self, connection: Connection) -> Informed<T> {
+        Informed { connection, info: self }
+    }
+}
+
+/// Only the metadata entry point wraps the ordinary service and inserts an extension.
+#[derive(Clone)]
+pub(crate) struct Informed<T> {
+    connection: Connection,
+    info: crate::ConnectionInfo<T>,
+}
+
+impl<T: Clone + Send + Sync + 'static> tower_service::Service<hyper::Request<hyper::body::Incoming>> for Informed<T> {
+    type Response = http::Response<crate::watch::Answered>;
+    type Error = Infallible;
+    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        self.connection.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
+        req.extensions_mut().insert(self.info.clone());
+        self.connection.call(req)
+    }
+}
+
+impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection {
+    type Response = http::Response<crate::watch::Answered>;
+    type Error = std::convert::Infallible;
+    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        tower_service::Service::<Request>::poll_ready(&mut self.router, cx)
+    }
+
+    fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
+        // Marks a read of the body that waits for the client, for the deadline (#1061).
+        let mut req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        // An HTTP/1.1 message with no `Host` line, which only its reader knows of a request.
+        crate::security::mark_unnamed(&mut req);
+        let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
+        let connect = req.method() == http::Method::CONNECT;
+        if let Some(bound) = &self.bound {
+            bound.arrived();
+        }
+        let call = tower_service::Service::<Request>::call(&mut self.router, req);
+        let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
+        crate::watch::Answer { inner, watch, connect }
+    }
+}
+
+/// The paths of Corten's own routes.
+#[derive(Clone, Default)]
+pub(crate) struct Own {
+    exact: Vec<&'static str>,
+    prefixes: Vec<String>,
+    /// Routes Corten serves with an API's (`Api::companions`), at paths made when it starts.
+    companions: Vec<String>,
+}
+
+impl Own {
+    fn contains(&self, path: &str) -> bool {
+        self.exact.contains(&path) || self.under_prefix(path) || self.companions.iter().any(|companion| companion == path)
+    }
+
+    /// Under one of Corten's own prefixes (`/corten/`, the assets').
+    fn under_prefix(&self, path: &str) -> bool {
+        self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+    }
+}
+
+/// What a request meets from the area or API it is in, or from the app where it is in none:
+/// resolved for each area and API when the router is built and given to each route's entry, so a
+/// request reads it from the route it matched.
+pub(crate) struct Scope {
+    /// Corten's own routes (the assets, the runtime, the health checks): the app's settings, and
+    /// no tag on their answers.
+    own: bool,
+    /// The API it is under.
+    mount: Option<Mount>,
+    /// The innermost API's or area's around it that sets a deadline, else the app's.
+    deadline: Option<Duration>,
+    /// Its body limit, the same way.
+    body_limit: usize,
+    /// The CSP of its pages and what it adds to their shell key: its innermost area's that adds to
+    /// the policy, else the app's. An API's answers keep their own CSP and send its referrer policy.
+    csp: Arc<Csp>,
+    shell: u64,
+    /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
+    lines: http::HeaderMap,
+    /// Its middleware, after the app's: each area's around it, outermost first, then its API's
+    /// (with the APIs' around it).
+    middleware: crate::middleware::Stack,
+}
+
+/// Every area's and API's scope and the app's, by path: for a request whose route cannot say
+/// which it is in (an unknown URL, whose `404` belongs to the prefix it is under, and a route
+/// whose parameter or catch-all can match under another prefix, [`Scopes::of_route`]), and for a
+/// WebSocket handshake's API ([`crate::upgrade::Upgrade`]).
+pub(crate) struct Scopes {
+    own_paths: Own,
+    own: Arc<Scope>,
+    app: Arc<Scope>,
+    /// Each area's and API's, innermost prefix first, so the first whose prefix holds a path is
+    /// its own.
+    prefixed: Vec<(String, Arc<Scope>)>,
+}
+
+impl Scopes {
+    /// Each area's and API's settings with those of the areas around it, over `app`'s (the app's
+    /// deadline and body limit): the innermost that sets one decides, an API's own (and the APIs'
+    /// around it) before an area's.
+    fn new(app: (Option<Duration>, usize), own_paths: Own, areas: &[Placed], mounts: Vec<Mount>, policy: &Applied) -> Self {
+        let (deadline, body_limit) = app;
+        // The areas whose prefix holds `prefix`, its own included, outermost first.
+        let around = |prefix: &str| {
+            let mut around: Vec<&Placed> = areas.iter().filter(|area| crate::api::under(area.prefix, prefix)).collect();
+            around.sort_by_key(|area| area.prefix.len());
+            around
+        };
+        let mut prefixed: Vec<(String, Arc<Scope>)> = Vec::with_capacity(areas.len() + mounts.len());
+        for area in areas {
+            let around = around(area.prefix);
+            let (csp, shell) = policy.csp_for(area.prefix);
+            let scope = Scope {
+                own: false,
+                mount: None,
+                deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
+                body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
+                lines: policy.lines(&csp, true),
+                csp,
+                shell,
+                middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
+            };
+            prefixed.push((area.prefix.to_string(), Arc::new(scope)));
+        }
+        // An API meets the middleware of the areas around it before its own, as a nested area would.
+        for mut mount in mounts {
+            let around = around(&mount.prefix);
+            let (csp, shell) = policy.csp_for(&mount.prefix);
+            let steps = std::mem::take(&mut mount.middleware);
+            let deadline = mount.deadline.or_else(|| around.iter().rev().find_map(|area| area.deadline)).unwrap_or(deadline);
+            let body_limit =
+                mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
+            let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
+            let prefix = mount.prefix.clone();
+            let lines = policy.lines(&csp, false);
+            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, lines, middleware };
+            prefixed.push((prefix, Arc::new(scope)));
+        }
+        prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+        let app = |own| {
+            let csp = policy.csp.clone();
+            let lines = policy.lines(&csp, true);
+            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, lines, middleware: Default::default() })
+        };
+        Scopes { own_paths, own: app(true), app: app(false), prefixed }
+    }
+
+    /// The scope of the requests at `path`: Corten's own, else the innermost area's or API's whose
+    /// prefix holds it, else the app's.
+    pub(crate) fn at(&self, path: &str) -> &Arc<Scope> {
+        if self.own_paths.contains(path) {
+            return &self.own;
+        }
+        self.prefixed_at(path)
+    }
+
+    fn prefixed_at(&self, path: &str) -> &Arc<Scope> {
+        self.prefixed.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(&self.app, |(_, scope)| scope)
+    }
+
+    /// The scope of every request the route at `pattern` (as the router holds it) answers, or none
+    /// when its parameter or catch-all can match a path under another prefix, counted segment by
+    /// segment (a page's `/{*rest}` beside an area, `/api/{id}` at an inner API's prefix,
+    /// `/{a}/{b}` under `/corten/`), whose requests find theirs by path. `/{slug}` matches one
+    /// segment, so beside `/corten/` and prefixes of two segments it has its scope.
+    fn of_route(&self, pattern: &str) -> Option<&Arc<Scope>> {
+        if !pattern.contains('{') {
+            return Some(self.at(pattern));
+        }
+        let own = self.own_paths.prefixes.iter().map(String::as_str);
+        let mut prefixes = own.chain(self.prefixed.iter().map(|(prefix, _)| prefix.as_str()));
+        if prefixes.any(|prefix| crate::api::can_match_under(pattern, prefix)) {
+            return None;
+        }
+        // Corten's exact paths are compared as written, so no request a parameter matches is one.
+        Some(if self.own_paths.under_prefix(pattern) { &self.own } else { self.prefixed_at(pattern) })
+    }
+
+    /// The API whose prefix holds `path`, if one does.
+    pub(crate) fn mount(&self, path: &str) -> Option<&Mount> {
+        self.at(path).mount.as_ref()
+    }
+
+    /// Whether the API whose prefix holds `path` answers it in place of the route at `pattern`
+    /// (as the router holds it), outside that API: the check [`Layer::secure`] makes for a route
+    /// whose scope its path finds. The access log names no route for such a request.
+    pub(crate) fn foreign(&self, pattern: &str, path: &str) -> bool {
+        self.mount(path).is_some_and(|mount| mount.exposed && !mount.contains(pattern))
+    }
+}
+
+/// Paths no page is at, however the app's routes match them: Corten's own and the APIs'.
+#[derive(Default)]
+pub(crate) struct NotPages {
+    own: Own,
+    apis: Vec<String>,
+}
+
+impl NotPages {
+    pub(crate) fn contains(&self, path: &str) -> bool {
+        self.own.contains(path) || self.apis.iter().any(|prefix| crate::api::under(prefix, path))
+    }
+}
+
+/// The app's stages for the routes of one scope, given to each of their entries; with none, for
+/// a request that finds its scope by its path ([`Scopes::at`]).
+struct At<S> {
+    layer: Arc<Layer<S>>,
+    scope: Option<Arc<Scope>>,
+}
+
+/// A handle to the request held once in the stage future. Each stage moves it to the next,
+/// and dispatch consumes it, so neither can read the request after handing it off.
+pub(crate) struct Inbound<'a>(&'a mut Option<Request>);
+
+impl Inbound<'_> {
+    pub(crate) fn get(&mut self) -> &mut Request {
+        self.0.as_mut().expect("the stages have not dispatched the request yet")
+    }
+
+    pub(crate) fn take(self) -> Request {
+        self.0.take().expect("the stages have not dispatched the request yet")
+    }
+
+    /// An early answer drops the undispatched request before compression finishes the response.
+    fn discard(self) {
+        *self.0 = None;
+    }
+}
+
+// Check the private type in-crate. A second matching marker makes inference ambiguous if
+// Inbound ever implements Copy or Clone, either of which would allow reads after hand-off.
+#[cfg(test)]
+const _: fn() = || {
+    trait UniqueIfMoveOnly<Marker> {
+        fn check() {}
+    }
+    impl<T> UniqueIfMoveOnly<()> for T {}
+    impl<T: Copy> UniqueIfMoveOnly<u8> for T {}
+    impl<T: Clone> UniqueIfMoveOnly<u16> for T {}
+    <Inbound<'_> as UniqueIfMoveOnly<_>>::check();
+};
+
+/// The stages around each staged route, as the router runs them: one boxed future per request,
+/// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
+/// every request (`Next`) on top of the future.
+impl<S: Steps> crate::router::Stages for At<S> {
+    fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
+        let route = route.clone();
+        // Capture the slot directly instead of moving a captured request into it.
+        let mut held = Some(req);
+        Box::pin(async move { self.layer.handle(Inbound(&mut held), route, self.scope.as_deref()).await })
+    }
+}
+
+/// `table`'s routes, each through `layer` with the scope its route is in; an unknown URL and a
+/// route whose requests may be in another scope, with the one the request's path is in.
+fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
+    let layer = Arc::new(layer);
+    let at = |scope: Option<&Arc<Scope>>| -> Arc<dyn crate::router::Stages> {
+        Arc::new(At { layer: layer.clone(), scope: scope.cloned() })
+    };
+    // One for each scope, which all its routes share.
+    let scopes = &layer.scopes;
+    let each: Vec<(&Arc<Scope>, Arc<dyn crate::router::Stages>)> = [&scopes.own, &scopes.app]
+        .into_iter()
+        .chain(scopes.prefixed.iter().map(|(_, scope)| scope))
+        .map(|scope| (scope, at(Some(scope))))
+        .collect();
+    Router::new(table, Some(at(None)), |path| {
+        let scope = scopes.of_route(path)?;
+        let (_, stages) = each.iter().find(|(each, _)| Arc::ptr_eq(each, scope)).expect("every scope has its stages");
+        Some(stages.clone())
+    })
+}
+
+/// The rest of the request under the deadline and the panic catch: the app's middleware, then the
+/// area's or API's, then the route and its handler.
+pub(crate) struct Next<'a, S: Steps> {
+    steps: &'a S,
+    scope: S::Scope<'a>,
+    route: Option<Route>,
+}
+
+impl<'a, S: Steps> Next<'a, S> {
+    pub(crate) fn has_middleware(&self) -> bool {
+        S::has_middleware(&self.scope)
+    }
+
+    pub(crate) fn route_can_answer_action_page(&self) -> bool {
+        !self.route.as_ref().is_some_and(|route| route.action_patches())
+    }
+
+    // Not an `async fn`: a layer of its own would move the request once more.
+    #[inline]
+    pub(crate) fn run(self, req: Request) -> impl Future<Output = Response> + Send + 'a {
+        self.steps.run(req, self.route, self.scope)
+    }
+}
+
+/// The middleware a request goes through: the app's, and an area's or API's where one has its
+/// own. Chosen when the router is built, so in an app whose areas and APIs have none a request's
+/// future is the app's middleware around the route, as if areas could have none.
+pub(crate) trait Steps: Send + Sync + 'static {
+    /// What a request carries to [`Steps::run`]: nothing, or the middleware of its area or API.
+    type Scope<'a>: Send;
+
+    fn scope<'a>(&'a self, scope: &'a Scope) -> Self::Scope<'a>;
+
+    fn has_middleware(scope: &Self::Scope<'_>) -> bool;
+
+    fn run<'a>(
+        &'a self,
+        req: Request,
+        route: Option<Route>,
+        scope: Self::Scope<'a>,
+    ) -> impl Future<Output = Response> + Send + 'a;
+}
+
+/// The app's middleware alone: no area or API has any.
+struct Plain<M>(M);
+
+impl<M: Middleware> Steps for Plain<M> {
+    type Scope<'a> = ();
+
+    #[inline]
+    fn scope<'a>(&'a self, _: &'a Scope) {}
+
+    fn has_middleware(_: &()) -> bool {
+        std::any::TypeId::of::<M>() != std::any::TypeId::of::<()>()
+    }
+
+    #[inline]
+    fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
+        self.0.call(req, crate::middleware::Handle(route))
+    }
+}
+
+/// The app's middleware, then the request's area's or API's ([`Scope`]).
+struct Scoped<M>(M);
+
+impl<M: Middleware> Steps for Scoped<M> {
+    type Scope<'a> = &'a [Arc<dyn crate::middleware::Erased>];
+
+    #[inline]
+    fn scope<'a>(&'a self, scope: &'a Scope) -> Self::Scope<'a> {
+        &scope.middleware
+    }
+
+    fn has_middleware(stack: &Self::Scope<'_>) -> bool {
+        !stack.is_empty() || Plain::<M>::has_middleware(&())
+    }
+
+    #[inline]
+    fn run<'a>(
+        &'a self,
+        req: Request,
+        route: Option<Route>,
+        stack: Self::Scope<'a>,
+    ) -> impl Future<Output = Response> + Send + 'a {
+        use futures_util::future::Either;
+        match stack {
+            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route))),
+            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route })),
+        }
+    }
+}
+
+/// Everything `App` puts around a request, as one middleware: one boxed future per request,
+/// where separate security, compression and error layers cost one each.
+struct Layer<S> {
+    shared: Arc<Shared>,
+    /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
+    bounds: bool,
+    policy: Applied,
+    /// The scope of a request whose route does not say it.
+    scopes: Arc<Scopes>,
+    /// The app's middleware, and the areas' and APIs' where some have their own.
+    steps: S,
+}
+
+impl<S: Steps> Layer<S> {
+    /// `scope` is the request's route's, when its route says it.
+    async fn handle(&self, mut pending: Inbound<'_>, route: Route, scope: Option<&Scope>) -> Response {
+        #[cfg(feature = "compress")]
+        let coding = crate::compress::negotiate(pending.get().headers());
+        #[cfg(feature = "compress")]
+        let accepts_coding = coding.any();
+        #[cfg(not(feature = "compress"))]
+        let accepts_coding = cache::accepts_a_coding(pending.get().headers());
+        let res = self.secure(pending, route, accepts_coding, scope).await;
+        #[cfg(feature = "compress")]
+        let res = crate::compress::finish(res, coding).await;
+        res
+    }
+
+    /// The security policy around the request: the host and same-origin checks first, the
+    /// headers last.
+    async fn secure(&self, mut pending: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+        let req = pending.get();
+        let headers = req.headers();
+        let mut origin = Origin::new(headers);
+        // A request for another name (a DNS-rebound page), or one HTTP does not allow, runs
+        // nothing of the app's: no error page, no caller lookup.
+        if let Some(mut res) = self.policy.asked(req, &mut origin).refusal() {
+            let vary = res.headers().contains_key(header::VARY);
+            self.policy.headers(&mut res, None, &self.policy.csp, vary);
+            res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            pending.discard();
+            return res;
+        }
+        // The area or API the request is in: its route's, or, for an unknown URL or a route that
+        // can answer under another prefix, the one its path is under.
+        let scope = scope.unwrap_or_else(|| self.scopes.at(req.uri().path()));
+        let (own, mount) = (scope.own, scope.mount.as_ref());
+        // The policy here, and the deadline: an area's when it sets one. An API in an area keeps
+        // its own CSP but sends the area's referrer policy.
+        let (csp, shell) = (&*scope.csp, scope.shell);
+        let deadline = scope.deadline;
+        if self.bounds {
+            crate::client::answering(deadline);
+        }
+        // The body limit, the same way, carried by the request's signal.
+        let body_limit = scope.body_limit;
+        // The middleware of the area or API the request is in, where one has some.
+        let steps = self.steps.scope(scope);
+        let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
+        if let Some(mount) = mount {
+            if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
+                let vary = res.headers().contains_key(header::VARY);
+                self.policy.headers(&mut res, None, csp, vary);
+                res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+                pending.discard();
+                return res;
+            }
+        }
+        let mut page = RequestPage::read(headers, mount.is_none());
+        let (mode, fetched) = page.mode;
+        let credentials = cache::Credentials::read(headers);
+        // A page's nonce is made only if its HTML asks for one; an API route never has one.
+        let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
+        if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
+            let (mut refused, vary) = match mount {
+                Some(mount) => {
+                    let refused = crate::api::json_failure(refused, false, mount.errors.as_ref()).await;
+                    let vary = refused.headers().contains_key(header::VARY);
+                    (refused, vary)
+                }
+                None if page.refusal_wants_html(headers) => {
+                    page.credentials = credentials.for_error_page(headers);
+                    let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
+                    let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
+                    let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    // The error page's language, as on any other answer (below).
+                    let asked = watch.0.asked_language();
+                    let mut page = signal::follow(page, watch, self.zoned());
+                    let vary = page::vary_on_language(asked, page.headers_mut());
+                    (page, vary)
+                }
+                None => (refused, false),
+            };
+            self.policy.headers(&mut refused, nonce.as_ref(), csp, vary);
+            if mount.is_none() {
+                self.policy.document(&mut refused, csp, mode.swaps());
+            }
+            cache::settle_refused(&mut refused);
+            pending.discard();
+            return refused;
+        }
+        let personal = if mount.is_none() && mode != Mode::Data {
+            page.credentials = credentials.for_error_page(headers);
+            // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
+            #[cfg(debug_assertions)]
+            {
+                page.form_check = self.policy.form_check(req, &mut origin, mode == Mode::Action);
+            }
+            credentials.personal(|| page.credentials.authorization.is_some())
+        } else {
+            credentials.personal(|| headers.contains_key(header::AUTHORIZATION))
+        };
+        let has = if !own && mount.is_none() { cache::request_tags(req.method(), headers, accepts_coding) } else { None };
+        let watch = Watch(self.signal(&credentials, body_limit));
+        let cors = cors.cloned();
+        if let Some(nonce) = &nonce {
+            req.extensions_mut().insert(nonce.clone());
+        }
+        req.extensions_mut().insert(watch.0.clone());
+        // Every path under an API's prefix is its own: a parameter or a catch-all of a route
+        // outside it (a page's `/{*rest}`, or the API around it's `/api/{id}` for `/api/items`)
+        // does not answer it. The request meets everything a route of the API would, and the API's
+        // 404 answers in its place.
+        // Only an API such a route can reach pays for the check. `Scopes::foreign` repeats it
+        // for the access log.
+        let foreign = mount.is_some_and(|mount| {
+            mount.exposed
+                && req.extensions().get::<crate::router::MatchedPath>().is_some_and(|matched| !mount.contains(matched.as_str()))
+        });
+        let route = (!foreign).then_some(route);
+        if foreign {
+            // It is an unknown URL of the API's, for middleware that reads the route too.
+            req.extensions_mut().remove::<crate::router::MatchedPath>();
+        }
+        let path = self.shared.dev.then(|| req.uri().path().to_string());
+        // A write may change what a kept page shows: it is counted when it is answered, and
+        // when it is dropped before that, for its path once the app counts writes by path. Only for a method that is not safe, in
+        // an app that keeps answers.
+        let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
+        // A debug build times the runtime's hover prefetch, so a page that grew slow is named
+        // before someone has to measure every screen. It is timed until it is dropped, so a
+        // prefetch the runtime gave up on (it aborts one it drops) is named too.
+        #[cfg(debug_assertions)]
+        let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
+        let next = Next { steps: &self.steps, scope: steps, route };
+        // The signal ends when this future is dropped, then when the response is dropped.
+        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        let caller = watch.0.is_personal();
+        let asked = watch.0.asked_language();
+        let mut res = signal::follow(res, watch, self.zoned());
+        // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
+        // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
+        let vary = page::vary_on_language(asked, res.headers_mut());
+        if let Some(wrote) = wrote {
+            wrote.answered(&res);
+        }
+        #[cfg(debug_assertions)]
+        if let Some(prefetched) = &mut prefetched {
+            prefetched.answered = true;
+        }
+        // The outer route's `Allow` (the router adds it to a method that route lacks) would list
+        // methods the path does not have: none has any here, whatever answered.
+        if foreign {
+            res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
+        }
+        // An answer that brings none of its scope's lines is given them all in one pass; any
+        // other has each inserted.
+        let ready = self.policy.ready(&mut res, &scope.lines, nonce.as_ref(), csp, caller);
+        if !ready {
+            // First: the security headers reserve room for `Cache-Control` and `Vary` too.
+            self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
+            if mount.is_none() {
+                self.policy.document(&mut res, csp, mode.swaps());
+            }
+        }
+        let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
+        let seen = Seen {
+            credentials: personal,
+            caller,
+            // A page route answers several forms at one URL; only the full document may be shared,
+            // and not as the runtime fetched it (`corten: page`), whose redirect differs (#1034).
+            partial: mount.is_none() && (mode != Mode::Document || fetched),
+            nonce: nonced,
+            dev: self.shared.dev,
+        };
+        // Corten's own routes (assets, the runtime) are settled the same way: they say what they
+        // are, and anything that does not gets the default.
+        if !ready {
+            cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        }
+        // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
+        // when its headers as sent let a shared cache keep it.
+        #[cfg(debug_assertions)]
+        if let Some(path) = &path {
+            crate::LiveShared::note(&res, path);
+        }
+        // A body with this request's nonce differs every time, so its tag would never match.
+        if !nonced {
+            if let Some(has) = has {
+                res = cache::tag(res, &has).await;
+            }
+        }
+        if let Some(mount) = mount {
+            mount.cors(cors, &mut res);
+        }
+        res
+    }
+
+    /// Whether a streamed answer's fragments are written in the visitor's zone
+    /// (`App::zoned_dates`, `zones` feature), as its page was.
+    fn zoned(&self) -> bool {
+        #[cfg(feature = "zones")]
+        return self.shared.zoned_dates;
+        #[cfg(not(feature = "zones"))]
+        false
+    }
+
+    /// A request's signal in this app: the app's state, and the zone the browser reported when
+    /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
+    /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
+    fn signal(&self, credentials: &cache::Credentials<'_>, body_limit: usize) -> Signal {
+        #[cfg(feature = "zones")]
+        if self.shared.client_zone {
+            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(credentials.cookies()), body_limit);
+        }
+        #[cfg(not(feature = "zones"))]
+        let _ = credentials;
+        Signal::for_app(self.shared.clone(), body_limit)
+    }
+}
+
+/// The app has a stylesheet and no [`App::error_page`]: its failures would be Corten's plain
+/// document, outside its layout. Said in a debug build only; the default stays right for an app
+/// that has no layout of its own.
+#[cfg(debug_assertions)]
+fn no_error_page() {
+    tracing::warn!("corten: the app has a stylesheet and no App::error_page, so a failed request is Corten's plain document, not the app's layout (see Error pages in the app guide)");
+}
+
+/// How long `/health/ready` waits for the app's check unless [`App::ready_within`] says.
+const READY_WITHIN: Duration = Duration::from_millis(800);
+
+/// The app's readiness check ran past its limit: `/health/ready` answers `unavailable` until it
+/// answers in time again.
+#[cold]
+fn not_ready_in_time(limit: Duration) {
+    tracing::warn!(limit_ms = limit.as_millis() as u64, "corten: the ready check did not answer in time");
+}
+
+/// `policy` with the proxies in `PROXIES` (comma separated, as given to [`Policy::proxy`]).
+fn proxies_from_env(mut policy: Policy) -> Policy {
+    let Ok(proxies) = std::env::var("PROXIES") else { return policy };
+    for network in proxies.split(',').map(str::trim).filter(|network| !network.is_empty()) {
+        policy = policy.proxy(network);
+    }
+    policy
+}
+
+/// `policy` with the names in `HOSTS` (comma separated, as given to [`Policy::host`]; `*` for any
+/// host), which a deploy sets where it sets `HOST` and `PORT`.
+fn hosts_from_env(mut policy: Policy) -> Policy {
+    let Ok(hosts) = std::env::var("HOSTS") else { return policy };
+    for name in hosts.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+        policy = if name == "*" { policy.any_host() } else { policy.host(name) };
+    }
+    policy
+}
+
+fn load_assets(
+    files: Option<StaticFiles>,
+    dev: bool,
+    components: &[crate::Component],
+    sections: &[(&str, &[crate::Component])],
+) -> Option<Assets> {
+    if files.is_none() && components.is_empty() && sections.is_empty() {
+        return None;
+    }
+    let owner = files.map(|f| f.owner);
+    let files = match files {
+        // Under `corten dev`, the directory as it is now (a debug build knows where `embed!` read
+        // it), and `corten dev` is told where it is, so a change to it alone restarts the app.
+        Some(StaticFiles { dir, .. }) if dev && !dir.is_empty() && std::path::Path::new(dir).is_dir() => {
+            if let Some(list) = std::env::var_os("CORTEN_DEV_ASSETS") {
+                use std::io::Write;
+                // Appended: a program with two apps lists both directories.
+                let _ =
+                    std::fs::OpenOptions::new().create(true).append(true).open(list).and_then(|mut file| writeln!(file, "{dir}"));
+            }
+            crate::assets::read_dir(std::path::Path::new(dir))
+                .unwrap_or_else(|error| panic!("corten: could not read the static files in {dir}: {error}"))
+        }
+        Some(StaticFiles { files, .. }) => files(),
+        None => Vec::new(),
+    };
+    match Assets::build_with(files, components, sections, "/assets") {
+        Ok(mut assets) => {
+            assets.owner = owner;
+            Some(assets)
+        }
+        Err(error) => panic!("corten: could not serve the static files and the components: {error}"),
+    }
+}
+
+/// The static directory `App::assets` was given.
+#[derive(Clone, Copy)]
+struct StaticFiles {
+    /// Where `embed!` read it, in a debug build (empty in a release build).
+    dir: &'static str,
+    /// The `embed!` struct, which its files name.
+    owner: &'static str,
+    /// Its files, as compiled in.
+    files: fn() -> Vec<(String, bytes::Bytes)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_assets, Bound, Drain, StaticFiles};
+    use std::time::Duration;
+
+    /// A connection's bound at shutdown: the longer of the grace and its request's deadline; the
+    /// longest for a request whose deadline was removed; the grace before a first request; and for
+    /// a request that has not said, the grace, then the longest once the grace has passed (#887).
+    #[test]
+    fn a_connection_has_the_longer_of_the_grace_and_its_requests_deadline() {
+        let drain = Drain { grace: Duration::from_secs(5), most: Duration::from_secs(3600), each: true };
+        let bound = Bound::new();
+        assert_eq!((bound.drain(drain, false), bound.drain(drain, true)), (drain.grace, drain.grace), "no request yet");
+        bound.arrived();
+        assert_eq!((bound.drain(drain, false), bound.drain(drain, true)), (drain.grace, drain.most), "not known yet");
+        bound.set(Some(Duration::from_secs(30)));
+        assert_eq!(bound.drain(drain, true), Duration::from_secs(30));
+        bound.set(Some(Duration::from_secs(1)));
+        assert_eq!(bound.drain(drain, true), drain.grace, "the grace, the longer");
+        bound.set(None);
+        assert_eq!(bound.drain(drain, false), drain.most, "a deadline removed has the longest, as before");
+        bound.set(Some(Duration::MAX));
+        assert!(bound.drain(drain, false) > drain.most, "however long, never read as another case");
+        bound.arrived();
+        assert_eq!(bound.drain(drain, false), drain.grace, "the next request, not known yet");
+    }
+
+    /// Each area's and API's scope is resolved once from what it and those around it set, and a
+    /// route reads its own: one in an area its area's, one whose parameter can reach under another
+    /// prefix none (its requests find theirs by path, as an unknown URL's do), and Corten's own
+    /// routes the app's settings (#1213).
+    #[test]
+    fn a_route_reads_its_areas_scope_and_one_that_can_reach_another_prefix_its_paths() {
+        use super::{Own, Placed, Scopes};
+        use crate::security::Sources;
+        use std::sync::Arc;
+        let area = |prefix, deadline, body_limit, sources| Placed {
+            prefix,
+            routes: crate::router::Table::new(),
+            pages: Vec::new(),
+            companions: Vec::new(),
+            components: Vec::new(),
+            deadline,
+            body_limit,
+            sources,
+            middleware: vec![Arc::new(()) as Arc<dyn crate::middleware::Erased>],
+        };
+        let eight = Some(Duration::from_secs(8));
+        let areas = [
+            area("/shop", Some(eight), Some(64 << 10), Sources::default().img_src("https://img.example")),
+            area("/shop/desk", None, None, Sources::default().script_src("https://js.example")),
+        ];
+        let sources: Vec<_> = areas.iter().map(|area| (area.prefix, &area.sources)).collect();
+        let policy = crate::security::Applied::new(crate::security::Policy::new(), "", &sources);
+        #[derive(crate::Route)]
+        #[route("/shop/api")]
+        struct ShopApi;
+        let api = crate::Api::<ShopApi>::new().body_limit(16 << 10).middleware(());
+        let mounts = vec![crate::api::Mount::new("/shop/api".to_string(), &api)];
+        let own = Own { exact: vec!["/health/live"], prefixes: vec!["/corten/".to_string()], companions: Vec::new() };
+        let scopes = Scopes::new((Some(Duration::from_secs(5)), 1 << 10), own, &areas, mounts, &policy);
+
+        let shop = scopes.of_route("/shop/item").expect("a route in the area");
+        assert_eq!((shop.deadline, shop.body_limit, shop.middleware.len()), (eight, 64 << 10, 1));
+        assert!(shop.shell != 0 && !Arc::ptr_eq(&shop.csp, &policy.csp), "the area's CSP");
+        let desk = scopes.of_route("/shop/desk/{id}").expect("a parameter that cannot leave the inner area");
+        assert_eq!(
+            (desk.deadline, desk.body_limit, desk.middleware.len()),
+            (eight, 64 << 10, 2),
+            "the outer area's where it sets none"
+        );
+        assert!(desk.shell != 0 && desk.shell != shop.shell, "both areas' sources");
+        let api = scopes.of_route("/shop/api/quote").expect("a route of the API");
+        assert_eq!(api.mount.as_ref().map(|mount| mount.prefix.as_str()), Some("/shop/api"));
+        assert_eq!((api.deadline, api.body_limit, api.middleware.len(), api.shell), (eight, 16 << 10, 2, shop.shell));
+        assert!(Arc::ptr_eq(scopes.of_route("/about/{id}").expect("outside every prefix"), &scopes.app));
+        let reach = ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/{a}/{b}", "/cor{x}/{b}"];
+        for pattern in reach {
+            assert!(scopes.of_route(pattern).is_none(), "{pattern} can match under another prefix");
+        }
+        // A parameter must be nonempty: these cannot reach `/shop/desk` or `/corten/a`.
+        for pattern in ["/shop{x}/desk", "/corten{x}/{b}"] {
+            assert!(Arc::ptr_eq(scopes.of_route(pattern).expect("cannot match an empty value"), &scopes.app));
+        }
+        // One segment matches `/shop`, never a path under `/corten/`.
+        assert!(Arc::ptr_eq(scopes.of_route("/cor{x}").expect("one segment, not /shop"), &scopes.app));
+        assert!(Arc::ptr_eq(scopes.of_route("/item/{id}.json").expect("text after it; item is no prefix's"), &scopes.app));
+        // Without the one-segment area, a first-segment parameter has the app's scope (#1213).
+        let own = Own { exact: vec!["/health/live"], prefixes: vec!["/corten/".to_string()], companions: Vec::new() };
+        let deep = Scopes::new((Some(Duration::from_secs(5)), 1 << 10), own, &areas[1..], Vec::new(), &policy);
+        assert!(Arc::ptr_eq(deep.of_route("/{slug}").expect("one segment"), &deep.app));
+        assert!(Arc::ptr_eq(deep.of_route("/item/{page}").expect("neither prefix's first segment"), &deep.app));
+        let reach = ["/shop/{page}", "/{a}/{b}", "/{slug}/{page}", "/{slug}/item"];
+        assert!(reach.iter().all(|pattern| deep.of_route(pattern).is_none()), "each can match /shop/desk or under /corten/");
+        // An unknown URL, by its path.
+        assert!(Arc::ptr_eq(scopes.at("/shop/desk/nope"), desk) && Arc::ptr_eq(scopes.at("/shop/nope"), shop));
+        assert!(Arc::ptr_eq(scopes.at("/shop/api/nope"), api) && Arc::ptr_eq(scopes.at("/nope"), &scopes.app));
+        let own = scopes.of_route("/corten/{file}").expect("under Corten's own prefix");
+        assert!(own.own && !scopes.app.own && Arc::ptr_eq(own, scopes.at("/health/live")));
+        assert_eq!(
+            (own.deadline, own.body_limit, own.middleware.len(), own.shell),
+            (Some(Duration::from_secs(5)), 1 << 10, 0, 0)
+        );
+    }
+
+    fn none() -> Vec<(String, bytes::Bytes)> {
+        Vec::new()
+    }
+
+    #[test]
+    fn dev_reads_the_static_directory_from_disk_and_a_release_the_files_compiled_in() {
+        let files =
+            StaticFiles { dir: concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/fixture"), owner: "tests::Static", files: none };
+        let dev = load_assets(Some(files), true, &[], &[]).expect("assets");
+        assert!(dev.contains("style.css") && dev.contains("icons/192.png"));
+        assert_eq!(dev.owner, Some("tests::Static"));
+        let release = load_assets(Some(files), false, &[], &[]).expect("assets");
+        assert!(!release.contains("style.css"), "compiled in: nothing here");
+        for elsewhere in [concat!(env!("CARGO_MANIFEST_DIR"), "/src/assets/not-here"), ""] {
+            let files = StaticFiles { dir: elsewhere, ..files };
+            assert!(!load_assets(Some(files), true, &[], &[]).expect("assets").contains("style.css"), "{elsewhere}");
+        }
+    }
+}

@@ -1,0 +1,8 @@
+comparison change-plain placement 17 workload plain
+A base-p36160 e033b28f2ad17916739ade5ac5a85d824da459989556ffadb371f17c4ea37d4f
+B head-p36160 f9c801530c72adef47edf5ee3fe1051071f9fbe4a2e8b30efebdff171454d07a
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 30
+started 2026-11-26T20:29:43Z
+ended 2026-11-26T20:30:45Z

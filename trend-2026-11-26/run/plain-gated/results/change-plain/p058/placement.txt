@@ -1,0 +1,8 @@
+comparison change-plain placement 58 workload plain
+A base-p7440 8a9cd7cbfc68c66b3bddb55290cbc099bd85faa9839d4d7bec93fef803e2cbc6
+B head-p7440 41416542d8b07a9a6539dc86c04db18a1e29eebfb406cb05813c46d8a0545c5a
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 18
+started 2026-11-26T20:17:13Z
+ended 2026-11-26T20:18:16Z

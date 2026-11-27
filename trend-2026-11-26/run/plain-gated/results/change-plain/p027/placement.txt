@@ -1,0 +1,8 @@
+comparison change-plain placement 27 workload plain
+A base-p36576 62466ebbfe260498af71885b6c5ab5b650f64d510b0d9cdfebd65960620bd295
+B head-p36576 7f65dcae72887d19f28d25ac65efcf2326b35f0426e83e53ade1f9b7abf43ffe
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 102
+started 2026-11-26T21:44:45Z
+ended 2026-11-26T21:45:48Z

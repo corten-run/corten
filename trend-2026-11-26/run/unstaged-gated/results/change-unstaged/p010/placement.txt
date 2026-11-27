@@ -1,0 +1,8 @@
+comparison change-unstaged placement 10 workload unstaged
+A base-p30992 9dca5608621efbfb90d41d706312f4e7599598ac27a7674d94a52adbfdfb7fbf
+B head-p30992 3e817d0f2f0e13d02123b32187a036d0728d7bc57e01b0f9ab79191e02daeec2
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 23
+started 2026-11-27T00:17:00Z
+ended 2026-11-27T00:18:03Z

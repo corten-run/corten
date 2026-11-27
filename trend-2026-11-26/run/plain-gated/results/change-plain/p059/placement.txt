@@ -1,0 +1,8 @@
+comparison change-plain placement 59 workload plain
+A base-p18144 1501d90f9ac658f1878f782d5dfdc35a5fab38cb29e8ec5f0fb081b4c97979cb
+B head-p18144 698a18b61ce6cc903fc34c2e07e5a1d544b05cc74b8a8453ff728a8651bf9f12
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 15
+started 2026-11-26T20:14:05Z
+ended 2026-11-26T20:15:08Z

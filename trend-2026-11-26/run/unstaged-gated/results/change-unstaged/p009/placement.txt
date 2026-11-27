@@ -1,0 +1,8 @@
+comparison change-unstaged placement 9 workload unstaged
+A base-p20288 20fdef00d04e1d96d6bb1fcdb83093870154cc448cbcfc3e4bccebc0f21309b7
+B head-p20288 41db7d6ffd065e03744d84334866a77f120fae9c278196bce63c4349ff91d8ac
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 7
+started 2026-11-27T00:00:21Z
+ended 2026-11-27T00:01:23Z

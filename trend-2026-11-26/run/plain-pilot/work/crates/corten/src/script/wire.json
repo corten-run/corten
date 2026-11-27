@@ -1,0 +1,825 @@
+{
+  "//": "The data-on wire format, shared by both sides: script/tests.rs checks that handlers write each attr (HTML-unescaped; corten-ui's tests check the cases it writes), and scripts/wire.mjs that the runtime's parser (crates/corten/js/on.js) reads it as parsed.",
+  "cases": [
+    {
+      "name": "a ref",
+      "attr": "input:line_item.enable(@save)",
+      "parsed": [
+        {
+          "type": "input",
+          "module": "line_item",
+          "name": "enable",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "save"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a string with a quote",
+      "attr": "click:line_item.confirm($e,@dialog,\"a\\\"b\")",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "line_item",
+          "name": "confirm",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "dialog"
+            },
+            {
+              "kind": "v",
+              "value": "a\"b"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "every element of a ref, and a typed event",
+      "attr": "row-toggled:row_list.count($e,*row)",
+      "parsed": [
+        {
+          "type": "row-toggled",
+          "module": "row_list",
+          "name": "count",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "*",
+              "owner": null,
+              "name": "row"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a handler for an event anywhere on the page",
+      "attr": "document.keydown:shared.key($e,$t)",
+      "parsed": [
+        {
+          "type": "document.keydown",
+          "module": "shared",
+          "name": "key",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "$t",
+              "owner": null
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "the runtime's events, whose names hold a colon",
+      "attr": "corten:error:shared.failed($e,$t) document.corten:notice:shared.said($e)",
+      "parsed": [
+        {
+          "type": "corten:error",
+          "module": "shared",
+          "name": "failed",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "$t",
+              "owner": null
+            }
+          ],
+          "home": null
+        },
+        {
+          "type": "document.corten:notice",
+          "module": "shared",
+          "name": "said",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "the element with the handler",
+      "attr": "click:row_list.toggle($t,\"x\")",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "row_list",
+          "name": "toggle",
+          "args": [
+            {
+              "kind": "$t",
+              "owner": null
+            },
+            {
+              "kind": "v",
+              "value": "x"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "two handlers, a parent's ref and scope",
+      "attr": "input:field.trim($t) change:form.enable(@form/save,$c/form)",
+      "parsed": [
+        {
+          "type": "input",
+          "module": "field",
+          "name": "trim",
+          "args": [
+            {
+              "kind": "$t",
+              "owner": null
+            }
+          ],
+          "home": null
+        },
+        {
+          "type": "change",
+          "module": "form",
+          "name": "enable",
+          "args": [
+            {
+              "kind": "@",
+              "owner": "form",
+              "name": "save"
+            },
+            {
+              "kind": "$c",
+              "owner": "form"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a parent's handler that keeps state, on a child's element",
+      "attr": "change:tallies.bump($t)/tallies",
+      "parsed": [
+        {
+          "type": "change",
+          "module": "tallies",
+          "name": "bump",
+          "args": [
+            {
+              "kind": "$t",
+              "owner": null
+            }
+          ],
+          "home": "tallies"
+        }
+      ]
+    },
+    {
+      "name": "the same, in markup the parent gave the child",
+      "attr": "click:tallies.bump($t)/tallies",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "tallies",
+          "name": "bump",
+          "args": [
+            {
+              "kind": "$t",
+              "owner": null
+            }
+          ],
+          "home": "tallies"
+        }
+      ]
+    },
+    {
+      "name": "a string, a number and a boolean",
+      "attr": "click:shared.log(\"hi\",2,true)",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "shared",
+          "name": "log",
+          "args": [
+            {
+              "kind": "v",
+              "value": "hi"
+            },
+            {
+              "kind": "v",
+              "value": 2
+            },
+            {
+              "kind": "v",
+              "value": true
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "the separators in a string, a negative float, false",
+      "attr": "click:shared.log(\"),{\\\"x\\\":1}\\\\ \\u2028 <&'> é 🦀 ,a:b\",-1.5,false)",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "shared",
+          "name": "log",
+          "args": [
+            {
+              "kind": "v",
+              "value": "),{\"x\":1}\\   <&'> é 🦀 ,a:b"
+            },
+            {
+              "kind": "v",
+              "value": -1.5
+            },
+            {
+              "kind": "v",
+              "value": false
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "NaN is null",
+      "attr": "click:shared.log(\"\",null,true)",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "shared",
+          "name": "log",
+          "args": [
+            {
+              "kind": "v",
+              "value": ""
+            },
+            {
+              "kind": "v",
+              "value": null
+            },
+            {
+              "kind": "v",
+              "value": true
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "the signal and a JSON object",
+      "attr": "connect:shared.watch($s,{\"id\":\"a}\",\"tags\":[\"x,y\",\"]\"]})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "watch",
+          "args": [
+            {
+              "kind": "$s",
+              "owner": null
+            },
+            {
+              "kind": "v",
+              "value": {
+                "id": "a}",
+                "tags": [
+                  "x,y",
+                  "]"
+                ]
+              }
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "closest and a group, twice",
+      "attr": "click:stock_grid.toggle(^row,{rows:*row,count:@count}) row-toggled:stock_grid.toggled($e,{rows:*row,count:@count})",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "stock_grid",
+          "name": "toggle",
+          "args": [
+            {
+              "kind": "^",
+              "owner": null,
+              "name": "row"
+            },
+            {
+              "kind": "{",
+              "fields": [
+                [
+                  "rows",
+                  {
+                    "kind": "*",
+                    "owner": null,
+                    "name": "row"
+                  }
+                ],
+                [
+                  "count",
+                  {
+                    "kind": "@",
+                    "owner": null,
+                    "name": "count"
+                  }
+                ]
+              ]
+            }
+          ],
+          "home": null
+        },
+        {
+          "type": "row-toggled",
+          "module": "stock_grid",
+          "name": "toggled",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "{",
+              "fields": [
+                [
+                  "rows",
+                  {
+                    "kind": "*",
+                    "owner": null,
+                    "name": "row"
+                  }
+                ],
+                [
+                  "count",
+                  {
+                    "kind": "@",
+                    "owner": null,
+                    "name": "count"
+                  }
+                ]
+              ]
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a keyed ref",
+      "attr": "connect:stock_grid.show(#qty,\"a\")",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "stock_grid",
+          "name": "show",
+          "args": [
+            {
+              "kind": "#",
+              "owner": null,
+              "name": "qty"
+            },
+            {
+              "kind": "v",
+              "value": "a"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a library's module",
+      "attr": "invalid:ui.combo_box.invalid($e,$c)",
+      "parsed": [
+        {
+          "type": "invalid",
+          "module": "ui.combo_box",
+          "name": "invalid",
+          "args": [
+            {
+              "kind": "$e",
+              "owner": null
+            },
+            {
+              "kind": "$c",
+              "owner": null
+            }
+          ],
+          "home": null
+        }
+      ],
+      "from": "corten-ui"
+    },
+    {
+      "name": "a plural message for the handler to fill in, with its locale's number format and plural table",
+      "attr": "connect:shared.say(@out,%{\"z\":\"0\",\"s\":[\".\",\",\",3,3,1],\"t\":[\"\\u0001\",\"-\\u0001\"],\"c\":\"515555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555\",\"m\":[null,[\"\",\"count\",\" listing\"],null,null,null,[\"\",\"count\",\" listings\"]]})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "say",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "out"
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "s": [
+                  ".",
+                  ",",
+                  3,
+                  3,
+                  1
+                ],
+                "t": [
+                  "\u0001",
+                  "-\u0001"
+                ],
+                "c": "515555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555",
+                "m": [
+                  null,
+                  [
+                    "",
+                    "count",
+                    " listing"
+                  ],
+                  null,
+                  null,
+                  null,
+                  [
+                    "",
+                    "count",
+                    " listings"
+                  ]
+                ]
+              }
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a plural message in another locale, with a form for a million (many)",
+      "attr": "connect:shared.say(@out,%{\"z\":\"0\",\"s\":[\",\",\" \",3,3,1],\"t\":[\"\\u0001\",\"-\\u0001\"],\"c\":\"115555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555554\",\"m\":[null,[\"\",\"count\",\" annonce\"],null,null,[\"\",\"count\",\" d’annonces\"],[\"\",\"count\",\" annonces\"]]})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "say",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "out"
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "s": [
+                  ",",
+                  " ",
+                  3,
+                  3,
+                  1
+                ],
+                "t": [
+                  "\u0001",
+                  "-\u0001"
+                ],
+                "c": "115555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555554",
+                "m": [
+                  null,
+                  [
+                    "",
+                    "count",
+                    " annonce"
+                  ],
+                  null,
+                  null,
+                  [
+                    "",
+                    "count",
+                    " d’annonces"
+                  ],
+                  [
+                    "",
+                    "count",
+                    " annonces"
+                  ]
+                ]
+              }
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a message with quotes, braces and commas",
+      "from": "messages.rs",
+      "attr": "click:m.f(%[\"\\\"a\\\" {x}, \",\"n\",\"),\\\\\"])",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "m",
+          "name": "f",
+          "args": [
+            {
+              "kind": "%",
+              "parts": [
+                "\"a\" {x}, ",
+                "n",
+                "),\\"
+              ]
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a group with a message",
+      "attr": "connect:shared.tally(@out,{entity:\"Levels\",label:%[\"\",\"count\",\" selected\"]})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "tally",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "out"
+            },
+            {
+              "kind": "{",
+              "fields": [
+                [
+                  "entity",
+                  {
+                    "kind": "v",
+                    "value": "Levels"
+                  }
+                ],
+                [
+                  "label",
+                  {
+                    "kind": "%",
+                    "parts": [
+                      "",
+                      "count",
+                      " selected"
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a group with a message in another locale",
+      "attr": "connect:shared.tally(@out,{entity:\"Levels\",label:%[\"\",\"count\",\" sélectionnées\"]})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "tally",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "out"
+            },
+            {
+              "kind": "{",
+              "fields": [
+                [
+                  "entity",
+                  {
+                    "kind": "v",
+                    "value": "Levels"
+                  }
+                ],
+                [
+                  "label",
+                  {
+                    "kind": "%",
+                    "parts": [
+                      "",
+                      "count",
+                      " sélectionnées"
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a page's formats, in en: a number, an amount in USD and a short date at GMT-5",
+      "attr": "connect:shared.priced(@out,%{\"z\":\"0\",\"s\":[\".\",\",\",3,3,1],\"t\":[\"\\u0001\",\"-\\u0001\"]},%{\"z\":\"0\",\"s\":[\".\",\",\",3,3,1],\"t\":[\"$\\u0001\",\"-$\\u0001\"],\"d\":2},%{\"z\":\"0\",\"f\":[[\"M\"],[\"\",\"/\"],[\"d\"],[\"\",\"/\"],[\"y\"]],\"o\":-18000})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "priced",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "out"
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "s": [
+                  ".",
+                  ",",
+                  3,
+                  3,
+                  1
+                ],
+                "t": [
+                  "\u0001",
+                  "-\u0001"
+                ]
+              }
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "s": [
+                  ".",
+                  ",",
+                  3,
+                  3,
+                  1
+                ],
+                "t": [
+                  "$\u0001",
+                  "-$\u0001"
+                ],
+                "d": 2
+              }
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "f": [
+                  [
+                    "M"
+                  ],
+                  [
+                    "",
+                    "/"
+                  ],
+                  [
+                    "d"
+                  ],
+                  [
+                    "",
+                    "/"
+                  ],
+                  [
+                    "y"
+                  ]
+                ],
+                "o": -18000
+              }
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "the same formats in fr",
+      "attr": "connect:shared.priced(@out,%{\"z\":\"0\",\"s\":[\",\",\" \",3,3,1],\"t\":[\"\\u0001\",\"-\\u0001\"]},%{\"z\":\"0\",\"s\":[\",\",\" \",3,3,1],\"t\":[\"\\u0001 $US\",\"-\\u0001 $US\"],\"d\":2},%{\"z\":\"0\",\"f\":[[\"dd\"],[\"\",\"/\"],[\"MM\"],[\"\",\"/\"],[\"y\"]],\"o\":-18000})",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "priced",
+          "args": [
+            {
+              "kind": "@",
+              "owner": null,
+              "name": "out"
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "s": [
+                  ",",
+                  " ",
+                  3,
+                  3,
+                  1
+                ],
+                "t": [
+                  "\u0001",
+                  "-\u0001"
+                ]
+              }
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "s": [
+                  ",",
+                  " ",
+                  3,
+                  3,
+                  1
+                ],
+                "t": [
+                  "\u0001 $US",
+                  "-\u0001 $US"
+                ],
+                "d": 2
+              }
+            },
+            {
+              "kind": "f",
+              "spec": {
+                "z": "0",
+                "f": [
+                  [
+                    "dd"
+                  ],
+                  [
+                    "",
+                    "/"
+                  ],
+                  [
+                    "MM"
+                  ],
+                  [
+                    "",
+                    "/"
+                  ],
+                  [
+                    "y"
+                  ]
+                ],
+                "o": -18000
+              }
+            }
+          ],
+          "home": null
+        }
+      ]
+    }
+  ]
+}

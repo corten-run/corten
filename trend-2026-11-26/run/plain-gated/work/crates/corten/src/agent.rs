@@ -1,0 +1,2282 @@
+//! Agent tools over the Model Context Protocol (feature `agent`): one `POST` route that speaks
+//! JSON-RPC 2.0 as MCP's streamable HTTP transport defines it, answering with `application/json`.
+//!
+//! A tool is one of the app's actions with a name, a description, a typed input and a typed
+//! output. The input derives `FromJson` and the output `ToJson`, which describe the JSON from the
+//! same reading of `#[serde(..)]` they read and write it by, so the `inputSchema` and
+//! `outputSchema` agents see are generated from the same structs the handler receives and
+//! returns, and cannot drift from them. An input with no schema for agents does not compile as
+//! one, even one that is read (here a `Deserialize` with the opt-in `FromJson` impl, below):
+//!
+//! ```compile_fail,E0277
+//! use corten::agent::Tools;
+//! #[derive(serde::Deserialize)]
+//! struct Adjust { id: String }
+//! impl corten::FromJson for Adjust {}
+//! #[derive(corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! Nor does one that derives serde's `Deserialize` beside a schema written by hand, since its
+//! schema and what it reads could drift apart (the opt-in `impl corten::FromJson for Adjust {}`
+//! would compile it, for a type whose `Deserialize` `FromJson` cannot write: written by hand, or
+//! serde's for an attribute it refuses):
+//!
+//! ```compile_fail,E0277
+//! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};
+//! #[derive(serde::Deserialize)]
+//! struct Adjust { id: String }
+//! impl FromJsonSchema for Adjust {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//! }
+//! #[derive(corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! With the opt-in impl it does. Here the input trims its id with serde's `deserialize_with`,
+//! which `FromJson` does not follow, and the schema written beside it describes what that reads:
+//!
+//! ```
+//! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};
+//! use serde::Deserialize;
+//! #[derive(Deserialize)]
+//! struct Adjust {
+//!     #[serde(deserialize_with = "trimmed")]
+//!     id: String,
+//! }
+//! fn trimmed<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+//!     String::deserialize(d).map(|id| id.trim().to_owned())
+//! }
+//! impl FromJsonSchema for Adjust {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value {
+//!         serde_json::json!({ "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] })
+//!     }
+//! }
+//! impl corten::FromJson for Adjust {}
+//! #[derive(corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! The same input deriving `FromJson` instead does too, with nothing written by hand:
+//!
+//! ```
+//! use corten::agent::Tools;
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String }
+//! #[derive(corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! A form's input struct (`#[derive(Fields)]`, which is a `FromJson` too) can be the tool's input
+//! as is, so the browser and the agent share one definition and one set of rules.
+//!
+//! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
+//! The check given to [`Tools::auth`] runs once per call (read the token with
+//! [`crate::caller::bearer`]), and its result is handed to the tool:
+//!
+//! ```
+//! use corten::{agent::{ToolError, Tools}, caller, prelude::*};
+//!
+//! /// Who the token says is calling.
+//! #[derive(Clone)]
+//! struct User { name: String }
+//!
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String, delta: i64 }
+//!
+//! #[derive(corten::ToJson)]
+//! struct Adjusted { id: String, quantity: i64, by: String }
+//!
+//! #[corten::routes(api = Mcp)]
+//! mod mcp {
+//!     #[route("/mcp")]
+//!     pub struct Mcp;
+//! }
+//!
+//! let tools = Tools::new("card-market", "1.0")
+//!     // A real app looks the token up in its store here.
+//!     .auth(|headers| match caller::bearer(headers) {
+//!         Some("dev-token") => Ok(User { name: "dev".into() }),
+//!         _ => Err(ToolError::Unauthorized),
+//!     })
+//!     .tool("inventory.adjust", "Change the quantity of an inventory item", |user: User, input: Adjust| async move {
+//!         Ok(Adjusted { id: input.id, quantity: input.delta, by: user.name })
+//!     });
+//! let app = App::new(Routes::new()).api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()));
+//! # let _ = app.router();
+//! ```
+//!
+//! An endpoint whose tokens come from an OAuth authorization server says which one with
+//! [`Tools::authorization`], as the MCP authorization spec asks: Corten serves the endpoint's
+//! protected-resource metadata (RFC 9728) and names it in every 401, so a client that is refused
+//! finds where to get a token from the refusal.
+//!
+//! A screen's data is already available to agents through [`crate::Req::screen`]; tools cover
+//! the writes. Results go back as `structuredContent` and as the same JSON in a text block, for
+//! clients that only read text. The output is written once, by its `ToJson` (a derived one
+//! writes the JSON serde's `Serialize` would, laid out when the crate compiles), into the response
+//! as is, so a tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in
+//! any `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
+//! cannot hold, a path that is not UTF-8, a `SystemTime` before the epoch) panics where it is
+//! written; for a tool's output the call catches that panic and answers it as the tool's internal
+//! error (`isError`, "internal error"), logged with the tool's name and the panic's message. An
+//! app built with `panic = "abort"` ends instead.
+//!
+//! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
+//! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
+//! reading of the type. A `Serialize` type that has a schema but is not a `ToJson` (another
+//! crate's, or a map of one) goes in a `#[serde(transparent)]` newtype that derives `ToJson`, one
+//! impl that writes it by serde; serde's bytes then go out under the inner type's schema, whichever
+//! crate it is from, so that schema is the one to keep in step. A type whose schema is written by
+//! hand (one the derive refuses, or another crate's type, in a newtype of the app's) writes its
+//! `ToJson` by hand too, beside its `ToJsonSchema`, two impls you keep in step (deriving `ToJson`
+//! beside a hand-written schema is E0119). A hand-written one writes exactly one JSON object. An
+//! output derived over types whose `ToJson` Corten or serde writes (every field, at any depth) goes
+//! into the response as written, unparsed; one that is, or holds, a `ToJson` or map key written by
+//! hand is parsed first, in every build, and one that is not one JSON object is the tool's internal
+//! error, logged with the tool's name, the output's size and the fault, not its data. A debug build
+//! (`corten dev`, tests without `--release`) parses every output and answers one that is not one
+//! object with the app's 500 and a log line naming the tool, so a test stops at it.
+//!
+//! An output that derives only serde's `Serialize`, beside a schema written by hand, does not
+//! compile:
+//!
+//! ```compile_fail,E0277
+//! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}};
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String }
+//! #[derive(serde::Serialize)]
+//! struct Done { ok: bool }
+//! impl ToJsonSchema for Done {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//! }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! Written by hand, it does, and its output is parsed before it is sent. Here the output is another
+//! crate's type, which serde writes, in a newtype of the app's:
+//!
+//! ```
+//! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}, ToJson};
+//! mod other_crate {
+//!     #[derive(serde::Serialize)]
+//!     pub struct Done { pub ok: bool }
+//! }
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String }
+//! struct Done(other_crate::Done);
+//! impl ToJson for Done {
+//!     fn write_json(&self, out: &mut Vec<u8>) {
+//!         serde_json::to_writer(&mut *out, &self.0).expect("Done is written as JSON");
+//!     }
+//! }
+//! impl ToJsonSchema for Done {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value {
+//!         serde_json::json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
+//!     }
+//! }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done(other_crate::Done { ok: true })) });
+//! ```
+
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, OnceLock},
+};
+
+use crate::response::IntoResponse;
+use crate::response::Response;
+use bytes::Bytes;
+use http::header;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use http::StatusCode;
+use serde_json::{json, Value};
+
+use crate::json::{
+    schema::{FromJsonSchema, Generator, ToJsonSchema},
+    FromJson, ToJson,
+};
+
+/// Protocol revisions this server speaks, newest first. A request other than `initialize` whose
+/// `MCP-Protocol-Version` names another is answered 400 before its token is checked.
+pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
+
+/// The header in which a client names the agreed revision on every request after `initialize`
+/// (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header").
+const PROTOCOL_VERSION_HEADER: HeaderName = HeaderName::from_static("mcp-protocol-version");
+
+/// Why a tool call failed.
+#[derive(Debug)]
+pub enum ToolError {
+    /// The arguments are wrong; the message goes back to the agent so it can correct them.
+    Invalid(String),
+    /// The arguments are fine, but what they act on has moved on (a stale revision, a record
+    /// deleted meanwhile) or other work on it is under way
+    /// ([`Errors::refuse`](crate::Errors::refuse)); the message goes back to the agent so it
+    /// reads the current state (or, as the message says, waits for that work) before trying
+    /// again.
+    Refused(String),
+    /// A service the tool calls failed ([`Refusal::Upstream`](crate::Refusal::Upstream)); the
+    /// message goes back to the agent, which may try again later.
+    Upstream(String),
+    /// No valid credentials: the response is HTTP 401 so the client can authenticate.
+    Unauthorized,
+    /// The token is valid but lacks a scope this call needs. The text is the scopes to ask the
+    /// authorization server for, space separated (`"inventory:read inventory:write"`; include
+    /// those the client already holds that the call still needs, so it does not lose them). The
+    /// response is HTTP 403 with `WWW-Authenticate: Bearer error="insufficient_scope"` and the
+    /// scopes, so the client asks for them and tries again.
+    InsufficientScope(String),
+    /// Authenticated but not allowed; the message goes back to the agent.
+    Forbidden(String),
+    /// Anything else. Logged; the agent only sees "internal error".
+    Internal(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl ToolError {
+    /// An unexpected failure (a database error, say): logged, and the agent sees "internal error".
+    pub fn internal(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        ToolError::Internal(error.into())
+    }
+}
+
+/// Validation errors go back to the agent as one message per field, so it can correct them; a
+/// refusal for a state that moved on or work under way ([`Errors::refuse`](crate::Errors::refuse))
+/// as that.
+impl From<crate::Errors> for ToolError {
+    fn from(errors: crate::Errors) -> Self {
+        match errors.refusal() {
+            crate::Refusal::Invalid => ToolError::Invalid(errors.to_string()),
+            crate::Refusal::Conflict | crate::Refusal::Gone => ToolError::Refused(errors.to_string()),
+            crate::Refusal::Upstream => ToolError::Upstream(errors.to_string()),
+        }
+    }
+}
+
+impl From<serde_json::Error> for ToolError {
+    fn from(error: serde_json::Error) -> Self {
+        ToolError::Invalid(error.to_string())
+    }
+}
+
+type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, Ran>> + Send>>;
+/// A tool, given who [`Tools::auth`] says is calling: its output as JSON text.
+type Handler<A> = Arc<dyn Fn(A, Value) -> BoxFuture<String> + Send + Sync>;
+
+/// Why a tool's call ended without its output: what the tool answered, or Corten's reading of its
+/// input or writing of its output, which is no tool's own answer.
+enum Ran {
+    Tool(ToolError),
+    Corten(ToolError),
+}
+type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
+
+/// Where an MCP client gets a token for the endpoint: its OAuth 2.0 protected-resource metadata
+/// (RFC 9728), given to [`Tools::authorization`]. Corten serves it as JSON at the endpoint's
+/// well-known path (`/.well-known/oauth-protected-resource/mcp` for `/mcp`), and every 401 the
+/// endpoint answers names it: `WWW-Authenticate: Bearer resource_metadata="https://cards.example/.well-known/oauth-protected-resource/mcp"`,
+/// with `scope` when [`Authorization::scopes`] lists some. With one, every request to the
+/// endpoint runs [`Tools::auth`] (`initialize` and `tools/list` too, as the spec asks), not only
+/// a tool call.
+///
+/// The document's `resource` is the endpoint's URL, the origin and the path of the route it is
+/// for (`https://cards.example/mcp`), which the token check takes from
+/// [`Authorization::resource`] to refuse a token issued for another server, as the spec requires:
+///
+/// ```
+/// use corten::{agent::{Authorization, ToolError, Tools}, caller, prelude::*};
+///
+/// #[derive(Route)]
+/// #[route("/mcp")]
+/// struct Mcp;
+///
+/// # fn token_for(_: &str, _: &str) -> Option<()> { Some(()) }
+/// let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["inventory:read"]);
+/// let audience = authorization.resource().to_string();
+/// assert_eq!(audience, "https://cards.example/mcp");
+/// let tools = Tools::new("card-market", "1.0")
+///     .authorization(authorization)
+///     .auth(move |headers| caller::bearer(headers).and_then(|token| token_for(token, &audience)).ok_or(ToolError::Unauthorized));
+/// # let _ = tools;
+/// ```
+///
+/// The endpoint's path is the route's, a fixed path without a trailing slash, or the app does not
+/// build:
+///
+/// ```compile_fail,E0080
+/// use corten::{agent::Authorization, prelude::*};
+///
+/// #[derive(Route)]
+/// #[route("/mcp/{tenant}")]
+/// struct Mcp;
+///
+/// let _ = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
+/// ```
+///
+/// The origin and the issuers are checked when they are given (an `https` URL, or `http` on
+/// `localhost` or a loopback address for development; no path on the origin), so a typo is a
+/// startup panic, not a document a client cannot use:
+///
+/// ```should_panic
+/// # use corten::prelude::*;
+/// # #[derive(Route)]
+/// # #[route("/mcp")]
+/// # struct Mcp;
+/// corten::agent::Authorization::new::<Mcp>("https://cards.example/mcp", "https://auth.example");
+/// ```
+#[derive(Clone, Debug)]
+pub struct Authorization {
+    /// The endpoint's route path, which the route it is mounted at must have.
+    path: &'static str,
+    origin: String,
+    resource: String,
+    servers: Vec<String>,
+    scopes: Vec<String>,
+}
+
+impl Authorization {
+    /// The endpoint at route `R`, served on the app's origin as clients reach it
+    /// (`https://cards.example`, from the deployment's settings), and the issuer of an
+    /// authorization server that issues its tokens (`https://auth.example`). Mounted at another
+    /// route, the app panics at startup.
+    pub fn new<R: crate::Route>(origin: &str, server: &str) -> Self {
+        const {
+            assert!(
+                resource_path(R::PATH),
+                "corten: an MCP endpoint with an Authorization has a fixed path without a trailing slash (the note below names the route)"
+            )
+        };
+        let origin = origin.strip_suffix('/').unwrap_or(origin);
+        let origin = web_origin(origin)
+            .unwrap_or_else(|| panic!("corten: Authorization::new takes the app's origin, a scheme and a host like https://cards.example, not {origin:?}"));
+        let resource = if R::PATH == "/" { format!("{origin}/") } else { format!("{origin}{}", R::PATH) };
+        Authorization { path: R::PATH, origin, resource, servers: Vec::new(), scopes: Vec::new() }.server(server)
+    }
+
+    /// The endpoint's URL, the `resource` its tokens are issued for (RFC 8707): what the token
+    /// check compares a token's audience with.
+    pub fn resource(&self) -> &str {
+        &self.resource
+    }
+
+    /// Another authorization server whose tokens the endpoint takes; the client picks one.
+    pub fn server(mut self, server: &str) -> Self {
+        let (at, path) = server.find("://").map_or((server, ""), |scheme| match server[scheme + 3..].find('/') {
+            Some(slash) => server.split_at(scheme + 3 + slash),
+            None => (server, ""),
+        });
+        let issuer = web_origin(at).filter(|_| path.bytes().all(|b| b.is_ascii_graphic() && !b"\"\\?#".contains(&b)));
+        let issuer = issuer.unwrap_or_else(|| {
+            panic!("corten: an authorization server is its issuer URL, like https://auth.example, not {server:?}")
+        });
+        self.servers.push(format!("{issuer}{path}"));
+        self
+    }
+
+    /// The scopes a client asks for to use the endpoint (`scopes_supported`), sent with every
+    /// 401 as `scope` too; a call that needs more answers [`ToolError::InsufficientScope`].
+    pub fn scopes(mut self, scopes: &[&str]) -> Self {
+        for scope in scopes {
+            assert!(scope_token(scope), "corten: a scope is printable ASCII with no space, quote or backslash, not {scope:?}");
+            self.scopes.push(scope.to_string());
+        }
+        self
+    }
+
+    /// The metadata's route for an endpoint at `path`, and the 401's challenge into `challenge`.
+    fn serve(&self, path: &'static str, challenge: &OnceLock<Protected>) -> (String, crate::router::MethodSet) {
+        assert!(
+            path == self.path,
+            "corten: the MCP endpoint is mounted at {path:?}, but its Authorization was made for the route at {:?}, the resource its tokens name",
+            self.path
+        );
+        // RFC 9728 3.1: the well-known path goes between the host and the resource's path.
+        let well_known = format!("/.well-known/oauth-protected-resource{}", path.trim_end_matches('/'));
+        let metadata = format!("{}{well_known}", self.origin);
+        let mut unauthorized = crate::Challenge::scheme("Bearer").param("resource_metadata", &metadata);
+        if !self.scopes.is_empty() {
+            unauthorized = unauthorized.param("scope", &self.scopes.join(" "));
+        }
+        assert!(challenge.set(Protected { metadata, unauthorized }).is_ok(), "corten: an MCP endpoint is mounted once");
+        let mut document = json!({
+            "resource": self.resource,
+            "authorization_servers": self.servers,
+            "bearer_methods_supported": ["header"],
+        });
+        if !self.scopes.is_empty() {
+            document["scopes_supported"] = json!(self.scopes);
+        }
+        let document = Bytes::from(document.to_string());
+        // Public and read without credentials, so a client in a browser on any site may read it,
+        // with the headers it sends (its preflight answered).
+        let route = crate::router::get(move || {
+            let document = document.clone();
+            async move {
+                let headers = [
+                    (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
+                    (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=3600")),
+                    (header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*")),
+                ];
+                (headers, document).into_response()
+            }
+        })
+        .options(|request: crate::http::Request| async move {
+            let mut res = StatusCode::NO_CONTENT.into_response();
+            let out = res.headers_mut();
+            out.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+            out.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET"));
+            if let Some(asked) = request.headers().get(header::ACCESS_CONTROL_REQUEST_HEADERS) {
+                out.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, asked.clone());
+            }
+            res
+        });
+        (well_known, route)
+    }
+}
+
+/// A route path an endpoint's resource can be made from: fixed, with no trailing slash but `/`.
+const fn resource_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'/' || (bytes.len() > 1 && bytes[bytes.len() - 1] == b'/') {
+        return false;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' || bytes[i] == b'?' || bytes[i] == b'#' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `https://host[:port]`, lowercase and without its default port, or `http://` on `localhost`
+/// or a loopback address; `None` for anything else (a path, a bad port, another scheme).
+fn web_origin(origin: &str) -> Option<String> {
+    let origin = origin.to_ascii_lowercase();
+    let (scheme, at) = origin.split_once("://")?;
+    let (host, port) = match at.rsplit_once(':') {
+        Some((host, _)) if !host.ends_with(']') && host.contains(':') => (at, None),
+        Some((host, port)) => (host, Some(port)),
+        None => (at, None),
+    };
+    let named = !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && !host.contains("..")
+        && host.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.".contains(&b));
+    let v6 = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).and_then(|h| h.parse::<std::net::Ipv6Addr>().ok());
+    if !named && v6.is_none() {
+        return None;
+    }
+    // Parsed, so `:0443` is the default port and `:08443` is written `:8443`.
+    let port = match port {
+        None => None,
+        Some(port) if port.bytes().all(|b| b.is_ascii_digit()) => Some(port.parse::<u16>().ok().filter(|port| *port != 0)?),
+        Some(_) => return None,
+    };
+    // A name that only starts like an address (`127.attacker.example`) is a name.
+    let loopback = host == "localhost"
+        || host.ends_with(".localhost")
+        || v6.is_some_and(|ip| ip.is_loopback())
+        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback());
+    let default = match scheme {
+        "https" => 443,
+        "http" if loopback => 80,
+        _ => return None,
+    };
+    Some(match port.filter(|port| *port != default) {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
+/// RFC 6749's `scope-token`: printable ASCII but space, `"` and `\`.
+fn scope_token(scope: &str) -> bool {
+    !scope.is_empty() && scope.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
+}
+
+/// What a refusal names, once the endpoint is mounted with an [`Authorization`]: the protected
+/// resource's metadata (RFC 9728).
+struct Protected {
+    /// The metadata document's URL.
+    metadata: String,
+    /// The 401's `WWW-Authenticate`.
+    unauthorized: crate::Challenge,
+}
+
+struct Tool<A> {
+    description: String,
+    input_schema: Value,
+    output_schema: Value,
+    read_only: bool,
+    /// Calling it again with the same arguments does nothing more (`idempotentHint`): its input
+    /// requires a `SubmitKey`, or it was added with [`Tools::idempotent_tool`].
+    idempotent: bool,
+    /// Its output's `ToJson` writes well-formed JSON by construction (derived over types that do),
+    /// so a release build need not parse what it writes.
+    well_formed: bool,
+    handler: Handler<A>,
+}
+
+/// The tools one MCP endpoint offers. `A` is what [`Tools::auth`] proves about the caller (a
+/// user, a scope); it is `()` until `auth` is set.
+pub struct Tools<A = ()> {
+    name: String,
+    version: String,
+    auth: Auth<A>,
+    /// [`Tools::auth`] was set: a tool's answer is for the caller it found, never shared.
+    checked: bool,
+    tools: Arc<BTreeMap<String, Tool<A>>>,
+    authorization: Option<Arc<Authorization>>,
+    challenge: Arc<OnceLock<Protected>>,
+    /// The 401's challenge without an [`Authorization`], built once from the name.
+    named: crate::Challenge,
+}
+
+impl<A> Clone for Tools<A> {
+    fn clone(&self) -> Self {
+        Tools {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            auth: self.auth.clone(),
+            checked: self.checked,
+            tools: self.tools.clone(),
+            authorization: self.authorization.clone(),
+            challenge: self.challenge.clone(),
+            named: self.named.clone(),
+        }
+    }
+}
+
+impl Tools<()> {
+    /// An endpoint whose tools anyone may call, until [`Tools::auth`] says otherwise.
+    pub fn new(name: &str, version: &str) -> Self {
+        let printable = !name.is_empty() && name.bytes().all(|b| b == b' ' || b.is_ascii_graphic());
+        Tools {
+            named: crate::Challenge::bearer(if printable { name } else { "mcp" }),
+            name: name.into(),
+            version: version.into(),
+            auth: Arc::new(|_| Ok(())),
+            checked: false,
+            tools: Arc::default(),
+            authorization: None,
+            challenge: Arc::default(),
+        }
+    }
+
+    /// Checks every tool call before it runs (with an [`Authorization`], every request to the
+    /// endpoint): `Err(ToolError::Unauthorized)` answers 401, and `Ok(caller)` is passed to the
+    /// tool. It runs once per request. Set it before adding tools. A tool's answer is then that
+    /// caller's, as an answer that reads a [`crate::Caller`] is: never shared, whatever a middleware
+    /// writes on it; with an [`Authorization`], so is every answer the check lets through (the
+    /// list of tools, `initialize`).
+    pub fn auth<A, F>(self, auth: F) -> Tools<A>
+    where
+        F: Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync + 'static,
+    {
+        assert!(self.tools.is_empty(), "set Tools::auth before adding tools");
+        Tools {
+            name: self.name,
+            version: self.version,
+            auth: Arc::new(auth),
+            checked: true,
+            tools: Arc::default(),
+            authorization: self.authorization,
+            challenge: self.challenge,
+            named: self.named,
+        }
+    }
+}
+
+/// Whether an input's schema requires a [`crate::SubmitKey`] at its top level: known by the
+/// key's pattern, which a field's doc comment does not replace.
+fn keyed(input: &Value) -> bool {
+    let required = input.get("required").and_then(Value::as_array);
+    let properties = input.get("properties").and_then(Value::as_object);
+    let (Some(required), Some(properties)) = (required, properties) else { return false };
+    required
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|name| properties.get(name).and_then(|field| field.get("pattern")) == Some(&json!(crate::form::SUBMIT_KEY_PATTERN)))
+}
+
+impl<A: Send + 'static> Tools<A> {
+    /// Where clients get a token for the endpoint ([`Authorization`]): Corten serves its
+    /// protected-resource metadata next to the endpoint and names it in every 401. Without it a
+    /// 401 names only `Bearer` and a realm (the endpoint's name, or `mcp` when the name is empty or
+    /// not printable ASCII), for tokens handed out by hand.
+    pub fn authorization(mut self, authorization: Authorization) -> Self {
+        self.authorization = Some(Arc::new(authorization));
+        self
+    }
+
+    /// Adds a tool that changes data. A write only the call identifies (placing an order) takes
+    /// a `submit: SubmitKey` field in its input, which the agent sends again on a retry. Such a
+    /// tool is marked `idempotentHint`, which tells clients they may retry it on their own: that
+    /// holds because the tool stores the key with the write and answers a repeat from it, so a
+    /// tool never takes a key it does not store.
+    pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
+    where
+        I: FromJson + FromJsonSchema + Send + 'static,
+        O: ToJson + ToJsonSchema + 'static,
+        F: Fn(A, I) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+    {
+        self.add(name, description, false, false, handler)
+    }
+
+    /// Adds a tool that changes data and is idempotent without a key, since what it does is
+    /// named by its arguments ("set the quantity to 5"): marked `idempotentHint`, so a client
+    /// may call it again after a lost reply.
+    pub fn idempotent_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
+    where
+        I: FromJson + FromJsonSchema + Send + 'static,
+        O: ToJson + ToJsonSchema + 'static,
+        F: Fn(A, I) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+    {
+        self.add(name, description, false, true, handler)
+    }
+
+    /// Adds a tool that only reads (marked `readOnlyHint`, so clients may call it without asking).
+    pub fn read_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
+    where
+        I: FromJson + FromJsonSchema + Send + 'static,
+        O: ToJson + ToJsonSchema + 'static,
+        F: Fn(A, I) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+    {
+        self.add(name, description, true, true, handler)
+    }
+
+    fn add<I, O, F, Fut>(mut self, name: &str, description: &str, read_only: bool, idempotent: bool, handler: F) -> Self
+    where
+        I: FromJson + FromJsonSchema + Send + 'static,
+        O: ToJson + ToJsonSchema + 'static,
+        F: Fn(A, I) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
+    {
+        // JSON Schema for the input as the server reads it and the output as it writes it. MCP
+        // requires an object at the top.
+        let input_schema = Generator::root_for_read::<I>();
+        assert!(
+            input_schema.get("type") == Some(&json!("object")),
+            "tool {name}: the input must be a struct (MCP input schemas are objects)"
+        );
+        let idempotent = idempotent || keyed(&input_schema);
+        let output_schema = Generator::root_for_write::<O>();
+        assert!(
+            output_schema.get("type") == Some(&json!("object")),
+            "tool {name}: the output must be a struct (MCP structured content is an object)"
+        );
+        let handler = Arc::new(handler);
+        let handler: Handler<A> = Arc::new(move |caller, args| {
+            let handler = handler.clone();
+            Box::pin(async move {
+                let input: I = serde_json::from_value(args).map_err(|error| Ran::Corten(error.into()))?;
+                let output = handler(caller, input).await.map_err(Ran::Tool)?;
+                // A value in the output that its `ToJson` cannot write (a field whose own
+                // `Serialize` fails) panics there; the call answers it as the tool's internal
+                // error, a JSON-RPC result the agent reads, as it did when serde wrote outputs.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| output.to_json()))
+                    .map_err(|panic| Ran::Corten(ToolError::internal(crate::task::panic_message(&*panic).to_owned())))
+            })
+        });
+        let tools = Arc::get_mut(&mut self.tools).expect("add tools before serving");
+        let well_formed = O::__well_formed();
+        let tool =
+            Tool { description: description.into(), input_schema, output_schema, read_only, idempotent, well_formed, handler };
+        assert!(tools.insert(name.into(), tool).is_none(), "tool {name} is defined twice");
+        self
+    }
+
+    /// The `POST` route for the endpoint, usually mounted at `/mcp` under [`crate::App::api`]:
+    /// `.api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()))`. With an
+    /// [`Authorization`], its metadata's route comes with it, so it goes under an API, where
+    /// Corten learns the endpoint's path.
+    pub fn route<S: Clone + Send + Sync + 'static>(self) -> crate::Methods<S>
+    where
+        A: 'static,
+    {
+        let mut tools = self;
+        // Each route has its own challenge, set when the metadata's route is placed.
+        tools.challenge = Arc::default();
+        let companion = tools.authorization.clone().map(|authorization| {
+            let challenge = tools.challenge.clone();
+            crate::route::Companion(Arc::new(move |path| authorization.serve(path, &challenge)))
+        });
+        let tools = Arc::new(tools);
+        // Corten's own handler: it answers JSON-RPC errors in the protocol's shape itself.
+        let methods = crate::Methods::writes(crate::router::post(move |request: crate::http::Request| {
+            let tools = tools.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                // Only the headers go on: the rest of the head is dropped before the body is read,
+                // as the `Bytes` extractor did, so a guard in its extensions is not held meanwhile.
+                let (limit, headers) = {
+                    let mut parts = parts;
+                    (crate::extract::body_limit(&parts.extensions), std::mem::take(&mut parts.headers))
+                };
+                match crate::extract::whole(body, limit).await {
+                    Ok(body) => tools.handle(headers, &body).await,
+                    Err(error) => error.into_response(),
+                }
+            }
+        }));
+        crate::Methods(methods.0, methods.1, companion, std::marker::PhantomData)
+    }
+
+    async fn handle(&self, headers: HeaderMap, body: &[u8]) -> Response {
+        // A request whose `MCP-Protocol-Version` names a revision the endpoint does not speak is a
+        // 400 (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header"), so a message
+        // that cannot be read is one too, with the same JSON-RPC error as without the header.
+        let speaks = speaks(&headers);
+        // The protocol's `200` with a JSON-RPC error, or that `400`.
+        let malformed = |code, message: &str| {
+            let status = if speaks { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+            rpc_error(Value::Null, status, code, message.into())
+        };
+        let message: Value = match serde_json::from_slice(body) {
+            Ok(value) => value,
+            Err(_) => return malformed(-32700, "parse error"),
+        };
+        if !message.is_object() {
+            // JSON-RPC batches were removed from MCP in 2025-06-18.
+            return malformed(-32600, "invalid request: send one JSON-RPC message per request");
+        }
+        // A revision the endpoint does not speak cannot be served whoever sends it, so it is
+        // refused before the token, as a body that is not JSON is. An `initialize` request is sent
+        // before a revision is agreed, so a header on it names none to check (MCP 2025-11-25,
+        // Lifecycle, "Version Negotiation"); one without an `id` is a notification, not that
+        // request, and is checked. Without the header a request is 2025-03-26's, which it speaks.
+        if !speaks && !(message.get("id").is_some() && message.get("method").and_then(Value::as_str) == Some("initialize")) {
+            return unsupported_version(&headers);
+        }
+        let id = message.get("id").cloned();
+        // An endpoint that names where to get a token takes one on every request, as the spec
+        // asks, so a client without one is told where before it starts a session; a tool call
+        // gets the caller found here.
+        let mut caller = None;
+        if self.authorization.is_some() {
+            match (self.auth)(&headers) {
+                Ok(found) => caller = Some(found),
+                Err(error) => return self.refused(id.unwrap_or(Value::Null), error, &headers),
+            }
+        }
+        let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        // Behind the endpoint-wide check (an `Authorization` with `Tools::auth`), every answer it
+        // let through is the caller's, the list of tools and `initialize` included: a shared copy
+        // would answer a request the check would have turned away.
+        let gated = self.checked && caller.is_some();
+        let answer = |res: Response| if gated { crate::cache::personal(res) } else { res };
+        let Some(id) = id else {
+            // A notification (`notifications/initialized`) or a response: nothing to answer.
+            return answer(StatusCode::ACCEPTED.into_response());
+        };
+        if message.get("jsonrpc") != Some(&json!("2.0")) || method.is_empty() {
+            return rpc_error(id, StatusCode::OK, -32600, "invalid request".into());
+        }
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        // A tool's answer to a caller `Tools::auth` found is that caller's: never shared, though it
+        // goes out untyped and the request's `Authorization` alone does not make it private. A
+        // shared copy would also answer a request the check would have turned away.
+        let for_caller = self.checked;
+        let result = match method {
+            "tools/call" => match self.call(&headers, caller, params).await {
+                Err(CallError::Refused(error)) => return self.refused(id, error, &headers),
+                Err(CallError::Rpc(code, message)) => return rpc_error(id, StatusCode::OK, code, message),
+                // A result the endpoint made in the tool's place: Corten's, as its errors are.
+                Err(CallError::Failed(result)) => return crate::cache::unshared(reply_raw(&id, &result)),
+                Ok(result) if for_caller => return crate::cache::personal(reply_raw(&id, &result)),
+                Ok(result) => return reply_raw(&id, &result),
+            },
+            "initialize" => {
+                let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
+                let version = PROTOCOL_VERSIONS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOL_VERSIONS[0]);
+                json!({
+                    "protocolVersion": version,
+                    "capabilities": { "tools": { "listChanged": false } },
+                    "serverInfo": { "name": self.name, "version": self.version },
+                })
+            }
+            "ping" => json!({}),
+            "tools/list" => json!({ "tools": self.list() }),
+            _ => return rpc_error(id, StatusCode::OK, -32601, format!("method not found: {method}")),
+        };
+        answer(reply(id, Ok(result)))
+    }
+
+    /// A request [`Tools::auth`] turned away, before any tool ran: 401 or 403 with the challenge
+    /// for a token the check did not take, 403 for a caller it knows and refuses, 503 when it
+    /// could not check (its provider is down), 500 (logged) for anything else. Never the answer,
+    /// and never shared ([`crate::cache::Unshared`]): each is about who is asking.
+    fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
+        match error {
+            ToolError::Unauthorized => self.unauthorized(id, sent_bearer(headers)),
+            ToolError::InsufficientScope(scope) => self.forbidden(id, &scope),
+            // A malformed request (RFC 6750 3.1), told so in the challenge.
+            ToolError::Invalid(message) => {
+                let mut res = rpc_error(id, StatusCode::BAD_REQUEST, -32600, format!("invalid request: {message}"));
+                let challenge = crate::Challenge::scheme("Bearer").param("error", "invalid_request");
+                res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
+                res
+            }
+            ToolError::Forbidden(message) | ToolError::Refused(message) => {
+                rpc_error(id, StatusCode::FORBIDDEN, -32001, format!("not allowed: {message}"))
+            }
+            ToolError::Upstream(message) => {
+                rpc_error(id, StatusCode::SERVICE_UNAVAILABLE, -32603, format!("cannot check the token now: {message}"))
+            }
+            ToolError::Internal(error) => {
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: the MCP endpoint's auth check failed");
+                rpc_error(id, StatusCode::INTERNAL_SERVER_ERROR, -32603, "internal error".into())
+            }
+        }
+    }
+
+    /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
+    /// 3.1; a request with no bearer token, or another scheme's credentials, is told only where
+    /// to get one). Without an [`Authorization`] its realm is the endpoint's name, or `mcp` when
+    /// the name is empty or not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a
+    /// parameter.
+    fn unauthorized(&self, id: Value, sent: bool) -> Response {
+        let mut res = rpc_error(id, StatusCode::UNAUTHORIZED, -32001, "unauthorized".into());
+        let mut challenge = match self.challenge.get() {
+            Some(protected) => protected.unauthorized.clone(),
+            None => self.named.clone(),
+        };
+        if sent {
+            challenge = challenge.param("error", "invalid_token");
+        }
+        res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
+        res
+    }
+
+    /// The 403 for a token without a scope the request needs.
+    fn forbidden(&self, id: Value, scope: &str) -> Response {
+        let mut res = rpc_error(id, StatusCode::FORBIDDEN, -32001, "insufficient scope".into());
+        res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(scope));
+        res
+    }
+
+    /// The 403's `WWW-Authenticate` for a call that needs `scope`.
+    fn insufficient_scope(&self, scope: &str) -> HeaderValue {
+        let mut value = crate::Challenge::scheme("Bearer").param("error", "insufficient_scope");
+        if scope.split(' ').all(scope_token) {
+            value = value.param("scope", scope);
+        } else {
+            // A test or `corten dev` stops at it; a release build sends the 403 without it.
+            debug_assert!(false, "corten: ToolError::InsufficientScope names scopes separated by single spaces, not {scope:?}");
+            tracing::error!(scope, "corten: ToolError::InsufficientScope names scopes separated by single spaces");
+        }
+        if let Some(challenge) = self.challenge.get() {
+            value = value.param("resource_metadata", &challenge.metadata);
+        }
+        value.value().clone()
+    }
+
+    fn list(&self) -> Vec<Value> {
+        self.tools
+            .iter()
+            .map(|(name, tool)| {
+                json!({
+                    "name": name,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                    "outputSchema": tool.output_schema,
+                    "annotations": { "readOnlyHint": tool.read_only, "idempotentHint": tool.idempotent },
+                })
+            })
+            .collect()
+    }
+
+    /// The call's `result`, as JSON text, for `caller` when the request's check found it already.
+    async fn call(&self, headers: &HeaderMap, caller: Option<A>, params: Value) -> Result<String, CallError> {
+        let name = params.get("name").and_then(Value::as_str).ok_or(CallError::Rpc(-32602, "missing tool name".into()))?;
+        let tool = self.tools.get(name).ok_or_else(|| CallError::Rpc(-32602, format!("unknown tool: {name}")))?;
+        let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        if !args.is_object() {
+            return Err(CallError::Rpc(-32602, "arguments must be an object".into()));
+        }
+        // Tool failures are results with isError, so the agent can read them and retry.
+        let caller = match caller {
+            Some(caller) => caller,
+            None => match (self.auth)(headers) {
+                Ok(caller) => caller,
+                Err(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_))) => {
+                    return Err(CallError::Refused(error))
+                }
+                // Other refusals are a result with isError, as they were before a check per
+                // request, but the check's, made before any tool ran: Corten's.
+                Err(error) => return Err(CallError::Failed(self.failed(name, error))),
+            },
+        };
+        match (tool.handler)(caller, args).await {
+            Ok(output) => {
+                // A derived output over types that write well-formed JSON goes into the envelope as
+                // written. One that holds a `ToJson` written by hand (or is one) is parsed first,
+                // in every build; a debug build parses every output. One that is not one JSON object
+                // is the tool's internal error, logged with the output's size and the fault, not its
+                // data; a debug build panics instead (the app's 500), so a test stops at it.
+                if let Some(fault) = not_one_object(&output, cfg!(debug_assertions) || !tool.well_formed) {
+                    let rule = format!("ToJson must write one JSON object; {fault}");
+                    if cfg!(debug_assertions) {
+                        panic!("corten: tool {name}'s output {rule}");
+                    }
+                    return Err(CallError::Failed(self.failed(name, ToolError::internal(format!("its output {rule}")))));
+                }
+                // The output as written, and once more as a JSON string for the text block, into
+                // one string sized for both: a large result is not copied as it grows.
+                let text = serde_json::to_string(&output).map_err(|e| CallError::Rpc(-32603, e.to_string()))?;
+                Ok([
+                    r#"{"content":[{"type":"text","text":"#,
+                    &text,
+                    r#"}],"structuredContent":"#,
+                    &output,
+                    r#","isError":false}"#,
+                ]
+                .concat())
+            }
+            Err(Ran::Tool(error @ (ToolError::Unauthorized | ToolError::InsufficientScope(_)))) => Err(CallError::Refused(error)),
+            Err(Ran::Tool(error)) => Ok(self.failed(name, error)),
+            // Arguments that do not fit the input, or an output that could not be written.
+            Err(Ran::Corten(error)) => Err(CallError::Failed(self.failed(name, error))),
+        }
+    }
+
+    /// A tool's failure as its result, with `isError`, so the agent can read it and retry.
+    fn failed(&self, name: &str, error: ToolError) -> String {
+        let text = match error {
+            ToolError::Invalid(message) => format!("invalid arguments: {message}"),
+            ToolError::Refused(message) => format!("refused, read the current state first: {message}"),
+            ToolError::Upstream(message) => format!("a service it calls failed, try again later: {message}"),
+            ToolError::Forbidden(message) => format!("not allowed: {message}"),
+            ToolError::Unauthorized | ToolError::InsufficientScope(_) => unreachable!("answered with a 401 or 403"),
+            ToolError::Internal(error) => {
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(tool = name, error, "corten: agent tool failed");
+                "internal error".into()
+            }
+        };
+        json!({ "content": [{ "type": "text", "text": text }], "isError": true }).to_string()
+    }
+}
+
+/// What is wrong with a tool's output as one JSON object, or `None`: its ends always, and with
+/// `parse` the whole text. It names the size and the first character or parser's message, which
+/// hold none of the output's data.
+fn not_one_object(output: &str, parse: bool) -> Option<String> {
+    // JSON's whitespace, not Rust's (`trim_ascii` also takes a form feed).
+    let ends = output.trim_matches([' ', '\t', '\n', '\r']);
+    let Some(first) = ends.chars().next() else {
+        return Some(format!("it wrote {} bytes and no value", output.len()));
+    };
+    if !(first == '{' && ends.ends_with('}')) {
+        return Some(format!("it wrote {} bytes starting {first:?}", output.len()));
+    }
+    if parse {
+        if let Err(error) = serde_json::from_str::<serde::de::IgnoredAny>(output) {
+            return Some(format!("it wrote {} bytes that are not one JSON value: {error}", output.len()));
+        }
+    }
+    None
+}
+
+/// Whether the request's `MCP-Protocol-Version`, when it sent one, names a revision this server
+/// speaks. The header holds one revision, not a list, so a sender must not send it on two lines
+/// (RFC 9110, 5.3); a request that does, even with the same value on both, names none, as their
+/// combined value (`2025-11-25, 2025-11-25`, 5.2) is no revision.
+fn speaks(headers: &HeaderMap) -> bool {
+    let mut sent = headers.get_all(PROTOCOL_VERSION_HEADER).iter();
+    match (sent.next(), sent.next()) {
+        (None, _) => true,
+        (Some(version), None) => PROTOCOL_VERSIONS.iter().any(|v| v.as_bytes() == version.as_bytes()),
+        (Some(_), Some(_)) => false,
+    }
+}
+
+/// The 400 for a revision this server does not speak: a JSON-RPC error with no `id`, as the
+/// transport allows for an HTTP request it does not accept, whose `data` has the revisions it
+/// speaks and the header's combined value (RFC 9110, 5.2), as MCP's own version errors do (MCP
+/// 2025-11-25, Lifecycle, "Error Handling"). The code is JSON-RPC's own, not one a later
+/// revision defines, so a client that tried a later revision first takes this for an earlier
+/// server and falls back to `initialize` (MCP 2026-07-28, Streamable HTTP, "Backward
+/// Compatibility").
+fn unsupported_version(headers: &HeaderMap) -> Response {
+    let sent = headers.get_all(PROTOCOL_VERSION_HEADER).iter();
+    let requested = sent.map(|value| String::from_utf8_lossy(value.as_bytes())).collect::<Vec<_>>().join(", ");
+    let message = format!("unsupported MCP-Protocol-Version; this server speaks {}", PROTOCOL_VERSIONS.join(", "));
+    let data = json!({ "supported": PROTOCOL_VERSIONS, "requested": requested });
+    let error = json!({ "code": -32600, "message": message, "data": data });
+    let mut res = crate::cache::unshared(json_response(json!({ "jsonrpc": "2.0", "error": error }).to_string()));
+    *res.status_mut() = StatusCode::BAD_REQUEST;
+    res
+}
+
+/// Whether the request used the bearer method, for RFC 6750 3.1's choice of error: an
+/// `Authorization` line that is `Bearer` and a space in any case, then something other than
+/// whitespace. A token that is malformed, not ASCII included (which [`crate::caller::bearer`]
+/// cannot hand an app as text), was still sent, as was one on either of two `Authorization` lines
+/// (which the reader refuses), so its 401 says `error="invalid_token"`; `Bearer` with nothing
+/// after it, which RFC 6750 (2.1) does not allow, is taken as no token, so the client is told
+/// where to get one. It runs only on a 401, so reading every line costs an accepted call nothing.
+fn sent_bearer(headers: &HeaderMap) -> bool {
+    headers.get_all(header::AUTHORIZATION).iter().any(|value| {
+        let value = value.as_bytes();
+        value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ") && !value[7..].trim_ascii().is_empty()
+    })
+}
+
+enum CallError {
+    /// The check turned the call away (`Unauthorized`, `InsufficientScope`): a 401 or 403.
+    Refused(ToolError),
+    /// A call the endpoint cannot make (no tool, an unknown one, arguments that are not an
+    /// object) or whose output it cannot write: a JSON-RPC error, answered by [`rpc_error`] alone.
+    Rpc(i64, String),
+    /// A result with `isError` that the endpoint made, not the tool: the check turned the caller
+    /// away before any tool ran, the arguments did not fit the tool's input, or its output was not
+    /// one JSON object.
+    Failed(String),
+}
+
+/// A JSON-RPC error the endpoint makes itself, at `status` (the protocol's `200` for an error in a
+/// message it read): Corten's, not a tool's answer, so never shared ([`crate::cache::Unshared`]).
+fn rpc_error(id: Value, status: StatusCode, code: i64, message: String) -> Response {
+    let mut res = crate::cache::unshared(reply(id, Err((code, message))));
+    *res.status_mut() = status;
+    res
+}
+
+fn reply(id: Value, result: Result<Value, (i64, String)>) -> Response {
+    let body = match result {
+        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
+    };
+    json_response(body.to_string())
+}
+
+/// A successful reply whose `result` is JSON text already, written into the body as is.
+fn reply_raw(id: &Value, result: &str) -> Response {
+    json_response([r#"{"id":"#, &id.to_string(), r#","jsonrpc":"2.0","result":"#, result, "}"].concat())
+}
+
+fn json_response(body: String) -> Response {
+    ([(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))], body).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::body::Body;
+    use crate::{router::Table, Router};
+    use http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// Change an item's quantity.
+    #[derive(crate::json::FromJson)]
+    struct Adjust {
+        id: String,
+        /// Added to the quantity; negative to remove.
+        delta: i64,
+        #[serde(default)]
+        note: Option<String>,
+    }
+
+    #[derive(crate::json::ToJson)]
+    struct Adjusted {
+        id: String,
+        quantity: i64,
+    }
+
+    #[derive(crate::json::FromJson)]
+    struct Nothing {}
+
+    #[test]
+    fn a_refusal_reaches_an_agent_as_what_it_can_do_about_it() {
+        let refused = |why, text: &str| {
+            let mut errors = crate::Errors::new();
+            errors.refuse(why, text);
+            ToolError::from(errors)
+        };
+        assert!(matches!(refused(crate::Refusal::Conflict, "moved"), ToolError::Refused(m) if m == "moved"));
+        assert!(matches!(refused(crate::Refusal::Gone, "gone"), ToolError::Refused(m) if m == "gone"));
+        assert!(matches!(refused(crate::Refusal::Upstream, "no answer"), ToolError::Upstream(m) if m == "no answer"));
+    }
+
+    #[derive(crate::json::ToJson)]
+    struct Pong {
+        pong: bool,
+    }
+
+    /// The caller, as the auth check proves it.
+    #[derive(Clone)]
+    struct Agent(String);
+
+    fn app() -> Router {
+        let tools = Tools::new("test", "1.0")
+            .auth(|headers| crate::caller::bearer(headers).map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized))
+            .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
+                if input.id == "locked" {
+                    return Err(ToolError::Forbidden(format!("{} may not change a locked item", agent.0)));
+                }
+                let _ = input.note;
+                Ok(Adjusted { id: input.id, quantity: 10 + input.delta })
+            })
+            .read_tool("ping", "Answers pong", |_: Agent, _: Nothing| async { Ok(Pong { pong: true }) });
+        Router::from(Table::new().route("/mcp", tools.route().0))
+    }
+
+    async fn rpc(body: Value, auth: bool) -> (StatusCode, Value) {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        if auth {
+            req = req.header("authorization", "Bearer ada");
+        }
+        let res = app().oneshot(req.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        let status = res.status();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        (status, if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() })
+    }
+
+    /// Each of the endpoint's refusals is Corten's, not a handler's: marked so as it is made, so no
+    /// shared cache keeps it wherever it is answered ([`crate::cache::Unshared`]).
+    #[tokio::test]
+    async fn every_refusal_is_marked_as_corten_s() {
+        // With an [`Authorization`], so every failure of the check is answered as a refusal.
+        let tools = Tools::new("test", "1.0")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(|headers| match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
+                Some("Bearer narrow") => Err(ToolError::InsufficientScope("inventory:write".into())),
+                Some("Bearer idp-down") => Err(ToolError::Upstream("the identity provider timed out".into())),
+                Some("Bearer broken") => Err(ToolError::internal("bad key")),
+                Some("Bearer two words") => Err(ToolError::Invalid("one token".into())),
+                Some(_) => Ok(Agent("writer".into())),
+                None => Err(ToolError::Unauthorized),
+            })
+            .tool("inventory.adjust", "Adjust quantity", |_: Agent, input: Adjust| async move {
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let listed = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        // A request in a revision the endpoint does not speak is refused with a 400; without the
+        // header it is 2025-03-26's, whose malformed message is a 200 with a JSON-RPC error.
+        let unspoken = Some("1999-01-01");
+        for (item, body, token, version, status) in [
+            ("not JSON", "{", Some("good"), unspoken, StatusCode::BAD_REQUEST),
+            ("a revision it does not speak", &listed[..], Some("good"), unspoken, StatusCode::BAD_REQUEST),
+            ("no token", &listed[..], None, None, StatusCode::UNAUTHORIZED),
+            ("not allowed", &listed[..], Some("banned"), None, StatusCode::FORBIDDEN),
+            ("a scope it lacks", &listed[..], Some("narrow"), None, StatusCode::FORBIDDEN),
+            ("the check cannot run", &listed[..], Some("idp-down"), None, StatusCode::SERVICE_UNAVAILABLE),
+            ("the check failed", &listed[..], Some("broken"), None, StatusCode::INTERNAL_SERVER_ERROR),
+            ("a malformed token", &listed[..], Some("two words"), None, StatusCode::BAD_REQUEST),
+        ] {
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            if let Some(version) = version {
+                req = req.header(PROTOCOL_VERSION_HEADER, version);
+            }
+            if let Some(token) = token {
+                req = req.header("authorization", format!("Bearer {token}"));
+            }
+            let res = app.clone().oneshot(req.body(Body::from(body.to_owned())).unwrap()).await.unwrap();
+            assert_eq!(res.status(), status, "{item}");
+            assert!(res.extensions().get::<crate::cache::Unshared>().is_some(), "{item}: not marked");
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_negotiates_the_protocol_version() {
+        let (_, res) = rpc(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }),
+            false,
+        )
+        .await;
+        assert_eq!(res["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(res["result"]["serverInfo"]["name"], "test");
+        let (_, res) = rpc(
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": { "protocolVersion": "1999-01-01" } }),
+            false,
+        )
+        .await;
+        assert_eq!(res["result"]["protocolVersion"], PROTOCOL_VERSIONS[0]);
+        let (status, _) = rpc(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), false).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+    }
+
+    /// A request naming a revision the endpoint does not speak in `MCP-Protocol-Version` is a
+    /// 400 with a JSON-RPC error and no `id`, before its token is checked; one naming none is taken
+    /// as 2025-03-26, which it speaks (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version
+    /// Header"). `initialize`, sent before a revision is agreed, is answered whatever it names.
+    #[tokio::test]
+    async fn an_unsupported_protocol_version_header_is_a_bad_request() {
+        let request = |versions: &[&str], body: &str| {
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            for version in versions {
+                req = req.header("mcp-protocol-version", *version);
+            }
+            req.body(Body::from(body.to_owned())).unwrap()
+        };
+        let list = &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        for versions in [&["2025-11-25"][..], &["2025-06-18"], &["2025-03-26"], &[]] {
+            let (status, _, body) = send(&app(), request(versions, list)).await;
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!((status, body["id"].clone()), (StatusCode::OK, json!(1)), "{versions:?}");
+            assert_eq!(body["result"]["tools"].as_array().map(Vec::len), Some(2), "{versions:?}");
+        }
+        let refused = |versions: &'static [&'static str], body: String| {
+            let app = app();
+            async move {
+                let (status, headers, text) = send(&app, request(versions, &body)).await;
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{versions:?}: {text}");
+                assert_eq!(headers["content-type"], "application/json", "{versions:?}");
+                let body: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(body["error"]["code"], -32600, "{versions:?}");
+                assert!(body["error"]["message"].as_str().unwrap().contains("MCP-Protocol-Version"), "{versions:?}");
+                assert!(body.get("id").is_none() && body.get("result").is_none(), "{versions:?}: {text}");
+                let data = json!({ "supported": PROTOCOL_VERSIONS, "requested": versions.join(", ") });
+                assert_eq!(body["error"]["data"], data, "{versions:?}");
+            }
+        };
+        for versions in [&["2024-11-05"][..], &["nonsense"], &["2099-01-01"], &[""], &["2025-11-25", "2025-06-18"]] {
+            refused(versions, list.clone()).await;
+        }
+        // Sent twice with the same revision, the header is still not one revision (RFC 9110, 5.3).
+        refused(&["2025-11-25", "2025-11-25"], list.clone()).await;
+        // A notification is refused too, an `initialize` without an `id` included: it is not the
+        // request that agrees a revision.
+        refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string()).await;
+        refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "initialize", "params": {} }).to_string()).await;
+        // `initialize` comes before a revision is agreed: whatever its header names, it is answered.
+        let initialize = &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }).to_string();
+        let (status, _, text) = send(&app(), request(&["2099-01-01"], initialize)).await;
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((status, &body["result"]["protocolVersion"]), (StatusCode::OK, &json!(PROTOCOL_VERSIONS[0])), "{text}");
+        // An endpoint that takes a token on every request refuses the revision before the token,
+        // and tells an `initialize` where to get one whatever its header names.
+        let protected = protected(Some(Authorization::new::<Mcp>("https://cards.example", "https://auth.example")));
+        let (status, _, _) = send(&protected, request(&["nonsense"], list)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "the revision comes before the token");
+        let (status, _, _) = send(&protected, request(&["2025-11-25"], list)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "a revision it speaks is then told where to get a token");
+        let (status, _, _) = send(&protected, request(&["nonsense"], initialize)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "an initialize is told where to get a token");
+    }
+
+    /// The status and body of `body` posted with each of these `MCP-Protocol-Version` headers.
+    async fn malformed(body: &str, versions: &[&str]) -> (StatusCode, Value) {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        for version in versions {
+            req = req.header("mcp-protocol-version", *version);
+        }
+        let (status, _, text) = send(&app(), req.body(Body::from(body.to_owned())).unwrap()).await;
+        (status, serde_json::from_str(&text).unwrap())
+    }
+
+    /// A body that is not JSON is a parse error, a 200 as before without the header or with a
+    /// revision the endpoint speaks, and a 400 with the same error when the header names one it
+    /// does not: such a request is a 400 whatever it holds (MCP 2025-11-25, Transports).
+    #[tokio::test]
+    async fn a_body_that_is_not_json_is_a_bad_request_in_a_revision_not_spoken() {
+        let error = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } });
+        assert_eq!(malformed("{", &[]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed("{", &["2025-11-25"]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed("{", &["2099-01-01"]).await, (StatusCode::BAD_REQUEST, error.clone()));
+        assert_eq!(malformed("{", &["2025-11-25", "2025-11-25"]).await, (StatusCode::BAD_REQUEST, error));
+    }
+
+    /// A batch is refused as before, a 200 without the header or with a revision the endpoint
+    /// speaks, and a 400 with the same error when the header names one it does not.
+    #[tokio::test]
+    async fn a_batch_is_a_bad_request_in_a_revision_not_spoken() {
+        let batch = &json!([{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }]).to_string();
+        let message = "invalid request: send one JSON-RPC message per request";
+        let error = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": message } });
+        assert_eq!(malformed(batch, &[]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed(batch, &["2025-06-18"]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed(batch, &["nonsense"]).await, (StatusCode::BAD_REQUEST, error));
+    }
+
+    #[tokio::test]
+    async fn schemas_come_from_the_input_and_output_types() {
+        let (_, res) = rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }), false).await;
+        let tools = res["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["name"], "inventory.adjust");
+        assert_eq!(
+            tools[0]["inputSchema"],
+            json!({
+                "description": "Change an item's quantity.",
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "delta": { "description": "Added to the quantity; negative to remove.", "type": "integer", "format": "int64" },
+                    "note": { "type": ["string", "null"], "default": null }
+                },
+                "required": ["id", "delta"]
+            })
+        );
+        assert_eq!(tools[0]["outputSchema"]["required"], json!(["id", "quantity"]));
+        assert_eq!(tools[0]["annotations"], json!({ "readOnlyHint": false, "idempotentHint": false }), "a write with no key");
+        assert_eq!(tools[1]["annotations"], json!({ "readOnlyHint": true, "idempotentHint": true }));
+    }
+
+    #[tokio::test]
+    async fn calls_are_authorized_then_typed() {
+        let call = |args: Value| json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": args } });
+        let (_, res) = rpc(call(json!({ "id": "a", "delta": 2 })), true).await;
+        assert_eq!(res["id"], 7);
+        assert_eq!(res["result"]["structuredContent"], json!({ "id": "a", "quantity": 12 }));
+        assert_eq!(res["result"]["isError"], false);
+        let text: Value = serde_json::from_str(res["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text, res["result"]["structuredContent"], "the text block is the same JSON");
+        let (_, res) = rpc(call(json!({ "id": "a" })), true).await;
+        assert_eq!(res["result"]["isError"], true);
+        assert!(res["result"]["content"][0]["text"].as_str().unwrap().starts_with("invalid arguments: missing field `delta`"));
+        let (_, res) = rpc(call(json!({ "id": "a", "delta": "two" })), true).await;
+        assert!(res["result"]["content"][0]["text"].as_str().unwrap().starts_with("invalid arguments: invalid type"));
+        let (_, res) = rpc(call(json!({ "id": "locked", "delta": 1 })), true).await;
+        assert_eq!(res["result"]["content"][0]["text"], "not allowed: ada may not change a locked item");
+        let (status, res) = rpc(call(json!({ "id": "a" })), false).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "auth runs before the input is read");
+        assert_eq!(res["error"]["code"], -32001);
+    }
+
+    #[tokio::test]
+    async fn bad_requests_get_json_rpc_errors() {
+        let (_, res) = rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "nope" }), false).await;
+        assert_eq!(res["error"]["code"], -32601);
+        let (_, res) =
+            rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "missing" } }), false).await;
+        assert_eq!(res["error"]["code"], -32602);
+        let res = app().oneshot(Request::post("/mcp").body(Body::from("{")).unwrap()).await.unwrap();
+        let body: Value = serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(body["error"]["code"], -32700);
+        let (status, res) = rpc(json!([{ "jsonrpc": "2.0", "id": 1, "method": "ping" }]), false).await;
+        assert_eq!((status, res["error"]["code"].clone()), (StatusCode::OK, json!(-32600)), "batches are refused, not accepted");
+    }
+
+    #[test]
+    #[should_panic(expected = "the input must be a struct")]
+    fn a_non_object_input_is_refused_at_startup() {
+        let _ = Tools::new("t", "1").tool("bad", "", |_: (), _: String| async { Ok(Pong { pong: true }) });
+    }
+
+    #[derive(crate::Route)]
+    #[route("/mcp")]
+    struct Mcp;
+
+    #[tokio::test]
+    async fn a_tool_request_keeps_the_routes_body_limit_and_body_errors() {
+        let tools = Tools::new("test", "1").read_tool("ping", "Pong", |(), _: Nothing| async { Ok(Pong { pong: true }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route()).body_limit(32)).router();
+        let oversized =
+            Request::post("/mcp").header("content-type", "application/json").body(Body::from("x".repeat(33))).unwrap();
+        assert_eq!(app.clone().oneshot(oversized).await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let broken =
+            Body::from_stream(futures_util::stream::once(async { Err::<Bytes, _>(std::io::Error::other("broken body")) }));
+        let request = Request::post("/mcp").body(broken).unwrap();
+        assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The request's head, all but its headers, is released before the body is read, as the
+    /// `Bytes` extractor did: a guard a middleware put in its extensions (a permit) is not held
+    /// through the read or the tool call.
+    #[tokio::test]
+    async fn a_tool_request_releases_its_extensions_before_reading_the_body() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        #[derive(Clone)]
+        struct Permit {
+            _held: Arc<()>,
+        }
+        let tools = Tools::new("test", "1").read_tool("ping", "Pong", |(), _: Nothing| async { Ok(Pong { pong: true }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let permit = Arc::new(());
+        let watch = Arc::downgrade(&permit);
+        let released = Arc::new(AtomicBool::new(false));
+        let seen = released.clone();
+        let body = Body::from_stream(futures_util::stream::once(async move {
+            seen.store(watch.upgrade().is_none(), Ordering::SeqCst);
+            Ok::<_, std::io::Error>(Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#))
+        }));
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .extension(Permit { _held: permit })
+            .body(body)
+            .unwrap();
+        app.oneshot(request).await.unwrap();
+        assert!(released.load(Ordering::SeqCst), "the extension was still held when the body was read");
+    }
+
+    /// A value inside a tool's output that serde cannot write (here, one whose `Serialize`
+    /// fails): the call answers it as the tool's internal error, a JSON-RPC result with the call's
+    /// `id`, and logs the tool's name with serde's message.
+    #[tokio::test]
+    async fn an_output_that_cannot_be_written_is_the_tools_internal_error() {
+        struct Unwritable;
+        impl serde::Serialize for Unwritable {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("not JSON"))
+            }
+        }
+        impl ToJsonSchema for Unwritable {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({})
+            }
+        }
+        #[derive(crate::json::ToJson)]
+        struct Out {
+            value: Unwritable,
+        }
+        let tools = Tools::new("test", "1.0")
+            .read_tool("broken", "Fails to write", |(), _: Nothing| async { Ok(Out { value: Unwritable }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "broken", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let ((status, _, body), text) = logging(send(&app, req)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["id"], 7, "{body}");
+        assert_eq!(body["result"]["isError"], true, "{body}");
+        assert_eq!(body["result"]["content"][0]["text"], "internal error", "{body}");
+        assert!(
+            text.lines().any(|line| line.contains("agent tool failed") && line.contains("broken") && line.contains("not JSON")),
+            "the log names the tool and serde's message: {text}"
+        );
+    }
+
+    /// A hand-written output `ToJson` that writes something other than one JSON object stops a
+    /// test at the call, naming the tool, rather than sending a broken answer.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_hand_written_output_that_is_not_one_object_stops_a_test() {
+        struct Listed;
+        impl ToJson for Listed {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(b"[1]");
+            }
+        }
+        impl ToJsonSchema for Listed {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({ "type": "object" })
+            }
+        }
+        let tools = Tools::new("test", "1.0").read_tool("listed", "Writes an array", |(), _: Nothing| async { Ok(Listed) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "listed", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let ((status, _, body), text) = logging(send(&app, req)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert!(text.contains("tool listed's output ToJson must write one JSON object; it wrote 3 bytes starting '['"), "{text}");
+    }
+
+    /// A release build parses an output that holds a hand-written `ToJson`: one that is not one JSON
+    /// object, at its ends or inside a derived output, is the tool's internal error, naming the
+    /// tool in the log and not the output; an object is sent as written.
+    #[cfg(not(debug_assertions))]
+    #[tokio::test]
+    async fn a_release_build_parses_an_output_with_a_hand_written_to_json() {
+        struct Written(&'static str);
+        impl ToJson for Written {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(self.0.as_bytes());
+            }
+        }
+        impl ToJsonSchema for Written {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({ "type": "object" })
+            }
+        }
+        #[derive(crate::json::ToJson)]
+        struct Holds {
+            inner: Written,
+        }
+        let tools = Tools::new("test", "1.0")
+            .read_tool("listed", "Writes an array", |(), _: Nothing| async { Ok(Written("[1]")) })
+            .read_tool("cut", "Writes half an object", |(), _: Nothing| async { Ok(Written("{\"secret\":1,}")) })
+            .read_tool("held", "Holds half a value", |(), _: Nothing| async { Ok(Holds { inner: Written("[\"secret\"") }) })
+            .read_tool("spaced", "Writes an object", |(), _: Nothing| async { Ok(Written(" {\"a\":1} ")) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = |tool: &str| {
+            let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": tool, "arguments": {} } });
+            Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap()
+        };
+        let ((status, _, body), text) = logging(send(&app, call("listed"))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["id"], 7, "{body}");
+        assert_eq!(body["result"]["isError"], true, "{body}");
+        assert_eq!(body["result"]["content"][0]["text"], "internal error", "{body}");
+        assert!(text.contains("listed") && text.contains("must write one JSON object; it wrote 3 bytes starting '['"), "{text}");
+        assert!(!text.contains("[1]"), "the log does not hold the output: {text}");
+        for tool in ["cut", "held"] {
+            let ((status, _, body), text) = logging(send(&app, call(tool))).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["result"]["isError"], true, "{tool}: {body}");
+            assert!(text.contains(tool) && text.contains("bytes that are not one JSON value"), "{tool}: {text}");
+            assert!(!text.contains("secret"), "the log does not hold the output: {text}");
+        }
+        let (status, _, body) = send(&app, call("spaced")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""structuredContent": {"a":1} ,"isError":false"#), "{body}");
+    }
+
+    /// A `Serialize` type with a schema (here the app's own, standing for another crate's) is a
+    /// tool's whole output in a `#[serde(transparent)]` newtype that derives `ToJson`: serde
+    /// writes its bytes, and its schema is the output's.
+    #[tokio::test]
+    async fn an_output_can_be_a_serialize_type_in_a_transparent_newtype() {
+        #[derive(serde::Serialize)]
+        struct Theirs {
+            ok: bool,
+            #[serde(rename = "seenAt")]
+            seen_at: u32,
+        }
+        impl ToJsonSchema for Theirs {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({ "type": "object", "properties": { "ok": { "type": "boolean" }, "seenAt": { "type": "integer" } }, "required": ["ok", "seenAt"] })
+            }
+        }
+        #[derive(crate::json::ToJson)]
+        #[serde(transparent)]
+        struct Done(Theirs);
+        let tools = Tools::new("test", "1.0")
+            .read_tool("theirs", "Another crate's", |(), _: Nothing| async { Ok(Done(Theirs { ok: true, seen_at: 3 })) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(list.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let listed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(listed["result"]["tools"][0]["outputSchema"], Generator::root_for_write::<Theirs>(), "{body}");
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "theirs", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""structuredContent":{"ok":true,"seenAt":3}"#), "{body}");
+    }
+
+    /// A tool's input can be any object, read whole (`serde_json::Map`), and an integer-keyed map
+    /// is one inside a newtype that derives `FromJson`.
+    #[tokio::test]
+    async fn an_input_can_be_any_object_or_a_map_in_a_newtype() {
+        #[derive(crate::json::FromJson)]
+        #[serde(transparent)]
+        struct Counts(std::collections::BTreeMap<u32, u32>);
+        #[derive(crate::json::ToJson)]
+        struct Size {
+            n: usize,
+        }
+        let tools = Tools::new("test", "1.0")
+            .read_tool(
+                "any",
+                "Any object",
+                |(), input: serde_json::Map<String, Value>| async move { Ok(Size { n: input.len() }) },
+            )
+            .read_tool("counts", "Counts by id", |(), input: Counts| async move { Ok(Size { n: input.0.len() }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        for (tool, arguments) in [("any", json!({ "a": 1, "b": [2] })), ("counts", json!({ "1": 2, "7": 3 }))] {
+            let call =
+                json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": tool, "arguments": arguments } });
+            let req =
+                Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+            let (status, _, body) = send(&app, req).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(body.contains(r#""structuredContent":{"n":2}"#), "{tool}: {body}");
+        }
+    }
+
+    /// A tool's output can hold text the app wrote (`Raw`), sent as it is.
+    #[tokio::test]
+    async fn an_output_can_hold_raw_json() {
+        #[derive(crate::json::ToJson)]
+        struct Quoted {
+            quote: crate::json::Raw,
+        }
+        let tools = Tools::new("test", "1.0").read_tool("quote", "Quotes", |(), _: Nothing| async {
+            Ok(Quoted { quote: crate::json::Raw::new(r#"{"price":2.50,"at":[1, 2]}"#).unwrap() })
+        });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "quote", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""structuredContent":{"quote":{"price":2.50,"at":[1, 2]}}"#), "{body}");
+    }
+
+    /// Which outputs a release build parses: one whose `ToJson` is derived over types that write
+    /// well-formed JSON (Corten's, serde's, `Raw`) is not; one that is, or holds, a `ToJson` or
+    /// map key written by hand is.
+    #[test]
+    fn an_output_is_parsed_only_where_a_to_json_is_written_by_hand() {
+        macro_rules! for_schema {
+            ($($t:ty),*) => {$(
+                impl ToJsonSchema for $t {
+                    fn json_schema(_: &mut Generator) -> Value {
+                        json!({})
+                    }
+                }
+            )*};
+        }
+        struct Hand;
+        impl ToJson for Hand {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(b"1");
+            }
+        }
+        #[derive(PartialEq, Eq, PartialOrd, Ord)]
+        struct Key;
+        impl crate::json::JsonKey for Key {
+            fn write_key(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(b"\"k\"");
+            }
+        }
+        #[derive(serde::Serialize)]
+        struct Theirs;
+        for_schema!(Hand, Key, Theirs);
+        #[allow(dead_code)]
+        #[derive(crate::json::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+        enum Tone {
+            Calm,
+        }
+        #[derive(crate::json::ToJson)]
+        struct Derived<'a, T> {
+            a: Vec<Option<String>>,
+            b: std::collections::BTreeMap<Tone, (u8, f64)>,
+            c: crate::json::Raw,
+            d: Theirs,
+            e: &'a str,
+            f: T,
+            #[serde(skip)]
+            _g: Hand,
+        }
+        #[allow(dead_code)]
+        #[derive(crate::json::ToJson)]
+        enum Either {
+            Plain { n: u32 },
+            Hand(Hand),
+        }
+        #[derive(crate::json::ToJson)]
+        struct Keyed(std::collections::BTreeMap<Key, u8>);
+        // Trees: asked once per type, so these answer rather than recurse forever.
+        #[derive(crate::json::ToJson)]
+        struct Node {
+            name: String,
+            children: Vec<Node>,
+            next: Option<Box<Node>>,
+        }
+        #[derive(crate::json::ToJson)]
+        struct HandNode {
+            children: Vec<HandNode>,
+            leaf: Option<Hand>,
+        }
+        #[derive(crate::json::ToJson)]
+        struct Ping {
+            pong: Vec<Pong>,
+        }
+        #[derive(crate::json::ToJson)]
+        struct Pong {
+            ping: Option<Box<Ping>>,
+            hand: Vec<Hand>,
+        }
+        assert!(<Node>::__well_formed());
+        assert!(<Vec<Node>>::__well_formed());
+        assert!(!<HandNode>::__well_formed());
+        assert!(!<Ping>::__well_formed());
+        assert!(!<Pong>::__well_formed());
+        // Each type expanded once per question: twelve types that all hold each other, which a
+        // walk per path asks about 12! times, and a ladder of 26 each holding the next two.
+        macro_rules! dense {
+            ($all:tt $($t:ident)*) => {$( dense!(@one $t $all); )*};
+            (@one $t:ident [$($f:ident)*]) => {
+                #[allow(non_snake_case)]
+                #[derive(crate::json::ToJson)]
+                struct $t { $($f: Vec<$f>,)* }
+            };
+        }
+        dense!([D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11] D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11);
+        macro_rules! ladder {
+            ($last:ident $hand:ty) => {
+                #[derive(crate::json::ToJson)]
+                struct $last { hand: Vec<$hand> }
+            };
+            ($t:ident $a:ident $($rest:ident)+ ; $hand:ty) => {
+                #[derive(crate::json::ToJson)]
+                struct $t { a: Vec<$a>, b: Option<Box<ladder!(@second $($rest)+)>> }
+                ladder!($a $($rest)+ ; $hand);
+            };
+            ($t:ident $a:ident ; $hand:ty) => {
+                #[derive(crate::json::ToJson)]
+                struct $t { a: Vec<$a> }
+                ladder!($a $hand);
+            };
+            (@second $b:ident $($rest:ident)*) => { $b };
+        }
+        ladder!(L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 L16 L17 L18 L19 L20 L21 L22 L23 L24 L25; u8);
+        ladder!(H0 H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 H20 H21 H22 H23 H24 H25; Hand);
+        let started = std::time::Instant::now();
+        assert!(<D0>::__well_formed());
+        assert!(<D11>::__well_formed());
+        assert!(<L0>::__well_formed());
+        assert!(!<H0>::__well_formed());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
+        assert!(<Derived<'static, u8>>::__well_formed());
+        assert!(<Box<[Derived<'static, Tone>]>>::__well_formed());
+        assert!(!<Derived<'static, Hand>>::__well_formed());
+        assert!(!<Hand>::__well_formed());
+        assert!(!<Vec<Hand>>::__well_formed());
+        assert!(!<Either>::__well_formed());
+        assert!(!<Keyed>::__well_formed());
+    }
+
+    /// `answer`'s result, with what the app logged on this thread while it ran.
+    async fn logging<T>(answer: impl Future<Output = T>) -> (T, String) {
+        #[derive(Clone, Default)]
+        struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let out = answer.await;
+        drop(guard);
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        (out, text)
+    }
+
+    /// An app whose agents get tokens from an authorization server: `reader` may read, `writer`
+    /// may write too.
+    fn protected(authorization: Option<Authorization>) -> Router {
+        let tools = Tools::new("test", "1.0");
+        let tools = match authorization {
+            Some(authorization) => tools.authorization(authorization),
+            None => tools,
+        };
+        let tools = tools
+            .auth(|headers| {
+                let token = crate::caller::bearer(headers).filter(|t| *t != "expired");
+                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
+            })
+            .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
+                if agent.0 != "writer" {
+                    return Err(ToolError::InsufficientScope("inventory:read inventory:write".into()));
+                }
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router()
+    }
+
+    /// Without an [`Authorization`], a 401 names the endpoint as its realm, and `mcp` when its
+    /// name cannot be one (RFC 6750 3: `Bearer` is followed by a parameter).
+    #[tokio::test]
+    async fn a_refusal_names_the_endpoint_as_its_realm() {
+        for (name, realm) in [("inventory tools", "inventory tools"), ("caf\u{e9}", "mcp"), ("", "mcp")] {
+            let tools = Tools::new(name, "1.0").auth(|_| Err::<Agent, _>(ToolError::Unauthorized)).tool(
+                "inventory.adjust",
+                "Adjust quantity",
+                |_: Agent, input: Adjust| async move { Ok(Adjusted { id: input.id, quantity: input.delta }) },
+            );
+            let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+            let (status, headers, _) = send(&app, adjust(None)).await;
+            assert_eq!(
+                (status, headers["www-authenticate"].to_str().unwrap()),
+                (StatusCode::UNAUTHORIZED, &*format!(r#"Bearer realm="{realm}""#)),
+                "{name:?}"
+            );
+        }
+    }
+
+    async fn send(app: &Router, req: Request<Body>) -> (StatusCode, HeaderMap, String) {
+        let res = app.clone().oneshot(req).await.unwrap();
+        let (parts, body) = res.into_parts();
+        (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    }
+
+    /// With an [`Authorization`], a check that fails for any reason answers before any method
+    /// does (an identity provider that is down never lists the tools), and a tool call runs the
+    /// check once.
+    #[tokio::test]
+    async fn the_check_runs_once_and_every_failure_of_it_is_answered() {
+        let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = checks.clone();
+        let tools = Tools::new("test", "1.0")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(move |headers| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                    Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
+                    Some("Bearer idp-down") => Err(ToolError::Upstream("the identity provider timed out".into())),
+                    Some("Bearer broken") => Err(ToolError::internal("bad key")),
+                    Some("Bearer two words") => Err(ToolError::Invalid("one token".into())),
+                    Some(_) => Ok(Agent("writer".into())),
+                    None => Err(ToolError::Unauthorized),
+                }
+            })
+            .tool("inventory.adjust", "Adjust quantity", |_: Agent, input: Adjust| async move {
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let rpc = |token: &str, method: &str| {
+            let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": { "name": "inventory.adjust", "arguments": { "id": "a", "delta": 1 } } });
+            let req = Request::post("/mcp")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"));
+            req.body(Body::from(body.to_string())).unwrap()
+        };
+        for (token, status, code) in [
+            ("banned", StatusCode::FORBIDDEN, -32001),
+            ("idp-down", StatusCode::SERVICE_UNAVAILABLE, -32603),
+            ("broken", StatusCode::INTERNAL_SERVER_ERROR, -32603),
+            ("two words", StatusCode::BAD_REQUEST, -32600),
+        ] {
+            for method in ["initialize", "tools/list", "tools/call"] {
+                let (got, headers, body) = send(&app, rpc(token, method)).await;
+                assert_eq!(got, status, "{token} {method}: {body}");
+                // A malformed request is told so in the challenge (RFC 6750 3.1); the others carry none.
+                let challenge = (status == StatusCode::BAD_REQUEST).then_some(r#"Bearer error="invalid_request""#);
+                assert_eq!(headers.get("www-authenticate").map(|v| v.to_str().unwrap()), challenge, "{token} {method}");
+                let body: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(body["error"]["code"], code, "{token} {method}");
+                assert!(body.get("result").is_none(), "{token} {method}: no tools listed");
+            }
+        }
+        checks.store(0, std::sync::atomic::Ordering::Relaxed);
+        let (status, _, _) = send(&app, rpc("good", "tools/call")).await;
+        assert_eq!((status, checks.load(std::sync::atomic::Ordering::Relaxed)), (StatusCode::OK, 1), "one check per call");
+    }
+
+    fn adjust(token: Option<&str>) -> Request<Body> {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": { "id": "a", "delta": 1 } } });
+        req.body(Body::from(call.to_string())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_client_finds_where_to_get_a_token_from_the_refusal() {
+        let authorization =
+            Authorization::new::<Mcp>("https://Cards.example:443/", "https://auth.example").scopes(&["inventory:read"]);
+        assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
+        let app = protected(Some(authorization));
+        // Other credentials than a bearer token are no token, nor is `Bearer` with only
+        // whitespace after it: told where to get one, nothing more. A token outside visible ASCII,
+        // which `caller::bearer` does not read, was sent, as was a bearer token on either of two
+        // `Authorization` lines: the check refuses it and the 401 says it is invalid (RFC 6750 3.1).
+        let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
+        // Each request's `Authorization` lines, and whether its 401 names the token invalid.
+        let requests: [(&[&[u8]], bool); 8] = [
+            (&[b"Basic YTpi"], false),
+            (&[b"Bearer"], false),
+            (&[b"Bearer   "], false),
+            (&[b"Bearer \t"], false),
+            (&["Bearer caf\u{e9}".as_bytes()], true),
+            (&[b"bearer caf\xe9"], true),
+            (&[b"Basic YTpi", b"Bearer t"], true),
+            (&[b"Bearer t", b"Bearer u"], true),
+        ];
+        for (sent, invalid) in requests {
+            let sent: Vec<_> = sent.iter().map(|line| HeaderValue::from_bytes(line).unwrap()).collect();
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            for line in &sent {
+                req = req.header("authorization", line);
+            }
+            let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
+            assert_eq!(headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), invalid, "{sent:?}: {headers:?}");
+        }
+        let (status, headers, body) = send(&app, adjust(None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";
+        assert_eq!(headers["www-authenticate"], format!(r#"Bearer resource_metadata="{metadata}", scope="inventory:read""#));
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["error"]["code"], -32001);
+        // A token that was sent and refused is named invalid (RFC 6750 3.1).
+        let (status, headers, _) = send(&app, adjust(Some("expired"))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            headers["www-authenticate"],
+            format!(r#"Bearer resource_metadata="{metadata}", scope="inventory:read", error="invalid_token""#)
+        );
+        // The session cannot start without a token, so the client is told where to get one first.
+        for method in ["initialize", "tools/list", "ping"] {
+            let req = Request::post("/mcp").header("content-type", "application/json");
+            let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": { "protocolVersion": "2025-11-25" } });
+            let (status, headers, _) = send(&app, req.body(Body::from(body.to_string())).unwrap()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method}");
+            assert!(headers["www-authenticate"].to_str().unwrap().contains(metadata), "{method}");
+        }
+        // The client reads the document the challenge names, at the endpoint's well-known path.
+        let path = metadata.strip_prefix("https://cards.example").unwrap();
+        let (status, headers, body) = send(&app, Request::get(path).body(Body::empty()).unwrap()).await;
+        assert_eq!((status, &headers["content-type"]), (StatusCode::OK, &HeaderValue::from_static("application/json")));
+        assert_eq!(
+            (&headers["cache-control"], &headers["access-control-allow-origin"]),
+            (&HeaderValue::from_static("public, max-age=3600"), &HeaderValue::from_static("*"))
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({
+                "resource": "https://cards.example/mcp",
+                "authorization_servers": ["https://auth.example"],
+                "bearer_methods_supported": ["header"],
+                "scopes_supported": ["inventory:read"],
+            }),
+            "RFC 9728: the resource is the URL the client called"
+        );
+        // A browser client's preflight for it, with a header of its own.
+        let preflight = Request::options(path)
+            .header("origin", "https://inspector.example")
+            .header("access-control-request-method", "GET")
+            .header("access-control-request-headers", "mcp-protocol-version");
+        let (status, headers, _) = send(&app, preflight.body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            (&headers["access-control-allow-origin"], &headers["access-control-allow-headers"]),
+            (&HeaderValue::from_static("*"), &HeaderValue::from_static("mcp-protocol-version"))
+        );
+        // A token without the scope a call needs is told which to ask for.
+        let (status, headers, _) = send(&app, adjust(Some("reader"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            headers["www-authenticate"],
+            format!(
+                r#"Bearer error="insufficient_scope", scope="inventory:read inventory:write", resource_metadata="{metadata}""#
+            )
+        );
+        let (status, _, body) = send(&app, adjust(Some("writer"))).await;
+        assert_eq!(
+            (status, serde_json::from_str::<Value>(&body).unwrap()["result"]["isError"].clone()),
+            (StatusCode::OK, json!(false))
+        );
+    }
+
+    #[tokio::test]
+    async fn without_an_authorization_a_refusal_names_no_metadata() {
+        let app = protected(None);
+        let (status, headers, _) = send(&app, adjust(None)).await;
+        assert_eq!(
+            (status, &headers["www-authenticate"]),
+            (StatusCode::UNAUTHORIZED, &HeaderValue::from_static(r#"Bearer realm="test""#))
+        );
+        let (_, headers, _) = send(&app, adjust(Some("expired"))).await;
+        assert_eq!(headers["www-authenticate"], r#"Bearer realm="test", error="invalid_token""#);
+        let list = Request::post("/mcp").header("content-type", "application/json");
+        let list = list.body(Body::from(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string()));
+        assert_eq!(send(&app, list.unwrap()).await.0, StatusCode::OK, "tokens are checked per call, as before");
+        let (status, headers, _) = send(&app, adjust(Some("reader"))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(headers["www-authenticate"], r#"Bearer error="insufficient_scope", scope="inventory:read inventory:write""#);
+        let (status, ..) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "no document is served");
+    }
+
+    /// A route served outside every stage at the metadata's path, which Corten adds when the app
+    /// starts, would join its route there: refused then.
+    #[test]
+    #[should_panic(expected = "says unstaged and can answer at \"/.well-known/oauth-protected-resource/mcp\"")]
+    fn an_unstaged_route_at_the_metadata_s_path_is_refused_at_startup() {
+        #[crate::routes]
+        mod at_metadata {
+            #[route("/.well-known/oauth-protected-resource/mcp", get = unstaged_metadata, unstaged)]
+            pub struct Metadata;
+        }
+        let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
+        let tools = Tools::new("test", "1.0").authorization(authorization);
+        let _ = crate::App::new(at_metadata::router()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+    }
+
+    async fn unstaged_metadata() -> &'static str {
+        "mine"
+    }
+
+    /// One at a path beside it that cannot match it (`/.well-known/{file}`, one segment) starts.
+    #[test]
+    fn an_unstaged_route_beside_the_metadata_s_path_starts() {
+        let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
+        let tools = Tools::new("test", "1.0").authorization(authorization);
+        let _ = crate::App::new(beside_metadata::router()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+    }
+
+    #[crate::routes]
+    mod beside_metadata {
+        #[route("/.well-known/{file}", get = well_known, unstaged)]
+        pub struct WellKnown<'a> {
+            pub file: &'a str,
+        }
+    }
+
+    async fn well_known(_: crate::Params<beside_metadata::WellKnown<'_>>) -> &'static str {
+        "file"
+    }
+
+    #[derive(crate::Route)]
+    #[route("/")]
+    struct Root;
+
+    /// Turns every request away.
+    struct Deny;
+
+    impl crate::Middleware for Deny {
+        async fn call(&self, _: crate::http::Request, _: impl crate::middleware::Next) -> Response {
+            crate::Refused::unauthorized(crate::Challenge::basic("tools")).into_response()
+        }
+    }
+
+    /// The document is Corten's own, as the health checks are: an API whose prefix holds its path
+    /// (the whole app, `/`) does not answer it, nor does its middleware run for it.
+    #[tokio::test]
+    async fn the_metadata_is_not_the_apis_around_it() {
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"));
+        let app =
+            crate::App::new(crate::Routes::new()).api::<Root>(|api| api.route::<Mcp>(tools.route()).middleware(Deny)).router();
+        let (status, _, body) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, headers, _) = send(&app, adjust(None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "the API's own route meets its middleware");
+        assert_eq!(headers["www-authenticate"], r#"Basic realm="tools""#, "a middleware's refusal keeps its challenge");
+    }
+
+    #[derive(crate::Route)]
+    #[route("/.well-known")]
+    struct WellKnown;
+
+    /// An endpoint in an area keeps its metadata out of an area around the well-known path, as
+    /// one under an API does.
+    #[tokio::test]
+    async fn the_metadata_is_not_an_areas_around_it() {
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"));
+        let app = crate::App::new(crate::Routes::new())
+            .area::<Mcp>(|area| area.route::<Mcp>(tools.route()))
+            .area::<WellKnown>(|area| area.middleware(Deny))
+            .router();
+        let (status, _, body) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    #[test]
+    fn an_origin_is_https_or_loopback_and_written_one_way() {
+        for (given, origin) in [
+            ("https://Cards.Example", Some("https://cards.example")),
+            ("https://cards.example:443", Some("https://cards.example")),
+            ("https://cards.example:8443", Some("https://cards.example:8443")),
+            ("http://localhost:3000", Some("http://localhost:3000")),
+            ("http://127.0.0.1", Some("http://127.0.0.1")),
+            ("https://[::1]:8443", Some("https://[::1]:8443")),
+            ("http://cards.example", None),
+            ("https://cards.example:abc", None),
+            ("https://cards.example:", None),
+            ("https://..", None),
+            ("https://cards.example/mcp", None),
+            ("cards.example", None),
+            ("ftp://cards.example", None),
+            // A name that starts like a loopback address is a name, on plain http refused.
+            ("http://127.attacker.example", None),
+            ("http://[::2]", None),
+            ("https://[a\"b]", None),
+            ("https://[::1", None),
+            ("https://cards.example:0", None),
+            ("https://cards.example:99999", None),
+            ("https://cards.example:65535", Some("https://cards.example:65535")),
+            ("https://cards.example:0443", Some("https://cards.example")),
+            ("https://cards.example:08443", Some("https://cards.example:8443")),
+        ] {
+            assert_eq!(web_origin(given).as_deref(), origin, "{given}");
+        }
+        assert!(resource_path("/mcp") && resource_path("/") && resource_path("/api/mcp"));
+        assert!(!resource_path("/mcp/") && !resource_path("/mcp/{id}") && !resource_path("mcp"));
+    }
+
+    #[test]
+    #[should_panic(expected = "an authorization server is its issuer URL")]
+    fn an_issuer_on_plain_http_is_refused_at_startup() {
+        let _ = Authorization::new::<Mcp>("https://cards.example", "http://auth.example");
+    }
+
+    #[derive(crate::Route)]
+    #[route("/agents")]
+    struct Agents;
+
+    #[test]
+    #[should_panic(expected = "but its Authorization was made for the route at \"/agents\"")]
+    fn an_endpoint_mounted_at_another_route_is_refused_at_startup() {
+        let tools =
+            Tools::new("t", "1").authorization(Authorization::new::<Agents>("https://cards.example", "https://auth.example"));
+        let _ = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route()));
+    }
+
+    /// An endpoint in an area (one its middleware guards) has its metadata served as under an
+    /// API, outside the area, and named in its 401.
+    #[tokio::test]
+    async fn an_endpoint_in_an_area_serves_its_metadata_too() {
+        let tools = Tools::new("t", "1")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(|_| Err::<(), _>(ToolError::Unauthorized));
+        let app = crate::App::new(crate::Routes::new()).area::<Mcp>(|area| area.route::<Mcp>(tools.route())).router();
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(body)).unwrap();
+        let (status, headers, _) = send(&app, req).await;
+        let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";
+        assert_eq!(
+            (status, &headers["www-authenticate"]),
+            (StatusCode::UNAUTHORIZED, &HeaderValue::from_str(&format!(r#"Bearer resource_metadata="{metadata}""#)).unwrap())
+        );
+        let (status, _, body) =
+            send(&app, Request::get("/.well-known/oauth-protected-resource/mcp").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["resource"], "https://cards.example/mcp");
+    }
+
+    #[test]
+    #[should_panic(expected = "a scope is printable ASCII")]
+    fn a_scope_with_a_quote_is_refused_at_startup() {
+        let _ = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["read\"write"]);
+    }
+
+    /// A write an agent may retry.
+    #[derive(crate::json::FromJson)]
+    struct Order {
+        sku: String,
+        submit: crate::SubmitKey,
+    }
+
+    /// A write whose key may be left out (a form that data clients post without one).
+    #[derive(crate::json::FromJson)]
+    struct MaybeKeyed {
+        sku: String,
+        submit: Option<crate::SubmitKey>,
+    }
+
+    #[derive(crate::json::ToJson)]
+    struct Placed {
+        key: String,
+    }
+
+    #[tokio::test]
+    async fn a_write_tool_takes_an_idempotency_key_as_a_form_does() {
+        let tools = Tools::new("t", "1")
+            .tool("orders.place", "Place an order", |(), order: Order| async move {
+                let _ = order.sku;
+                Ok(Placed { key: order.submit.as_str().to_string() })
+            })
+            .tool("orders.maybe", "Place an order", |(), order: MaybeKeyed| async move {
+                Ok(Placed { key: order.submit.map_or(order.sku, |key| key.as_str().to_string()) })
+            })
+            .idempotent_tool("stock.set", "Set the quantity", |(), _: Nothing| async { Ok(Pong { pong: true }) });
+        let app = Router::from(Table::new().route("/mcp", tools.route().0));
+        let rpc = |body: Value| {
+            let app = app.clone();
+            async move {
+                let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(body.to_string()));
+                let res = app.oneshot(req.unwrap()).await.unwrap();
+                serde_json::from_slice::<Value>(&res.into_body().collect().await.unwrap().to_bytes()).unwrap()
+            }
+        };
+        let list = rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
+        let listed =
+            |name: &str| list["result"]["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).unwrap().clone();
+        let place = listed("orders.place");
+        let key = &place["inputSchema"]["properties"]["submit"];
+        assert_eq!((&key["type"], &key["format"]), (&json!("string"), &json!("uuid")));
+        assert!(key["description"].as_str().unwrap().contains("Send the same key again when retrying"), "{key}");
+        assert_eq!(place["inputSchema"]["required"], json!(["sku", "submit"]));
+        // Repeating it with the same key does nothing more; with the key left out it might.
+        assert_eq!(place["annotations"], json!({ "readOnlyHint": false, "idempotentHint": true }));
+        assert_eq!(listed("orders.maybe")["annotations"]["idempotentHint"], false, "a key it may go without");
+        assert_eq!(listed("stock.set")["annotations"], json!({ "readOnlyHint": false, "idempotentHint": true }));
+        let call = |key: &str| json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "orders.place", "arguments": { "sku": "a", "submit": key } } });
+        let res = rpc(call("3F2504E0-4F89-41D3-9A0C-0305E82C3301")).await;
+        assert_eq!(
+            res["result"]["structuredContent"]["key"], "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+            "the handler's SubmitKey, as a form gives it"
+        );
+        let res = rpc(call("3f2504e0-4f89-11d3-9a0c-0305e82c3301")).await;
+        assert_eq!(res["result"]["isError"], true, "a UUID that is not v4 is refused before the tool runs");
+        let refusal = res["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(refusal.contains("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"), "{res}");
+        // An agent told "like <a key>" may send that key, so the refusal names none.
+        let words = refusal.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'));
+        assert!(
+            words.filter(|word| !word.is_empty()).all(|word| serde_json::from_value::<crate::SubmitKey>(json!(word)).is_err()),
+            "{refusal}"
+        );
+    }
+
+    /// A tool's failure and the auth check's are logged as the error itself, so the log line
+    /// names each error under the message (a reset connection under "error sending request"),
+    /// while the agent is told "internal error" alone.
+    #[tokio::test]
+    async fn a_tool_or_auth_failure_is_logged_with_each_cause_under_it() {
+        #[derive(Debug)]
+        struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+        impl std::fmt::Display for Failed {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Failed {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|source| source as _)
+            }
+        }
+        #[derive(Clone)]
+        struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let failure = || {
+            let reset = Failed("client error (SendRequest)", Some(Box::new(Failed("connection reset", None))));
+            ToolError::internal(Failed("error sending request", Some(Box::new(reset))))
+        };
+        let tools = Tools::new("test", "1.0");
+        let lines = Lines(std::sync::Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let (result, refused) = tracing::subscriber::with_default(subscriber, || {
+            (tools.failed("stock.set", failure()), tools.refused(json!(1), failure(), &HeaderMap::new()))
+        });
+        assert!(result.contains(r#""text":"internal error""#), "{result}");
+        assert!(!result.contains("connection reset"), "the agent is not told the cause: {result}");
+        assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = crate::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(!body.contains("connection reset") && !body.contains("error sending request"), "nor is the client: {body}");
+        assert!(body.contains("internal error"), "{body}");
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        let logged: Vec<&str> = text.lines().collect();
+        assert_eq!(logged.len(), 2, "{text}");
+        for (line, says) in logged.iter().zip(["agent tool failed", "auth check failed"]) {
+            assert!(line.contains(says), "{line}");
+            assert!(line.contains("error=error sending request"), "{line}");
+            assert!(line.contains("error.sources=[client error (SendRequest), connection reset]"), "{line}");
+        }
+    }
+}

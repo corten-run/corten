@@ -1,0 +1,8 @@
+comparison change-plain placement 32 workload plain
+A base-p16304 26762aa9b94bf666559ee4a9863ca6668be5b69275a6aae8d14cfa868a98206e
+B head-p16304 e2f3fbd091a6fa0b3c4327b3c4d64c03856c9c83516fde1e1af4a30e47c6a191
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 63
+started 2026-11-26T21:04:07Z
+ended 2026-11-26T21:05:09Z

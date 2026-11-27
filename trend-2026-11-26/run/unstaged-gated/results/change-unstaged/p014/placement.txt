@@ -1,0 +1,8 @@
+comparison change-unstaged placement 14 workload unstaged
+A base-p36880 0f7f942a0e9e1f7a4b8b4512b86b7e56b6ab3113c1ff7b7ba418aa0dcb39e400
+B head-p36880 8d3153fd3c9d7a9b35c1c85520825364af9d5d223665a4dea10490f3cf2cb519
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 34
+started 2026-11-27T00:28:27Z
+ended 2026-11-27T00:29:30Z

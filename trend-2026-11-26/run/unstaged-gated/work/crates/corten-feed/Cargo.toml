@@ -1,0 +1,28 @@
+[package]
+name = "corten-feed"
+version.workspace = true
+edition = "2021"
+description = "The server side of a Corten live feed: keyed rows, numbered patches, replay and resume, served as JSON snapshots and server-sent events as plain HTTP responses."
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["corten", "sse", "live", "feed", "http"]
+categories = ["web-programming::http-server", "asynchronous"]
+
+[dependencies]
+corten-protocol.workspace = true
+# A feed's answer is an `http` response with a body of its own (`FeedBody`), which `corten` sends
+# as it sends any answer: the vocabulary hyper and HTTP clients share, and no framework.
+bytes = "1"
+http = "1"
+http-body = "1"
+futures-util = { version = "0.3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+http-body-util = "0.1"

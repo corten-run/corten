@@ -1,0 +1,1 @@
+no refusal: no section aligned beyond 64 bytes, and none named for a Rust-mangled symbol at or after the first aligned beyond 16 or outside .text

@@ -1,0 +1,8 @@
+comparison change-plain placement 4 workload plain
+A base-p40624 2030db583f72aebd1309541c6a8f84ecaa3ac4b6730f5dbad39dd0b6a5505e31
+B head-p40624 8b7639a9f985d45c2bb15f16481230a59b82b5baf44dc9c57e10325290fabcb3
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 11
+started 2026-11-26T20:09:56Z
+ended 2026-11-26T20:10:58Z

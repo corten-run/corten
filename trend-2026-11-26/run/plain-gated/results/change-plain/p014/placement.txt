@@ -1,0 +1,8 @@
+comparison change-plain placement 14 workload plain
+A base-p36880 bfdaeb37cb5d553cb9aa6e3589e17980211e1357d9cd4b8b980b7989c92617ba
+B head-p36880 00ff7593b8a3046249a4bced5b815e745cfb51ddf3723ae32c434d53e023de9d
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 99
+started 2026-11-26T21:41:38Z
+ended 2026-11-26T21:42:40Z

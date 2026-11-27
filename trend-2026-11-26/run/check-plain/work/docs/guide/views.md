@@ -1,0 +1,946 @@
+# Views
+
+[Back to the guides](../../README.md#documentation)
+
+`html!` reads like JSX and compiles to `push_str` calls: static markup is merged at compile
+time, expressions are escaped as they are written, and the output buffer is sized from the last
+render of the same call site.
+
+A `#[component]` rendered into a string of its own (`to_html`, which a patch is drawn with) is
+sized the same way, from that component's last render on its own, an eighth more and never below
+256 bytes. A component rendered inside other markup writes into its parent's string, and neither
+reads nor sets that size. There is one size per component definition, shared by every
+instantiation of a generic component, as an `html!` call site inside a generic function has one.
+There is no upper bound, as for an `html!` call site: after one very large render, the next
+render of that component reserves that size once (a 1-byte render right after a 2 MiB one reserves
+2.25 MiB), then sizes from its own length again.
+
+| Write | Means |
+|---|---|
+| `"Price"` | text (source whitespace between tags is never output) |
+| `{expr}` | an expression, escaped: anything that implements `Render` (strings, numbers, `Option`, other views) or else `Display`. `raw(html)` prints trusted HTML; markup a view rendered ahead goes in `req.rendered(view)` (a `corten::Rendered`) instead, which keeps the sizes and scripts its render noted. Not inside `<script>` or `<style>`: their text must be literal |
+| `href={url::Item { id: &id }}`, `aria-label={("Remove ", &item.name)}` | an attribute: a link is a route, and a tuple prints its parts without building a string. A path in the app written as text (`href="/items"`, `action="/watch"`) does not compile ([below](#typed-links-and-messages)) |
+| `hidden={flag}`, `class={maybe}` | `bool` prints the bare name or nothing; `None` leaves the attribute out |
+| `<input {..e.aria(field)}>` | spreads `Attrs` |
+| `for`, `if`/`else`, `match`, `let` | as in Rust, with markup in the braces; patterns too (`if let Shape::Circle { r } = shape`) |
+| `<Card title="x" compact>children</Card>` | a component: a struct with those fields (`compact` is `true`), children in `children` |
+| `<>...</>`, `<!DOCTYPE html>`, `<input>` | fragments, the doctype, void elements without a closing tag |
+
+An emitted HTML attribute name is written once per element, case-insensitively:
+`name="a" NAME={b}` does not compile, even when one value might be absent. Combine values in one
+expression instead.
+`ref` writes `data-ref`, bare `page` writes `data-corten-page`, and `key` writes `data-key`, so
+each can appear beside its uppercase literal name (`REF`, `PAGE`, `KEY`); bare `page` can also
+appear beside `page=".."`. Repeating a pseudo-attribute is still a duplicate.
+Spreads can still write duplicate names: the macro cannot see their contents, and the browser
+keeps the first. Handler calls (`on:..`) still combine in one generated `data-on` attribute,
+including several calls for one event. `data-key` is Corten's output; write `key={item.id}`,
+not `data-key=".."`.
+
+Markup a browser parses differently from how it is written does not compile where
+the markup shows how the browser parses it. An element inside one whose content a browser reads as text (`<textarea>`,
+`<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`) would show as text: put it beside
+the element, or write text meant to show tags as a string (`"<b>"`). One inside a `<script>` or
+a `<style>` belongs in a `#[component(js)]` or the component's CSS file (a data block,
+`<script type="text/x-template">`, writes its content as a string literal, which an HTML
+`<script>` writes as is), and a `<plaintext>`, which makes the rest of the page text, is a `<pre>`. An
+element the HTML standard's rules for
+foreign content take out of an `<svg>` or a `<math>` (`<b>`, `<div>`, `<p>`, `<span>`,
+`<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`), written
+straight into one, or into an `<annotation-xml>` whose first `encoding` is not an HTML one (or
+that has none), which holds MathML, would close the drawing or the formula before it: HTML in a drawing
+goes in a `<foreignObject>`, and in a formula in an `<mtext>`. The markup
+shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`, a document's
+`<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>`, and in a `<math>`'s `<mi>`,
+`<mo>`, `<mn>`, `<ms>` and `<mtext>` (but in a `<mglyph>` or `<malignmark>` there) and an `<annotation-xml>` whose first `encoding` is `text/html`
+or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<textarea>`,
+`<title>` or `<style>` is an element of the drawing or the formula and holds elements.
+Where the markup shows a `<style>` or `<script>` is foreign content, `html!` escapes `<` and `&`
+in its literal text at compile time so the browser keeps them as text, rather than reading tags
+or character references. If you previously wrote `&lt;` or `&amp;` by hand to get `<` or `&` in
+foreign content, replace those references with the characters you want the browser to receive.
+Known HTML (including HTML integration points) continues to write the text as is.
+This includes a direct literal `<style>` in a known HTML `<noscript>` in the head or body,
+before any content that could change its parsing context, so long as the literal cannot end
+either tag early. With scripting on, it is part of the `<noscript>` text; with scripting off,
+the `<style>` reads its own text. Structural checks inside `<noscript>` do not change.
+
+When the context is unknown, a script or style literal containing either character does not
+compile, even if it worked at its one actual placement. Root fragments, component children
+and slots (including a view passed as a `head` prop), and markup after opaque output do not
+establish an HTML context. An optional `color`, `face` or `size` on a foreign `<font>`
+(including a spread) can close the drawing before the literal, and markup that a conditional
+or loop can leave open can change the context of later markup or the next iteration.
+An ordinary `<` in known HTML raw text, such as a comparison, does not change the context.
+Move the literal to markup that shows how it parses, split the HTML and foreign cases, or use
+the component's CSS file for styles and `#[component(js)]` for behavior.
+
+For an HTML data block, write the literal directly in a proven HTML `<script>`, for example
+under the layout's literal `<head>` before any opaque output. If the tag must be passed to
+a fixed HTML-only slot such as that layout's `head` prop, pass the complete static tag as
+trusted `raw` markup, without adding a wrapper:
+
+```rust
+use corten::prelude::*;
+
+let head = raw(r#"<script type="application/json">{"label":"R&D"}</script>"#);
+assert_eq!(head.to_html(), r#"<script type="application/json">{"label":"R&D"}</script>"#);
+```
+
+Pass that value as `head={head}`. The same applies to a static `text/x-template` data block.
+Never interpolate untrusted data into `raw`. `JsonLd` is for JSON-LD, not arbitrary script data.
+
+At the top
+of a component's markup (its parent may write it into an `<svg>`), among a component's
+children (they go where the component writes them), anywhere after an expression or a
+component, `<Corten />` included (what it writes may open or close an `<svg>` or a
+`<textarea>`, or leave a script open, whose text a later literal tag is part of), after a
+`<script>` or `<style>` whose text can end it early or keep it open (`</script>` in it ends the
+element and may open anything after it, `<!--<script>` keeps it open past its end tag) and in an `<annotation-xml>` whose
+`encoding` an expression or a spread may write first, it does not show, and no element here is
+refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
+`<svg>` compiles. An `<svg>` or a `<math>` written there does not show its own namespace either
+(a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a `<math>` MathML's): an element a
+browser takes out of either is refused straight in it, but its `<foreignObject>`, `<title>` or
+`<mtext>` shows nothing; put it in a `<div>` or another HTML element to show it. Where the
+markup does not show HTML, what a `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`,
+`<xmp>`, `<noembed>`, `<noframes>` or `<plaintext>` holds is not read for a refusal either (as
+HTML's it is text, as SVG's elements), so `<iframe><p><div>"Detail"</div></p></iframe>` at the
+top of a component compiles, and nothing after such a `<plaintext>` is refused; nor is what a
+`<noscript>` holds, anywhere, since it is text with scripting on ([design Choice 54](../design.md#choice-html-parse-refusals),
+[Limit 30](../design.md#limit-markup-context)).
+
+The same rule applies to literal HTML nesting whose start tags close an open element: a block
+in a `<p>` (`<p><span><div>..</div></span></p>`), an `<li>` in an `<li>` without a list or
+another special element between, a `<dt>` or `<dd>` in either without such a boundary, an `<a>`
+in an active `<a>`, a `<button>` or `<nobr>` in one still in scope, a heading directly in a
+heading. A `<select>` is closed by a
+nested `<select>` or `<input>`; option, option-group and ruby starts that imply the current
+element's end are refused too (`<option><option>`, `<rt><rt>`). An option inside an
+`<optgroup>` and an `<rt>` inside an `<rtc>` still compile. Put the elements beside one
+another, use `<div>` rather than `<p>` around blocks, and wrap a nested list in `<ul>` or
+`<ol>`. This is checked even without refs: a ref in content the browser moves may leave its
+component's scope. A refusal rests only on the literal markup of the same `html!` between the
+two elements, followed through control-flow bodies and fragments. A component, with or without
+children (`<Corten />` too: `html!` knows a component only by its name), and an expression,
+`raw` among them, may write any element, or close one, or leave a script open, and so may a
+`<script>` or `<style>` whose literal text can end it early or keep it open. After such output, no
+context-dependent structural refusal in the same `html!` acts, whatever later literal elements
+show. The script and style literal encoding refusal still applies, as do checks that need no
+context (duplicate attributes and hand-written `data-key`):
+`<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+compiles, as browsers keep it, and so does `<p>{text}<div>..</div></p>`, which they do not.
+Nesting across those boundaries is the app's to keep correct. The content of a
+`<template>`, and of an `<svg>` or `<math>` (their HTML integration points included), is
+checked with nothing open around it, as browsers keep these: an `<a>` in a `<foreignObject>`
+or `<mtext>` inside another `<a>` compiles. A form in a form is not refused: a browser ignores
+the inner one only outside every `<template>`, which a fragment cannot show (its caller may
+write it into one), and a document's body follows `<Corten />`, so nothing in a document's
+body is refused either. Every refusal assumes `html!` output, a component's included, is
+drawn where a browser reads tags. Writing a component into script or style text a caller left
+open (after `raw("<script>")`, or a script whose text holds `<!--<script>`) is not supported,
+since a script's text comes from a string, not markup: there a refused shape would be the
+script's text, which a browser keeps. A
+top-level `<a>` or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
+namespace needs to be established. These are local checks at tag boundaries, not full HTML
+tree construction or a proof about every fragment insertion mode. They do not check
+insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a
+`<table>` in a `<p>` (which closes the paragraph only outside quirks mode).
+
+`#[component]` turns a function into a props struct and a `Render` impl, so the same
+component renders inside a page and on its own as a patch, and the two cannot drift. A view owns
+what it captures and renders once, so it can be returned from a function.
+
+Every prop is written where the component is used, an empty one too: `head=""` for a page that
+adds no head tags, `toast={None}` for no toast. A prop left out does not compile, so the markup
+always says what the component gets. Rust has no stable way to leave a struct field to a default
+(default field values are unstable), and filling a left-out `impl Render` prop would fix its type
+for every caller. When several answers build one component with most props the same, a function
+gives the common value and each answer changes its part:
+`Gallery { toast: Some(SAVED), ..listings(&req, &none) }`.
+
+## Accessible names
+
+A name a screen reader would drop does not compile. ARIA prohibits a name on an element with no
+role, so `aria-label` or `aria-labelledby` on a `<div>` or `<span>` with no `role`, or on an `<a>`
+with no `href`, is refused, and so is a written-out name on an `<a>` whose `href={..}` is an
+`Option` or `bool`, which is no link when it writes nothing. Put the name in the element as text
+(`<span class={VisuallyHidden {}}>"Previous shipment"</span>` beside an icon), which stays when the
+`href` does not, or give the element the role it plays (`role="img"`). A `role` or a spread (which
+may write one) exempts the element, as does a name that is itself an expression
+(`aria-label={before.map(..)}`), which can be absent with the href. Elements inside an `<svg>`
+in the same `html!` are not checked: an SVG `<a>` with no href is a group, which may be named (a
+component that draws an SVG fragment without its `<svg>` says `role="group"`). The check reads
+the `href`'s type where `html!` is written, so a generic `href` (a type parameter) passes it.
+The rest of a page's accessibility is an audit's to find in a browser ([app](app.md#accessibility)).
+
+## The document
+
+A page is a whole HTML document, built from components like everything else: the app's layout
+component with the page in it. `corten new` writes the layout in `src/views.rs`, and it is the
+app's to change; Corten adds nothing around it.
+
+Write `<!DOCTYPE html>` before `<html>` so the browser uses standards mode rather than quirks
+mode. A document component with refs, a `scope` argument or `keep` still has one root element:
+the doctype is a declaration, not another root, and `data-scope` goes on `<html>`.
+
+```rust
+use corten::prelude::*;
+
+# corten::assets::embed! { pub struct Static = "src/assets/fixture"; }
+// The files in `static/`, compiled into the program (`App::assets(Static)`):
+// corten::assets::embed! { pub struct Static = "static"; }
+
+#[component]
+fn Layout(req: &Req, title: &str, head: impl Render, children: impl Render) -> impl Document {
+    html! {
+        <!DOCTYPE html>
+        <html lang={req.lang()}>
+            <head>
+                <meta charset="utf-8">
+                <link rel="stylesheet" href={req.asset(Static::STYLE_CSS)}>
+                <title>{title}" | Shop"</title>
+                {head}
+                <Corten />
+            </head>
+            <body>
+                <header>"Shop"</header>
+                <main>{children}</main>
+            </body>
+        </html>
+    }
+}
+
+async fn about(req: Req) -> HtmlResult {
+    let head = html! { <meta name="description" content="Who we are"> };
+    req.page(html! { <Layout req={&req} title="About" head={head}><h1>"About"</h1></Layout> })
+}
+```
+
+`html!` that starts with `<html>` (or `<!DOCTYPE html>`) is a `Document`, and so is a component
+that returns `impl Document`; `req.page`, `req.screen` and the error page take one. The
+markup is checked when it compiles: one `<head>` with one `<title>` and one `<Corten />`, and
+one `<main>`, not inside a `for`, `if` or `match`. Each part renders for the requests that use it:
+
+| Part | Full load | Client navigation | Data client (`req.screen`, or a script's [`read()`](scripts.md#a-screens-data)) |
+|---|---|---|---|
+| `<title>`'s text | yes | yes | yes, as `"title"` |
+| an expression or component in `<head>` (`{head}`): the page's own tags | yes | yes, each marked `data-corten-head` so the next page's replace them | no |
+| `<Corten />`: the runtime, the import map, the page's scripts and stylesheets | yes | the area stylesheets the page needs | no |
+| `<main>`'s children: the page | yes | yes | no |
+| an element of the layout marked `page` (`<nav page id={SectionNavId}>`): the page's, beside `<main>` | yes | yes, put in place of the one on screen by its id | no |
+| everything else: the header, the footer, the layout's own tags | yes | no: the runtime keeps what the page has (after a write that redirects, it draws again what changed: below) | no |
+
+So the layout costs a navigation nothing, and what the layout shows that a navigation cannot
+update (the signed-in user, from a `Caller` the handler took) is covered by the page key: when it
+changes, the runtime loads the next page in full. Keep a layout's props to what most pages set (the title,
+their head tags); a page that needs a different document uses another layout. Each layout's
+`html!` document has a key of its own (from where it is written), so a link from a page in one
+layout to a page in another loads it in full, with no `data-reload`. A prop that changes the
+layout around `<main>` is not seen by a navigation, unless the element it changes is marked
+`page`.
+
+A part of the layout that depends on the page, such as a section's nav beside `<main>` that lists
+the section's pages, is marked `page`:
+`<nav page id={SectionNavId} aria-label="Section">{section_links}</nav>`. A navigation's answer has
+it as well as `<main>`'s children, and the runtime puts it in place of the one on screen when the
+page draws it differently, so a link from one section to another shows the new section's pages
+without a full load. One the page draws the same is left as it is, with its scroll and its scripts'
+state; a link followed in it moves the focus as a link in the header does. It costs a navigation
+only its own markup, and the rest of the layout still does not run. It has a `#[derive(Id)]` id
+without a key, the same on every page, which is how the runtime finds the one on screen, and it is
+on every page of the layout: not inside `for`, `if` or `match`, in `<head>`, `<main>` itself or
+around it, inside another, in a component's children, or in markup other than the layout's document,
+none of which compiles. What is in it may be anything, so a page with no section draws it empty. A
+layout read (`later::<..>()`) is not drawn in it, since a navigation does not start the read; a
+debug build says so. A layout whose pages differ in more than such elements (another header, another
+frame around `<main>`) is a second layout.
+
+A layout is a component like any other, so it can have a stylesheet and a script of its own
+(`#[component(css, js)]`): its markup calls its handlers (`on:connect={js::watch(signal)}` on a
+toaster in its `<body>`) and names its classes in each part above, as in the whole document, so
+the toaster's handler is drawn on a full load and kept by a navigation. List it in its area's
+`App::components`, as any component with a stylesheet.
+
+The runtime fetches a same-origin link's page after the pointer rests on it for 65 ms (or a
+touch starts), so the click shows it at once; it keeps the 8 newest for 10 seconds and aborts
+the request of one it drops, so the server sees the client go. The page a clicked link names is
+fetched once, by the click: no hover until it is in (the dwell the click cut short, the pointer
+back on its link) prefetches it. A page that is costly to draw (a report that takes seconds)
+says so on its route, `#[route("/reports/suggested", get = suggested,
+prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` included, is written
+with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
+URLs (a workflow step that calls another service) names a function of the route that says which
+may be fetched on a hover, `#[route("/export", get = export, prefetch = cheap)]` with
+`fn cheap(at: &url::Export<'_>) -> bool { at.step != Some(Step::PullSheet) }` (named from where
+the routes module is declared, as a handler is: beside `mod url`; a route outside a routes
+module writes `#[route("/export", prefetch = cheap)]` and takes `&Export<'_>`), and every link
+to those URLs is written with `data-no-prefetch`: in a nav and through a component's `&dyn Href`
+prop too, so no link has to remember. The function sees only the URL, so a URL whose cost depends
+on stored state (a visit with no step that resumes at the first step not done) answers `false`.
+The runtime's prefetch says `Purpose: prefetch`, and a debug
+build logs one whose page took longer than half a second, naming its URL, so a page that grew
+slow is found before someone measures every screen. A prefetch the visitor clicks is the visit,
+with no further request, so a server answers it as it would a click; only the browser knows
+which prefetches were followed, so count visits there. An answer to a prefetch that is not a page
+(a proxy's `204` or `503`) is not used: the click fetches the page itself, and a hover within
+the prefetch's 10 seconds does not ask again. Corten's own redirect (to a place on a page, or to
+another origin) is a page's answer: the click follows it. `data-no-prefetch` by
+hand on a link or an element around links does the same for links that are not routes, and
+`data-reload` loads the page in full instead of a client navigation (and is never prefetched).
+
+Who is signed in reaches the layout the same way as everything else, as a prop the handler
+passes: `viewer={viewer.as_deref()}` from the `Option<Caller<Viewer>>` it took. A layout does not
+read the request itself. Rendering is synchronous and `Identify` is not (a session store, a
+token check), so a layout could not look the viewer up while it renders. Reading it there would
+need a second async step before each full-page render, and its own rules for a failed lookup,
+for caching it per request and for the page key. In the handler the lookup runs once, only on the
+routes that ask for it, and the type says which pages show a viewer. A page with more than one call site keeps the viewer in its own
+function's parameters (`fn alerts_page(req: &Req, viewer: Option<&Viewer>, ..)`), as watchlist does.
+
+A value only the layout shows and that needs a read of its own (a cart's count, an unread count)
+is a layout read: declared once, `impl LayoutRead for CartCount`, registered with
+`App::layout_read(CartCount(shared.clone()))`, and drawn where the layout puts
+`{later::<CartCount>()}`. No handler, helper or closure that draws the layout takes it:
+
+```rust,ignore
+/// The header's cart count, for whoever is signed in: holds the app's state, as a handler's
+/// `State` does.
+pub struct CartCount(pub Shared);
+
+impl LayoutRead for CartCount {
+    type Value = Option<u32>;
+
+    fn start(&self, parts: &Parts) -> Option<impl Future<Output = Option<u32>> + Send + 'static> {
+        // What the read uses, taken by value: it outlives this call.
+        let (state, parts) = (self.0.clone(), parts.clone());
+        Some(async move {
+            let Caller(viewer) = Caller::<Viewer>::find(&parts, &state).await.ok()?;
+            Some(state.carts.count(&viewer).await)
+        })
+    }
+
+    fn view(count: &Option<u32>) -> impl Render + '_ {
+        html! { if let Some(count) = count { <span class={CartBadge}>{*count}</span> } }
+    }
+}
+
+// The layout, where the count goes (outside <main>):
+// <a href={url::Cart}>"Cart"{later::<CartCount>()}</a>
+```
+
+Corten starts the read as a page route is called for a `GET` of a whole document (a full load, a
+reload, the page a write redirects to), after the app's and the area's middleware, and polls it with
+the handler on the request's task, so a full load waits for the longer of the two, not their sum. A
+page route is one whose handler returns a page (`HtmlResult`, `PageOr`, or an app's own answer type
+that wraps one and says so with `const PAGE: bool = true` in its `Answer`); one that returns a file,
+text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A `PageOr`
+or `SwitchOr` that answers a file or an upgrade starts it, since either may answer a page; the read
+is dropped unused. A `Public` answer draws no read's value however it was started.) Once the handler has drawn the
+page, Corten draws the read's `view` where the layout put `later`, before the app's middleware sees
+the page; one read fills every place that names it. A place goes in the `<body>` around `<main>`:
+`<head>` and its `<title>` are sent with each navigation, which does not start the read, so a debug
+build refuses a page that draws one there. A write that draws its own page rather than redirect (a
+refused form, a partial result), with JavaScript or without, starts the reads its page draws once it
+has answered, so it waits for them (below). A navigation, a `GET` form the runtime sends and a patch
+keep the header the full load drew, so the read is not started for them, nor for an API or a data
+client. A `Public` page is the same for everyone, so it
+draws nothing there, and a `Public` page route never starts the read. An answer that draws no layout
+(a redirect) drops a read still running, which stops it; one already in stays for an error page the
+app's middleware makes of the answer. So do the values a page drew, for an error page the
+middleware makes of that page. A read that fails or passes the request's deadline draws
+nothing in its place and is logged; the page is still sent. The error page for a failure the request
+is at fault for (an unknown URL, a wrong method, a method no route has (the router's 501), a refusal other than a 429, an extractor's or a
+handler's `Err(Refused::forbidden())?`, a form that does not read) starts the reads not started
+yet and waits for them as a page does, so a 404 shows the count every other page shows. A read
+it starts sees the head its extractors see (the URL, the cookies, `Authorization`, the language
+and the request's caller), not what the app's middleware
+added; one that has nothing to read without a session should return `None` from `start`, which
+keeps an unknown URL a scanner asks for as cheap as before. For any other failure (a handler's
+`Error` at any status but 404, any other 5xx, a 429, which slows a client down, a cross-site write,
+refused before anything runs) it starts none and waits for none: it draws a value only if its read is
+in by the time the page is drawn, since what made the request fail (a database that is down) is
+likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
+value instead (`action.patch(Badge { count })` with `action` from `req.action()`). A `later` whose `to_html()` string the page never
+writes draws nothing and is no error, and the page does not wait for its read. In a debug build, a
+`later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
+one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
+whose answer type does not say it is a page, is an error naming it, on the error page's
+`Failure::detail` (so a router test sees it) and on stderr outside `corten dev`. A middleware that
+answers a page of its own in place of such a route's draws the error as a plain 500, logged
+(and on stderr outside `corten dev`). One in a live fragment is logged. A release build checks
+less, so test the page in a debug build: a read it does not start, a page whose answer type is
+not a page, and a place in a patch or a live fragment draw nothing and are logged once; a place
+inside `<main>` draws the value on a full load and nothing on a navigation, and one in `<head>`
+(its `<title>` included) draws nothing, both unlogged; one rendered as text stays as that text
+(logged once); and a string placed twice is filled once. A `HEAD` starts no read, so its
+`Content-Length` and `ETag` are those of the page drawn without its values.
+
+The read looks the caller up with `Caller::find`, which shares the request's one lookup with the
+handler. A page that draws a value a read looked a caller up for is private, but that caller is
+not part of the page's key: a navigation does not start the read, so its key must not depend on
+it. A handler that takes the caller still keys the page by them. Signing in or out is a write
+that redirects, which draws the layout again; a sign-out in another tab shows in this one at its
+next full load.
+
+The view is markup to display: it gets the value alone (no `Req`), so the value carries what it
+shows (formatted text, a count), and it is drawn in the visitor's time zone. The page's head is
+written before it is drawn, so a view that uses a component's script or a `style={..}` value
+draws nothing and is logged as an error; draw such a part in the layout itself.
+
+A page that has the value already (the cart page, which read the cart) gives it,
+`req.page(..)?.give::<CartCount>(Some(lines.len() as u32))`, and Corten draws that without
+waiting for the read. The read was started as the route was called, before the handler could say
+it gives the value, so its query still runs and is dropped. A route whose page always gives it
+says so in its routes module, `#[route("/cart", get = cart, gives(CartCount))]`, and the read is
+not started for it; a type there that is not a layout read does not compile. A page from such a
+route that does not give the value draws nothing there, and a debug build refuses the page, naming
+the route's `gives(..)` as the error page's detail; the
+route's error page (a 404 its handler answers) is not that page, so it starts the read as any
+error page for a failure the request is at fault for does; one for a failure that is not (a 5xx)
+starts none, so it draws nothing there. On a `Public` or JSON route it changes nothing, as no read
+is started for one.
+
+A value both the page and the layout use (who is signed in, which the page greets by name) stays
+a prop the handler passes. A read the page itself needs and wants started early is a
+`corten::Ahead`, `Ahead::start(read)` in an extractor and awaited where it is used; `Mode::of`
+reads the request's mode before the handler has its `Req`. A value the layout shows is a layout
+read, not an `Ahead`: Corten starts a layout read only for a page that draws the layout, and an
+extractor that started the count ahead for every request but a navigation would start it on every
+write the runtime sends, one that answers a patch too, before the write. `Ahead` is `tokio::spawn` with the two
+things a request needs and a bare task lacks: dropped, it stops the read (a bare task would run on
+after the client left), and its panic fails the request. It starts before the handler, so on a
+write it may not see what the write did: a value that depends on the write (the count after an item
+is added) is read or given by the handler after the write, or is a layout read, which a write's own
+page starts once the handler has answered.
+
+A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothing more: the
+runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so
+the layout read starts), swaps in `<main>` and replaces each element around it that
+the server now draws otherwise, in the same document. The header shows the count the write made,
+with JavaScript as without, and only a navigation that may follow a change the layout has not
+drawn pays the layout's reads (the one after a write, one that cuts a write off and the one after
+it, the first to another page after a write that failed in view, below); every other navigation
+still keeps the header. When that page reads itself again
+([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
+catches up), each read is whole too, until one that no longer asks: a count the layout could not
+read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
+and a read that changes nothing, in the page or around it, leaves the page as it is. The notice
+the page drew is sent back with each read, so a toaster that showed it is not emptied by the read.
+Each such read costs a whole document's read and parse, and the layout's own reads, every few
+seconds while the write is behind. A layout element that differs on every render (below) is
+drawn again on every such read, not only once per write. Each element the server drew beside `<main>` and beside
+each element around it, up to `<body>`, is compared with what the server sent for it, and one that
+changed is replaced as a patch replaces it, keeping what the user typed or opened; one that did not
+stays as it is, and what a script added beside them stays too. One a patch changed since (a count
+inside the header) is compared with what the server drew and the patches since put there, so a
+page that draws what the patch drew leaves it as it is. One a patch went into where the server's
+markup has no element of its id, or that took so many appended elements that its copy would hold
+well more than it does (a feed a script trims), is drawn again from the new page. A page that differs in any other
+way around `<main>` loads in full, as a browser without JavaScript loads it: an element more or
+fewer beside one (a banner shown now), an attribute of `<main>` or of an element around it (`lang`,
+a theme on `<html>`), or the layout's own head tags (not the page's values for `style={..}`,
+which are set on what is swapped in). The frame the first write's page is compared with is
+read from the page as it loaded, so what a browser extension added before the runtime started (an
+attribute on `<html>`, a `<style>` in `<head>`) is in it: a write's page only has to add or change
+nothing there, and an attribute or head tag the server stops writing (a theme turned off) stays
+until a full load, since a script's or an extension's (a theme a blocking script set before first
+paint, Dark Reader's marks) looks the same. A layout that turns one off writes the off state
+(`data-theme="light"`, not no attribute), so the write's page differs and loads in full. After that the
+frame is the last write's page, as the server sent it. An element a script or an extension adds
+beside `<main>`'s ancestors after the runtime starts stays; one an extension adds to `<body>`
+before it starts is taken as the layout's, so each write's page, which lacks it, loads in full.
+Until a write's page is swapped in, every navigation reads the whole page, so one the user starts
+before it arrives draws what the write changed as well. A patch that lands in a layout element
+after the write's page has come and before it is drawn (while the stylesheets or scripts it needs
+load) is newer than the page and wins: the element keeps the patch. A layout element
+whose markup differs on every render (a form with a submit key, a `<corten-live>` with its
+position) is replaced on every such write, and on every read again of a write's page, keeping
+what the user typed but losing what scripts did to it (a stream reconnects); keep it out of the
+layout, or draw it in a component a patch updates. A layout element whose live region shows the
+redirect's notice is drawn again even when its markup is the same, so the same notice twice is
+shown twice (the notice's text elsewhere, a "Saved searches" link for "Saved", does not count);
+a live region in it (the toaster's `role="status"`) stays and takes the new message, so it is
+announced as a patch's is. Around a live region, what the server draws as it drew it before (with
+the patches since, a toast's or a cart count's) stays as a script left it (the toaster's close
+button it showed), and what it draws otherwise is updated in place, so a script that holds an
+element there keeps holding the one on the page; an element updated in place takes the server's
+attributes, so one a script set on it (`aria-expanded`, a class) goes, as it does when a patch
+replaces it, while a `<details>` or `<dialog>` the user opened or closed stays so. Inside a layout
+element, the elements must be the server's: one whose children a script added to or took from is
+replaced whole, live region and all, so a script adds its own markup beside the layout's elements
+(as the toaster's region is) or inside a live region. The page a write sends the browser to is
+fetched as a document, so when it redirects again, `fetch` follows that redirect itself: a
+`#id` on the second one is not kept, and one to another site loads in full.
+
+A write that answers with its own page rather than a redirect (a form drawn again with what it
+refused, a bulk add whose failed lines the page lists) needs nothing more either. `req.page(..)` for
+a write is the whole document in document mode or an action with `Prefer: corten-draws=whole`: the layout
+reads it draws start once the handler has answered with it, so they see what the write did (nothing
+runs beside the handler of such a write, and one that answers a patch or a redirect starts none), a
+value the handler read after the write is given with `.give::<CartCount>(n)`, and the runtime draws
+it as it draws that page, swapping in `<main>` and each element around it that changed, in the same
+document and at the same address; until it is in, a navigation reads the whole page, so one that
+leaves it on its way still shows what the write changed. With two writes out at once, whichever
+page is drawn last may be older than the other write, so the next navigation reads the whole page
+again. So does one after a write a navigation cut off before its answer, which the server may have
+applied, and the navigation after that one, since the server may still have been running the write
+when that page was read. A patch that took a write counts too: one that drew a layout element (a
+count with an id), drawn over by an older write's own page that came after it, leaves the next
+navigation to read the whole page. A write that failed in view (the network failed, a 5xx, or its
+answer was cut off after its headers came) may still have been applied. A navigation to another
+page reads the whole page. While the failure is undrawn, a same-page poll uses a partial response,
+even if another write is undrawn; a whole [`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
+poll already on its way is skipped and retried. If another write drew while a 5xx body was still
+arriving, the failure counts again when it is shown, whether that body arrived or was cut off.
+A partial draw can still replace `<main>` and
+page-owned layout elements; it does not redraw the rest of the layout. Browsers without the
+Navigation API reload for `ReadAgain`. A page the app's or an area's middleware makes with `Req` in the
+route's place (a sign-in page) is filled the same way, from the request's head as it had it.
+This also works when middleware takes `Req` from a head it retained and replaces the response
+after the route returns. The fill stays within the request's deadline, and a failure to fill it
+gets the error page. A `GET` form's page
+(a search) still answers `<main>` alone, as a navigation's does, since a `GET` changes nothing the
+layout shows. Such an answer
+costs the layout's markup and its reads; a page that differs from the one on screen in more than
+such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and
+the layout's elements that are the page's (`page` in `html!`), as a navigation does, and the next
+navigation reads the whole page. Where a navigation's page would load in full instead (a section
+stylesheet that does not load, a page element with no place on screen), so does the write's: its
+address is loaded, which draws the page there, not the write's answer (a refused form's messages
+and values), though its notice is kept. The runtime says it draws the whole page
+(`Prefer: corten-draws=whole` on the write, an HTTP preference a server that does not know it
+ignores); a runtime that does not (a tab open across the deploy that
+brought this) gets `<main>` alone, as it did before, and keeps its layout until a full load. A
+runtime that gets `<main>` alone for a write (a server from before, halfway through a deploy) has
+the next navigation read the whole page.
+
+A patch is not a page: it carries elements by id and fills no layout read's place, and a read's
+`view` drawn at two places has no id to carry. So a write whose answer must change a layout read
+answers its page, not a patch: `req.page(..)`, with the read's value given or read again. A patch
+changes the layout only through an element the layout draws with an id, from a value the handler
+passes it, as a prop, not a layout read. The badge is a component the layout renders and a patch
+can carry (an `#[derive(Id)]` on it), and the write reads the value itself after the write, and
+only for the patch: without JavaScript the redirect's next page is a full load that reads it.
+In an app with layout reads a typed write route whose answer type can be a page (`HtmlResult`)
+keeps a copy of the request's head on a preferred submit or a swap write that reaches it through
+middleware. It keeps the head even if middleware removes the preference: the handler may still set
+`req.mode = Mode::Document`. A fragment starts no layout reads.
+A handler forwarding the request into another Corten router does not suppress that router's
+layout reads. Each app's layout reads follow its own deadline. When one Corten app forwards a
+write to another, the outer app's request timer still bounds the whole response. To leave slow
+places empty rather than time out, set the inner app's deadline no longer than the time the outer
+request has left when it forwards, allowing for any outer work after the inner answer. With an
+outer one-second deadline, an inner app with `deadline(None)` waiting on a two-second read will
+get cut off and the outer app will answer 503.
+A handler that answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) can return
+`HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
+page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
+`Table` handler taking `Req` can still copy the head
+([Requests and forms](requests-and-forms.md#request-modes)).
+
+```rust,ignore
+#[component]
+fn CartBadge(count: Option<u32>) -> impl Patch {
+    html! { <span id={CartBadgeId}>{count.unwrap_or(0)}</span> }
+}
+
+async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> HtmlResult {
+    carts.add(&viewer, ..).await?;
+    if let Some(action) = req.action() {
+        let count = carts.count(&viewer).await;
+        return action.patch(CartBadge { count: Some(count) });
+    }
+    req.redirect(&url::Cart)
+}
+```
+
+Either way there is one answer that brings a layout read up to date after a write, a page: the page
+the write redirects to, or its own ([design Choice 66](../design.md#choice-write-own-page-whole)).
+
+A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
+`href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link
+that stays current on the pages under it). The full load renders `aria-current`, and the runtime
+moves it after each client navigation, so the header is right without rendering again. It does
+the same after a patch that puts a nav link on the page, which the server marked against the
+request that made the patch (a form's action), not the page. A link it makes current, or finds
+current when it first sees it (on a full load, or in a row a write's page or a patch draws
+again), is put in the middle of the nearest box around it that overflows sideways and scrolls
+(a nav row wider than the bar), or its start at the box's when it is wider, when it is shown and
+out of that box's view: at once, in the next frame, and never by scrolling the page. A link that
+stays current is left where the user scrolled it, and so is one in a row in `<main>` the user
+scrolled sideways (back to its start too) when a swap keeps their place (`data-keep-place`, a read
+again). A tag
+that writes `href`, `data-nav` or `aria-current` itself beside the spread does not compile, nor
+does `data-nav` written by hand.
+
+Each `req.nav` link is judged alone, so a section and a page under it (Seller Desk at
+`/account/desk`, Money at `/account/desk/money`) are both current on Money's page. A nav whose
+entries nest, or that is read from data, is written whole with `req.nav_of`: of its entries
+that hold the page, only the deepest is current. Its links carry the group they were ranked in
+(`data-nav-group`), so the runtime ranks the same links after a client navigation wherever the
+markup puts them, so render every link it gives back: leave out an entry the user may not see
+before the call. Each entry comes with its item (a label, or the row it was read from), which
+`links()` hands back beside its link. An entry is a route or a `Local` path, written as the
+browser asks for it (a link to another site is a plain link, never current):
+
+```rust,ignore
+let nav = req.nav_of(items.iter().map(|item| (NavTo::section(&item.href), item)));
+html! { <nav>for (link, item) in nav.links() { <a {..link}>{&item.label}</a> }</nav> }
+```
+
+Structured data for search engines is a head tag too: `head={JsonLd { value: &product }}`
+(feature `json`) writes a `ToJson` value in `<script type="application/ld+json">` with `<` as
+`\u003c`, so a description that says `</script>` cannot end it. An expression written inside
+`<script>` in `html!` does not compile, because it would be escaped as HTML.
+
+`html!` that is one component is that component: its props are evaluated where the markup is,
+so `req={&req}` borrows the handler's `req`. A prop that borrows something the function made
+for the view is made inside the markup, where the view owns it:
+
+```rust,ignore
+fn job_dialog(job: &Job) -> impl Render + '_ {
+    html! {
+        let title = format!("{} rows", job.rows);   // owned by the view
+        <Dialog title={&title}>{job.summary}</Dialog>
+    }
+}
+```
+
+With the `let` outside the `html!`, the view would borrow a local of a function that has
+returned (E0515). `let`s and a layout component are a document, like the layout alone, and `let`s and a patch
+component are a patch. A patch's top-level elements are parsed together, as a `<template>`'s
+content, so table rows or cells beside other elements are dropped unless they come first: `html!`
+refuses the shapes lost wherever they are written, such as a row after a first `<table>`
+(`<table id={TotalsId}>..</table> <tr id={RowId(7)}>..</tr>`) or a `<table>` after a first row,
+where nothing an expression or a component writes comes between the two, and a debug build
+refuses the rest, the shapes that depend on what the patch began with among them, when it is sent
+([Requests and forms](requests-and-forms.md)).
+
+A view lent to a prop inside another view (`action={&html! { .. }}`), or to a call written in its
+markup (`{keep_query(&at, &html! { .. })}`), is built and rendered inside the view around it, so it borrows what it uses instead of owning it: a step bar's action and the
+panel below it read the same `name`, without `let name = name.as_ref();` first. A view given by
+value (`view={html! { .. }}`) still owns what it uses, since the component may keep it, and so
+does one inside a closure of its own (`.map(|row| html! { .. })`) and one lent to a prop of the
+component a whole `html!` is, whose props are evaluated where the `html!` is written.
+
+The view a handler gives `req.page(..)` owns what it uses too, like any view at the top of an
+`html!`, so it can be returned from a function. A local the markup reads that something made
+before the markup also borrows is passed to it as a reference: `let found = found.as_ref();`
+before the `html!` (E0505 otherwise).
+
+## Typed links and messages
+
+The strings that usually drift between files are Rust types, checked when the app compiles.
+
+```rust,ignore
+#[derive(Route)]
+#[route("/items/{id}")]
+pub struct ItemRoute<'a> { pub id: &'a str, pub tab: Option<&'a str> }   // tab is a query parameter
+
+corten::i18n::messages! {
+    pub struct Msg { "en" => "locales/en.json", "fr" => "locales/fr.json" }
+}
+
+// in the app's #[corten::routes] module, each route names its handler:
+// #[route("/items/{id}", get = show)] pub struct ItemRoute<'a> { .. }
+
+#[derive(Id)]
+pub struct OfferId<'a>(pub &'a str);                                          // offer-{key}
+
+let t: Msg = req.t();
+html! {
+    <a href={ItemRoute { id: &item.id, tab: None }}>{item.title}</a>       // /items/a%20b
+    <p>{t.item_show_all_offers(item.offers.len())}</p>
+    <li id={OfferId(&offer.id)}>{offer.seller}</li>                         // a patch's target
+}
+action.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id, in Mode::Action
+```
+
+| What | Fails to compile when |
+|---|---|
+| `#[derive(Route)]` | the path names a parameter the struct lacks, text comes before a parameter in its segment, the path has a `.` or `..` segment or `.` or `..` text after a parameter, a link leaves a field out |
+| `html!` | an element's URL attribute (`href`, `src`, `srcset`, `action`, `formaction`, `poster`, or the rarer `imagesrcset`, `data`, `ping` and `xlink:href`) is text, or one string literal in braces (`href={"/items"}`), that is a path in the app: it starts with one `/` (or `\`, which a browser reads as `/`), or is `http:` or `https:` without the `//` of a host (`https:/items`, a path in the app on a page of that scheme and a host on one of the other). Link to a route (`href={url::Items}`, `action={url::Watch}`), or name a static file by its constant (`src={req.asset(Static::LOGO_SVG)}`; with a fragment, `href={(req.asset(Static::SPRITE_SVG), "#arrow")}`; in a `srcset`, a tuple that keeps the descriptors). A path on this origin the app does not route (another service behind the same proxy, `/oauth2/sign_out`) is a `corten::Local`, as in a test, `href={Local::parse("/oauth2/sign_out").expect("a path on this site")}`, which keeps a query and `#fragment`: an explicit opt-out the compiler takes on trust (a `Local` of a routed path compiles too). A fragment (`#top`), a full URL (`https://example.com`), another scheme (`mailto:`, `tel:`) and `//host` compile. Any other expression in braces (`href={format!(..)}`, a tuple), a spread, a component's prop, a relative path (`items/7`, `?page=2`) and a URL inside another attribute's text (`<meta http-equiv="refresh" content="0; url=/items">`) are not checked |
+| `messages!` | a locale lacks a key or has an extra one, a message takes different arguments in another locale, a call names a missing key or leaves out an argument, or passes one that is not text, an integer or a value `t` formats (a float goes through `t.number`) |
+| `#[derive(Href)]` | a variant holds no link or more than one (a unit variant has no URL) |
+| `#[derive(UrlValue)]` | the enum has a variant with fields, a variant serde does not read (`skip_deserializing`), or a serde attribute that changes its words in a way it does not follow |
+| `#[derive(Id)]` | `Remove` is given text instead of an id type; two ids in one program have the same name (each is a linker symbol, `corten__two_ids_are__offer`; name each after its feature, `ShippingOfferId`); the struct holds more than one key |
+| `#[component(css)]`, `#[component(js)]` | two components in one program have the same name, so they would style one `.name__*` or serve one `scripts/name.js` (each is a linker symbol, `corten__two_components_style__offer_list`, `corten__two_scripts_are__offer_list`) |
+| `#[component(view)]`, `#[event]` | two views or two typed events in one program have the same name, since `corten/views` and `corten/events` export one class of a name and the page dispatches one event of a name (`corten__two_views_are__Row`, `corten__two_events_are__RowToggled`, and `corten__two_events_named__url_changed` for two classes with one event name, `UrlChanged` and `URLChanged`) |
+
+An id is the type's name without `Id`, in kebab case (`OfferId` is `offer-`, then the key; a
+unit struct, `StatusId`, is just `status`). Use one for every element a patch replaces or
+removes, and for `for`, `popovertarget` or `commandfor` across components. Its name is a linker
+symbol, and so is the class prefix of a component with a stylesheet and the name of one with a
+script: names are global to the app, so two features that each write a `SettingsForm` (or a
+`SettingsFormId`) in one crate fail to compile, rather than the app when it starts. `cargo check`
+and an editor report it too, at both sites (E0428, "the name `corten__two_ids_are__settings_form`
+is defined multiple times", pointing at each `#[derive]` or `#[component]`), because each name is
+also a hidden exported macro. Name them by feature (`ShippingSettingsForm`). For the same reason,
+a crate that re-exports two libraries with `pub use` globs (`pub use orders::*; pub use
+shipping::*;`) gets an `ambiguous_glob_reexports` warning naming that macro when the two share
+such a name. Across crates (a feature's library and the app), the pair fails to link once the program uses both, in every profile (debug, release,
+thin or fat LTO) on the architectures named below: each item's constant points at a static of its own beside its symbols, so a
+program that lists a component, or in a debug build (every test is one) renders it or writes an
+id, loads them. That holds although a linker takes a
+library's object file only for a symbol it needs (as a Windows GNU link did, leaving a library's
+namesake out so the program linked). A namesake the program does not use may still fail to link:
+a linker takes an object file whole, so whether the unused one comes in depends on what else in
+that object file the program uses, which the build profile decides (how the compiler split the
+crate, or merged it under LTO; under LTO it always does) and which can differ between targets.
+Rename one of the two rather than rely on it being left out. Under LTO the check is a second
+symbol of the name with `.link` after it (`corten__two_ids_are__offer.link`, which the link
+error names), written in assembly, which Rust supports on x86, Arm, RISC-V, LoongArch and s390x;
+on other targets (PowerPC, MIPS) a release build with LTO links a pair, so build in debug there
+before a release. The same holds
+for a `script!` module, served by its name as a component's script is. The check is the declaration's, not the page's: two
+identical declarations of one component (a module declared in both `lib.rs` and `main.rs`, a
+macro that writes one component in several modules) fail too, so declare each once. A library's
+ids and scripts (a crate with a script prefix, which their names in the page carry) also carry
+its version, so two versions of one library in a program still link; its classes do not carry
+the prefix (`.card__*`), so a library's `Card` with a stylesheet and the app's clash, and nor do
+its views and typed events (one name each in `corten/views` and `corten/events`), so two versions
+of a library with them (corten-ui's `Copied`) do not link.
+
+Routes write their URL straight into the page (path parameters percent-encoded, `None` query
+parameters left out). A query field is anything `Display`; an enum in an address (a tab, a sort,
+what a redirect says happened) derives `UrlValue`, which writes each variant as the word
+its `Deserialize` (derived with it) reads (`#[serde(rename_all = "kebab-case")]`: `AwaitingLabel` is
+`awaiting-label`), so the link and the handler cannot disagree. The same word is its value in an
+attribute (`data-tab={tab}`), and an `Option` of it leaves the attribute out when `None`, as an
+`Option<&str>` does.
+
+A component several pages draw (a filter and sortable table that two screens share) takes where
+its links and forms go from the page, typed: a prop `action: &'a dyn Href` takes any route (or a
+place on a page, `route.at(Id)`), written straight into `action={action}` with no `String`. A
+value that is one of several routes (an app's screens, the links a shared list makes, one per
+column) is an enum whose variants each hold one, `#[derive(Href)] enum Screen<'a> {
+Inventory(url::Inventory), PullSheet(url::PullSheet<'a>) }`, written as `href={screen}`, and the
+page passes a function that builds it, `link: &'a dyn Fn(SortBy) -> SheetLink<'a>`. A unit
+variant does not compile (it has no URL), and neither does text where a `&dyn Href` goes. When
+one enum of every page's route would tie together modules that should stay apart (the pages that
+draw a shared list live in separate features), the function returns a boxed link instead,
+`link: &'a dyn Fn(SortBy) -> Box<dyn Href + 'a>`, and `href={link(by)}` takes the box as it is. A
+part of each row the page decides (a detail one screen shows) is a function the same way,
+`detail: &'a dyn Fn(&Item) -> Box<dyn Render + 'a>`, drawn as `{detail(item)}`.
+
+Messages are split into text and arguments when the crate compiles: one
+without arguments is a `&'static str`, one with arguments writes its pieces into the page,
+escaped, with no lookup and no intermediate string. Editing a catalog rebuilds the crate.
+
+A count's text is a plural message: a form per plural category, with the suffixes i18next uses
+(`"items_one": "{count} item"`, `"items_other": "{count} items"`), and one method,
+`t.grid_items(count)`, which picks the form by CLDR's rules for the locale and writes the count
+as `t.number` does (`1,234 items`). Never pick a form with `count == 1`: French puts 0 in `one`
+and a million in `many`, Polish has `few` and `many`, Japanese has `other` alone. A catalog has
+exactly the forms its language's whole numbers use, and `_other`, or the build fails and names
+the missing one with a number that needs it (`fr` uses `_many` for 1000000). Text for none
+("No items yet") is a message of its own the view chooses, since `zero` is not a category in
+most languages.
+
+### Text: literals or the catalog
+
+An app chooses once, by how many locales it has:
+
+1. **One locale.** Fixed text is a literal in the view (`<h1>"Statement"</h1>`). The catalog
+   holds only what a literal cannot be: a count with its plural (`grid.items_one` and
+   `grid.items_other`, one message, `t.grid_items(count)`), text with arguments, and text a script fills in
+   (`t.js().prices_updates()`). Numbers, money and dates still go through `t`, which writes them
+   for the locale.
+2. **More than one locale.** Every word a reader sees goes through the catalog, so a locale that
+   lacks one does not compile. A name that is the same in every language (the store's) may stay
+   a literal.
+
+Moving from the first to the second is mechanical: each literal becomes a key. card-market is
+the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery, listings-feed and
+corten-site are the first.
+
+A message with one argument takes it as the method's parameter (`t.grid_items(count)`). One with two
+or more takes them by name, in a struct the catalog's module has for it (`Msg`'s is `msg`), so two
+values cannot trade places and rewording the default text, which moves its arguments, moves no
+call:
+
+```rust,ignore
+// "pager.summary": "{rangeStart}–{rangeEnd} of {total}"
+<p>{t.pager_summary(msg::PagerSummary { range_start, range_end, total })}</p>
+```
+
+The fields are the arguments' names in snake case (`{rangeStart}` is `range_start`, a Rust
+keyword a raw identifier, `r#type`), and a field left out, misspelled or renamed in the default
+locale does not compile. A plural with more than its `{count}` takes `count` as a field too.
+The module is one `messages!` adds beside the catalog, as visible as it, so a view names it as
+it names the catalog (`use crate::text::{msg, Msg};`), and an item of the same name next to the
+catalog clashes with it.
+
+A message the page cannot name in its source, because another service answers with its key
+(`{"titleKey": "queue.item.title", "titleParams": {..}}`), is `t.by_key(key, &args)`: the
+message with that catalog key (dotted, as in the JSON) in the request's locale, its arguments
+taken by name from `args` (pairs, a map or a JSON object). It is `None` when the catalog has no
+such key or `args` lacks one of its arguments (an `Option` renders nothing when `None`), so the
+page chooses what to show instead. Prefer the methods wherever the page knows the message.
+
+Numbers, money and dates are written by `t` in the request's locale too, on the server, so a
+price or a time is right on the first paint with no script:
+
+```rust,ignore
+const USD: Currency = Currency::new("USD");
+html! {
+    <td>{t.money(Minor(line.cents), USD)}</td>                           // $1,234.50, 1 234,50 $US
+    <td>{t.money(Decimal::parse(&api.amount).unwrap_or_default(), USD)}</td> // "21.50" from an API
+    <td>{t.number(listing.count)}</td>                                     // 1,234
+    <td>{t.percent(Decimal::new(fee_bps, 4), 2)}</td>                      // 2.9%, 2,9 %, %2,9
+    <td>{t.change(Decimal::new(stock.change_bp, 4), 2)}</td>               // +0.60%, -0.30%, 0.00%
+    <td>{t.signed_money(Minor(sale.cents - cost.cents), USD)}</td>         // +$3.20, -$1.23, $0.00
+    <p>{t.item_pending(t.date_time(at, DateStyle::Medium, TimeStyle::Short))}</p> // Mar 22, 2026, 12:00 PM UTC
+    <p>{t.account_member_since(t.date(joined, MonthStyle::Long))}</p>     // Member since March 2025
+}
+```
+
+`t.percent(ratio, digits)` takes the ratio (0.029 for 2.9%, so 290 basis points are
+`Decimal::new(290, 4)`) and writes at most `digits` fraction digits, rounded half away from zero
+and without trailing zeros, with the locale's sign where it puts it. `t.change(ratio, digits)` is
+the same ratio as a change (a price's move today, in a column that lines up): exactly `digits`
+fraction digits and a sign on a gain as on a loss (`+0.60%`, `+0,60 %`, `+%0,60`), none on what
+rounds to zero (`0.00%`). `t.signed_money(amount, currency)` writes a difference between two amounts
+the same way, a plus sign on a gain and none on what rounds to zero (`+$3.20`, `+3,20 $US`),
+with the sign where the locale puts it, so a page never builds a sign by hand. `t.money` takes `Minor` units (cents) or a `Decimal` in the major unit, never a float and never
+a bare integer (it could be either, so it does not compile), with the digits the currency is
+shown with (0 for JPY, 3 for KWD), which a `Currency` carries from when it is made (at compile
+time for a `const` one), so they are not looked up for each amount. A price a person types into a form is read back the same way:
+`t.parse_money(&input.price, USD)` is `Some(Minor(129950))` for `$1,299.50` in en and for
+`1 299,50 $US` or `1299,5` in fr (with or without the symbol, the code, the groups or the
+fraction, and without the direction marks some locales write), and `None` for a sign, a group of
+the wrong size, a grouped number that starts with `0` (`0,500`), another locale's decimal
+separator, more fraction digits than the currency has or an amount over `u64`. Every amount
+every locale writes reads back, so a form never reads money
+as a float or with a parser of its own. `MonthStyle` writes the month and year without the day, in
+the locale's order and words (`Mar 2026`, `März 2026`), and `DayStyle` the month and day without
+the year (`Mar 2`, `2 mars`), for a chart's axis or a week's row whose year the page says once;
+neither has a time, so `t.date_time` takes neither. A date is in UTC unless `.zone(Offset::hours(-5))` or a zone
+of your own (`corten::i18n::Zone`, for one with daylight saving time) says otherwise, so a page
+reads the same wherever it is rendered; `parse_timestamp` reads the RFC 3339 text APIs send.
+For dates where the visitor is ("your listings come back on Nov 2"), the app turns on Corten's
+`zones` feature (Jiff 1 and its bundled IANA tz database) and sets `App::zoned_dates()`; the feature
+alone changes no app's dates, so a library that turns it on does not change yours.
+The runtime keeps the browser's zone (`America/Chicago`) in a cookie from the first page it
+loads, so the form posts and pages after it carry it, and while Corten renders a request's
+answer, `t.date`, `t.time` and `t.date_time` write in that zone, with its daylight saving
+rules: no handler takes the zone and no component is given it. `.zone(..)` still chooses
+another (a store's own zone). A page that writes a date in the visitor's zone answers privately
+(`Cache-Control: private`), and the zone is not part of the page's key, so it does not make the
+runtime load the next page in full; a date the layout writes is drawn in `LocalTime` for that
+reason (a navigation keeps the layout's text from the first page). `req.zone()` is the zone itself (a
+`corten::i18n::Visitor`, a `Zone`), for the zone a page draws a form's dates and times in
+(`DrawZone::from(req.zone())`), which the form sends back as a `FormZone`; its post reads a
+picked date and time, and finds where a picked day begins (`day.start(&input.zone)`), in that, not
+in the post's `req.zone()` ([Requests and forms](requests-and-forms.md));
+`Option<ClientZone>` is its name. Both are UTC (`None`) on a browser's first page, before it
+has reported its zone, and without JavaScript; draw a date the first page shows in
+`corten_ui::LocalTime`, whose script writes it again in the browser's zone there, in the
+server's own format, so it is right on the first page too. A date in an attribute
+(`title={..}`) has no element to write again and stays in UTC on that page. A live part's
+fragments, rendered as the stream is read, are in the zone too. A value that names a day rather
+than an instant (a report's window, a week's start, a due date, an API's `"2026-09-02"`) is a
+`corten::i18n::Day`, which `t.date(day, style)` writes as that day in every zone; it has no
+`.zone(..)` and no time, so the compiler keeps it from being written as an instant. `Day` parses
+`YYYY-MM-DD` (what `<input type="date">` sends), reads and writes JSON and serde as that text,
+and `day.start(Utc)` is the instant where a query needs one (an `Option`: `None` before the
+earliest instant the platform has, 1601 on Windows; `t.date` writes every day). A script writes
+a day with `format("2026-09-02")` and no offset. A day already kept as an
+instant at UTC midnight takes `.zone(Utc)`, or it reads a day early west of UTC. A script's `t.js().date(..)` writes UTC unless
+it is given an offset (`format(at, { offset })`, the browser's at that instant), and `to_string()`
+or `format!` in a handler is UTC: only Corten's render knows the zone, and a `req.screen`'s data
+takes `.zone(req.zone())` where it formats a date itself. A `Public` answer is the same for
+everyone, so it is written as for a visitor whose zone is not known (UTC, `req.zone()` too) and
+stays shared; its `LocalTime`s are written again in the browser. The zone rules are the bundled database's
+(`jiff-tzdb`), updated with `cargo update -p jiff-tzdb`. A date rendered once and kept across
+requests (a footer in a `OnceLock`, a fragment a cache shares) takes `.zone(..)`, as a value a
+cache keeps never holds one visitor's data: rendered during a request, it would be in that
+visitor's zone for everyone. `App::client_zone()` alone learns the zone for `req.zone()` and
+`Option<ClientZone>` and writes dates as before.
+
+A time relative to now ("resets in 10 hours", "updated 3 min. ago") is `t.relative(at, now,
+RelativeStyle::Long)` (or `Short`, `Narrow`): in the largest unit it has a whole one of, rounded
+toward zero, in the locale's plural forms. Written that way it is right only when drawn, so put it
+in `corten_ui::RelativeTime`, which renders a `<time datetime>` and has the browser write it
+again, in the same locale and style, each time its text would change, on one timer for the page.
+A live part then sends only when its data changes, not to move a countdown, and its server does
+not redraw every open page on a clock:
+
+```rust,ignore
+html! { <p>"Resets "<RelativeTime when={t.relative(window.resets_at, now, RelativeStyle::Long)} /></p> }
+```
+
+Days are the largest unit ("in 45 days"); a time further off reads better as `t.date`. The
+browser counts from its own clock and writes with its own `Intl.RelativeTimeFormat`, so a browser
+whose CLDR is older than the server's may word a unit slightly differently once it takes over, and
+one without the locale (or with only another script of it) keeps the server's text. Without
+JavaScript the text is as old as the page. With it, a page from a cache or the back/forward cache
+is written again as it shows, and a page in a hidden tab is brought up to date when it is shown.
+
+Each listed locale's separators, currency symbols and date patterns are CLDR's, checked against
+Intl, and only the locales `messages!` lists are in the app. A script that writes a number, an
+amount or a date takes the page's format (`t.js().money(USD)`) and writes the same text
+([Scripts](scripts.md#numbers-money-and-dates-a-script-writes)).
+
+### A locale in the URL
+
+`req.t()` and `req.lang()` follow the browser's `Accept-Language`, and so does the page's
+`Vary`. The locale is picked by RFC 4647 Lookup, then Corten's same-language step: the header's
+languages are taken highest `q` first, and each loses its last subtag until it is one
+`messages!` lists (`zh-Hant-TW` is `zh-Hant`, `fr-CA-u-ca-gregory` is `fr-CA`, `fr-BE` is `fr`);
+one that shortens to nothing listed takes the first listed locale of its language (`fr` takes
+`fr-CA`), which Lookup alone would not, before the next is tried
+([design Choice 42](../design.md#choice-locale-same-language)), and a header that matches nothing
+gets the first locale. So `zh-Hant-TW,zh;q=0.9` gets `zh-Hant` when both `zh` and `zh-Hant` are
+listed: a shorter form of the reader's first choice comes before their second. Lookup only
+shortens a tag, so a browser that sends `zh-TW` or `zh-HK` gets `zh` (Simplified) when it is
+listed, not `zh-Hant`, and with `zh-Hans` and `zh-Hant` listed and no `zh`, the same-language
+step gives it `zh-Hans`, the first, even when `zh-Hant` is the header's next choice; an app with
+Traditional Chinese readers lists `zh-TW` and `zh-HK` too, which Corten has data for.
+
+Weights follow RFC 9110's `qvalue` grammar: `0` to `1`, with at most three decimal places
+(`0.123`, `1.000`; a decimal point with no digits is allowed too). A missing weight means `1`,
+and equal weights keep header order. A range with a malformed or repeated weight is ignored.
+A comma inside another parameter's closed quoted value does not start a new range, and
+weight-like text inside that value is not a repeated weight. If the quote never closes, that
+range is ignored and the remaining text is split on commas to recover other ranges.
+For example, `nan`, `inf`, `1.5`, `-0`, an empty value and too many decimals are malformed.
+Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
+If no range matches, the first locale is still the fallback.
+
+A page that a shared cache keeps (`Public`), or one whose address should name its
+language (a link to the French page), takes its locale from its URL instead: a
+`corten::i18n::Locale<Msg>` route field, read only as one of the tags `messages!` lists, as
+it lists it (`/FR/..` is refused, so a page has one URL per locale; so is a tag it does not list,
+400, as a path parameter that does not read is), and `req.set_locale` before anything reads the
+locale (a debug build stops a `set_locale` after `req.t()` or `req.lang()` read another):
+
+```rust,ignore
+#[route("/{lang}/categories/{slug}", get = category)]
+pub struct Category<'a> { pub lang: Locale<Msg>, pub slug: &'a str }
+
+async fn category(req: Req, Params(at): Params<url::Category<'_>>) -> Public<HtmlResult> {
+    req.set_locale(at.lang);
+    let t: Msg = req.t();                                   // in the URL's locale
+    ..
+}
+```
+
+Then `req.t()`, `req.lang()` and the error page are in that locale whatever `Accept-Language`
+asks, the answer does not vary on `Accept-Language`, so a cache keys it on the URL (one copy
+per locale rather than one per browser's header string), and a client navigation to the page in
+another locale loads it in full, since the layout is in the other language. `Locale::of(t)`
+writes the link to a page in the reader's locale, `Locale::parse(tag)` reads one from elsewhere (a
+cookie the app sets). Where `/` sends a visitor first is the app's: a handler that reads
+`req.t::<Msg>()` and redirects to its `Locale::of` (its answer depends on `Accept-Language`, so it
+is not `Public`). Every page in an app with messages says its locale in `Content-Language`,
+whichever way it was chosen.
+
+Only a request whose handler calls `req.set_locale` is in the URL's locale. A form, a patch or a
+live stream the page sends to another route negotiates unless that route takes the locale too
+(`/{lang}/cart/add`), so give a page's write and stream routes the field when the page has it; a
+patch's fragments carry no `Content-Language`. A request no handler reached (a URL no route has,
+a parameter that did not read) negotiates as well, so its error page is in the browser's
+language. A route whose first segment is the locale (`/{lang}`) answers 400, not 404, for any
+one-segment URL another route does not take.

@@ -1,0 +1,8 @@
+comparison change-plain placement 2 workload plain
+A base-p15120 b272422aeaecca9da8c4a832d8e0090ab863aebf97a9cd6eb4015f5f017bbc0e
+B head-p15120 71f068a2903815e78e33fe88e45e4698a9cd654ec92edc789455c0efb7787c09
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 70
+started 2026-11-26T21:11:24Z
+ended 2026-11-26T21:12:27Z

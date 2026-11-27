@@ -1,0 +1,8 @@
+comparison change-unstaged placement 18 workload unstaged
+A base-p5904 893fb0e04cdb6a985ba0c37a8f16e5a3d789b0ba08188658af46f39d0f5c75ae
+B head-p5904 e5f18028e9cd5f95c8d5eb728b122a88b2ae6f8512fa08e2d5b9642f508152fe
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 27
+started 2026-11-27T00:21:10Z
+ended 2026-11-27T00:22:13Z

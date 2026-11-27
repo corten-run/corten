@@ -1,0 +1,4 @@
+BIN=/root/trend-1126/run/unstaged-pilot/bin/base
+HOME=/root
+PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PORT=18083

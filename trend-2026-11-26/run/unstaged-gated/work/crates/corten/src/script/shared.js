@@ -1,0 +1,77 @@
+// @ts-check
+/** @param {string} text @param {number} n @param {boolean} loud */
+export function log(text, n, loud) {
+  console.log(loud ? text.toUpperCase() : text, n);
+}
+
+/** @param {HTMLElement} root */
+export function run(root) {
+  root.title = "Changed";
+}
+
+/** @param {HTMLElement} el @param {string[]} names */
+export function named(el, names) {
+  el.title = names.join(", ");
+}
+
+/** @param {KeyboardEvent} event @param {HTMLElement} el */
+export function key(event, el) {
+  el.title = event.key;
+}
+
+/** @import { CortenError, CortenNotice } from "corten" */
+
+/** @param {CortenError} event @param {HTMLFormElement} form */
+export function failed(event, form) {
+  form.title = String(event.detail.status);
+}
+
+/** @param {CortenNotice} event */
+export function said(event) {
+  document.title = event.detail.message;
+}
+
+/** @typedef {import("../types/app").Options} Options */
+
+/** @param {AbortSignal} signal @param {Options} options */
+export function watch(signal, options) {
+  signal.addEventListener("abort", () => console.log("stopped", options.id));
+}
+
+/** @import { Message } from "corten" */
+
+/** @param {HTMLOutputElement} out @param {Message<"count">} label */
+export function say(out, label) {
+  out.textContent = label({ count: 3 });
+}
+
+/** @typedef {{ entity: string, label: Message<"count"> }} Counted */
+
+/** @param {HTMLOutputElement} out @param {Counted} counted */
+export function tally(out, counted) {
+  out.textContent = `${counted.entity}: ${counted.label({ count: 2 })}`;
+}
+
+/** @import { NumberFormat, MoneyFormat, DateFormat } from "corten" */
+
+/** @param {HTMLOutputElement} out @param {NumberFormat} count @param {MoneyFormat} price @param {DateFormat} when */
+export function priced(out, count, price, when) {
+  out.textContent = `${count(1234)} at ${price(123450)}, ${when(0)}`;
+}
+
+/** @param {HTMLInputElement} weight @param {HTMLSelectElement} format @param {HTMLTextAreaElement} note @param {HTMLInputElement[]} sizes */
+export function fill(weight, format, note, sizes) {
+  weight.value = format.value + note.value + String(sizes.length);
+}
+
+/** @typedef {{ weight: HTMLInputElement, sizes: HTMLInputElement[] }} Parcel */
+
+/** @param {Parcel} parcel */
+export function pack(parcel) {
+  parcel.weight.value = String(parcel.sizes.filter((size) => size.checked).length);
+}
+
+/** @param {HTMLElement} el @param {unknown} listing */
+export function listed(el, listing) {
+  el.title = Array.isArray(listing) ? String(listing.length) : "";
+}

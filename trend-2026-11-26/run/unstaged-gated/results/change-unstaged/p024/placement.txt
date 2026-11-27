@@ -1,0 +1,8 @@
+comparison change-unstaged placement 24 workload unstaged
+A base-p37296 e24b2ba8a517c3981ddbd2a2174c85ec80ddfe007809bd202848f8e02a9eab7d
+B head-p37296 4417d633a7098a70d087cf4d9dc2a44a82fa05036026fcfe9a06ca07b34e72d0
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 46
+started 2026-11-27T00:40:58Z
+ended 2026-11-27T00:42:01Z

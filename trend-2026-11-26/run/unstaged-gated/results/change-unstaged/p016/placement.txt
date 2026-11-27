@@ -1,0 +1,8 @@
+comparison change-unstaged placement 16 workload unstaged
+A base-p21424 692d09ff0285c6c8a7d041663a75168245a01d8d138acceb9e9ee3bc3fb8745b
+B head-p21424 d504b589b73fc53b7bb849ca3e3a2496a9d11c57c0240fade990690ede85d64d
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 55
+started 2026-11-27T00:50:21Z
+ended 2026-11-27T00:51:24Z

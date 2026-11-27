@@ -1,0 +1,217 @@
+{
+ "name": "trend-2026-11-26",
+ "part": "gated",
+ "workload": "unstaged",
+ "dry": {
+  "K": 6,
+  "R": 2,
+  "seconds": 1
+ },
+ "K": 6,
+ "declaredK": "pilot",
+ "sizedFrom": null,
+ "R": 2,
+ "seconds": 1,
+ "seed": 2026112602,
+ "rank": 6,
+ "lowerRank": 1,
+ "P": [
+  320,
+  15120,
+  25824,
+  40624,
+  10304,
+  21008
+ ],
+ "Q": [
+  22848,
+  12160,
+  38336,
+  27648,
+  12880,
+  2192
+ ],
+ "coverage": {
+  "P": {
+   "line": [
+    2,
+    2,
+    1,
+    1
+   ],
+   "pageQuarters": [
+    2,
+    1,
+    2,
+    1
+   ],
+   "pages": [
+    1,
+    0,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+   ],
+   "min": 320,
+   "max": 40624
+  },
+  "Q": {
+   "line": [
+    4,
+    2,
+    0,
+    0
+   ],
+   "pageQuarters": [
+    1,
+    1,
+    2,
+    2
+   ],
+   "pages": [
+    1,
+    0,
+    1,
+    1,
+    0,
+    1,
+    1,
+    0,
+    0,
+    1
+   ],
+   "min": 2192,
+   "max": 38336
+  },
+  "linePairCombos": 6,
+  "diffs": [
+   2048,
+   1136,
+   224,
+   3408,
+   2576,
+   1664
+  ],
+  "distinctDiffs": 6,
+  "diffQuarters": [
+   1,
+   2,
+   2,
+   1
+  ]
+ },
+ "sides": [
+  "base",
+  "head"
+ ],
+ "comparisons": [
+  "aa-unstaged",
+  "change-unstaged"
+ ],
+ "schedule": [
+  {
+   "seq": 1,
+   "comparison": "aa-unstaged",
+   "i": 1
+  },
+  {
+   "seq": 2,
+   "comparison": "change-unstaged",
+   "i": 1
+  },
+  {
+   "seq": 3,
+   "comparison": "change-unstaged",
+   "i": 3
+  },
+  {
+   "seq": 4,
+   "comparison": "aa-unstaged",
+   "i": 3
+  },
+  {
+   "seq": 5,
+   "comparison": "aa-unstaged",
+   "i": 6
+  },
+  {
+   "seq": 6,
+   "comparison": "change-unstaged",
+   "i": 6
+  },
+  {
+   "seq": 7,
+   "comparison": "change-unstaged",
+   "i": 5
+  },
+  {
+   "seq": 8,
+   "comparison": "aa-unstaged",
+   "i": 5
+  },
+  {
+   "seq": 9,
+   "comparison": "aa-unstaged",
+   "i": 2
+  },
+  {
+   "seq": 10,
+   "comparison": "change-unstaged",
+   "i": 2
+  },
+  {
+   "seq": 11,
+   "comparison": "change-unstaged",
+   "i": 4
+  },
+  {
+   "seq": 12,
+   "comparison": "aa-unstaged",
+   "i": 4
+  }
+ ],
+ "base": "a833b4e3e55033c5fa179f50cb9291d190aeedfb",
+ "head": "056aba61c56cce4b2672b8f299b4961e476654ef",
+ "reduction": null,
+ "reads": [
+  "margin"
+ ],
+ "recordsSpread": false,
+ "declared": "GET /unstaged to the probe's configuration plain, no request header of its own: a route that says unstaged, a short str out. In the trend because it is the least a request can be: the connection, the routing and the answer written, with no stage and no page, so a cost added around the handler is the largest share of this request that it is of any. Not read by it: a stage's cost, a page's rendering, and every path neither workload takes; two requests to one probe do not show every cost a change counts.",
+ "plan": "12bbcfaa192b3e80ddefc0f13d2c23be138a0776d6232f0d1c8e0c76ab4b00ba",
+ "inputs": "48bed34b7444dd0836ace5f3eb43f3626b02d1cc8462fd61b5e8e12763df8878",
+ "sized": null,
+ "request": {
+  "path": "/unstaged",
+  "headers": []
+ },
+ "start": "env LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536 PROBE_ALLOCATOR=jemalloc $BIN $PORT plain",
+ "load": {
+  "threads": 2,
+  "connections": 64,
+  "seconds": 3
+ },
+ "mask": [],
+ "build": "cargo build --release",
+ "env": {
+  "ZSTD_SYS_USE_PKG_CONFIG": "1"
+ },
+ "host": {
+  "cpuModel": null,
+  "cpus": {
+   "server": 2,
+   "load": [
+    4,
+    5
+   ],
+   "driver": 7
+  }
+ },
+ "status": 200,
+ "placementSeconds": 600
+}

@@ -1,0 +1,8 @@
+comparison change-unstaged placement 11 workload unstaged
+A base-p736 7b1bab58e0f4b01295c5706beb1ba69e26e9d1326d8285bbe8c1bc4509554b6f
+B head-p736 7794df820a88294305ef6b6a51f95e8a35afb6f9cb506ee34d4100fccb708237
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 54
+started 2026-11-27T00:49:19Z
+ended 2026-11-27T00:50:21Z

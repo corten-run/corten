@@ -1,0 +1,8 @@
+comparison change-plain placement 35 workload plain
+A base-p11488 3b587a99ecc1258e476885e71e6acfe1a1df7b1a1323e801a0d6ed5b5bc22664
+B head-p11488 389defe6ba7c746f50363e843ac91a3e6471a68df43aef4c597662d80dfadda1
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 98
+started 2026-11-26T21:40:35Z
+ended 2026-11-26T21:41:38Z

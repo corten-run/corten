@@ -1,0 +1,8 @@
+comparison change-unstaged placement 25 workload unstaged
+A base-p11072 b4d0fb8d2e78428ece7b93aa233476ac30b0e64a77eec3cc91c488ce928977ad
+B head-p11072 4be4aff70c5e39c8cef1724d152f48f5a607463f83585f4c6eb0836eb8456933
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 2
+started 2026-11-26T23:55:08Z
+ended 2026-11-26T23:56:10Z

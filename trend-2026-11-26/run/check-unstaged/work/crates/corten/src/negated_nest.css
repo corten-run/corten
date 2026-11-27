@@ -1,0 +1,3 @@
+.list {
+  :not(&) { color: red; }
+}

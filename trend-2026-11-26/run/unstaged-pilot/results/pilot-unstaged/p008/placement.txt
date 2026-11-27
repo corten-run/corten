@@ -1,0 +1,8 @@
+comparison pilot-unstaged placement 8 workload unstaged
+A base-p5552 9839bbfcfef74f625257880becb38034d97da02da86ebd068e15d3e50a17c878
+B base-p17680 a6cbd1473512ea8874538cd01abf1dec910f16638559d30dac3610616e8ded0f
+run a98fb839-0e01-4208-a65f-a45987900269
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 45
+started 2026-11-26T22:52:57Z
+ended 2026-11-26T22:54:00Z

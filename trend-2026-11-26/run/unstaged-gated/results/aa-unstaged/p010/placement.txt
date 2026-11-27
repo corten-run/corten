@@ -1,0 +1,8 @@
+comparison aa-unstaged placement 10 workload unstaged
+A base-p30992 9dca5608621efbfb90d41d706312f4e7599598ac27a7674d94a52adbfdfb7fbf
+B base-p33184 736789147b74fdd8aef5f2a0cbefc04ba6ea78e214a488bacd2c71c4b93eb63c
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 24
+started 2026-11-27T00:18:03Z
+ended 2026-11-27T00:19:05Z

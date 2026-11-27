@@ -1,0 +1,8 @@
+5,6c5,6
+< corten-shell: 618f77240fa962cf
+< content-security-policy: default-src 'self'; script-src 'self' 'sha256-ZUaI2DeJVMHn43nGR3MzIBTsNwK/+ZIoB+I7SnfpTf8='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+---
+> corten-shell: c21cf50c33ce3fc2
+> content-security-policy: default-src 'self'; script-src 'self' 'sha256-wrRGJXZcjWCJAx6O63tIvTNndMctLpy43268JO3YBrk='; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten
+bodies differ: 6124 and 6124 bytes
+turns: plain: A and B answer differently

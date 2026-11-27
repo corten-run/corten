@@ -1,0 +1,504 @@
+//! The address of who is asking, for an app that passes it on (to an API's per-client limit) or
+//! limits by it itself.
+//!
+//! [`ClientIp`] is the connection's peer, or behind a proxy the app trusts
+//! ([`Policy::proxy`](crate::security::Policy::proxy), `PROXIES`) the nearest address in
+//! `X-Forwarded-For` that is not one of its proxies. Only that header is read: a proxy sets one
+//! of `X-Forwarded-For` and `Forwarded`, and reading the other would take whatever a client
+//! wrote in it.
+
+use std::{
+    hash::{Hash, Hasher},
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
+
+use crate::extract::{FromRequestParts, OptionalFromRequestParts};
+use http::{request::Parts, Extensions, HeaderMap, StatusCode};
+
+use crate::response::{IntoResponse, Response};
+
+use crate::{app::Bound, Error, Signal};
+
+/// The IP address of who is asking: `async fn signup(ClientIp(ip): ClientIp, ..)`.
+///
+/// Without a trusted proxy it is the connection's peer. With one
+/// ([`Policy::proxy`](crate::security::Policy::proxy), or `PROXIES` where the deploy sets `HOST`
+/// and `PORT`), a request from a proxy is followed back through `X-Forwarded-For`, right to left,
+/// to the first address that is not a proxy: entries further left are whatever the client sent.
+/// A request on a Unix socket counts as from a proxy when the app has any, since only this
+/// machine reaches the socket. IPv4 addresses come as IPv4, also when a dual-stack socket
+/// reports them as `::ffff:a.b.c.d`.
+///
+/// It tells who is asking, so a [`Public`](crate::Public) handler cannot take it, and an answer
+/// that read it is private to that address:
+///
+/// ```compile_fail,E0277
+/// use std::time::Duration;
+/// use corten::{prelude::*, ClientIp};
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", get = home)]
+///     pub struct Home;
+/// }
+///
+/// async fn home(ClientIp(ip): ClientIp) -> Public<String> {
+///     Public::new(Duration::from_secs(60), ip.to_string())
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// When the address cannot be known (a Unix socket and no proxy, a listener whose address is not
+/// a socket address, a test's `app.test()`) taking `ClientIp` is a 500 and `Option<ClientIp>` is
+/// `None`. A test gives the request one with [`crate::testing::Call::peer`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ClientIp(pub IpAddr);
+
+impl ClientIp {
+    /// The address of who sent `req`, for a [`crate::Middleware`] (a limit by address), the
+    /// same as a handler that takes `Option<ClientIp>` gets: `None` when it cannot be known.
+    /// The answer is then private to that address, as a handler's would be.
+    pub fn of(req: &mut crate::http::Request) -> Option<Self> {
+        let (found, fresh) = Self::look(req.extensions(), req.headers());
+        if fresh {
+            req.extensions_mut().insert(Found(found));
+        }
+        found
+    }
+
+    fn find(parts: &mut Parts) -> Option<Self> {
+        let (found, fresh) = Self::look(&parts.extensions, &parts.headers);
+        if fresh {
+            parts.extensions.insert(Found(found));
+        }
+        found
+    }
+
+    /// The address, and whether it was looked up now (to be kept for the next read): once per
+    /// request, since a second read must not mark the caller again.
+    fn look(extensions: &Extensions, headers: &HeaderMap) -> (Option<Self>, bool) {
+        if let Some(Found(found)) = extensions.get::<Found>() {
+            return (*found, false);
+        }
+        // An address the request was given first (a test's, or a server's of the app's own),
+        // then the connection's.
+        let peer = match extensions.get::<PeerAddr>() {
+            Some(PeerAddr(peer)) => Peer::Ip(peer.ip()),
+            None => PEER.get(),
+        };
+        let signal = extensions.get::<Signal>();
+        let proxies = signal.and_then(Signal::shared).map_or(&[][..], |shared| &shared.proxies[..]);
+        let forwarded = headers.get_all("x-forwarded-for").iter().rev().flat_map(|value| {
+            // A value that is not text ends the walk where it is, like an entry that is not an address.
+            value.to_str().map_or_else(|_| "?".split(','), |value| value.split(',')).rev()
+        });
+        let found = client(peer, forwarded, proxies).map(ClientIp);
+        // The answer is for this address: private, and keyed by it like a caller.
+        if let (Some(ClientIp(ip)), Some(signal)) = (found, signal) {
+            match extensions.get::<crate::layout::Asking>() {
+                // A layout read's: private when its value is drawn, not part of the key.
+                Some(asking) => asking.mark(),
+                None => {
+                    let mut hasher = std::hash::DefaultHasher::new();
+                    "corten::ClientIp".hash(&mut hasher);
+                    ip.hash(&mut hasher);
+                    signal.mark_caller(hasher.finish());
+                }
+            }
+        }
+        (found, true)
+    }
+}
+
+/// The address of the client's end of the connection a request came on, for an app that serves
+/// [`crate::App::router`] with a connection loop of its own: put in the request's extensions
+/// (`req.extensions_mut().insert(PeerAddr(addr))`), it is what [`ClientIp`] starts from, as
+/// [`crate::serve`]'s connection is. A test gives one with [`crate::testing::Call::peer`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub SocketAddr);
+
+/// The request's [`ClientIp`], once looked up.
+#[derive(Clone, Copy)]
+struct Found(Option<ClientIp>);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
+        ClientIp::find(parts).ok_or_else(|| {
+            Error::new(
+                "corten::ClientIp: the request has no client address (a Unix socket with no Policy::proxy, a listener \
+                 without socket addresses, a router served without a PeerAddr, or a test without Call::peer); take Option<ClientIp> where none is an answer",
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            .into_response()
+        })
+    }
+}
+
+impl<S: Send + Sync> OptionalFromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Option<Self>, Self::Rejection> {
+        Ok(ClientIp::find(parts))
+    }
+}
+
+/// The visitor's time zone, as the browser names it (IANA: `America/Chicago`), with
+/// [`App::client_zone`](crate::App::client_zone): `async fn schedule(zone: Option<ClientZone>, ..)`.
+/// Its name only: with Corten's `zones` feature, `req.zone()` is the zone with its rules (for a
+/// date the user picked, `<input type="date">`, as the instant it means where they are), and with
+/// `App::zoned_dates` dates are written in it while Corten renders the answer, so a handler that
+/// only draws dates takes neither. This is for the name itself (a log line, "Alerts follow America/Chicago time").
+///
+/// It is `None` until the runtime has run once on a page of the app (the first page a browser
+/// loads, or a browser without JavaScript), so it is only taken as an `Option`: a bare
+/// `ClientZone` does not compile. The answer differs by zone, so a [`Public`](crate::Public)
+/// handler cannot take it either:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, ClientZone};
+///
+/// async fn schedule(zone: ClientZone) -> &'static str {
+///     "scheduled"
+/// }
+/// # let _: Methods = get(schedule);
+/// ```
+///
+/// ```compile_fail,E0277
+/// use std::time::Duration;
+/// use corten::{prelude::*, ClientZone};
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", get = home)]
+///     pub struct Home;
+/// }
+///
+/// async fn home(zone: Option<ClientZone>) -> Public<String> {
+///     Public::new(Duration::from_secs(60), format!("{zone:?}"))
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// Taking it in an app without `App::client_zone` is a 500 that names the setting in a debug
+/// build, and logged as an error and `None` in a release build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClientZone(pub String);
+
+/// The cookie the runtime keeps the browser's time zone in.
+pub(crate) const ZONE_COOKIE: &str = "corten-zone";
+
+/// An IANA zone name as a browser writes it: letters, digits and `/ _ + -`, at most 64 bytes.
+fn zone_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && !value.starts_with(['/', '-', '+'])
+        && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'+' | b'-'))
+}
+
+/// The zone the browser reported in the request's cookie, if it is a zone name.
+pub(crate) fn zone_of(headers: &http::HeaderMap) -> Option<&str> {
+    crate::security::cookie::get(headers, ZONE_COOKIE).filter(|name| zone_name(name))
+}
+
+/// A zone name kept for the request without allocating: at most 64 bytes, as `zone_name` allows.
+#[cfg(feature = "zones")]
+#[derive(Clone, Copy)]
+pub(crate) struct ZoneName {
+    len: u8,
+    bytes: [u8; 64],
+}
+
+#[cfg(feature = "zones")]
+impl ZoneName {
+    /// The zone in the request's cookie, if any.
+    pub(crate) fn of(headers: &http::HeaderMap) -> Option<Self> {
+        let name = zone_of(headers)?;
+        let mut bytes = [0; 64];
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        Some(ZoneName { len: name.len() as u8, bytes })
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        // Checked by `zone_name`: ASCII.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("")
+    }
+}
+
+impl<S: Send + Sync> OptionalFromRequestParts<S> for ClientZone {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Option<Self>, Response> {
+        let signal = parts.extensions.get::<Signal>();
+        if signal.and_then(Signal::shared).is_some_and(|shared| !shared.client_zone) {
+            let message = "corten::ClientZone: the app does not learn its visitors' time zones; add App::client_zone()";
+            if cfg!(debug_assertions) {
+                return Err(Error::new(message).with_status(StatusCode::INTERNAL_SERVER_ERROR).into_response());
+            }
+            tracing::error!("{message}");
+            return Ok(None);
+        }
+        let zone = zone_of(&parts.headers).map(str::to_string);
+        // The answer is for this zone: private. Not part of the page's key, as a caller is: the
+        // layout does not change with it, and the cookie arrives after the first page, so keying
+        // by it would load the next page in full, and the error page after a handler read it.
+        if let Some(signal) = signal {
+            signal.mark_personal();
+        }
+        Ok(zone.map(ClientZone))
+    }
+}
+
+/// Where a connection came from, by its listener's address type.
+#[derive(Clone, Copy)]
+pub(crate) enum Peer {
+    Ip(IpAddr),
+    /// A Unix socket: only this machine reaches it.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Local,
+    /// A listener of the app's own whose address is neither.
+    Unknown,
+}
+
+std::thread_local! {
+    /// The peer of the request being polled on this thread, while [`WithPeer`] polls it.
+    static PEER: std::cell::Cell<Peer> = const { std::cell::Cell::new(Peer::Unknown) };
+    /// Where the request being polled on this thread tells its connection its deadline, while
+    /// [`WithPeer`] polls it, in an app whose routes' deadlines differ.
+    static BOUND: std::cell::Cell<Option<Arc<Bound>>> = const { std::cell::Cell::new(None) };
+}
+
+/// A request's future with its connection's peer at hand while it is polled, and the place to
+/// tell the connection the request's deadline ([`answering`]) where it keeps one. What the
+/// request moves to another task (a layer that spawns its call) does not have them there.
+pub(crate) struct WithPeer<F> {
+    peer: Peer,
+    bound: Option<Arc<Bound>>,
+    inner: F,
+}
+
+impl<F> WithPeer<F> {
+    pub(crate) fn new(peer: Peer, bound: Option<Arc<Bound>>, inner: F) -> Self {
+        WithPeer { peer, bound, inner }
+    }
+}
+
+impl<F: std::future::Future + Unpin> std::future::Future for WithPeer<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<F::Output> {
+        /// Puts back what the thread had, also when the poll panics.
+        struct Restore(Peer);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                PEER.set(self.0);
+            }
+        }
+        /// Takes the bound back from the thread, also when the poll panics.
+        struct Lent<'a>(&'a mut Option<Arc<Bound>>, Option<Arc<Bound>>);
+        impl Drop for Lent<'_> {
+            fn drop(&mut self) {
+                *self.0 = BOUND.replace(self.1.take());
+            }
+        }
+        let this = &mut *self;
+        let _restore = Restore(PEER.replace(this.peer));
+        let _lent = match this.bound.take() {
+            None => None,
+            bound => Some(Lent(&mut this.bound, BOUND.replace(bound))),
+        };
+        std::pin::Pin::new(&mut this.inner).poll(cx)
+    }
+}
+
+/// Tells the connection of the request being polled the request's deadline, for shutdown
+/// ([`crate::app::Drain::each`]); nothing where it keeps none.
+pub(crate) fn answering(deadline: Option<std::time::Duration>) {
+    BOUND.with(|cell| {
+        let bound = cell.take();
+        if let Some(bound) = &bound {
+            bound.set(deadline);
+        }
+        cell.set(bound);
+    });
+}
+
+/// The client: the peer unless it is a trusted proxy (or local, with proxies), then the nearest
+/// `forwarded` entry (right to left) that is not one. An entry that is not an address stops the
+/// walk at the last address read.
+fn client<'a>(peer: Peer, forwarded: impl Iterator<Item = &'a str>, proxies: &[Network]) -> Option<IpAddr> {
+    let trusted = |ip: IpAddr| proxies.iter().any(|network| network.contains(ip));
+    let mut last = match peer {
+        Peer::Ip(ip) => Some(ip.to_canonical()),
+        Peer::Local => None,
+        Peer::Unknown => return None,
+    };
+    if proxies.is_empty() || last.is_some_and(|ip| !trusted(ip)) {
+        return last;
+    }
+    for entry in forwarded {
+        let Some(ip) = address(entry.trim()) else { return last };
+        if !trusted(ip) {
+            return Some(ip);
+        }
+        last = Some(ip);
+    }
+    last
+}
+
+/// An `X-Forwarded-For` entry: an address, with a port or in brackets as some proxies write it.
+fn address(entry: &str) -> Option<IpAddr> {
+    let ip = entry
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| entry.parse::<SocketAddr>().ok().map(|addr| addr.ip()))
+        .or_else(|| entry.strip_prefix('[')?.strip_suffix(']')?.parse().ok())?;
+    Some(ip.to_canonical())
+}
+
+/// An address or a network of them: `10.0.0.0/8`, `127.0.0.1`, `fc00::/7`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Network {
+    ip: IpAddr,
+    bits: u8,
+}
+
+impl Network {
+    /// `text` as a network, or `None` when it is not one (a host bit set counts as not one, so a
+    /// typo does not trust a wider network than meant).
+    pub(crate) fn parse(text: &str) -> Option<Network> {
+        let (ip, bits) = match text.split_once('/') {
+            Some((ip, bits)) => (ip, Some(bits)),
+            None => (text, None),
+        };
+        let ip = ip.parse::<IpAddr>().ok()?.to_canonical();
+        let max = if ip.is_ipv4() { 32 } else { 128 };
+        let bits = match bits {
+            Some(bits) if !bits.is_empty() && bits.bytes().all(|b| b.is_ascii_digit()) => bits.parse::<u8>().ok()?,
+            Some(_) => return None,
+            None => max,
+        };
+        let network = Network { ip, bits };
+        (bits <= max && network.masked(ip) == bits_of(ip)).then_some(network)
+    }
+
+    fn contains(&self, ip: IpAddr) -> bool {
+        self.ip.is_ipv4() == ip.is_ipv4() && self.masked(ip) == bits_of(self.ip)
+    }
+
+    /// `ip`'s bits with those past the prefix cleared.
+    fn masked(&self, ip: IpAddr) -> u128 {
+        let width = if ip.is_ipv4() { 32 } else { 128 };
+        let keep = u32::from(self.bits);
+        let mask = if keep == 0 { 0 } else { u128::MAX << (width - keep) };
+        bits_of(ip) & (mask & (u128::MAX >> (128 - width)))
+    }
+}
+
+fn bits_of(ip: IpAddr) -> u128 {
+    match ip {
+        IpAddr::V4(ip) => u128::from(u32::from(ip)),
+        IpAddr::V6(ip) => u128::from(ip),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `WithPeer` lends its connection's bound to the thread only while it polls, and takes it
+    /// back when the poll panics, so no later request's deadline is written into it (#887).
+    #[test]
+    fn a_poll_lends_the_bound_and_takes_it_back_when_it_panics() {
+        use std::{future::Future, task::Poll};
+        let lent = || {
+            BOUND.with(|cell| {
+                let bound = cell.take();
+                let some = bound.is_some();
+                cell.set(bound);
+                some
+            })
+        };
+        let bound = Arc::new(Bound::new());
+        let mut request = WithPeer::new(
+            Peer::Unknown,
+            Some(bound.clone()),
+            std::future::poll_fn(|_| -> Poll<()> {
+                assert!(lent(), "the thread has it while the request is polled");
+                answering(Some(std::time::Duration::from_secs(7)));
+                panic!("the handler panics");
+            }),
+        );
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| std::pin::Pin::new(&mut request).poll(&mut cx)));
+        assert!(polled.is_err());
+        assert!(!lent(), "the thread has it no more");
+        assert_eq!(Arc::strong_count(&bound), 2, "the request has it back");
+    }
+
+    fn nets(list: &[&str]) -> Vec<Network> {
+        list.iter().map(|n| Network::parse(n).unwrap()).collect()
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    fn of(peer: Peer, forwarded: &str, proxies: &[&str]) -> Option<IpAddr> {
+        client(peer, forwarded.split(',').rev().filter(|e| !e.is_empty()), &nets(proxies))
+    }
+
+    #[test]
+    fn networks_parse_as_written() {
+        assert!(Network::parse("10.0.0.0/8").is_some());
+        assert!(Network::parse("127.0.0.1").is_some());
+        assert!(Network::parse("fc00::/7").is_some());
+        assert!(Network::parse("0.0.0.0/0").is_some());
+        for wrong in ["10.0.0.1/8", "10.0.0.0/33", "10.0.0.0/", "10.0.0.0/+8", "shop.example", "::1/129", ""] {
+            assert_eq!(Network::parse(wrong), None, "{wrong}");
+        }
+        let private = Network::parse("172.16.0.0/12").unwrap();
+        assert!(private.contains(ip("172.31.255.255")));
+        assert!(!private.contains(ip("172.32.0.0")));
+        assert!(!private.contains(ip("::ffff:172.16.0.1")), "callers canonicalize first");
+        assert!(Network::parse("fc00::/7").unwrap().contains(ip("fd12::1")));
+        assert!(Network::parse("::ffff:10.0.0.0/104").is_none(), "a mapped network is read as IPv4, so /104 is too long");
+        assert!(Network::parse("::ffff:10.0.0.1").unwrap().contains(ip("10.0.0.1")));
+    }
+
+    #[test]
+    fn without_proxies_the_peer_is_the_client() {
+        let peer = Peer::Ip(ip("203.0.113.9"));
+        assert_eq!(of(peer, "198.51.100.1", &[]), Some(ip("203.0.113.9")));
+        assert_eq!(of(Peer::Ip(ip("::ffff:203.0.113.9")), "", &[]), Some(ip("203.0.113.9")));
+        assert_eq!(of(Peer::Local, "198.51.100.1", &[]), None);
+        assert_eq!(of(Peer::Unknown, "198.51.100.1", &["0.0.0.0/0"]), None);
+    }
+
+    #[test]
+    fn a_peer_that_is_not_a_proxy_is_the_client_whatever_it_forwards() {
+        assert_eq!(of(Peer::Ip(ip("203.0.113.9")), "198.51.100.1", &["10.0.0.0/8"]), Some(ip("203.0.113.9")));
+    }
+
+    #[test]
+    fn behind_proxies_the_nearest_address_that_is_not_one() {
+        let proxies = ["10.0.0.0/8", "fc00::/7"];
+        let peer = Peer::Ip(ip("10.0.0.2"));
+        // The client wrote 1.1.1.1 itself; 198.51.100.7 is what the first proxy saw.
+        assert_eq!(of(peer, "1.1.1.1, 198.51.100.7, 10.0.0.1", &proxies), Some(ip("198.51.100.7")));
+        assert_eq!(of(peer, "198.51.100.7:4711", &proxies), Some(ip("198.51.100.7")));
+        assert_eq!(of(peer, "[2001:db8::7]:4711", &proxies), Some(ip("2001:db8::7")));
+        assert_eq!(of(peer, "[2001:db8::7]", &proxies), Some(ip("2001:db8::7")));
+        assert_eq!(of(peer, "::ffff:198.51.100.7", &proxies), Some(ip("198.51.100.7")));
+        // Only proxies: the furthest one is as near as it goes.
+        assert_eq!(of(peer, "10.0.0.9, 10.0.0.1", &proxies), Some(ip("10.0.0.9")));
+        // No header: the proxy itself.
+        assert_eq!(of(peer, "", &proxies), Some(ip("10.0.0.2")));
+        // An entry that is not an address stops at the last address read.
+        assert_eq!(of(peer, "198.51.100.7, unknown, 10.0.0.1", &proxies), Some(ip("10.0.0.1")));
+        assert_eq!(of(Peer::Local, "198.51.100.7", &proxies), Some(ip("198.51.100.7")));
+        assert_eq!(of(Peer::Local, "", &proxies), None);
+    }
+}

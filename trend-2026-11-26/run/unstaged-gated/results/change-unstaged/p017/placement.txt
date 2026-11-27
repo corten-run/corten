@@ -1,0 +1,8 @@
+comparison change-unstaged placement 17 workload unstaged
+A base-p36160 57f5706a028a0e057b2c6e0202062d3e75c3cbdbd0b9e55f9e9a380fc6b41985
+B head-p36160 7da5a5f00c9612d4e2f374959f9da561c9653270859be43e8bacf8a8c2003ced
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 50
+started 2026-11-27T00:45:08Z
+ended 2026-11-27T00:46:11Z

@@ -1,0 +1,590 @@
+//! `#[derive(FromJson)]`: a struct, or an enum of unit variants, read from JSON by Corten's reader,
+//! with serde_json reading the text instead wherever the reader gives up.
+//!
+//! The generated `__read` matches each key against the field names (after `rename`, `rename_all`
+//! and `alias`), reads a known field's value straight into its type and skips the rest. A
+//! duplicate or missing field without a default gives up, so serde_json's answer (an error, or
+//! `None` for an `Option`) is the one returned.
+//!
+//! `#[serde(...)]` is read so the value is what serde's `Deserialize` makes; an attribute that changes
+//! how serde reads in a way this does not follow is a compile error.
+
+use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
+
+use crate::{
+    component::split,
+    derive::{parse_item, Item},
+    schema::{left_out, Body as Schema, DefaultValue, SchemaField, SchemaVariant, VShape},
+    to_json::{bounded, field_rule, serde_args_for, variant_rule, Arg, Value, RULES},
+    tokens::{err, is_ident, is_punct, q, Error},
+};
+
+const NAME: &str = "FromJson";
+
+pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
+    let item = parse_item(input, NAME, true)?;
+    let mut out = impls(&item)?;
+    // serde's `Deserialize`, the fallback, from the same attributes: the type needs no
+    // `#[derive(Deserialize)]` beside this one.
+    out.extend(crate::deserialize::for_from_json(&item)?);
+    Ok(out)
+}
+
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` add, since they write the type's
+/// `Deserialize` already: its `FromJson` (with corten's feature `json`) and schema (with
+/// `types`), so the type is read from JSON with no derive beside theirs. A generic type's
+/// `FromJson` is the trait's own body, which hands the text to serde_json, under the bounds that
+/// make the type `DeserializeOwned`: the ones serde infers (`T: Default` for a defaulted `T`,
+/// a bound on `T::Assoc`) are not one per parameter, and a reader written against them would
+/// need each of them. Nothing for one whose `Deserialize` borrows from its input (a `FromJson`
+/// is read into owned values), or one `FromJson` cannot read (an attribute it does not follow).
+pub fn beside_deserialize(item: &Item) -> TokenStream {
+    if crate::deserialize::struct_lends(item) {
+        return TokenStream::new();
+    }
+    match impls_with(item, !item.impl_generics.is_empty()) {
+        Ok(code) => q("::corten::__if_json! { __A0 }", &[code]),
+        Err(_) => TokenStream::new(),
+    }
+}
+
+/// The `FromJson` impl and its schema (feature `types`).
+fn impls(item: &Item) -> Result<TokenStream, Error> {
+    impls_with(item, false)
+}
+
+/// [`impls`]; with `by_serde`, the `FromJson` impl is the trait's own body (serde_json reads the
+/// text) and its bounds are only the type's own. A generic type's impl also asks for
+/// `Self: DeserializeOwned`, the trait's supertrait, on either path: the bounds inferred for its
+/// `Deserialize` (`T: Default` for a defaulted `Vec<T>`) need not follow from the ones here, the
+/// derive's own `Deserialize` included.
+fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
+    let container = Container::read(&item.attrs, item.is_enum)?;
+    let schema;
+    let body = if item.is_enum {
+        let Some(body) = &item.body else { return err(item.name.span(), "FromJson: expected the enum's variants") };
+        let (code, variants, other) = enumeration(&container, body)?;
+        // With `#[serde(other)]`, any word is one of the enum's.
+        schema = if other {
+            Schema::Value(q("::std::string::String", &[]))
+        } else {
+            Schema::Enum { tagging: crate::schema::Tagging::External, variants }
+        };
+        code
+    } else if let Some(fields) = &item.tuple {
+        let fields = parse_fields(fields, false)?;
+        let read: Vec<TokenStream> = fields.iter().filter(|f| !f.skip).map(ty).collect();
+        schema = match (container.transparent || fields.len() == 1, read.as_slice()) {
+            (true, [only]) => Schema::Value(only.clone()),
+            _ => Schema::Tuple(read),
+        };
+        if container.transparent {
+            transparent(&fields, item.name.span())?
+        } else {
+            tuple(&fields, item.name.span())?
+        }
+    } else if let Some(fields) = &item.body {
+        let fields = parse_fields(fields, true)?;
+        schema = if container.transparent {
+            match fields.iter().find(|f| !f.skip) {
+                Some(f) => Schema::Value(ty(f)),
+                None => Schema::Unit,
+            }
+        } else {
+            Schema::Object { fields: schema_fields(&container, &fields), deny_unknown: container.deny_unknown_fields }
+        };
+        if container.transparent {
+            transparent(&fields, item.name.span())?
+        } else {
+            object(&container, &fields)
+        }
+    } else {
+        schema = Schema::Unit;
+        q("if __r.null() { ::core::result::Result::Ok(Self) } else { ::core::result::Result::Err(::corten::json::__read::Fallback) }", &[])
+    };
+
+    // Each type parameter must be FromJson itself (and describe itself, for the schema).
+    let mut where_clause = if by_serde {
+        item.where_clause.clone()
+    } else {
+        bounded(&item.impl_generics, &item.where_clause, "::corten::json::FromJson")
+    };
+    if !item.impl_generics.is_empty() {
+        let last = where_clause.clone().into_iter().last();
+        where_clause.extend(q(
+            match last {
+                None => "where",
+                Some(TokenTree::Punct(p)) if p.as_char() == ',' => "",
+                Some(_) => ",",
+            },
+            &[],
+        ));
+        where_clause.extend(q("Self: ::corten::__private::serde::de::DeserializeOwned", &[]));
+    }
+    let schema_where = bounded(&item.impl_generics, &item.where_clause, "::corten::json::schema::FromJsonSchema");
+    let schema = crate::schema::expand(
+        crate::schema::Side::Read,
+        &item.name,
+        &item.impl_generics,
+        &item.type_generics,
+        &schema_where,
+        &crate::schema::doc(&item.attrs),
+        &schema,
+    );
+    let mut out = q("#[automatically_derived] impl", &[]);
+    out.extend(item.impl_generics.clone());
+    out.extend(q("::corten::json::FromJson for", &[]));
+    out.extend([TokenTree::Ident(item.name.clone())]);
+    out.extend(item.type_generics.clone());
+    out.extend(where_clause);
+    out.extend([TokenTree::Group(Group::new(
+        Delimiter::Brace,
+        if by_serde {
+            TokenStream::new()
+        } else {
+            q(
+                "#[allow(unused_mut, unused_variables, unused_imports, clippy::all)]
+            fn __read(__r: &mut ::corten::json::__read::Reader<'_>)
+                -> ::core::result::Result<Self, ::corten::json::__read::Fallback> {
+                use ::corten::json::__read::{ViaDeserialize as _, ViaFromJson as _};
+                __A0
+            }",
+                &[body],
+            )
+        },
+    ))]);
+    out.extend(schema);
+    // Naming a deprecated item warns no more than the item itself does, as serde_derive's.
+    if crate::deserialize::allows_deprecated(&item.attrs) {
+        return Ok(q("#[allow(deprecated)] const _: () = { __A0 };", &[out]));
+    }
+    Ok(out)
+}
+
+fn unsupported<T>(arg: &Arg) -> Result<T, Error> {
+    err(
+        arg.span,
+        format!(
+            "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json, and an empty `impl corten::FromJson for T {{}}` makes it a FromJson read by serde_json)",
+            arg.key
+        ),
+    )
+}
+
+fn string(arg: &Arg) -> Result<String, Error> {
+    match &arg.value {
+        Value::Str(s) => Ok(s.clone()),
+        _ => err(arg.span, format!("FromJson: use #[serde({} = \"...\")]", arg.key)),
+    }
+}
+
+fn rule(arg: &Arg) -> Result<String, Error> {
+    let rule = string(arg)?;
+    if !RULES.contains(&rule.as_str()) {
+        return err(arg.span, format!("FromJson: unknown rename_all rule {rule:?}; serde's are {}", RULES.join(", ")));
+    }
+    Ok(rule)
+}
+
+fn default(arg: &Arg) -> Result<DefaultValue, Error> {
+    match &arg.value {
+        Value::Bare => Ok(DefaultValue::Trait),
+        Value::Str(path) => match path.parse::<TokenStream>() {
+            Ok(path) => Ok(DefaultValue::Path(path)),
+            Err(_) => err(arg.span, "FromJson: default takes a function's path"),
+        },
+        Value::Group(_) => err(arg.span, "FromJson: use #[serde(default)] or #[serde(default = \"path\")]"),
+    }
+}
+
+#[derive(Default)]
+struct Container {
+    rename_all: Option<String>,
+    default: Option<DefaultValue>,
+    deny_unknown_fields: bool,
+    transparent: bool,
+}
+
+impl Container {
+    fn read(attrs: &[Group], is_enum: bool) -> Result<Self, Error> {
+        let mut c = Container::default();
+        for arg in serde_args_for(attrs, NAME)? {
+            match arg.key.as_str() {
+                "rename_all" => c.rename_all = Some(rule(&arg)?),
+                "default" if !is_enum => c.default = Some(default(&arg)?),
+                "deny_unknown_fields" => c.deny_unknown_fields = true,
+                "transparent" if !is_enum => c.transparent = true,
+                "rename_all_fields" if !is_enum => {
+                    return err(arg.span, "FromJson: #[serde(rename_all_fields)] can only be used on enums")
+                }
+                // Writing only, the type's own name, serde's path, or its error text and bounds:
+                // none changes what a successful read makes.
+                "rename" | "rename_all_fields" | "into" | "crate" | "expecting" | "bound" => {}
+                _ => return unsupported(&arg),
+            }
+        }
+        Ok(c)
+    }
+}
+
+struct Field {
+    /// The name, without `r#`; `None` in a tuple.
+    name: Option<String>,
+    /// The identifier as written (`r#type` stays raw), or the position in a tuple.
+    member: TokenTree,
+    rename: Option<String>,
+    aliases: Vec<String>,
+    default: Option<DefaultValue>,
+    skip: bool,
+    ty: Vec<TokenTree>,
+    /// For the schema: its doc comment.
+    doc: String,
+}
+
+fn parse_fields(group: &Group, named: bool) -> Result<Vec<Field>, Error> {
+    let mut fields = Vec::new();
+    for (index, tokens) in split(group.stream(), ',').into_iter().enumerate() {
+        let mut j = 0;
+        let mut attrs = Vec::new();
+        while is_punct(tokens.get(j), '#') {
+            if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
+                attrs.push(g.clone());
+            }
+            j += 2;
+        }
+        if is_ident(tokens.get(j), "pub") {
+            j += 1;
+            if matches!(tokens.get(j), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis) {
+                j += 1;
+            }
+        }
+        let (name, member, ty) = if named {
+            let (Some(TokenTree::Ident(ident)), true) = (tokens.get(j), is_punct(tokens.get(j + 1), ':')) else {
+                return err(group.span(), "FromJson: expected a named field");
+            };
+            let text = ident.to_string();
+            (
+                Some(text.strip_prefix("r#").unwrap_or(&text).to_string()),
+                TokenTree::Ident(ident.clone()),
+                tokens[j + 2..].to_vec(),
+            )
+        } else {
+            (None, TokenTree::Literal(Literal::usize_unsuffixed(index)), tokens[j..].to_vec())
+        };
+        let doc = crate::schema::doc(&attrs);
+        let mut field = Field { name, member, rename: None, aliases: Vec::new(), default: None, skip: false, ty, doc };
+        for arg in serde_args_for(&attrs, NAME)? {
+            match arg.key.as_str() {
+                "rename" => field.rename = Some(string(&arg)?),
+                "alias" => field.aliases.push(string(&arg)?),
+                "default" => field.default = Some(default(&arg)?),
+                "skip" | "skip_deserializing" => field.skip = true,
+                // Writing only, or bounds.
+                "skip_serializing" | "skip_serializing_if" | "serialize_with" | "bound" | "getter" => {}
+                _ => return unsupported(&arg),
+            }
+        }
+        fields.push(field);
+    }
+    Ok(fields)
+}
+
+fn ty(field: &Field) -> TokenStream {
+    field.ty.iter().cloned().collect()
+}
+
+fn var(index: usize) -> TokenStream {
+    TokenTree::Ident(Ident::new(&format!("__f{index}"), Span::mixed_site())).into()
+}
+
+/// Reads the field's value: by its `FromJson` impl, or by serde_json from its text.
+fn read(field: &Field) -> TokenStream {
+    q("(&::corten::json::__read::Read::<__A0>::new()).__read(__r)?", &[ty(field)])
+}
+
+/// What a field the object leaves out (or a skipped one) is: its own default, the container's,
+/// or (not skipped) what serde makes of a missing field.
+fn fallback_value(container: &Container, field: &Field) -> TokenStream {
+    let member: TokenStream = field.member.clone().into();
+    match (&field.default, &container.default) {
+        (Some(DefaultValue::Trait), _) => q("::core::default::Default::default()", &[]),
+        (Some(DefaultValue::Path(path)), _) => q("__A0()", std::slice::from_ref(path)),
+        (None, Some(_)) => q("__default.__A0", &[member]),
+        (None, None) if field.skip => q("::core::default::Default::default()", &[]),
+        (None, None) => q("::corten::json::__read::missing::<__A0>()?", &[ty(field)]),
+    }
+}
+
+fn container_default(container: &Container) -> TokenStream {
+    match &container.default {
+        Some(DefaultValue::Trait) => q("let __default: Self = ::core::default::Default::default();", &[]),
+        Some(DefaultValue::Path(path)) => q("let __default: Self = __A0();", std::slice::from_ref(path)),
+        None => TokenStream::new(),
+    }
+}
+
+/// A named field's key: its `rename`, or its name under the container's rule.
+fn key(container: &Container, field: &Field) -> String {
+    let name = field.name.as_deref().unwrap_or_default();
+    field
+        .rename
+        .clone()
+        .unwrap_or_else(|| container.rename_all.as_deref().map_or(name.to_string(), |rule| field_rule(name, rule)))
+}
+
+/// The fields a read takes, as the schema describes them: by key, with what a left-out one is.
+fn schema_fields(container: &Container, fields: &[Field]) -> Vec<SchemaField> {
+    fields
+        .iter()
+        .filter(|f| !f.skip)
+        .map(|f| SchemaField {
+            key: key(container, f),
+            ty: ty(f),
+            doc: f.doc.clone(),
+            default: left_out(f.default.as_ref(), container.default.as_ref(), &ty(f), &f.member.clone().into()),
+            skip_if: None,
+            flatten: false,
+        })
+        .collect()
+}
+
+fn byte_string(text: &str) -> TokenStream {
+    TokenTree::Literal(Literal::byte_string(text.as_bytes())).into()
+}
+
+/// A struct with named fields, from an object.
+fn object(container: &Container, fields: &[Field]) -> TokenStream {
+    if container.default.is_some() {
+        return object_over_default(container, fields);
+    }
+    let mut vars = TokenStream::new();
+    let mut arms = TokenStream::new();
+    let mut build = TokenStream::new();
+    for (index, field) in fields.iter().enumerate() {
+        let member: TokenStream = field.member.clone().into();
+        if field.skip {
+            build.extend(q("__A0: __A1,", &[member, fallback_value(container, field)]));
+            continue;
+        }
+        let mut pattern = byte_string(&key(container, field));
+        for alias in &field.aliases {
+            pattern.extend(q("|", &[]));
+            pattern.extend(byte_string(alias));
+        }
+        vars.extend(q("let mut __A0: ::core::option::Option<__A1> = ::core::option::Option::None;", &[var(index), ty(field)]));
+        arms.extend(q(
+            "__A0 => {
+                if __A1.is_some() {
+                    return ::core::result::Result::Err(::corten::json::__read::Fallback);
+                }
+                __A1 = ::core::option::Option::Some(__A2);
+            }",
+            &[pattern, var(index), read(field)],
+        ));
+        build.extend(q(
+            "__A0: match __A1 { ::core::option::Option::Some(v) => v, ::core::option::Option::None => __A2 },",
+            &[member, var(index), fallback_value(container, field)],
+        ));
+    }
+    let unknown = if container.deny_unknown_fields {
+        q("_ => return ::core::result::Result::Err(::corten::json::__read::Fallback),", &[])
+    } else {
+        q("_ => __r.skip()?,", &[])
+    };
+    arms.extend(unknown);
+    q(
+        "__A0
+        if __r.object()? {
+            loop {
+                match __r.key()? { __A1 }
+                if !__r.more()? {
+                    break;
+                }
+            }
+        }
+        __A2
+        ::core::result::Result::Ok(Self { __A3 })",
+        &[vars, arms, container_default(container), build],
+    )
+}
+
+/// A struct with a container default, read over that default: each field the object has is
+/// written in place, and one it leaves out keeps the default's value (or takes its own default).
+fn object_over_default(container: &Container, fields: &[Field]) -> TokenStream {
+    let mut vars = TokenStream::new();
+    let mut arms = TokenStream::new();
+    let mut after = TokenStream::new();
+    for (index, field) in fields.iter().enumerate() {
+        let member: TokenStream = field.member.clone().into();
+        let own_default = match &field.default {
+            Some(DefaultValue::Trait) => Some(q("::core::default::Default::default()", &[])),
+            Some(DefaultValue::Path(path)) => Some(q("__A0()", std::slice::from_ref(path))),
+            None => None,
+        };
+        if field.skip {
+            if let Some(value) = own_default {
+                after.extend(q("__out.__A0 = __A1;", &[member, value]));
+            }
+            continue;
+        }
+        let mut pattern = byte_string(&key(container, field));
+        for alias in &field.aliases {
+            pattern.extend(q("|", &[]));
+            pattern.extend(byte_string(alias));
+        }
+        vars.extend(q("let mut __A0 = false;", &[var(index)]));
+        arms.extend(q(
+            "__A0 => {
+                if __A1 {
+                    return ::core::result::Result::Err(::corten::json::__read::Fallback);
+                }
+                __A1 = true;
+                __out.__A2 = __A3;
+            }",
+            &[pattern, var(index), member.clone(), read(field)],
+        ));
+        if let Some(value) = own_default {
+            after.extend(q("if !__A0 { __out.__A1 = __A2; }", &[var(index), member, value]));
+        }
+    }
+    let unknown = if container.deny_unknown_fields {
+        q("_ => return ::core::result::Result::Err(::corten::json::__read::Fallback),", &[])
+    } else {
+        q("_ => __r.skip()?,", &[])
+    };
+    arms.extend(unknown);
+    let start = match &container.default {
+        Some(DefaultValue::Path(path)) => q("__A0()", std::slice::from_ref(path)),
+        _ => q("::core::default::Default::default()", &[]),
+    };
+    q(
+        "let mut __out: Self = __A0;
+        __A1
+        if __r.object()? {
+            loop {
+                match __r.key()? { __A2 }
+                if !__r.more()? {
+                    break;
+                }
+            }
+        }
+        __A3
+        ::core::result::Result::Ok(__out)",
+        &[start, vars, arms, after],
+    )
+}
+
+/// A tuple struct: one field is its value (serde's newtype), more are an array of exactly that
+/// many.
+fn tuple(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
+    if fields.iter().any(|f| f.skip || f.default.is_some()) {
+        return err(span, "FromJson: skip and default in a tuple struct are not supported; derive Deserialize alone");
+    }
+    let mut build = TokenStream::new();
+    if let [field] = fields {
+        build.extend(q("0: __A0,", &[read(field)]));
+        return Ok(q("::core::result::Result::Ok(Self { __A0 })", &[build]));
+    }
+    let mut steps = TokenStream::new();
+    for (index, field) in fields.iter().enumerate() {
+        let more = if index + 1 < fields.len() {
+            q("if !__r.more_items()? { return ::core::result::Result::Err(::corten::json::__read::Fallback); }", &[])
+        } else {
+            q("if __r.more_items()? { return ::core::result::Result::Err(::corten::json::__read::Fallback); }", &[])
+        };
+        steps.extend(q("let __A0 = __A1; __A2", &[var(index), read(field), more]));
+        build.extend(q("__A0: __A1,", &[field.member.clone().into(), var(index)]));
+    }
+    Ok(q(
+        "if !__r.array()? {
+            return ::core::result::Result::Err(::corten::json::__read::Fallback);
+        }
+        __A0
+        ::core::result::Result::Ok(Self { __A1 })",
+        &[steps, build],
+    ))
+}
+
+/// `#[serde(transparent)]`: the one field that is not skipped is the value; the others are
+/// their defaults.
+fn transparent(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
+    let mut read_fields = fields.iter().filter(|f| !f.skip);
+    let (Some(_), None) = (read_fields.next(), read_fields.next()) else {
+        return err(span, "FromJson: #[serde(transparent)] needs exactly one field that is not skipped");
+    };
+    let mut build = TokenStream::new();
+    for field in fields {
+        let value = if field.skip {
+            match &field.default {
+                Some(DefaultValue::Path(path)) => q("__A0()", std::slice::from_ref(path)),
+                _ => q("::core::default::Default::default()", &[]),
+            }
+        } else {
+            read(field)
+        };
+        build.extend(q("__A0: __A1,", &[field.member.clone().into(), value]));
+    }
+    Ok(q("::core::result::Result::Ok(Self { __A0 })", &[build]))
+}
+
+/// An enum of unit variants, from its name as a string, and whether one is `#[serde(other)]` (a
+/// `UrlValue`'s: any other word gives up, and serde's `Deserialize` reads it as that variant).
+fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<SchemaVariant>, bool), Error> {
+    let mut arms = TokenStream::new();
+    let mut variants = Vec::new();
+    let mut other = false;
+    for tokens in crate::component::variants(body.stream()) {
+        let mut j = 0;
+        let mut attrs = Vec::new();
+        while is_punct(tokens.get(j), '#') {
+            if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
+                attrs.push(g.clone());
+            }
+            j += 2;
+        }
+        let Some(TokenTree::Ident(ident)) = tokens.get(j) else { return err(body.span(), "FromJson: expected a variant") };
+        if matches!(tokens.get(j + 1), Some(TokenTree::Group(_))) {
+            return err(
+                ident.span(),
+                "FromJson: only an enum of unit variants is read; derive Deserialize alone for this enum (as a field it is then read by serde_json)",
+            );
+        }
+        let (mut rename, mut aliases, mut skip) = (None, Vec::new(), false);
+        for arg in serde_args_for(&attrs, NAME)? {
+            match arg.key.as_str() {
+                "rename" => rename = Some(string(&arg)?),
+                "alias" => aliases.push(string(&arg)?),
+                "skip" | "skip_deserializing" => skip = true,
+                "skip_serializing" | "serialize_with" | "bound" => {}
+                "other" => other = true,
+                _ => return unsupported(&arg),
+            }
+        }
+        if skip {
+            continue;
+        }
+        let name = rename.unwrap_or_else(|| {
+            let text = ident.to_string();
+            let text = text.strip_prefix("r#").unwrap_or(&text).to_string();
+            container.rename_all.as_deref().map_or(text.clone(), |rule| variant_rule(&text, rule))
+        });
+        variants.push(SchemaVariant { name: name.clone(), doc: crate::schema::doc(&attrs), shape: VShape::Unit });
+        let mut pattern = byte_string(&name);
+        for alias in &aliases {
+            pattern.extend(q("|", &[]));
+            pattern.extend(byte_string(alias));
+        }
+        arms.extend(q("__A0 => ::core::result::Result::Ok(Self::__A1),", &[pattern, TokenTree::Ident(ident.clone()).into()]));
+    }
+    Ok((
+        q(
+            "match __r.name()? {
+            __A0
+            _ => ::core::result::Result::Err(::corten::json::__read::Fallback),
+        }",
+            &[arms],
+        ),
+        variants,
+        other,
+    ))
+}

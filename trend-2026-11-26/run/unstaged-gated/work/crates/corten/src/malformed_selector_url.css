@@ -1,0 +1,5 @@
+@scope (body) {
+  @scope (:scope > main) {
+    :is(.list,[x=&url(a')],p,[y=url(a' )]) { outline-style:solid }
+  }
+}

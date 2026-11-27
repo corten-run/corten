@@ -1,0 +1,11 @@
+#!/bin/sh
+# wrap/cc: the `cc` rustc runs as its linker driver while build.sh builds the probe (build.sh puts
+# a copy of this file first on PATH, so rustc's own choice of linker and flags is unchanged). For the
+# probe binary's final link (an -o whose file is probe or probe-<hash>), link-capture.mjs first
+# records the command line and copies its inputs into $LINK_CAPTURE; every other call (build
+# scripts' links and compiles) passes straight through. Either way the real driver, /usr/bin/cc,
+# then runs. build.sh sets PLACEMENT_KIT to the kit's directory.
+case " $* " in
+    *" -o "*/probe" "*|*" -o "*/probe-*) node "$PLACEMENT_KIT/link-capture.mjs" "$@" || { echo "wrap/cc: link capture failed" >&2; exit 1; } ;;
+esac
+exec /usr/bin/cc "$@"

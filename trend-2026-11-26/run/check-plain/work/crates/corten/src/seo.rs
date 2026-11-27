@@ -1,0 +1,223 @@
+//! `robots.txt` and XML sitemaps, written as the search engine protocols define them. Each is the
+//! same for every crawler, so a handler returns it as it comes, `Public<seo::File>`, which shared
+//! caches keep for an hour. So does the app, for one of 1,024 bytes or more, as it keeps any
+//! `Public` text
+//! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler then does not run for
+//! every crawler that asks without credentials, and a URL added since may wait that hour to show.
+//! `.shared(..)` on the answer says another time for shared caches and the app
+//! (`seo::sitemap(urls).shared(Duration::from_secs(60))`), and `App::kept_answers(0)` keeps none.
+//!
+//! ```
+//! use corten::{prelude::*, seo};
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/robots.txt", get = robots)]
+//!     pub struct Robots;
+//!
+//!     #[route("/sitemap.xml", get = sitemap)]
+//!     pub struct Sitemap;
+//! }
+//!
+//! async fn robots() -> Public<seo::File> {
+//!     seo::robots(&["/account/"], Some("https://example.com/sitemap.xml"))
+//! }
+//!
+//! async fn sitemap() -> Public<seo::File> {
+//!     seo::sitemap([seo::SitemapUrl { loc: "https://example.com/", lastmod: None }])
+//! }
+//! # let _ = App::new(url::router()).router();
+//! ```
+
+use std::time::Duration;
+
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::HeaderValue;
+
+use crate::{
+    answer::{Answer, AnyInputs, Format},
+    view::escape_into,
+    Public,
+};
+
+/// How long shared caches keep one: crawlers read them rarely, and a new one may wait an hour.
+const MAX_AGE: Duration = Duration::from_secs(3600);
+
+/// `robots.txt` or a sitemap, with its content type: what [`robots`], [`sitemap`] and
+/// [`sitemap_index`] give, inside [`Public`].
+pub struct File(Response);
+
+impl IntoResponse for File {
+    fn into_response(self) -> Response {
+        self.0
+    }
+}
+
+impl Answer for File {
+    const FORMAT: Format = Format::Html;
+    const WHOLE: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
+    type Inputs = AnyInputs;
+    type Rows = crate::answer::NotAFeed;
+    type Kind = crate::AnyAnswer;
+}
+
+impl crate::answer::Shareable for File {
+    type ForAll = Self;
+}
+
+impl crate::answer::ForEveryone for File {
+    type Named = Self;
+
+    fn for_all(self) -> Self {
+        self
+    }
+}
+
+/// Most URLs one sitemap file may list. Split larger sets with [`sitemap_index`].
+pub const SITEMAP_MAX_URLS: usize = 50_000;
+
+/// One `<url>` entry.
+pub struct SitemapUrl<'a> {
+    pub loc: &'a str,
+    /// `YYYY-MM-DD` or a full W3C datetime.
+    pub lastmod: Option<&'a str>,
+}
+
+/// A `<urlset>` sitemap response. URLs must be absolute; more than [`SITEMAP_MAX_URLS`] panics in
+/// debug builds, because search engines reject the file.
+pub fn sitemap<'a>(urls: impl IntoIterator<Item = SitemapUrl<'a>>) -> Public<File> {
+    let mut out =
+        String::from(r#"<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"#);
+    let mut count = 0;
+    for url in urls {
+        count += 1;
+        out.push_str("<url><loc>");
+        escape_into(url.loc, &mut out);
+        out.push_str("</loc>");
+        if let Some(lastmod) = url.lastmod {
+            out.push_str("<lastmod>");
+            escape_into(lastmod, &mut out);
+            out.push_str("</lastmod>");
+        }
+        out.push_str("</url>");
+    }
+    debug_assert!(count <= SITEMAP_MAX_URLS, "a sitemap holds at most {SITEMAP_MAX_URLS} URLs");
+    out.push_str("</urlset>");
+    xml(out)
+}
+
+/// A `<sitemapindex>` that points at sitemap pages (`/sitemap/items/1.xml`, ...), each a typed
+/// route whose page number comes before `.xml`:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/sitemap.xml", get = index)]
+///     pub struct Index;
+///
+///     #[route("/sitemap/items/{page}.xml", get = items)]
+///     pub struct ItemsPage {
+///         pub page: u32,
+///     }
+///
+///     #[route("/items/{id}", get = item)]
+///     pub struct Item {
+///         pub id: u32,
+///     }
+/// }
+///
+/// const ORIGIN: &str = "https://shop.example";
+///
+/// async fn index() -> Public<corten::seo::File> {
+///     let pages: Vec<String> = (1..=PAGES).map(|page| format!("{ORIGIN}{}", url::ItemsPage { page }.href())).collect();
+///     corten::seo::sitemap_index(pages.iter().map(String::as_str))
+/// }
+///
+/// const PER_PAGE: u32 = 2;
+///
+/// const PAGES: u32 = 3;
+///
+/// async fn items(at: Params<url::ItemsPage>) -> corten::Result<Public<corten::seo::File>> {
+///     // `0.xml` and a page past the last are the app's to refuse.
+///     let page = at.page.checked_sub(1).filter(|page| *page < PAGES).ok_or_else(corten::Error::not_found)?;
+///     let first = page * PER_PAGE + 1;
+///     let locs: Vec<String> = (first..first + PER_PAGE).map(|id| format!("{ORIGIN}{}", url::Item { id }.href())).collect();
+///     Ok(corten::seo::sitemap(locs.iter().map(|loc| corten::seo::SitemapUrl { loc, lastmod: None })))
+/// }
+///
+/// async fn item(_: Params<url::Item>) -> &'static str {
+///     "item"
+/// }
+/// # fn main() { let _ = App::new(url::router()).router(); }
+/// ```
+pub fn sitemap_index<'a>(sitemaps: impl IntoIterator<Item = &'a str>) -> Public<File> {
+    let mut out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"#,
+    );
+    for loc in sitemaps {
+        out.push_str("<sitemap><loc>");
+        escape_into(loc, &mut out);
+        out.push_str("</loc></sitemap>");
+    }
+    out.push_str("</sitemapindex>");
+    xml(out)
+}
+
+fn xml(body: String) -> Public<File> {
+    file("application/xml; charset=utf-8", body)
+}
+
+fn file(content_type: &'static str, body: String) -> Public<File> {
+    let file = File(([(header::CONTENT_TYPE, HeaderValue::from_static(content_type))], body).into_response());
+    Public::new(MAX_AGE, file)
+}
+
+/// `robots.txt`: every path in `disallow` is closed to all crawlers, and `sitemap` is announced.
+pub fn robots(disallow: &[&str], sitemap: Option<&str>) -> Public<File> {
+    let mut out = String::from("User-agent: *\n");
+    if disallow.is_empty() {
+        out.push_str("Allow: /\n");
+    }
+    for path in disallow {
+        assert!(!path.contains('\n'), "one path per line");
+        out.push_str(&format!("Disallow: {path}\n"));
+    }
+    if let Some(sitemap) = sitemap {
+        out.push_str(&format!("Sitemap: {sitemap}\n"));
+    }
+    file("text/plain; charset=utf-8", out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    async fn text(file: Public<File>) -> String {
+        let res = file.into_response();
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=3600");
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn sitemap_escapes_urls() {
+        let res = sitemap([SitemapUrl { loc: "https://a.com/s?q=1&b=<2>", lastmod: Some("2026-10-20") }]).into_response();
+        assert_eq!(res.headers()["content-type"], "application/xml; charset=utf-8");
+        assert!(text(sitemap([SitemapUrl { loc: "https://a.com/s?q=1&b=<2>", lastmod: Some("2026-10-20") }]))
+            .await
+            .contains("<url><loc>https://a.com/s?q=1&amp;b=&lt;2&gt;</loc><lastmod>2026-10-20</lastmod></url>"));
+        assert!(text(sitemap_index(["https://a.com/sitemap/items/1.xml"]))
+            .await
+            .contains("<sitemap><loc>https://a.com/sitemap/items/1.xml</loc></sitemap>"));
+    }
+
+    #[tokio::test]
+    async fn robots_lists_rules_and_sitemap() {
+        let body = text(robots(&["/account/", "/api/"], Some("https://a.com/sitemap.xml"))).await;
+        assert_eq!(body, "User-agent: *\nDisallow: /account/\nDisallow: /api/\nSitemap: https://a.com/sitemap.xml\n");
+    }
+}

@@ -1,0 +1,8 @@
+comparison change-plain placement 15 workload plain
+A base-p10720 b24c7504b00c72083652a175c1decb2f0bcb99f3f9b52d44f7f470bc702772f7
+B head-p10720 1bda074fe384f5b1ac92c33757d9c5f7004efbd9aad53822b289efc2fc299652
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 59
+started 2026-11-26T20:59:57Z
+ended 2026-11-26T21:00:59Z

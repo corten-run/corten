@@ -1,0 +1,2161 @@
+//! `html!`: JSX-like markup compiled to string pushes.
+//!
+//! Static markup is merged at compile time into one `push_str` per run; expressions are escaped
+//! through `corten::view::Render` (or `Display`); control flow is plain Rust (`for`, `if`,
+//! `match`, `let`) written inside the markup, so no intermediate strings or trees are built.
+
+use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
+
+use crate::tokens::{
+    compile_error, err, escape, is_ident, is_punct, literal, literal_text, parens, q, stream, string_value, Error,
+};
+
+/// Elements that never have children or a closing tag.
+const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
+/// Elements whose text is not HTML (written as is, never escaped).
+const RAW_TEXT: &[&str] = &["script", "style"];
+/// Rust keywords that need `r#` as a component prop name.
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern", "fn", "for", "if", "impl", "in",
+    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "static", "struct", "trait", "type", "unsafe", "use",
+    "where", "while", "yield",
+];
+
+pub fn expand(input: TokenStream) -> TokenStream {
+    let (inside, input) = inside_marker(input);
+    // A view written as another view's prop renders inside it, so it borrows what it uses (see
+    // `borrowing`); any other owns it, since it may be returned.
+    let capture = if inside { "" } else { "move " };
+    let (scope, input) = scope_marker(input);
+    match Cursor::new(input).nodes(None).and_then(|mut nodes| {
+        if let Some(scope) = &scope {
+            mark_scope(&mut nodes, scope)?;
+        }
+        check_raw_text(&nodes, None)?;
+        check_pages(&nodes)?;
+        Ok(nodes)
+    }) {
+        Ok(nodes) if is_document(&nodes) => {
+            if let Err((span, message)) = check_document(&nodes) {
+                return compile_error(span, &message);
+            }
+            let mut gen = Gen::default();
+            gen.doc_nodes(&nodes);
+            q(
+                &"::corten::view::DocHtml::new({
+                    static SIZE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+                    &SIZE
+                }, {
+                    const SHELL: u64 = ::corten::view::__private::shell_id(file!(), line!(), column!());
+                    SHELL
+                }, __CAPTURE__|__OUT: &mut ::std::string::String, __PART: ::corten::view::Part| {
+                    #[allow(unused_imports)]
+                    use ::corten::view::__private::{AttrViaDisplay as _, AttrViaValue as _, ViaDisplay as _, ViaRender as _};
+                    __A0
+                })"
+                .replace("__CAPTURE__", capture),
+                &[gen.finish()],
+            )
+        }
+        // One component: the component itself, its props evaluated where the markup is, so a
+        // layout stays a document and borrows what the handler has (`req={&req}`). Its children
+        // own what they use, as a view does.
+        Ok(nodes) if matches!(nodes.as_slice(), [Node::Component { .. }]) => {
+            let [Node::Component { path, props, children }] = nodes.as_slice() else { unreachable!() };
+            let gen = Gen::default();
+            let built = gen.component(path, props, children, !inside);
+            q(
+                "{
+                    #[allow(unused_imports)]
+                    use ::corten::view::__private::{AttrViaDisplay as _, AttrViaValue as _, ViaDisplay as _, ViaRender as _};
+                    __A0
+                }",
+                &[built],
+            )
+        }
+        // `let`s, then one component: a view that owns what the `let`s make (a title it formats,
+        // a link it builds), and a document when the component is one.
+        Ok(nodes) if lets_then_component(&nodes) => {
+            let mut gen = Gen::default();
+            let (component, lets) = nodes.split_last().expect("a component");
+            gen.nodes(lets, false);
+            let Node::Component { path, props, children } = component else { unreachable!() };
+            let built = gen.component(path, props, children, false);
+            gen.code(q("(&&&::corten::view::__private::OneOf(&__A0)).__one(__OUT, __PART)", &[built]));
+            q(
+                &"::corten::view::__private::One::new({
+                    static SIZE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+                    &SIZE
+                }, __CAPTURE__|__OUT: &mut ::std::string::String, __PART: ::std::option::Option<::corten::view::Part>| {
+                    #[allow(unused_imports)]
+                    use ::corten::view::__private::{AttrViaDisplay as _, AttrViaValue as _, ViaDisplay as _, ViaRender as _, ViaDocument as _, ViaPatch as _, ViaView as _};
+                    __A0
+                })".replace("__CAPTURE__", capture),
+                &[gen.finish()],
+            )
+        }
+        Ok(nodes) => {
+            let mut gen = Gen::default();
+            // The closure returns the view's shape, which says whether it is a patch (see
+            // `corten::view::Patch`). A view with a part that cannot be one is written as before.
+            let body = if could_patch(&nodes) {
+                let mut slots = Slots::default();
+                let shape = gen.top_nodes(&nodes, &mut slots);
+                let mut body = slots.lets;
+                body.extend(gen.finish());
+                body.extend(shape);
+                body
+            } else {
+                gen.nodes(&nodes, false);
+                let mut body = gen.finish();
+                body.extend(q("::corten::view::__private::TextOrElementWithoutId", &[]));
+                body
+            };
+            q(
+                &"::corten::view::Html::new({
+                    static SIZE: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
+                    &SIZE
+                }, __CAPTURE__|__OUT: &mut ::std::string::String| {
+                    #[allow(unused_imports)]
+                    use ::corten::view::__private::{AttrViaDisplay as _, AttrViaValue as _, ViaDisplay as _, ViaRender as _, ProofPatch as _, ProofOther as _, ProofId as _, ProofNotId as _};
+                    __A0
+                })".replace("__CAPTURE__", capture),
+                &[body],
+            )
+        }
+        Err((span, message)) => compile_error(span, &message),
+    }
+}
+
+/// One or more `let`s and then one component, nothing else.
+fn lets_then_component(nodes: &[Node]) -> bool {
+    match nodes.split_last() {
+        Some((Node::Component { .. }, lets)) => !lets.is_empty() && lets.iter().all(|n| matches!(n, Node::Let(_))),
+        _ => false,
+    }
+}
+/// The `@__in;` that `borrowing` puts first in a view written as a prop.
+fn inside_marker(input: TokenStream) -> (bool, TokenStream) {
+    let tokens: Vec<TokenTree> = input.clone().into_iter().collect();
+    if is_punct(tokens.first(), '@') && is_ident(tokens.get(1), "__in") && is_punct(tokens.get(2), ';') {
+        return (true, stream(tokens.into_iter().skip(3)));
+    }
+    (false, input)
+}
+
+/// A prop whose whole value is a view lent to it (`action={&html! { .. }}`, or `corten::html!`),
+/// marked to borrow what it uses: it is built and rendered inside the enclosing view's closure,
+/// which already owns or borrows those locals, so the same local can be read again in the rest of
+/// the markup. Any other value is left as written: a view given by value may be kept, and one
+/// inside a closure of its own (`.map(|row| html! { .. })`) may outlive what it would borrow.
+fn borrowing(value: &TokenStream) -> TokenStream {
+    let tokens: Vec<TokenTree> = value.clone().into_iter().collect();
+    // A `{..}` value arrives in parentheses.
+    if let [TokenTree::Group(group)] = tokens.as_slice() {
+        if group.delimiter() == Delimiter::Parenthesis {
+            let mut inner = Group::new(Delimiter::Parenthesis, borrowing(&group.stream()));
+            inner.set_span(group.span());
+            return stream([TokenTree::Group(inner)]);
+        }
+    }
+    let [path @ .., TokenTree::Ident(name), TokenTree::Punct(bang), TokenTree::Group(body)] = tokens.as_slice() else {
+        return value.clone();
+    };
+    // Lent (`&html!`): a reference to the view cannot outlive the render, so borrowing loses
+    // nothing, where a view given by value may be kept (a prop that needs `'static`). And this
+    // macro, by its name or its path in `corten`, not another crate's `html!`.
+    let refs = path.iter().take_while(|t| is_punct(Some(t), '&')).count();
+    let segments: Vec<String> = path[refs..].iter().filter(|t| !is_punct(Some(t), ':')).map(ToString::to_string).collect();
+    let colons = path[refs..].iter().filter(|t| is_punct(Some(t), ':')).count();
+    let ours = match segments.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        [] => colons == 0,
+        ["corten"] | ["corten", "view"] => colons == 2 * segments.len() || colons == 2 * segments.len() + 2,
+        _ => false,
+    };
+    let idents_only = path[refs..].iter().all(|t| matches!(t, TokenTree::Ident(_) | TokenTree::Punct(_)));
+    if refs == 0
+        || inside_marker(body.stream()).0
+        || !ours
+        || !idents_only
+        || name.to_string() != "html"
+        || bang.as_char() != '!'
+        || body.delimiter() == Delimiter::None
+    {
+        return value.clone();
+    }
+    let mut inner = q("@ __in ;", &[]);
+    inner.extend(body.stream());
+    let mut marked = Group::new(body.delimiter(), inner);
+    marked.set_span(body.span());
+    let mut out = stream(tokens[..tokens.len() - 1].iter().cloned());
+    out.extend([TokenTree::Group(marked)]);
+    out
+}
+
+/// A child `{keep_query(&at, &html! { .. })}`: a view lent to a call written there (`&html! { .. }`
+/// as a whole argument) is built and rendered inside this view's closure, as one lent to a prop is,
+/// so it borrows what it uses (`borrowing`; one given by value may be kept). Only the arguments of
+/// the expression's own calls: one inside a closure or a block of its own
+/// (`.map(|row| f(html! { .. }))`) may outlive what it would borrow. A macro's arguments
+/// (`format!(..)`, `stringify!(..)`) are its own to read, so they are left as written. Arguments are split at every top-level comma and joined again as they were, so
+/// a turbofish's comma (`Vec::<A, B>::new()`) only makes two pieces that are not views.
+fn lent_args(expr: TokenStream) -> TokenStream {
+    let mut after_bang = false;
+    expr.into_iter()
+        .map(|token| {
+            let macro_args = std::mem::replace(&mut after_bang, is_punct(Some(&token), '!'));
+            match token {
+                TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis && !macro_args => {
+                    let mut args = TokenStream::new();
+                    let mut arg = Vec::new();
+                    for t in g.stream() {
+                        if is_punct(Some(&t), ',') {
+                            args.extend(borrowing(&stream(arg.drain(..))));
+                            args.extend([t]);
+                        } else {
+                            arg.push(t);
+                        }
+                    }
+                    args.extend(borrowing(&stream(arg)));
+                    let mut lent = Group::new(Delimiter::Parenthesis, args);
+                    lent.set_span(g.span());
+                    TokenTree::Group(lent)
+                }
+                other => other,
+            }
+        })
+        .collect()
+}
+
+/// `#[component]` starts the markup of a component with refs with `@scope "name";`.
+fn scope_marker(input: TokenStream) -> (Option<String>, TokenStream) {
+    let tokens: Vec<TokenTree> = input.clone().into_iter().collect();
+    if let (true, true, Some(TokenTree::Literal(name)), true) =
+        (is_punct(tokens.first(), '@'), is_ident(tokens.get(1), "scope"), tokens.get(2), is_punct(tokens.get(3), ';'))
+    {
+        if let Some(name) = string_value(name) {
+            return (Some(name), stream(tokens.into_iter().skip(4)));
+        }
+    }
+    (None, input)
+}
+
+/// Puts `data-scope="name"` on the one root element.
+fn mark_scope(nodes: &mut [Node], scope: &str) -> Result<(), Error> {
+    let mut roots = nodes.iter_mut().filter(|n| !matches!(n, Node::Let(_)));
+    match (roots.next(), roots.next()) {
+        (Some(Node::Element { attrs, .. }), None) => {
+            attrs.insert(0, Attr::Static("data-scope".into(), scope.into()));
+            Ok(())
+        }
+        _ => err(
+            Span::call_site(),
+            "a component with refs, or with a handler that takes scope, renders one root element, which holds its refs and is its scope: wrap its markup in one element",
+        ),
+    }
+}
+
+/// How a view property reads back from the page, from the parameter's Rust type.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Number,
+    Text,
+    Bool,
+}
+
+impl Kind {
+    /// `u32`, `f64`, `&'a str`, `String`, `Cow<'a, str>` or `bool`; other types are not a
+    /// view's (a script could not read them back from the page as the same value).
+    fn of(ty: &[TokenTree]) -> Option<Kind> {
+        let mut i = 0;
+        loop {
+            match ty.get(i) {
+                Some(TokenTree::Punct(p)) if p.as_char() == '&' => i += 1,
+                Some(TokenTree::Punct(p)) if p.as_char() == '\'' => i += 2,
+                Some(TokenTree::Ident(id)) if id.to_string() == "mut" => i += 1,
+                _ => break,
+            }
+        }
+        let words: Vec<String> = ty[i..].iter().map(ToString::to_string).collect();
+        match words.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            ["u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" | "f32" | "f64"] => {
+                Some(Kind::Number)
+            }
+            ["str" | "String"] => Some(Kind::Text),
+            ["bool"] => Some(Kind::Bool),
+            ["Cow", "<", .., "str", ">"] => Some(Kind::Text),
+            _ => None,
+        }
+    }
+
+    fn ts(self) -> &'static str {
+        match self {
+            Kind::Number => "number",
+            Kind::Text => "string",
+            Kind::Bool => "boolean",
+        }
+    }
+}
+
+/// Where a parameter is shown: an element's whole text, or one attribute's whole value. `path` is
+/// the element's place under the root, as child-element indexes.
+struct Hole {
+    param: usize,
+    path: Vec<usize>,
+    attr: Option<String>,
+    /// The element's tag: an `<input>`'s `value` and `checked` are what it shows now, which
+    /// the user changes, so a view reads and writes them as properties.
+    tag: String,
+}
+
+impl Hole {
+    /// The `<input>` property this hole is, when a script should read what the user changed:
+    /// `value` (text or a number) or `checked` (a bool).
+    fn live(&self, kind: Kind) -> Option<&'static str> {
+        match (self.tag.as_str(), self.attr.as_deref(), kind) {
+            ("input", Some("value"), Kind::Number | Kind::Text) => Some("value"),
+            ("input", Some("checked"), Kind::Bool) => Some("checked"),
+            _ => None,
+        }
+    }
+}
+
+/// The view class `#[component(view)]` generates for the component `class`, from the `html!` its
+/// `body` ends with: the JavaScript (`export class Row { .. }`) and its TypeScript declaration.
+///
+/// A parameter is a property when every use of it in the markup is a hole: `{label}` as the only
+/// child of an element, or an attribute's whole value (`data-selected={selected}`), on elements
+/// whose place is fixed (no loop, condition, expression or component before them among their
+/// siblings). The property's getter reads its first hole and its setter writes all of them. A root
+/// with `key={id}` keys the view, for `rows()`.
+pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], span: Span) -> Result<View, Error> {
+    let tokens: Vec<TokenTree> = body.stream().into_iter().collect();
+    let n = tokens.len();
+    let markup = match tokens.last() {
+        Some(TokenTree::Group(g))
+            if n >= 3
+                && g.delimiter() == Delimiter::Brace
+                && is_ident(tokens.get(n - 3), "html")
+                && is_punct(tokens.get(n - 2), '!') =>
+        {
+            g.clone()
+        }
+        _ => {
+            return err(
+                body.span(),
+                "a view's component ends with html! { <root> .. </root> }: its holes are found in that markup",
+            )
+        }
+    };
+    let nodes = Cursor::of(&markup).nodes(None)?;
+    let mut roots = nodes.iter().filter(|n| !matches!(n, Node::Let(_)));
+    let root = match (roots.next(), roots.next()) {
+        (Some(root @ Node::Element { .. }), None) => root,
+        _ => return err(markup.span(), "a view renders one root element: wrap its markup in one element"),
+    };
+    let names: Vec<&str> = params.iter().map(|(name, _)| name.as_str()).collect();
+    let mut holes = Vec::new();
+    find_holes(root, &mut Vec::new(), &names, &mut holes);
+    let mut uses = vec![0; params.len()];
+    count_uses(&nodes, &names, &mut uses);
+    // The properties: parameters shown only in holes, of a type the page can hold.
+    let mut props: Vec<(usize, Kind)> = Vec::new();
+    for (i, (_, ty)) in params.iter().enumerate() {
+        let shown: Vec<&Hole> = holes.iter().filter(|h| h.param == i).collect();
+        let Some(kind) = Kind::of(ty) else { continue };
+        let fits = shown.iter().all(|h| h.attr.is_some() || kind != Kind::Bool);
+        if !shown.is_empty() && shown.len() == uses[i] && fits {
+            props.push((i, kind));
+        }
+    }
+    if let Some(&(i, _)) = props.iter().find(|&&(i, _)| matches!(params[i].0.as_str(), "el" | "constructor")) {
+        return err(
+            span,
+            format!("a view's property cannot be named {}: its root element is el, and a class has a constructor", params[i].0),
+        );
+    }
+    if props.is_empty() {
+        return err(
+            span,
+            "a view needs a hole a script can write: a parameter that is the whole text of an element (<a>{label}</a>) or an attribute's whole value (data-selected={selected})",
+        );
+    }
+    let Node::Element { attrs: root_attrs, .. } = root else { unreachable!() };
+    let key = root_attrs.iter().find_map(|a| match a {
+        Attr::Expr(name, expr) if name == "data-key" => Some(param_of(expr, &names)),
+        _ => None,
+    });
+    // A key that is one of its holes lets scripts make rows (`keyOf` and `fill` give a new row its
+    // key); a key the markup also shows elsewhere (a child's prop, an id) is fixed, and the server
+    // makes the rows.
+    let (key, made) = match key {
+        None => (None, false),
+        Some(Some(i)) => (Some(i), props.iter().any(|(p, _)| *p == i)),
+        Some(None) => return err(span, "a view's key={..} is one of its parameters, alone (key={id})"),
+    };
+
+    let access = |base: &str, path: &[usize]| {
+        let mut s = base.to_string();
+        for &k in path {
+            s.push_str(".firstElementChild");
+            for _ in 0..k {
+                s.push_str(".nextElementSibling");
+            }
+        }
+        s
+    };
+    // An attribute method on a `<form>` goes through Element's own: a form has its controls'
+    // names over its members (`<input name="hasAttribute">`), as in the runtime. No other element
+    // has, so a hole on any other tag (a `<tr>` row) keeps the direct call.
+    let attr_call = |at: &str, tag: &str, method: &str, args: &str| {
+        if tag == "form" {
+            format!("Element.prototype.{method}.call({at}, {args})")
+        } else {
+            format!("{at}.{method}({args})")
+        }
+    };
+    let mut js = format!("export class {class} {{\n  constructor(el) {{ this.el = el; }}\n");
+    let Node::Element { name: root_tag, .. } = root else { unreachable!() };
+    let root_el = crate::dom::element(root_tag);
+    let mut ts = format!(
+        "  /** The view of #[component(view)] {class}: its holes, read from and written to the page. */\n  export class {class} {{\n    constructor(el: Element);\n    readonly el: {root_el};\n"
+    );
+    let mut data = Vec::new();
+    // `fill` writes the holes itself: going through a view and its setters cost about 1.5 µs a
+    // row when making 10,000 rows.
+    let mut fill = Vec::new();
+    for &(i, kind) in &props {
+        let name = &params[i].0;
+        let shown: Vec<&Hole> = holes.iter().filter(|h| h.param == i).collect();
+        let first = shown[0];
+        let at = access("this.el", &first.path);
+        let get = match (first.live(kind), &first.attr, kind) {
+            (Some(prop), _, Kind::Number) => format!("Number({at}.{prop})"),
+            (Some(prop), ..) => format!("{at}.{prop}"),
+            (None, None, Kind::Number) => format!("Number({at}.textContent)"),
+            (None, None, _) => format!("{at}.textContent"),
+            (None, Some(attr), Kind::Number) => {
+                format!("Number({})", attr_call(&at, &first.tag, "getAttribute", &format!("{attr:?}")))
+            }
+            (None, Some(attr), Kind::Text) => {
+                format!("{} ?? \"\"", attr_call(&at, &first.tag, "getAttribute", &format!("{attr:?}")))
+            }
+            (None, Some(attr), Kind::Bool) => attr_call(&at, &first.tag, "hasAttribute", &format!("{attr:?}")),
+        };
+        // Writes every hole of the element `base` from `value`. `fill` (`many`) checks a
+        // boolean attribute before toggling it: hasAttribute is about half the cost of a
+        // toggleAttribute that changes nothing, which is most rows of a new list.
+        let write = |base: &str, value: &str, many: bool| -> Vec<String> {
+            shown
+                .iter()
+                .map(|h| {
+                    let at = access(base, &h.path);
+                    match (h.live(kind), &h.attr, kind) {
+                        // `value(..)` and `checked(..)` write the property (what is shown, even
+                        // after the user typed) and the attribute (what a form reset goes back to).
+                        (Some(prop), ..) => format!("{prop}({at}, {value});"),
+                        (None, None, _) => format!("text({at}, {value});"),
+                        (None, Some(attr), Kind::Bool) if many => format!(
+                            "if ({} !== {value}) {};",
+                            attr_call(&at, &h.tag, "hasAttribute", &format!("{attr:?}")),
+                            attr_call(&at, &h.tag, "toggleAttribute", &format!("{attr:?}, {value}"))
+                        ),
+                        (None, Some(attr), Kind::Bool) => {
+                            format!("{};", attr_call(&at, &h.tag, "toggleAttribute", &format!("{attr:?}, {value}")))
+                        }
+                        (None, Some(attr), _) => {
+                            format!("{};", attr_call(&at, &h.tag, "setAttribute", &format!("{attr:?}, {value}")))
+                        }
+                    }
+                })
+                .collect()
+        };
+        let (set, filled) = if kind == Kind::Number {
+            // A numbered local: a parameter may be named like anything in this function.
+            let local = format!("v{i}");
+            let mut filled = vec![format!("const {local} = String(data.{name});")];
+            filled.extend(write("el", &local, true));
+            (write("this.el", "String(v)", false), filled)
+        } else {
+            (write("this.el", "v", false), write("el", &format!("data.{name}"), true))
+        };
+        fill.extend(filled);
+        js.push_str(&format!("  get {name}() {{ return {get}; }}\n  set {name}(v) {{ {} }}\n", set.join(" ")));
+        ts.push_str(&format!("    {name}: {};\n", kind.ts()));
+        data.push(format!("{name}: {}", kind.ts()));
+    }
+    js.push_str(&format!("  static fill(el, data) {{ {} }}\n", fill.join(" ")));
+    let data = format!("{{ {} }}", data.join("; "));
+    ts.push_str(&format!("    /** Writes every hole of `el` (a {class}'s root) from `data`. */\n    static fill(el: Element, data: {data}): void;\n"));
+    if let Some(i) = key {
+        let key = &params[i].0;
+        // Through Element's own when the row is a form, whose controls' names shadow its members.
+        js.push_str(&format!(
+            "  static key(el) {{ return {} ?? \"\"; }}\n",
+            attr_call("el", root_tag, "getAttribute", "\"data-key\"")
+        ));
+        ts.push_str(&format!(
+            "    /** The key of a {class}'s root (its key={{{key}}}). */\n    static key(el: Element): string;\n"
+        ));
+        if made {
+            js.push_str(&format!("  static keyOf(data) {{ return String(data.{key}); }}\n"));
+            ts.push_str(&format!("    static keyOf(data: {data}): string;\n"));
+        }
+    }
+    js.push_str("}\n");
+    ts.push_str("  }\n");
+    let numbers = props.iter().filter(|(_, kind)| *kind == Kind::Number).map(|&(i, _)| params[i].0.clone()).collect();
+    Ok(View { js, ts, numbers })
+}
+
+/// What `#[component(view)]` generates for a component.
+pub struct View {
+    /// The class, for `corten/views`.
+    pub js: String,
+    /// Its declaration.
+    pub ts: String,
+    /// The properties that are numbers in the page: debug builds check their values fit one.
+    pub numbers: Vec<String>,
+}
+
+/// The holes under `node` (an element at `path`): its attributes whose value is a parameter, its
+/// text when that is a parameter alone, and those of its child elements whose place is fixed.
+fn find_holes(node: &Node, path: &mut Vec<usize>, names: &[&str], holes: &mut Vec<Hole>) {
+    let Node::Element { name, attrs, children } = node else { return };
+    for attr in attrs {
+        if let Attr::Expr(attr, expr) = attr {
+            if let (false, Some(param)) = (attr == "class" || attr == "style", param_of(expr, names)) {
+                holes.push(Hole { param, path: path.clone(), attr: Some(attr.clone()), tag: name.clone() });
+            }
+        }
+    }
+    let content: Vec<&Node> = children.iter().filter(|c| !matches!(c, Node::Let(_))).collect();
+    if let ([Node::Expr(expr)], false) = (content.as_slice(), VOID.contains(&name.as_str()) || RAW_TEXT.contains(&name.as_str()))
+    {
+        if let Some(param) = param_of(expr, names) {
+            holes.push(Hole { param, path: path.clone(), attr: None, tag: name.clone() });
+        }
+    }
+    let mut index = 0;
+    for child in children {
+        match child {
+            Node::Element { .. } => {
+                path.push(index);
+                find_holes(child, path, names, holes);
+                path.pop();
+                index += 1;
+            }
+            Node::Text(_) | Node::Let(_) => {}
+            // Anything else may print elements, so the ones after it have no fixed place.
+            _ => break,
+        }
+    }
+}
+
+/// The parameter an expression is, when it is one alone (`label`, or `(label)` as an attribute
+/// value is wrapped).
+fn param_of(expr: &TokenStream, names: &[&str]) -> Option<usize> {
+    let mut tokens: Vec<TokenTree> = expr.clone().into_iter().collect();
+    if let [TokenTree::Group(g)] = tokens.as_slice() {
+        if g.delimiter() == Delimiter::Parenthesis {
+            tokens = g.stream().into_iter().collect();
+        }
+    }
+    match tokens.as_slice() {
+        [TokenTree::Ident(id)] => names.iter().position(|n| id.to_string() == *n),
+        _ => None,
+    }
+}
+
+/// Counts every mention of each parameter in the markup's Rust code (a field `x.label` is not one).
+fn count_uses(nodes: &[Node], names: &[&str], uses: &mut [usize]) {
+    fn count(tokens: &TokenStream, names: &[&str], uses: &mut [usize]) {
+        let tokens: Vec<TokenTree> = tokens.clone().into_iter().collect();
+        for (i, token) in tokens.iter().enumerate() {
+            match token {
+                TokenTree::Ident(id) if !(i > 0 && is_punct(tokens.get(i - 1), '.')) => {
+                    if let Some(p) = names.iter().position(|n| id.to_string() == *n) {
+                        uses[p] += 1;
+                    }
+                }
+                TokenTree::Group(g) => count(&g.stream(), names, uses),
+                _ => {}
+            }
+        }
+    }
+    for node in nodes {
+        match node {
+            Node::Element { attrs, children, .. } => {
+                for attr in attrs {
+                    match attr {
+                        Attr::Expr(_, expr) | Attr::Spread(expr) | Attr::Ref(expr, _) | Attr::On(_, _, expr) => {
+                            count(expr, names, uses)
+                        }
+                        Attr::Bare(_) | Attr::Static(..) | Attr::Page(_) => {}
+                    }
+                }
+                count_uses(children, names, uses);
+            }
+            Node::Component { props, children, .. } => {
+                for (_, value) in props {
+                    count(value, names, uses);
+                }
+                if let Some(children) = children {
+                    count_uses(children, names, uses);
+                }
+            }
+            Node::Expr(tokens) | Node::Let(tokens) => count(tokens, names, uses),
+            Node::Block { head, bodies, .. } => {
+                for h in head {
+                    count(h, names, uses);
+                }
+                for body in bodies {
+                    count_uses(body, names, uses);
+                }
+            }
+            Node::Text(_) | Node::Markup(_) => {}
+        }
+    }
+}
+
+enum Node {
+    Element {
+        name: String,
+        attrs: Vec<Attr>,
+        children: Vec<Node>,
+    },
+    Component {
+        path: TokenStream,
+        props: Vec<(TokenStream, TokenStream)>,
+        children: Option<Vec<Node>>,
+    },
+    Text(String),
+    Markup(String),
+    Expr(TokenStream),
+    /// `for`, `if`/`else`, `match`: the Rust tokens around each body, with the bodies in order.
+    Block {
+        head: Vec<TokenStream>,
+        bodies: Vec<Vec<Node>>,
+        arms: bool,
+    },
+    Let(TokenStream),
+}
+
+enum Attr {
+    Bare(String),
+    Static(String, String),
+    Expr(String, TokenStream),
+    Spread(TokenStream),
+    /// `ref={rows}`: prints `data-ref="rows"`, and types the ref with the element's interface, or
+    /// with a wider one (`ref={trigger as HTMLElement}`) when the ref is on several kinds.
+    Ref(TokenStream, Option<Ident>),
+    /// `on:click={js::show(rows)}`: the event (with its span) and the handler. All of an
+    /// element's print as one `data-on="click:module.show(@rows)"`.
+    On(String, Span, TokenStream),
+    /// `page`: an element of a document's layout around `<main>` that is the page's (a section's
+    /// nav). Printed `data-corten-page`; a navigation's answer has it, and the runtime puts it in
+    /// place of the one on screen, found by its id.
+    Page(Span),
+}
+
+/// Why a `<form>` with `on:corten:progress` would never hear it: the runtime reports progress only
+/// for a `data-patch` form it sends as `multipart/form-data` by a method other than GET. Attributes
+/// a spread may write are not known here, so a form with one is left to the runtime.
+fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
+    if !attrs.iter().any(|a| matches!(a, Attr::On(event, ..) if event == "corten:progress")) {
+        return None;
+    }
+    if attrs.iter().any(|a| matches!(a, Attr::Spread(_))) {
+        return None;
+    }
+    // `None`: not written; `Some(None)`: written as an expression, so not known here.
+    let named = |want: &str| {
+        attrs.iter().find_map(|a| match a {
+            Attr::Bare(n) if n.eq_ignore_ascii_case(want) => Some(Some("")),
+            Attr::Static(n, v) if n.eq_ignore_ascii_case(want) => Some(Some(v.as_str())),
+            Attr::Expr(n, _) if n.eq_ignore_ascii_case(want) => Some(None),
+            _ => None,
+        })
+    };
+    if named("data-patch").is_none() {
+        return Some("on:corten:progress: the runtime reports an upload's progress only for a data-patch form (a form without it is sent by the browser, which reports none): add data-patch");
+    }
+    let multipart = match named("enctype") {
+        Some(Some(v)) => v.eq_ignore_ascii_case("multipart/form-data"),
+        Some(None) => true,
+        None => false,
+    };
+    if !multipart {
+        return Some("on:corten:progress: only a multipart body is sent with its progress: add enctype=\"multipart/form-data\"");
+    }
+    let sends_body = match named("method") {
+        Some(Some(v)) => !v.is_empty() && !v.eq_ignore_ascii_case("get") && !v.eq_ignore_ascii_case("dialog"),
+        Some(None) => true,
+        None => false,
+    };
+    if !sends_body {
+        return Some(
+            "on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"",
+        );
+    }
+    None
+}
+
+/// The attribute an element is named by for assistive technology, `aria-label` or
+/// `aria-labelledby`, unless the element takes its role from elsewhere (a `role` of its own, or
+/// a spread, which may write one).
+fn label_of(attrs: &[Attr]) -> Option<&str> {
+    let mut label = None;
+    for attr in attrs {
+        let name = match attr {
+            Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => name.as_str(),
+            Attr::Spread(_) => return None,
+            Attr::Ref(..) | Attr::On(..) | Attr::Page(_) => continue,
+        };
+        match name.to_ascii_lowercase().as_str() {
+            "role" => return None,
+            "aria-label" | "aria-labelledby" => label = label.or(Some(name)),
+            _ => {}
+        }
+    }
+    label
+}
+
+/// What is wrong with an element named by `aria-label` or `aria-labelledby` that, by its kind and
+/// attributes, has no role a name can go on, so assistive technology drops the name (ARIA
+/// prohibits it there): a `<div>` or `<span>` without a `role`, or an `<a>` without an `href`.
+/// An `<a>` whose `href` is an expression is checked by its type (`checks_href`). Not checked
+/// inside an `<svg>`, whose elements ARIA maps differently (an `<a>` with no href is a group).
+fn unnamed_label(name: &str, attrs: &[Attr]) -> Option<String> {
+    let label = label_of(attrs)?;
+    let has = |wanted: &str| {
+        attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) | Attr::Expr(n, _) if n.eq_ignore_ascii_case(wanted)))
+    };
+    match name {
+        "div" | "span" => Some(format!(
+            "{label} on a <{name}> with no role names nothing: assistive technology drops it. Put the name in the element as text (<span class={{VisuallyHidden {{}}}}>\"..\"</span> beside an icon), or give the element the role it plays (role=\"img\", role=\"group\")"
+        )),
+        "a" if !has("href") => Some(format!(
+            "{label} on an <a> with no href names nothing: without an href it is not a link, and assistive technology drops the name. Give it an href, or put the name in it as text (<span class={{VisuallyHidden {{}}}}>\"..\"</span>)"
+        )),
+        _ => None,
+    }
+}
+
+/// An `<a>` named by a written-out `aria-label` or `aria-labelledby` whose `href` is an
+/// expression: its type must always write one (not `href={before.map(..)}`). A name that is an
+/// expression may be absent with the href, so it is not checked.
+fn checks_href(name: &str, attrs: &[Attr]) -> bool {
+    let named = |n: &str| n.eq_ignore_ascii_case("aria-label") || n.eq_ignore_ascii_case("aria-labelledby");
+    name == "a" && label_of(attrs).is_some() && attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) if named(n)))
+}
+
+/// `tokens` with every span, inside groups too, located at `at`, so an error in them points
+/// there; their names still resolve where the macro expands (a `macro_rules!` around `html!`).
+fn respan(tokens: TokenStream, at: Span) -> TokenStream {
+    let at = Span::call_site().located_at(at);
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Group(g) => {
+                let mut group = Group::new(g.delimiter(), respan(g.stream(), at));
+                group.set_span(at);
+                TokenTree::Group(group)
+            }
+            mut other => {
+                other.set_span(at);
+                other
+            }
+        })
+        .collect()
+}
+
+/// Whether the children of `name`, inside an `<svg>` when `outer`, are SVG's elements.
+fn within_svg(outer: bool, name: &str) -> bool {
+    if outer {
+        !name.eq_ignore_ascii_case("foreignObject")
+    } else {
+        name.eq_ignore_ascii_case("svg")
+    }
+}
+
+struct Cursor {
+    tokens: Vec<TokenTree>,
+    i: usize,
+    end: Span,
+    /// Inside an `<svg>` (and not its `<foreignObject>`), where elements are SVG's.
+    svg: bool,
+}
+
+impl Cursor {
+    fn new(stream: TokenStream) -> Self {
+        Cursor { tokens: stream.into_iter().collect(), i: 0, end: Span::call_site(), svg: false }
+    }
+
+    fn of(group: &Group) -> Self {
+        Cursor { tokens: group.stream().into_iter().collect(), i: 0, end: group.span_close(), svg: false }
+    }
+
+    /// The body of a `for`, `if` or `match` here, inside an `<svg>` when this is.
+    fn inner(&self, group: &Group) -> Self {
+        Cursor { svg: self.svg, ..Cursor::of(group) }
+    }
+
+    fn peek(&self) -> Option<&TokenTree> {
+        self.tokens.get(self.i)
+    }
+
+    fn peek2(&self) -> Option<&TokenTree> {
+        self.tokens.get(self.i + 1)
+    }
+
+    fn next(&mut self) -> Option<TokenTree> {
+        let token = self.tokens.get(self.i).cloned();
+        self.i += 1;
+        token
+    }
+
+    fn span(&self) -> Span {
+        self.peek().map_or(self.end, TokenTree::span)
+    }
+
+    fn at_end(&self) -> bool {
+        self.i >= self.tokens.len()
+    }
+
+    /// Nodes until the end, or until `</` when inside the element named `closing`.
+    fn nodes(&mut self, closing: Option<&str>) -> Result<Vec<Node>, Error> {
+        let mut nodes = Vec::new();
+        while !self.at_end() {
+            if is_punct(self.peek(), '<') && is_punct(self.peek2(), '/') {
+                if closing.is_some() {
+                    break;
+                }
+                let span = self.span();
+                self.next();
+                self.next();
+                let name = self.name().map(|n| n.0).unwrap_or_default();
+                let hint = if VOID.contains(&name.as_str()) {
+                    format!("; <{name}> is a void element and has no closing tag")
+                } else {
+                    String::new()
+                };
+                return err(span, format!("unexpected closing tag </{name}>{hint}"));
+            }
+            nodes.push(self.node()?);
+        }
+        Ok(nodes)
+    }
+
+    fn node(&mut self) -> Result<Node, Error> {
+        let span = self.span();
+        match self.peek().cloned() {
+            Some(TokenTree::Punct(p)) if p.as_char() == '<' => self.tag(),
+            Some(TokenTree::Literal(lit)) => {
+                self.next();
+                match string_value(&lit).or_else(|| literal_text(&lit)) {
+                    Some(text) => Ok(Node::Text(text)),
+                    None => err(span, "write text as a string literal: \"...\""),
+                }
+            }
+            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                self.next();
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                if inner.is_empty() {
+                    return err(span, "empty braces: put a Rust expression inside, like {name}");
+                }
+                if is_punct(inner.first(), '.') && is_punct(inner.get(1), '.') {
+                    return err(span, "{..attributes} goes inside a start tag, like <input {..attrs}>");
+                }
+                Ok(Node::Expr(borrowing(&lent_args(g.stream()))))
+            }
+            Some(TokenTree::Ident(id)) => match id.to_string().as_str() {
+                "for" => self.block_for(),
+                "if" => self.block_if(),
+                "match" => self.block_match(),
+                "let" => {
+                    let tokens = self.until_semicolon()?;
+                    Ok(Node::Let(tokens))
+                }
+                word => err(
+                    span,
+                    format!("unexpected `{word}`: write text in quotes (\"{word}\") and Rust expressions in braces ({{{word}}})"),
+                ),
+            },
+            Some(other) => err(
+                other.span(),
+                format!("unexpected `{other}`: expected <element>, \"text\", {{expression}}, for, if, match or let"),
+            ),
+            None => err(span, "unexpected end of markup"),
+        }
+    }
+
+    /// A tag name: `div`, `listing-sort`, `Card` or `ui::Card`. Returns the name, its tokens and
+    /// whether it names a component (a path, or a name starting with an uppercase letter).
+    fn name(&mut self) -> Result<(String, TokenStream, Span), Error> {
+        let span = self.span();
+        let Some(TokenTree::Ident(first)) = self.next() else {
+            return err(span, "expected a tag name");
+        };
+        let mut name = first.to_string();
+        let mut tokens = vec![TokenTree::Ident(first)];
+        loop {
+            match (self.peek(), self.peek2()) {
+                (Some(TokenTree::Punct(p)), Some(TokenTree::Ident(_) | TokenTree::Literal(_))) if p.as_char() == '-' => {
+                    let dash = self.next().unwrap();
+                    let part = self.next().unwrap();
+                    name.push('-');
+                    name.push_str(&part.to_string());
+                    tokens.extend([dash, part]);
+                }
+                (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b))) if a.as_char() == ':' && b.as_char() == ':' => {
+                    tokens.extend([self.next().unwrap(), self.next().unwrap()]);
+                    let span = self.span();
+                    match self.next() {
+                        Some(TokenTree::Ident(part)) => {
+                            name.push_str("::");
+                            name.push_str(&part.to_string());
+                            tokens.push(TokenTree::Ident(part));
+                        }
+                        _ => return err(span, "expected a name after ::"),
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok((name, stream(tokens), span))
+    }
+
+    fn tag(&mut self) -> Result<Node, Error> {
+        let open = self.span();
+        self.next();
+        if is_punct(self.peek(), '!') {
+            self.next();
+            let doctype = self.next();
+            let html = self.next();
+            if !(matches!(&doctype, Some(TokenTree::Ident(d)) if d.to_string().eq_ignore_ascii_case("doctype"))
+                && matches!(&html, Some(TokenTree::Ident(h)) if h.to_string() == "html")
+                && is_punct(self.peek(), '>'))
+            {
+                return err(open, "the only declaration is <!DOCTYPE html>");
+            }
+            self.next();
+            return Ok(Node::Markup("<!DOCTYPE html>".into()));
+        }
+        if is_punct(self.peek(), '>') {
+            self.next();
+            let children = self.nodes(Some(""))?;
+            self.closing("", open)?;
+            return Ok(Node::Block { head: vec![TokenStream::new()], bodies: vec![children], arms: false });
+        }
+        let (name, path, name_span) = self.name()?;
+        let component = name.contains("::") || name.starts_with(|c: char| c.is_ascii_uppercase());
+        let is_form = name == "form";
+        if component && name.contains('-') {
+            return err(name_span, "a component name is a Rust path; element names with - are lowercase");
+        }
+        let mut attrs = Vec::new();
+        let mut props = Vec::new();
+        let self_closing = loop {
+            let span = self.span();
+            match self.peek().cloned() {
+                Some(TokenTree::Punct(p)) if p.as_char() == '>' => {
+                    self.next();
+                    break false;
+                }
+                Some(TokenTree::Punct(p)) if p.as_char() == '/' && is_punct(self.peek2(), '>') => {
+                    self.next();
+                    self.next();
+                    break true;
+                }
+                Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                    self.next();
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    if component || !(is_punct(inner.first(), '.') && is_punct(inner.get(1), '.')) {
+                        return err(span, "inside a start tag, braces spread attributes: {..attrs}");
+                    }
+                    attrs.push(Attr::Spread(stream(inner.into_iter().skip(2))));
+                }
+                Some(TokenTree::Ident(id))
+                    if component
+                        && id.to_string() == "on"
+                        && is_punct(self.peek2(), ':')
+                        && !matches!(self.tokens.get(self.i + 2), Some(TokenTree::Punct(_))) =>
+                {
+                    self.next();
+                    self.next();
+                    let span = self.span();
+                    let Some(TokenTree::Ident(event)) = self.next() else {
+                        return err(span, "on: on a component names one of its Handler props: on:remove={..} sets on_remove");
+                    };
+                    if event.to_string() == "document" && is_punct(self.peek(), ':') {
+                        return err(span, "on:document: goes on an element in the component's own markup, which hears the event anywhere on the page while it is there; on: on a component sets one of its Handler props");
+                    }
+                    if !is_punct(self.peek(), '=') {
+                        return err(span, format!("on:{event} takes a handler: on:{event}={{js::name(..)}}"));
+                    }
+                    self.next();
+                    let (_, expr) = self.value(true)?;
+                    let field = Ident::new(&format!("on_{event}"), event.span());
+                    let expr =
+                        keywords(expr, &q("::corten::script::ev::Event", &[]), &q("::corten::script::el::HTMLElement", &[]));
+                    props.push((stream([TokenTree::Ident(field)]), q("&(__A0)", &[expr])));
+                }
+                Some(TokenTree::Ident(_)) if component => {
+                    let Some(TokenTree::Ident(prop)) = self.next() else { unreachable!() };
+                    if is_punct(self.peek(), '-') {
+                        return err(self.span(), "component props are Rust field names (no -)");
+                    }
+                    let text = prop.to_string();
+                    let field = if KEYWORDS.contains(&text.as_str()) { Ident::new_raw(&text, prop.span()) } else { prop };
+                    let value = if is_punct(self.peek(), '=') {
+                        self.next();
+                        self.value(true)?.1
+                    } else {
+                        q("true", &[])
+                    };
+                    props.push((stream([TokenTree::Ident(field)]), value));
+                }
+                Some(TokenTree::Ident(_)) => {
+                    let mut name = self.attr_name()?;
+                    // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
+                    if name == "key" {
+                        name = "data-key".into();
+                    }
+                    // HTML attribute names are case-insensitive: `data-Vars` is `data-vars`.
+                    let lower = name.to_ascii_lowercase();
+                    if lower == "data-nav" || lower == "data-nav-group" {
+                        return err(span, format!("{name} is printed by Corten: write <a {{..req.nav(&url::News)}}> (or req.nav_section, or a link of req.nav_of), which writes href, data-nav, data-nav-group and aria-current from one mention of the route"));
+                    }
+                    if lower == "data-ref" || lower == "data-on" || lower == "data-scope" {
+                        return err(span, "data-ref, data-on and data-scope are printed by Corten: write ref={rows} (with let (rows) = refs();) or on:click={js::show(rows)}");
+                    }
+                    if lower == "style" && name != "style" {
+                        return err(span, format!("write style, not {name}: style={{FILL.pct(42.0)}} is checked only as style"));
+                    }
+                    if lower == "data-vars" {
+                        return err(span, "data-vars is printed by Corten: write style={FILL.pct(42.0)}, with --fill registered by an @property in the component's stylesheet");
+                    }
+                    if lower == "data-corten-page" {
+                        return err(span, "data-corten-page is printed by Corten: write page on an element of the layout, <nav page id={SectionNavId}>");
+                    }
+                    // `page`: an element of a document's layout that is the page's (a section's
+                    // nav), which a navigation sends with `<main>`'s children.
+                    if name == "page" && !is_punct(self.peek(), '=') {
+                        attrs.push(Attr::Page(span));
+                        continue;
+                    }
+                    if name == "ref" || name.starts_with("on:") {
+                        let braced = is_punct(self.peek(), '=')
+                            && matches!(self.peek2(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace);
+                        if !braced {
+                            return err(
+                                span,
+                                format!("{name} takes a value in braces: ref={{rows}}, on:click={{js::show(rows)}}"),
+                            );
+                        }
+                        self.next();
+                        let (_, expr) = self.value(false)?;
+                        attrs.push(match name.strip_prefix("on:") {
+                            Some(event) => {
+                                // `on:document:keydown`: the element's handler for an event anywhere on
+                                // the page, printed `document.keydown` (the last `:` before the module
+                                // ends the type, so the runtime's `corten:error` keeps its own).
+                                let named = event.strip_prefix("document:").unwrap_or(event);
+                                if named.contains(':') && !crate::dom::is_runtime_event(named) {
+                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:), corten:progress (on a data-patch form) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                }
+                                if named == "corten:progress" && (event != named || !is_form) {
+                                    return err(span, format!("{name}: the runtime dispatches corten:progress on the data-patch form whose upload it is, and it does not bubble: write on:corten:progress on that <form>"));
+                                }
+                                if event == "corten:notice" {
+                                    return err(span, format!("{name}: the runtime dispatches corten:notice on the document, so no element hears it: write on:document:corten:notice"));
+                                }
+                                if let Some(on_page) = event.strip_prefix("document:") {
+                                    if on_page.starts_with(|c: char| c.is_ascii_uppercase()) {
+                                        return err(span, format!("{name}: on:document: takes an event of the browser's (on:document:keydown); a typed event is heard on an element it bubbles through: on:{on_page}={{..}}"));
+                                    }
+                                    let bubbling = match on_page {
+                                        "focus" => Some("focusin"),
+                                        "blur" => Some("focusout"),
+                                        "mouseenter" => Some("mouseover"),
+                                        "mouseleave" => Some("mouseout"),
+                                        "pointerenter" => Some("pointerover"),
+                                        "pointerleave" => Some("pointerout"),
+                                        _ => None,
+                                    };
+                                    if let Some(bubbling) = bubbling {
+                                        return err(span, format!("{name}: {on_page} stays on its element, so the document never hears it; on:document:{bubbling} hears every element's"));
+                                    }
+                                    if !crate::dom::reaches_document(on_page) && !crate::dom::is_runtime_event(on_page) {
+                                        return err(span, format!("{name}: on:document: takes an event of the browser's that bubbles to the document (keydown, click, focusin, pointerover); {on_page} is not one, so a listener there would never hear it"));
+                                    }
+                                    Attr::On(format!("document.{on_page}"), span, expr)
+                                } else {
+                                    Attr::On(event.to_string(), span, expr)
+                                }
+                            }
+                            None => {
+                                // `value` wraps the braces' contents in parentheses.
+                                let mut tokens: Vec<TokenTree> = expr.clone().into_iter().collect();
+                                if let [TokenTree::Group(g)] = tokens.as_slice() {
+                                    if g.delimiter() == Delimiter::Parenthesis {
+                                        tokens = g.stream().into_iter().collect();
+                                    }
+                                }
+                                let n = tokens.len();
+                                if n >= 3 && is_ident(tokens.get(n - 2), "as") {
+                                    let TokenTree::Ident(wide) = &tokens[n - 1] else {
+                                        return err(tokens[n - 1].span(), "ref={trigger as HTMLElement} names a DOM interface");
+                                    };
+                                    Attr::Ref(stream(tokens[..n - 2].iter().cloned()), Some(wide.clone()))
+                                } else {
+                                    Attr::Ref(expr, None)
+                                }
+                            }
+                        });
+                        continue;
+                    }
+                    if is_punct(self.peek(), '=') {
+                        self.next();
+                        match self.value(false)? {
+                            (Some(text), _) => attrs.push(Attr::Static(name, text)),
+                            (None, expr) => {
+                                // One `data-vars` per element: a browser keeps the first of two.
+                                if name == "style" && attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "style")) {
+                                    return err(
+                                        span,
+                                        "one style={..} per element: give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}",
+                                    );
+                                }
+                                attrs.push(Attr::Expr(name, expr))
+                            }
+                        }
+                    } else {
+                        attrs.push(Attr::Bare(name));
+                    }
+                }
+                _ => return err(span, format!("expected an attribute, > or /> in <{name}>")),
+            }
+        };
+        if !component && !self.svg {
+            if let Some(why) = unnamed_label(&name, &attrs) {
+                return err(name_span, why);
+            }
+        }
+        if is_form {
+            if let Some(why) = progress_unsent(&attrs) {
+                return err(name_span, why);
+            }
+        }
+        let void = !component && VOID.contains(&name.as_str());
+        let children = if self_closing || void {
+            None
+        } else {
+            let outer = self.svg;
+            self.svg = within_svg(outer, &name);
+            let children = self.nodes(Some(&name));
+            self.svg = outer;
+            let children = children?;
+            self.closing(&name, open)?;
+            Some(children)
+        };
+        if component {
+            return Ok(Node::Component { path, props, children });
+        }
+        Ok(Node::Element { name, attrs, children: children.unwrap_or_default() })
+    }
+
+    /// `</name>` after the children of the element opened at `open`.
+    fn closing(&mut self, name: &str, open: Span) -> Result<(), Error> {
+        if self.at_end() {
+            return err(open, format!("<{name}> is never closed; add </{name}> or write <{name} />"));
+        }
+        self.next();
+        self.next();
+        let found = if is_punct(self.peek(), '>') { String::new() } else { self.name()?.0 };
+        let span = self.span();
+        if found != name {
+            return err(span, format!("expected </{name}>, found </{found}>"));
+        }
+        if !is_punct(self.peek(), '>') {
+            return err(span, format!("expected > to end </{name}"));
+        }
+        self.next();
+        Ok(())
+    }
+
+    /// `data-ref`, `aria-label`, `xlink:href`.
+    fn attr_name(&mut self) -> Result<String, Error> {
+        let mut name = self.next().map(|t| t.to_string()).unwrap_or_default();
+        while let (Some(TokenTree::Punct(p)), Some(TokenTree::Ident(_) | TokenTree::Literal(_))) = (self.peek(), self.peek2()) {
+            if p.as_char() != '-' && p.as_char() != ':' {
+                break;
+            }
+            name.push(p.as_char());
+            self.next();
+            name.push_str(&self.next().unwrap().to_string());
+        }
+        Ok(name)
+    }
+
+    /// An attribute or prop value: `"text"`, a literal, `{expression}` or a single identifier.
+    /// Returns the static text when the value is known at compile time (elements only).
+    fn value(&mut self, component: bool) -> Result<(Option<String>, TokenStream), Error> {
+        let span = self.span();
+        match self.next() {
+            Some(TokenTree::Literal(lit)) if !component => match string_value(&lit).or_else(|| literal_text(&lit)) {
+                Some(text) => Ok((Some(text), TokenStream::new())),
+                None => err(span, "unsupported literal"),
+            },
+            Some(TokenTree::Literal(lit)) => Ok((None, TokenTree::Literal(lit).into())),
+            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                if g.stream().is_empty() {
+                    return err(span, "empty braces: put a Rust expression inside");
+                }
+                Ok((None, parens(g.stream())))
+            }
+            Some(TokenTree::Ident(id)) => Ok((None, TokenTree::Ident(id).into())),
+            _ => err(span, "a value is \"text\" or {expression}"),
+        }
+    }
+
+    /// Tokens up to the body, the next top-level `{...}` group, and the group. A pattern's
+    /// braces are its own, as in Rust: a `let` pattern's up to its `=` (`if let Shape::Circle { r }
+    /// = shape`, each `let` of a chain), and, when `pattern` is set, a `for` pattern's up to `in`.
+    fn until_brace(&mut self, what: &str, pattern: bool) -> Result<(TokenStream, Group), Error> {
+        let start = self.span();
+        let mut head: Vec<TokenTree> = Vec::new();
+        // Where a pattern ends: `=` for a `let`, `in` for a `for`; `None` outside one.
+        let mut ends_at: Option<&str> = pattern.then_some("in");
+        while let Some(token) = self.next() {
+            match (&token, ends_at) {
+                (TokenTree::Group(g), None) if g.delimiter() == Delimiter::Brace => return Ok((stream(head), g.clone())),
+                (TokenTree::Ident(id), None) if id.to_string() == "let" => ends_at = Some("="),
+                (TokenTree::Ident(id), Some("in")) if id.to_string() == "in" => ends_at = None,
+                // A lone `=`: not part of `==`, `=>`, `<=`, `!=` or a range's `..=`.
+                (TokenTree::Punct(p), Some("=")) if p.as_char() == '=' => {
+                    let joined_before =
+                        matches!(head.last(), Some(TokenTree::Punct(prev)) if prev.spacing() == proc_macro::Spacing::Joint);
+                    if !joined_before && p.spacing() == proc_macro::Spacing::Alone {
+                        ends_at = None;
+                    }
+                }
+                _ => {}
+            }
+            head.push(token);
+        }
+        err(start, format!("expected {{ ... }} after {what}"))
+    }
+
+    fn until_semicolon(&mut self) -> Result<TokenStream, Error> {
+        let start = self.span();
+        let mut tokens = Vec::new();
+        while let Some(token) = self.next() {
+            let end = matches!(&token, TokenTree::Punct(p) if p.as_char() == ';');
+            tokens.push(token);
+            if end {
+                return Ok(stream(tokens));
+            }
+        }
+        err(start, "a let in markup ends with ;")
+    }
+
+    fn block_for(&mut self) -> Result<Node, Error> {
+        let keyword = self.next().unwrap();
+        let (head, body) = self.until_brace("for ... in ...", true)?;
+        let mut tokens = stream([keyword]);
+        tokens.extend(head);
+        Ok(Node::Block { head: vec![tokens], bodies: vec![self.inner(&body).nodes(None)?], arms: false })
+    }
+
+    fn block_if(&mut self) -> Result<Node, Error> {
+        let mut heads = Vec::new();
+        let mut bodies = Vec::new();
+        let mut keyword = stream([self.next().unwrap()]);
+        loop {
+            let (cond, body) = self.until_brace("if", false)?;
+            keyword.extend(cond);
+            heads.push(keyword);
+            bodies.push(self.inner(&body).nodes(None)?);
+            if !is_ident(self.peek(), "else") {
+                break;
+            }
+            keyword = stream([self.next().unwrap()]);
+            if is_ident(self.peek(), "if") {
+                keyword.extend([self.next().unwrap()]);
+                continue;
+            }
+            let span = self.span();
+            match self.next() {
+                Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                    heads.push(keyword);
+                    bodies.push(self.inner(&g).nodes(None)?);
+                    break;
+                }
+                _ => return err(span, "expected { ... } or if after else"),
+            }
+        }
+        Ok(Node::Block { head: heads, bodies, arms: false })
+    }
+
+    fn block_match(&mut self) -> Result<Node, Error> {
+        let keyword = self.next().unwrap();
+        let (scrutinee, arms) = self.until_brace("match", false)?;
+        let mut cursor = self.inner(&arms);
+        let mut head = stream([keyword]);
+        head.extend(scrutinee);
+        let mut heads = vec![head];
+        let mut bodies = Vec::new();
+        while !cursor.at_end() {
+            let start = cursor.span();
+            let mut pattern = Vec::new();
+            loop {
+                match (cursor.peek(), cursor.peek2()) {
+                    (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b))) if a.as_char() == '=' && b.as_char() == '>' => {
+                        pattern.extend([cursor.next().unwrap(), cursor.next().unwrap()]);
+                        break;
+                    }
+                    (Some(_), _) => pattern.push(cursor.next().unwrap()),
+                    (None, _) => return err(start, "expected => in match arm"),
+                }
+            }
+            heads.push(stream(pattern));
+            let body = match cursor.peek() {
+                Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                    let g = g.clone();
+                    cursor.next();
+                    cursor.inner(&g).nodes(None)?
+                }
+                _ => vec![cursor.node()?],
+            };
+            bodies.push(body);
+            if is_punct(cursor.peek(), ',') {
+                cursor.next();
+            }
+        }
+        Ok(Node::Block { head: heads, bodies, arms: true })
+    }
+}
+
+/// Generated statements, with adjacent static markup merged into one `push_str`.
+#[derive(Default)]
+struct Gen {
+    out: TokenStream,
+    text: String,
+    /// Type checks that print nothing, emitted before the writes so they do not split runs of
+    /// static markup.
+    checks: TokenStream,
+    /// In a document, which parts what is written now belongs to.
+    level: Level,
+    /// Set while a patch's top-level element opens: the local its `id={..}` binds its shape to.
+    id_shape: Option<TokenStream>,
+    /// Inside an `<svg>` (and not its `<foreignObject>`), where an `<a>` is SVG's.
+    svg: bool,
+}
+
+/// The locals a view's shape is gathered in: one `Option` per body of a `for`, `if` or `match`
+/// at its top level, declared before the markup, and a count for every local's name.
+#[derive(Default)]
+struct Slots {
+    lets: TokenStream,
+    count: usize,
+}
+
+impl Slots {
+    fn name(&mut self) -> TokenStream {
+        self.count += 1;
+        TokenTree::Ident(Ident::new(&format!("__corten_shape_{}", self.count), Span::call_site())).into()
+    }
+
+    /// An `Option` a body of a block sets to its shape when it runs.
+    fn slot(&mut self) -> TokenStream {
+        let name = self.name();
+        self.lets.extend(q(
+            "#[allow(unused_mut, unused_assignments)] let mut __A0 = ::core::option::Option::None;",
+            std::slice::from_ref(&name),
+        ));
+        name
+    }
+}
+
+/// Whether a view's top level could be a patch: no text, no `<!DOCTYPE>` and no element without
+/// `id={..}` at its top level or in the bodies of its blocks. Anything else is settled by types.
+fn could_patch(nodes: &[Node]) -> bool {
+    nodes.iter().all(|node| match node {
+        Node::Text(text) => text.trim().is_empty(),
+        Node::Markup(_) => false,
+        Node::Element { attrs, .. } => attrs.iter().any(|a| matches!(a, Attr::Expr(name, _) if name == "id")),
+        Node::Block { bodies, .. } => bodies.iter().all(|body| could_patch(body)),
+        Node::Expr(_) | Node::Component { .. } | Node::Let(_) => true,
+    })
+}
+
+/// `(a, (b, (c, End)))`: a view's shape from its parts' shapes.
+fn shape_of(shapes: Vec<TokenStream>) -> TokenStream {
+    let mut shape = q("::corten::view::__private::End", &[]);
+    for part in shapes.into_iter().rev() {
+        let mut pair = part;
+        pair.extend(q(",", &[]));
+        pair.extend(shape);
+        shape = stream([TokenTree::Group(Group::new(Delimiter::Parenthesis, pair))]);
+    }
+    shape
+}
+
+/// The parts of a document (`corten::view::Part`) a piece of its markup is written in.
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Level {
+    /// Every part: markup outside documents, the text of `<title>`, `let`.
+    #[default]
+    Always,
+    /// The whole document and a navigation's swap: `<title>`, the page's head tags, `<main>`'s
+    /// children.
+    Page,
+    /// The whole document only: the rest of the layout.
+    Layout,
+}
+
+impl Gen {
+    fn flush(&mut self) {
+        if !self.text.is_empty() {
+            let text = std::mem::take(&mut self.text);
+            let write = q("__OUT.push_str(__A0);", &[literal(&text)]);
+            self.emit(write);
+        }
+    }
+
+    fn code(&mut self, tokens: TokenStream) {
+        self.flush();
+        self.emit(tokens);
+    }
+
+    fn emit(&mut self, tokens: TokenStream) {
+        let block = stream([TokenTree::Group(Group::new(Delimiter::Brace, tokens.clone()))]);
+        match self.level {
+            Level::Always => self.out.extend(tokens),
+            Level::Page => self.out.extend(q("if __PART != ::corten::view::Part::Title __A0", &[block])),
+            Level::Layout => self.out.extend(q("if __PART == ::corten::view::Part::Full __A0", &[block])),
+        }
+    }
+
+    /// Switches the parts what follows is written in.
+    fn level(&mut self, level: Level) {
+        if self.level != level {
+            self.flush();
+            self.level = level;
+        }
+    }
+
+    /// A document's nodes (see `check_document`): the element path down to `<main>` is the
+    /// layout's, except `<title>`, the expressions and components in `<head>` and the children
+    /// of `<main>`, which are the page's. A `let` always runs.
+    fn doc_nodes(&mut self, nodes: &[Node]) {
+        for node in nodes {
+            match node {
+                Node::Let(tokens) => {
+                    let level = self.level;
+                    self.level(Level::Always);
+                    self.code(tokens.clone());
+                    self.level(level);
+                }
+                Node::Element { name, attrs, children } if name == "main" => {
+                    self.level(Level::Layout);
+                    self.open_tag(name, attrs, children);
+                    self.level(Level::Page);
+                    self.nodes(children, false);
+                    self.level(Level::Layout);
+                    self.text.push_str("</main>");
+                }
+                Node::Element { name, attrs, children } if name == "head" => {
+                    self.level(Level::Layout);
+                    self.open_tag(name, attrs, children);
+                    for child in children {
+                        match child {
+                            Node::Element { name, attrs, children } if name == "title" => {
+                                self.level(Level::Page);
+                                self.open_tag(name, attrs, children);
+                                self.level(Level::Always);
+                                self.nodes(children, false);
+                                self.level(Level::Page);
+                                self.text.push_str("</title>");
+                            }
+                            Node::Component { path, .. } if is_corten(path) => {
+                                self.level(Level::Page);
+                                self.node(child, false);
+                            }
+                            // The page's own tags: marked so a navigation replaces them.
+                            Node::Expr(_) | Node::Component { .. } => {
+                                self.level(Level::Page);
+                                let body = self.body(std::slice::from_ref(child), false);
+                                self.code(q(
+                                    "::corten::view::__private::head_slot(|__OUT: &mut ::std::string::String| __A0, __OUT);",
+                                    &[body.into()],
+                                ));
+                            }
+                            Node::Let(_) => self.doc_nodes(std::slice::from_ref(child)),
+                            _ => {
+                                self.level(Level::Layout);
+                                self.node(child, false);
+                            }
+                        }
+                    }
+                    self.level(Level::Layout);
+                    self.text.push_str("</head>");
+                }
+                Node::Element { name, attrs, children } if holds_main(children) => {
+                    self.level(Level::Layout);
+                    self.open_tag(name, attrs, children);
+                    self.doc_nodes(children);
+                    self.level(Level::Layout);
+                    self.text.push_str(&format!("</{name}>"));
+                }
+                _ => {
+                    self.level(Level::Layout);
+                    self.node(node, false);
+                }
+            }
+        }
+        self.level(Level::Layout);
+    }
+
+    /// `Path { prop: value, .., children }`: a component built from its tag.
+    fn component(
+        &self,
+        path: &TokenStream,
+        props: &[(TokenStream, TokenStream)],
+        children: &Option<Vec<Node>>,
+        moving: bool,
+    ) -> TokenStream {
+        let mut fields = TokenStream::new();
+        for (field, value) in props {
+            // Only a view's own closure has something to borrow from: the props of the one
+            // component a view is (`moving`) are evaluated where the view is written.
+            let value = if moving { value.clone() } else { borrowing(value) };
+            fields.extend(q("__A0: __A1,", &[field.clone(), value]));
+        }
+        if let Some(children) = children {
+            let body = stream([self.body(children, false)]);
+            let capture = if moving { "move " } else { "" };
+            fields.extend(q(
+                &format!("children: ::corten::view::Html::child({capture}|__OUT: &mut ::std::string::String| __A0),"),
+                &[body],
+            ));
+        }
+        let literal = stream([TokenTree::Group(Group::new(Delimiter::Brace, fields))]);
+        let mut out = path.clone();
+        out.extend(literal);
+        out
+    }
+
+    fn finish(mut self) -> TokenStream {
+        self.flush();
+        let mut out = self.checks;
+        out.extend(self.out);
+        out
+    }
+
+    /// The top level of a view that could be a patch (see `could_patch`), written as `nodes`
+    /// writes it, with each part's shape bound to a local: an element's from its `id={..}`
+    /// (`Yes` for an `Id`), an expression's or component's from its type (`Yes` for a `Patch`),
+    /// a block's from the `Option` each of its bodies sets. Returns the view's shape.
+    fn top_nodes(&mut self, nodes: &[Node], slots: &mut Slots) -> TokenStream {
+        let mut shapes = Vec::new();
+        for node in nodes {
+            match node {
+                Node::Text(_) | Node::Markup(_) | Node::Let(_) => self.node(node, false),
+                Node::Expr(expr) => {
+                    let name = slots.name();
+                    self.code(q(
+                        "let __A1 = {
+                            let __corten_part = &(__A0);
+                            (&::corten::view::__private::Wrap(__corten_part)).__render(__OUT);
+                            (&::corten::view::__private::Proof(__corten_part)).__shape()
+                        };",
+                        &[expr.clone(), name.clone()],
+                    ));
+                    shapes.push(name);
+                }
+                Node::Component { path, props, children } => {
+                    let built = self.component(path, props, children, false);
+                    let name = slots.name();
+                    self.code(q(
+                        "let __A1 = {
+                            let __corten_part = __A0;
+                            ::corten::view::Render::render(&__corten_part, __OUT);
+                            (&::corten::view::__private::Proof(&__corten_part)).__shape()
+                        };",
+                        &[built, name.clone()],
+                    ));
+                    shapes.push(name);
+                }
+                Node::Element { .. } => {
+                    let name = slots.name();
+                    self.id_shape = Some(name.clone());
+                    self.node(node, false);
+                    // `could_patch` saw an `id={..}`, so `open_tag` bound it.
+                    self.id_shape = None;
+                    shapes.push(name);
+                }
+                Node::Block { head, bodies, arms } => {
+                    let mut tokens = if *arms { TokenStream::new() } else { head[0].clone() };
+                    let mut inner = TokenStream::new();
+                    for (i, body) in bodies.iter().enumerate() {
+                        let slot = slots.slot();
+                        let mut gen = Gen::default();
+                        let shape = gen.top_nodes(body, slots);
+                        let mut code = gen.finish();
+                        code.extend(q("__A0 = ::core::option::Option::Some(__A1);", &[slot.clone(), shape]));
+                        let group = TokenTree::Group(Group::new(Delimiter::Brace, code));
+                        if *arms {
+                            inner.extend(head[i + 1].clone());
+                            inner.extend([group, TokenTree::Punct(proc_macro::Punct::new(',', proc_macro::Spacing::Alone))]);
+                        } else {
+                            if i > 0 {
+                                tokens.extend(head[i].clone());
+                            }
+                            tokens.extend([group]);
+                        }
+                        shapes.push(slot);
+                    }
+                    if *arms {
+                        tokens = head[0].clone();
+                        tokens.extend([TokenTree::Group(Group::new(Delimiter::Brace, inner))]);
+                    }
+                    self.code(tokens);
+                }
+            }
+        }
+        shape_of(shapes)
+    }
+
+    fn body(&self, nodes: &[Node], raw: bool) -> TokenTree {
+        let mut gen = Gen { svg: self.svg, ..Gen::default() };
+        gen.nodes(nodes, raw);
+        TokenTree::Group(Group::new(Delimiter::Brace, gen.finish()))
+    }
+
+    fn nodes(&mut self, nodes: &[Node], raw: bool) {
+        for node in nodes {
+            self.node(node, raw);
+        }
+    }
+
+    /// `<name attrs>`: the start tag of an element, whose children only matter for a ref's rows.
+    fn open_tag(&mut self, name: &str, attrs: &[Attr], children: &[Node]) {
+        self.text.push('<');
+        self.text.push_str(name);
+        let mut actions_printed = false;
+        for attr in attrs {
+            match attr {
+                Attr::Bare(attr) => {
+                    self.text.push(' ');
+                    self.text.push_str(attr);
+                }
+                Attr::Page(_) => self.text.push_str(" data-corten-page"),
+                Attr::Static(attr, value) => {
+                    self.text.push_str(&format!(" {attr}=\"{}\"", escape(value)));
+                }
+                Attr::Ref(expr, wide) => {
+                    let el: TokenStream =
+                        format!("::corten::script::el::{}", crate::dom::element(name)).parse().expect("a path parses");
+                    // What the element holds: one view's rows, for a handler's Holds<Row, ..>.
+                    let holds: TokenStream = match rows_of(children) {
+                        Some(view) => format!("::corten::script::RowsOf<{}u64>", crate::script::view_id(&view)),
+                        None => "::corten::script::NoRows".to_string(),
+                    }
+                    .parse()
+                    .expect("a path parses");
+                    match wide {
+                        // `ref={trigger as HTMLElement}`: a ref on several kinds of element, typed as one they all are.
+                        Some(wide) => {
+                            let ty: TokenStream = format!("::corten::script::el::{wide}").parse().expect("a path parses");
+                            let ty: TokenStream = ty
+                                .into_iter()
+                                .map(|mut t| {
+                                    t.set_span(wide.span());
+                                    t
+                                })
+                                .collect();
+                            self.code(q(
+                                "::corten::script::__private::ref_attr_as::<__A1, __A2, __A3>(&(__A0), __OUT);",
+                                &[expr.clone(), el, ty, holds],
+                            ))
+                        }
+                        None => self.code(q(
+                            "::corten::script::__private::ref_attr::<__A1, __A2>(&(__A0), __OUT);",
+                            &[expr.clone(), el, holds],
+                        )),
+                    }
+                }
+                Attr::On(..) if actions_printed => {}
+                Attr::On(..) => {
+                    actions_printed = true;
+                    let target: TokenStream =
+                        format!("::corten::script::el::{}", crate::dom::element(name)).parse().expect("a path parses");
+                    let mut binds = TokenStream::new();
+                    let mut binds_before = TokenStream::new();
+                    for attr in attrs {
+                        let Attr::On(event, span, expr) = attr else { continue };
+                        // A form that hears its upload's progress sends it by the upload module.
+                        if event == "corten:progress" {
+                            binds_before.extend(q("::corten::script::__private::uses_upload();", &[]));
+                        }
+                        // A typed event's name is the one its `#[event]` gave it (a library's carries its
+                        // prefix: `ui-copied`), so it is read from the type rather than derived here.
+                        let (printed, ty) = if event.starts_with(|c: char| c.is_ascii_uppercase()) {
+                            let ty: TokenStream = TokenTree::Ident(Ident::new(event, *span)).into();
+                            self.checks.extend(q("::corten::script::__private::is_event::<__A0>();", std::slice::from_ref(&ty)));
+                            (q("<__A0 as ::corten::script::DomEvent>::NAME", std::slice::from_ref(&ty)), ty)
+                        } else {
+                            let dom_event = event.strip_prefix("document.").unwrap_or(event);
+                            let ty: TokenStream =
+                                format!("::corten::script::ev::{}", crate::dom::event(dom_event)).parse().expect("a path parses");
+                            (literal(event), ty)
+                        };
+                        let expr = keywords(expr.clone(), &ty, &target);
+                        binds.extend(q("(__A0, &(__A1) as &dyn ::corten::script::Bind),", &[printed, expr]));
+                    }
+                    if !binds_before.is_empty() {
+                        self.code(binds_before);
+                    }
+                    self.code(q("::corten::script::__private::data_on(__OUT, &[__A0]);", &[binds]));
+                }
+                // Classes are a list (see `corten::style::ClassList`): `class={(Row, hot.then_some(Hot))}`.
+                Attr::Expr(attr, expr) if attr == "class" => {
+                    self.code(q("::corten::style::__private::class_attr(&(__A0), __OUT);", std::slice::from_ref(expr)))
+                }
+                // Custom properties of the component's stylesheet: `style={(FILL.pct(42.0), GAP.px(4.0))}`.
+                Attr::Expr(attr, expr) if attr == "style" => {
+                    self.code(q("::corten::style::__private::vars_attr(&(__A0), __OUT);", std::slice::from_ref(expr)))
+                }
+                // A patch's top-level element: the id also says whether it is a `#[derive(Id)]`.
+                Attr::Expr(attr, expr) if attr == "id" && self.id_shape.is_some() => {
+                    let name = self.id_shape.take().expect("checked");
+                    self.code(q(
+                        "let __A2 = {
+                            let __corten_id = &(__A0);
+                            (&::corten::view::__private::Attr(__corten_id)).__attr(__A1, __OUT);
+                            (&::corten::view::__private::IdProof(__corten_id)).__id_shape()
+                        };",
+                        &[expr.clone(), literal(" id"), name],
+                    ))
+                }
+                // A link named by aria-label: its href's type must always write one.
+                Attr::Expr(attr, expr) if !self.svg && attr.eq_ignore_ascii_case("href") && checks_href(name, attrs) => {
+                    // The error points at the href's expression, not the whole `html!`.
+                    let at = expr.clone().into_iter().next().map_or_else(Span::call_site, |t| t.span());
+                    let check = respan(q("(&::corten::view::__private::NamedHref(__corten_href)).__named_href();", &[]), at);
+                    // A `match`, not a `let`: temporaries in the expression live through the write.
+                    self.code(q(
+                        "match &(__A0) {
+                            __corten_href => {
+                                use ::corten::view::__private::{NamedHrefAlways as _, NamedHrefMaybe as _};
+                                __A2
+                                (&::corten::view::__private::Attr(__corten_href)).__attr(__A1, __OUT);
+                            }
+                        }",
+                        &[expr.clone(), literal(&format!(" {attr}")), check],
+                    ))
+                }
+                // A page part is found on screen by its id, so it is a typed one.
+                Attr::Expr(attr, expr) if attr == "id" && attrs.iter().any(|a| matches!(a, Attr::Page(_))) => {
+                    self.code(q("::corten::view::__private::page_id(&(__A0), __OUT);", std::slice::from_ref(expr)))
+                }
+                Attr::Expr(attr, expr) => self.code(q(
+                    "(&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);",
+                    &[expr.clone(), literal(&format!(" {attr}"))],
+                )),
+                Attr::Spread(expr) => {
+                    // What else the tag writes, which the spread must not write again.
+                    let written: Vec<String> = attrs
+                        .iter()
+                        .filter_map(|other| match other {
+                            Attr::Expr(name, _) if name == "style" => Some("\"data-vars\"".into()),
+                            Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => {
+                                Some(format!("{:?}", name.to_ascii_lowercase()))
+                            }
+                            Attr::Ref(..) => Some("\"data-ref\"".into()),
+                            Attr::On(..) => Some("\"data-on\"".into()),
+                            Attr::Page(_) => Some("\"data-corten-page\"".into()),
+                            Attr::Spread(_) => None,
+                        })
+                        .collect();
+                    // Which spread of the tag this is, and how many it has: each spread after the
+                    // first is checked against those before it, by type (`Writes::Static`, which
+                    // holds none of their borrows), so no expression is evaluated twice.
+                    let spreads = attrs.iter().filter(|a| matches!(a, Attr::Spread(_))).count();
+                    let index = attrs
+                        .iter()
+                        .filter(|a| matches!(a, Attr::Spread(_)))
+                        .position(|a| std::ptr::eq(a, attr))
+                        .expect("in the list");
+                    if written.is_empty() && spreads < 2 {
+                        self.code(q("::corten::view::Attrs::render_attrs(&(__A0), __OUT);", std::slice::from_ref(expr)))
+                    } else {
+                        // The checks are calls that do nothing, or do not compile when the
+                        // spread's type declares (`Writes`) one of the names; one evaluation of
+                        // the expression serves the checks and the render.
+                        let mut checks = String::from(
+                            "#[allow(unused_imports)] use ::corten::view::__private::{Declared as _, Undeclared as _};",
+                        );
+                        if !written.is_empty() {
+                            checks.push_str(&format!(
+                                "struct __CortenWritten; impl ::corten::view::__private::Written for __CortenWritten {{ const NAMES: &'static [&'static str] = &[{}]; }}",
+                                written.join(", ")
+                            ));
+                        }
+                        let mut calls = String::new();
+                        if !written.is_empty() {
+                            calls.push_str("(&::corten::view::__private::Spread(__spread)).check::<__CortenWritten>();");
+                        }
+                        for earlier in 0..index {
+                            calls.push_str(&format!(
+                                "(&::corten::view::__private::Spread(__spread)).after(&__corten_spread_{earlier});"
+                            ));
+                        }
+                        let checks: TokenStream = checks.parse().expect("the names parse");
+                        let calls: TokenStream = calls.parse().expect("the checks parse");
+                        if spreads < 2 {
+                            self.code(q(
+                                "{ __A1 match &(__A0) { __spread => { __A2 ::corten::view::Attrs::render_attrs(__spread, __OUT); } } }",
+                                &[expr.clone(), checks, calls],
+                            ))
+                        } else {
+                            let bind: TokenStream = format!("__corten_spread_{index}").parse().expect("a name parses");
+                            self.code(q(
+                                "let __A3 = { __A1 match &(__A0) { __spread => { __A2 ::corten::view::Attrs::render_attrs(__spread, __OUT); (&::corten::view::__private::Spread(__spread)).marker() } } };",
+                                &[expr.clone(), checks, calls, bind],
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        self.text.push('>');
+    }
+
+    fn node(&mut self, node: &Node, raw: bool) {
+        match node {
+            Node::Text(text) if raw => self.text.push_str(text),
+            Node::Text(text) => self.text.push_str(&escape(text)),
+            Node::Markup(markup) => self.text.push_str(markup),
+            Node::Expr(expr) => {
+                self.code(q("(&::corten::view::__private::Wrap(&(__A0))).__render(__OUT);", std::slice::from_ref(expr)))
+            }
+            Node::Let(tokens) => self.code(tokens.clone()),
+            Node::Element { name, attrs, children } => {
+                // An element of the layout that is the page's (`page`): written for a navigation too.
+                let part = self.level == Level::Layout && attrs.iter().any(|a| matches!(a, Attr::Page(_)));
+                if part {
+                    self.level(Level::Page);
+                }
+                self.open_tag(name, attrs, children);
+                if !VOID.contains(&name.as_str()) {
+                    let outer = self.svg;
+                    self.svg = within_svg(outer, name);
+                    self.nodes(children, RAW_TEXT.contains(&name.as_str()));
+                    self.svg = outer;
+                    self.text.push_str(&format!("</{name}>"));
+                }
+                if part {
+                    self.level(Level::Layout);
+                }
+            }
+            Node::Component { path, props, children } => {
+                let built = self.component(path, props, children, false);
+                self.code(q("::corten::view::Render::render(&__A0, __OUT);", &[built]));
+            }
+            Node::Block { head, bodies, arms } => {
+                if *arms {
+                    let mut inner = TokenStream::new();
+                    for (pattern, body) in head[1..].iter().zip(bodies) {
+                        inner.extend(pattern.clone());
+                        inner.extend([
+                            self.body(body, raw),
+                            TokenTree::Punct(proc_macro::Punct::new(',', proc_macro::Spacing::Alone)),
+                        ]);
+                    }
+                    let mut tokens = head[0].clone();
+                    tokens.extend([TokenTree::Group(Group::new(Delimiter::Brace, inner))]);
+                    self.code(tokens);
+                } else {
+                    let mut tokens = TokenStream::new();
+                    for (h, body) in head.iter().zip(bodies) {
+                        tokens.extend(h.clone());
+                        tokens.extend([self.body(body, raw)]);
+                    }
+                    self.code(tokens);
+                }
+            }
+        }
+    }
+}
+
+/// Inside `<script>` and `<style>` only literal text: the browser reads their text as it is, so
+/// an expression there, written escaped as HTML, would not read back as what it was (JSON with
+/// `&quot;` is not JSON), and written as it is it could end the element.
+fn check_raw_text(nodes: &[Node], inside: Option<&str>) -> Result<(), Error> {
+    for node in nodes {
+        let span = match node {
+            Node::Element { name, children, .. } => {
+                let inside = if RAW_TEXT.contains(&name.as_str()) { Some(name.as_str()) } else { inside };
+                check_raw_text(children, inside)?;
+                continue;
+            }
+            Node::Text(_) | Node::Markup(_) | Node::Let(_) => continue,
+            Node::Expr(tokens) | Node::Component { path: tokens, .. } => first_span(tokens),
+            Node::Block { head, bodies, .. } => {
+                if inside.is_none() {
+                    for body in bodies {
+                        check_raw_text(body, None)?;
+                    }
+                    continue;
+                }
+                head.first().map_or(Span::call_site(), first_span)
+            }
+        };
+        if let Some(name) = inside {
+            return err(
+                span,
+                format!(
+                    "<{name}> holds only literal text: an expression in it is escaped as HTML, which a {name} does not read back. Structured data is <JsonLd value={{..}} /> (corten::JsonLd), behavior a #[component(js)], styles a component's CSS file"
+                ),
+            );
+        }
+        if let Node::Component { children: Some(children), .. } = node {
+            check_raw_text(children, None)?;
+        }
+    }
+    Ok(())
+}
+
+fn first_span(tokens: &TokenStream) -> Span {
+    tokens.clone().into_iter().next().map_or(Span::call_site(), |t| t.span())
+}
+/// True when `<main>` is among `nodes` or inside one of their elements.
+fn holds_main(nodes: &[Node]) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Element { name, children, .. } => name == "main" || holds_main(children),
+        _ => false,
+    })
+}
+
+/// True for `<Corten />`, where Corten writes its tags in a document's `<head>`.
+fn is_corten(path: &TokenStream) -> bool {
+    let path = path.to_string();
+    path == "Corten" || path.ends_with(":: Corten")
+}
+
+/// True when the markup is a document: `<!DOCTYPE html>` (optional) and `<html>`.
+fn is_document(nodes: &[Node]) -> bool {
+    let mut roots = nodes.iter().filter(|n| !matches!(n, Node::Let(_)));
+    let first = roots.next();
+    let root = match first {
+        Some(Node::Markup(_)) => roots.next(),
+        other => other,
+    };
+    matches!(root, Some(Node::Element { name, .. }) if name == "html")
+}
+
+/// What `corten::view::Document` needs, checked here so a mistake does not compile: the doctype
+/// at most, then `<html>` holding one `<head>` (with one `<title>` and `<Corten />`) and one
+/// `<main>`, reached through elements alone so every part knows where it is.
+fn check_document(nodes: &[Node]) -> Result<(), Error> {
+    let fail = |message: &str| err(Span::call_site(), message);
+    let roots: Vec<&Node> = nodes.iter().filter(|n| !matches!(n, Node::Let(_) | Node::Markup(_))).collect();
+    let [Node::Element { children, .. }] = roots.as_slice() else {
+        return fail("a document is <!DOCTYPE html> and one <html> element, with nothing after it");
+    };
+    let heads: Vec<&Vec<Node>> = children
+        .iter()
+        .filter_map(|n| match n {
+            Node::Element { name, children, .. } if name == "head" => Some(children),
+            _ => None,
+        })
+        .collect();
+    let [head] = heads.as_slice() else {
+        return fail("a document's <html> holds one <head>, with its <title> and <Corten />");
+    };
+    let titles = head.iter().filter(|n| matches!(n, Node::Element { name, .. } if name == "title")).count();
+    if titles != 1 {
+        return fail("a document's <head> holds one <title>: <title>{title}</title>");
+    }
+    let cortens = head.iter().filter(|n| matches!(n, Node::Component { path, .. } if is_corten(path))).count();
+    if cortens != 1 {
+        return fail("a document's <head> holds <Corten /> once, where Corten writes the runtime and the page's scripts");
+    }
+    fn mains(nodes: &[Node], in_block: bool, found: &mut usize) -> Result<(), &'static str> {
+        for node in nodes {
+            match node {
+                Node::Element { name, children, .. } => {
+                    if name == "main" {
+                        if in_block {
+                            return Err("a document's <main> is not inside for, if or match: a navigation swaps it");
+                        }
+                        *found += 1;
+                    }
+                    mains(children, in_block, found)?;
+                }
+                Node::Block { bodies, .. } => {
+                    for body in bodies {
+                        mains(body, true, found)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    let mut found = 0;
+    mains(children, false, &mut found).or_else(fail)?;
+    if found != 1 {
+        return fail("a document holds one <main>, which a client navigation swaps: <main>{children}</main>");
+    }
+    Ok(())
+}
+
+/// Where `page` goes: on an element of a document's layout around `<main>`, outside `<head>`, not
+/// inside `for`, `if` or `match` (so every page of the layout has it, and a navigation's answer
+/// always holds one for the runtime to put in place), nor inside another such element. It has a
+/// typed `id={..}`, by which the runtime finds the one on screen.
+fn check_pages(nodes: &[Node]) -> Result<(), Error> {
+    fn walk(nodes: &[Node], document: bool, inside: Option<&'static str>) -> Result<(), Error> {
+        for node in nodes {
+            match node {
+                Node::Element { name, attrs, children } => {
+                    let page = attrs.iter().find_map(|a| match a {
+                        Attr::Page(span) => Some(*span),
+                        _ => None,
+                    });
+                    let within = match page {
+                        Some(span) => {
+                            if !document {
+                                return err(span, "page marks an element of a document's layout (the html! that starts with <html>) as the page's: write it there, around this markup (<nav page id={SectionNavId}><SectionLinks req={req} /></nav>); an attribute named page is written page=\"\"");
+                            }
+                            if matches!(name.as_str(), "main" | "head" | "title") {
+                                return err(span, format!("page marks an element of the layout beside <main> as the page's, and <{name}> is the page's already: a navigation sends it"));
+                            }
+                            if let Some(place) = inside {
+                                return err(span, format!("page marks an element of the layout around <main> as the page's, and this one is {place}"));
+                            }
+                            if holds_main(children) {
+                                return err(span, "an element marked page is beside <main>, not around it: a navigation sends <main>'s children already");
+                            }
+                            if !attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "id")) {
+                                return err(span, "an element marked page has an id of a #[derive(Id)] type, by which the runtime finds the one on screen: <nav page id={SectionNavId}>");
+                            }
+                            Some("inside another element marked page")
+                        }
+                        None if name == "main" => inside.or(Some("inside <main>, which is the page's already")),
+                        None if name == "head" => {
+                            inside.or(Some("in <head>, where the page's tags are an expression or component ({head})"))
+                        }
+                        None => inside,
+                    };
+                    walk(children, document, within)?;
+                }
+                Node::Block { bodies, .. } => {
+                    for body in bodies {
+                        walk(body, document, inside.or(Some("inside for, if or match: draw it on every page, with what is in it chosen by the page (it may be empty)")))?;
+                    }
+                }
+                Node::Component { children: Some(children), .. } => {
+                    walk(
+                        children,
+                        document,
+                        inside.or(Some(
+                            "in a component's children, which the component places: mark an element of the layout's own markup",
+                        )),
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    walk(nodes, is_document(nodes), None)
+}
+
+/// The view every child of an element is, when the markup puts only components of one name in it
+/// (`<Row .. />`, directly or as the whole body of a `for`, `if` or `match`): its name, the last
+/// segment of its path, which is also its class in `corten/views`.
+fn rows_of(children: &[Node]) -> Option<String> {
+    fn walk(nodes: &[Node], found: &mut Option<String>) -> bool {
+        nodes.iter().all(|node| match node {
+            Node::Let(_) => true,
+            Node::Text(text) => text.trim().is_empty(),
+            Node::Component { path, .. } => {
+                let Some(TokenTree::Ident(last)) = path.clone().into_iter().last() else { return false };
+                let name = last.to_string();
+                found.get_or_insert_with(|| name.clone()) == &name
+            }
+            Node::Block { bodies, .. } => bodies.iter().all(|body| walk(body, found)),
+            Node::Element { .. } | Node::Markup(_) | Node::Expr(_) => false,
+        })
+    }
+    let mut found = None;
+    if walk(children, &mut found) {
+        found
+    } else {
+        None
+    }
+}
+
+/// Whether the identifier at `tokens[i]` is a handler keyword there: not a field (`x.scope`), a
+/// path segment, a struct field name (`scope: ..`), a call (`scope()`) or a macro.
+fn is_keyword_at(tokens: &[TokenTree], i: usize) -> bool {
+    let after_dot = i > 0 && (is_punct(tokens.get(i - 1), '.') || is_punct(tokens.get(i - 1), ':'));
+    let next = tokens.get(i + 1);
+    let used_otherwise = is_punct(next, ':')
+        || is_punct(next, '!')
+        || matches!(next, Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis);
+    !(after_dot || used_otherwise)
+}
+
+/// True when a handler value (the `{..}` of an `on:`) passes the keyword `kw`, as `keywords`
+/// would replace it.
+pub(crate) fn passes_keyword(tokens: TokenStream, kw: &str) -> bool {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    tokens.iter().enumerate().any(|(i, token)| match token {
+        TokenTree::Ident(id) => id.to_string() == kw && is_keyword_at(&tokens, i),
+        TokenTree::Group(g) => passes_keyword(g.stream(), kw),
+        _ => false,
+    })
+}
+
+/// `event`, `target`, `signal` and `scope` in a handler call are the browser's: typed as the
+/// event `event_ty` and the element `target_ty`. A field (`x.event`), a path segment, a struct
+/// field name (`event: ..`), a call (`event()`) or a macro keeps its own meaning.
+fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream) -> TokenStream {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut out = TokenStream::new();
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            TokenTree::Ident(id) if matches!(id.to_string().as_str(), "event" | "target" | "signal" | "scope") => {
+                if !is_keyword_at(&tokens, i) {
+                    out.extend([token.clone()]);
+                    continue;
+                }
+                let replaced = match id.to_string().as_str() {
+                    "event" => q("::corten::script::__private::EventKw::<__A0>::NEW", std::slice::from_ref(event_ty)),
+                    "target" => q("::corten::script::__private::TargetKw::<__A0>::NEW", std::slice::from_ref(target_ty)),
+                    "signal" => q("::corten::script::__private::SignalKw", &[]),
+                    _ => q("::corten::script::__private::ScopeKw", &[]),
+                };
+                // Errors about the keyword point at it.
+                out.extend(replaced.into_iter().map(|mut t| {
+                    t.set_span(id.span());
+                    t
+                }));
+            }
+            TokenTree::Group(g) => {
+                let mut copy = Group::new(g.delimiter(), keywords(g.stream(), event_ty, target_ty));
+                copy.set_span(g.span());
+                out.extend([TokenTree::Group(copy)]);
+            }
+            other => out.extend([other.clone()]),
+        }
+    }
+    out
+}

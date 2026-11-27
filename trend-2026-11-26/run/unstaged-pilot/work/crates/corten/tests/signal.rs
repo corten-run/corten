@@ -1,0 +1,133 @@
+//! The request signal against a real server: a client that leaves, a handler past its deadline,
+//! and a request that is answered.
+use std::{io::Write, time::Duration};
+
+use corten::{
+    extract::State,
+    http::{Body, Request},
+    Abort, App, Router, Signal,
+};
+use http_body_util::BodyExt;
+use tokio::sync::mpsc;
+use tower::ServiceExt;
+
+type Tx = mpsc::UnboundedSender<Abort>;
+
+/// Reports how the request's signal ended, from a task that outlives the handler.
+fn report(signal: Signal, tx: Tx) {
+    tokio::spawn(async move {
+        let _ = tx.send(signal.aborted().await);
+    });
+}
+
+fn app(deadline: Duration) -> (Router, mpsc::UnboundedReceiver<Abort>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (App::new(url::router(tx)).deadline(deadline).router(), rx)
+}
+
+#[corten::routes(state = Tx)]
+mod url {
+    #[route("/slow", get = slow)]
+    pub struct Slow;
+
+    #[route("/quick", get = quick)]
+    pub struct Quick;
+
+    #[route("/unstaged", get = unstaged, unstaged)]
+    pub struct Unstaged;
+}
+
+async fn slow(signal: Signal, State(tx): State<Tx>) -> &'static str {
+    report(signal, tx);
+    std::future::pending::<&str>().await
+}
+
+async fn quick(req: corten::Req, State(tx): State<Tx>) -> &'static str {
+    report(req.signal().clone(), tx);
+    "done"
+}
+
+/// An unstaged route takes the module's state too.
+async fn unstaged(State(tx): State<Tx>) -> &'static str {
+    if tx.is_closed() {
+        "closed"
+    } else {
+        "open"
+    }
+}
+
+#[tokio::test]
+async fn an_unstaged_route_takes_the_module_s_state() {
+    let (router, _rx) = app(Duration::from_secs(60));
+    let res = router.oneshot(Request::get("/unstaged").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "open");
+}
+
+async fn next(rx: &mut mpsc::UnboundedReceiver<Abort>) -> Abort {
+    tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("the signal never aborted").unwrap()
+}
+
+#[tokio::test]
+async fn a_client_that_closes_the_connection_aborts_the_request() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(corten::serve_on(vec![listener], App::new(url::router(tx)).deadline(Duration::from_secs(60))));
+    let started = std::time::Instant::now();
+    tokio::task::spawn_blocking(move || {
+        let mut socket = std::net::TcpStream::connect(addr).unwrap();
+        socket.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    })
+    .await
+    .unwrap();
+    assert_eq!(next(&mut rx).await, Abort::Disconnected);
+    println!("HTTP/1.1 disconnect seen {:?} after connecting (100 ms of that before closing)", started.elapsed());
+}
+
+/// The same, with the router served another way: hyper's own connection loop around
+/// `App::router`, as an app with a server of its own serves it, giving each request its client's
+/// address.
+#[tokio::test]
+async fn a_client_that_leaves_a_router_served_another_way_aborts_the_request() {
+    let (router, mut rx) = app(Duration::from_secs(60));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (stream, peer) = listener.accept().await.unwrap();
+        let service = hyper::service::service_fn(move |req: Request<hyper::body::Incoming>| {
+            let mut req = req.map(Body::new);
+            req.extensions_mut().insert(corten::PeerAddr(peer));
+            router.clone().oneshot(req)
+        });
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, service).await;
+    });
+    tokio::task::spawn_blocking(move || {
+        let mut socket = std::net::TcpStream::connect(addr).unwrap();
+        socket.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    })
+    .await
+    .unwrap();
+    assert_eq!(next(&mut rx).await, Abort::Disconnected);
+}
+
+#[tokio::test]
+async fn a_handler_past_the_deadline_gets_the_error_page() {
+    let (router, mut rx) = app(Duration::from_millis(50));
+    let res = router.oneshot(Request::get("/slow").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), 503);
+    let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(body.contains("<html"), "the error page, not an empty 503: {body}");
+    assert_eq!(next(&mut rx).await, Abort::Deadline);
+}
+
+#[tokio::test]
+async fn an_answered_request_ends_its_work() {
+    let (router, mut rx) = app(Duration::from_secs(60));
+    let res = router.oneshot(Request::get("/quick").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(next(&mut rx).await, Abort::Responded);
+}

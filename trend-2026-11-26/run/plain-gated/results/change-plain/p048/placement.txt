@@ -1,0 +1,8 @@
+comparison change-plain placement 48 workload plain
+A base-p7088 c0acc66eec28ac81648e5f541ff98d1d1a8a796e7ff2ac27d9f0c3464b7d9b05
+B head-p7088 07d3d052c42fc5f0b777a18f2959547fd7f952f92d3d8f5967beec2c0f508ac6
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 47
+started 2026-11-26T20:47:27Z
+ended 2026-11-26T20:48:30Z

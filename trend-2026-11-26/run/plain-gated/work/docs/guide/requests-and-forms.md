@@ -1,0 +1,2579 @@
+# Requests and forms
+
+[Back to the guides](../../README.md#documentation)
+
+## How a request works
+
+### HTTP types
+
+The HTTP types an app names are in one module, `corten::http`: a status, a method, a header or
+a URL outside the app (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the
+`header` constants, `Uri`, `request::Parts`), the `http` crate's types, which hyper and HTTP
+clients share, so an app's code names them without naming the server library under Corten;
+and the body, request and response Corten builds on them: `Request` (what a middleware or a
+handler takes whole), `Response` (what it answers), `IntoResponse` (which makes one of a
+`Refused`, a status or a tuple of them), `IntoResponseParts`, `Body` (a relay's) and `Bytes`
+(a body's bytes, shared rather than copied). The rest of what an app names about a request is
+Corten's too: an extractor of its own implements `corten::extract::FromRequestParts` (with
+`FromRef` for a part of the state, beside the derive of the same name), a listener of its own is
+a `corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
+traits and `State` are Corten's own, with the names, the `Rejection` and the
+`from_request_parts(parts, state)` signature they had as axum's, so an extractor written against
+axum's compiles against them with its `use` changed; `Request` and `Response` are the `http`
+crate's with Corten's `Body`, and `IntoResponse` is Corten's, so the app imports one crate and
+Corten depends on no web framework ([design Choice 21](../design.md#choice-own-extractors)).
+A body read whole (`Bytes`, `String`, `Json`, `Form`) is refused over its limit with a 413 (the
+rest read past until twice the limit has arrived, at most 64 MiB past it, so a browser still
+sending reads it, and refused unread when its length says it is longer than that), or with a 400
+when it cannot be read. The limit is 2 MiB unless the app, an area or an API sets its own, as it
+sets a deadline: `App::body_limit`, `Area::body_limit`, `Api::body_limit` (in bytes; the
+innermost area or API that sets one decides), so `.api(|api| api.body_limit(16 << 20))` takes
+large documents there while every page keeps 2 MiB, and an `Upload` keeps the same limit unless
+its handler sets `upload.limit`; the refusal is a `corten::extract::BodyRejection`, plain text
+as axum's were, so a handler that takes `Result<Json<T>, BodyRejection>` answers it itself.
+axum's own extractors (`Path`,
+`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments, since they
+implement axum's traits and Rust's orphan rule keeps an app from implementing Corten's for
+them (a type that implements neither does not compile, `corten::extract`'s `compile_fail`
+example): a route's path
+and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler
+that answers a refusal itself takes `Result<T, T::Rejection>`, as `Option<T>` goes without a
+value; an extractor of the app's own that needs two others reads each in turn, since a tuple of
+them is not one. A handler that takes the whole `Request` and answers
+a body over a limit of its own itself (a route that keeps another server's error shape) reads it
+with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
+large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:
+`let mut pieces = corten::extract::pieces_up_to(request.into_body(), max)`, then
+`while let Some(piece) = pieces.chunk().await? { .. }`, writing each piece to the disk or store
+before asking for the next, so the request holds one piece, not the body. It counts what arrives,
+whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
+rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
+before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
+minute (`.idle(d)` to change it), or trickles the body in so slowly that it falls that minute
+behind 240 bytes a second, is a 408 (still the 413 when it stops past the limit), and a body that
+breaks is a 400; each is a
+`corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
+body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
+it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
+path and query are read as its `Params`, never another way. A test's stand-in for another
+service is a server of the test's own, not Corten ([Testing an app](app.md#testing-an-app)).
+
+### Request modes
+
+| Request | Sent by | Handler returns | Client does |
+|---|---|---|---|
+| `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
+| `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
+| `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
+| `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `action.patch(view)` from `Some(action) = req.action()` ([where a form posts](#where-a-form-posts)) | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
+| `POST` with `corten: action` and `Prefer: corten-draws=whole`, answered with a page | runtime, a write that draws its own page (a refused form, a partial result) | `req.page(doc)`: the whole document, its layout reads started, as without JavaScript (`<main>` alone for a runtime that does not prefer it) | swaps the page and draws its layout again |
+| `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
+| any, `Accept: application/json` | native screen, agent, a page's script ([`read()`](scripts.md#a-screens-data)), test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
+| any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
+| SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
+| `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
+
+One handler serves every mode, and `req.mode` says which. A `data-patch` form's handler answers
+both of its rows with `req.patch_or(view, || async { req.page(..) }).await`: the patch with
+JavaScript, and otherwise the page (or a redirect), whose closure runs only then, so the patch
+never loads what only the page shows. A patch that needs data of its own, which the page does not,
+is `req.patch_or_with(|action| async move { .. action.patch(view) }, || async { req.page(..) }).await`, where both
+sides are closures and only the one the request asks for runs (the part's may answer
+`action.patch_with_status`, or set headers on its response, for a status or headers of its own);
+a refusal whose
+form needs a read is `req.invalid_with` (below). A write that answers with its own page instead
+sends it whole in document mode or in an action with `Prefer: corten-draws=whole`, and the runtime
+draws what changed around `<main>` as after a redirect, so a layout read (a cart's count) is
+current; a patch fills no layout read, so a write
+whose answer must change one answers its page ([layout reads](views.md#the-document)). A route with no screen goes under
+[`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
+loads and on a write's own page ([the document](views.md#the-document)), not on a navigation; every page carries a key hashed from the
+caller its handler read (if any; by value, so a rule that holds only another caller keys as that
+one does), the deploy and its layout, and when a navigation answers with a different key
+(sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
+never stale.
+
+For an action write, the page uses the mode and drawing preference in the request as middleware
+leaves it. Removing the preference, replacing it with `corten-draws=main`, or forwarding the
+request in navigation mode gives a fragment unless the handler overrides the mode. If the handler
+sets `req.mode = Mode::Document`, its whole page still fills the layout reads after the write.
+
+During a mixed-version deploy, an older server can answer a new runtime's preferred write with
+`<main>` alone. With the same shell key, the runtime draws that fragment and reads the layout on
+the next navigation. With a different key, it reloads the current address instead: the write is
+not sent again, but its answer is lost, including the fields and messages in a refusal. The same
+shell check applies when a tab with the old runtime submits to the new server.
+
+A `data-patch` form may send to any route. One whose handler answers its page in
+`Mode::Action` (`req.page`, no `patch_or`) gets that page drawn as a redirect's is, its title,
+`<main>` and each element of the layout that changed: the form works, and every submit sends and
+draws the whole page, which a small page with no ids may want. Nothing checks that a form's handler answers a patch. A part of
+the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
+is the one thing that needs one, so it takes only a route that says `patches`. A write whose
+handler answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) may return
+`HtmlResult<Patches>` too: in an app with layout reads a typed `HtmlResult` route keeps a copy of
+the request's head on every preferred submit, in case it answers a page. `HtmlResult<Patches>`
+skips that route's copy, not the copy made by a raw `Table` handler or by middleware taking
+`Req` from its own request head, even after the route answers.
+
+Controls may be named `parentElement`, `parentNode`, `id`, `elements` or other DOM members. A
+control, in the form or joined to it by `form=`, is the form's member of its name, so Corten reads
+and calls a form's members through the platform's prototypes: the runtime (patches, navigation),
+`shortcut()` in `corten/keys`, `view()` and `rows()` for a host, root or row that is a form, and
+the classes `#[component(view)]` generates for a hole
+on a form (an attribute, or its whole text), a row that is a form, and a hole whose path starts
+from a form, into it or past it. An app's own script that reads a form directly must take the
+same care: `form.parentElement` can be a control, not its parent.
+
+While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
+`data-patch` form and the button that sent it until its answer is drawn (or, when the answer
+sends the browser to another page, until that page is), and for a navigation `<main>` and the
+link or GET form that started it, with the form's button, until the new page is swapped in
+(through a redirect too). A button outside its form (`form="open"`, a row's action for one form
+the rows share) is marked as well, so the one pressed shows it is working, and the kit's `Button`
+draws that. When another navigation replaces one, or another button sends the same form by GET,
+the first one's marks go at once, and the newer one's stay. An element two of them mark (a form a
+part's read and a submit both wait on) is the one that marked it last: the earlier one's end
+leaves the mark, and the later one's end takes it away even while the earlier one is still on its
+way (the element is not busy again until something marks it). A write is never cut
+short that way: a button pressed while it is on its way is marked beside it and sends once its
+answer is drawn, when that answer took the write or refused only its input (a 2xx or a 422);
+after any other (a 409, a 5xx, a failed network, another page) its mark goes and it is not sent.
+Showing which control is working is then CSS
+alone, in the component's stylesheet:
+
+```css
+.reports a[aria-busy]::after {
+  content: " …";
+}
+```
+
+Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
+itself again marks nothing.
+
+A `data-patch` form that sends files can also show how much of its body is sent. Its
+`on:corten:progress` handler is called with the browser's `ProgressEvent` while the multipart body
+goes out: `loaded` and `total` count the whole request, not one file, and `lengthComputable` says
+whether `total` is known. The app draws a native `<progress>` and fills it. Only a page with such
+a form loads the module that sends it (every page's runtime carries the few lines that load it), by `XMLHttpRequest`, since
+`fetch` reports no upload progress; every other submit is still a `fetch`. The answer is handled
+as any submit's is (a patch, a refusal, a redirect, `corten:error`), and the form stays
+`aria-busy` until it is drawn. So "all of it is sent" is not "saved": once `loaded` reaches
+`total`, the server is still working, and a bar with no `value` says so. A navigation abandons the
+upload: its events stop, and its answer is not drawn (one left before it was sent is never sent). A
+newer submit of the same form waits for it, as any write's does. Without JavaScript the form posts
+as it always does. The handler is checked like any other: one that takes a `ProgressEvent` takes no
+other event, and `corten:progress` is heard only on a `<form>` the runtime sends with it (it does
+not bubble): one with `data-patch`, `method="post"` (or another method with a body) and
+`enctype="multipart/form-data"`, so a form that would never report progress does not compile.
+The form itself carries them: a button's `formmethod` or `formenctype` is not read for the check. The watchlist's profile
+picture (`examples/watchlist/src/account.rs`, `picture_upload.js`) shows the bar only while the form
+is busy:
+
+```js
+/** @param {ProgressEvent} event @param {HTMLProgressElement} bar */
+export function sending(event, bar) {
+  if (event.lengthComputable && event.loaded < event.total) bar.value = event.loaded / event.total;
+  else bar.removeAttribute("value");
+}
+```
+
+The address changes when the page's answer is in, as a full load's does, not at the click: while a
+slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
+gets that page, and a link the server redirects, or sends to a place on a page, shows only the
+address it ends at, in one history entry. This holds where the browser lets a navigation say when
+its address changes (the Navigation API's `precommitHandler`; the runtime checks for the feature,
+not for a browser). Elsewhere, and for back and forward, the address changes at the click while
+the old page is shown busy until the new one comes; `main[aria-busy]` is the hook for styling
+that wait.
+
+Back and forward draw the page again from the server, as a link does, and put back what the user
+typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
+typed or chose in whose state was not the markup's when the page was left, found again by its id,
+else by its name and which of those it is, and given that state before the page joins, so a
+component's `on:connect` reads it. A field the server now draws otherwise (another kind, another
+value, other options) keeps what the server draws. A field found by name and place that is drawn
+as before takes the state even when another row moved into its place, so give a field repeated in
+a list an id. A value a script set in a field the user never typed in is not put back, unless the
+script dispatched `input` or `change` on the field as a typed field sends (the runtime counts a
+field once it has seen either, whoever sent it). As the
+browser does, a password, a file and a field marked `autocomplete="off"` (or in a form so
+marked) are drawn as the server draws them, and so are hidden inputs. What was typed is kept in
+the page's memory only: a Back that loads the whole document (another layout, a new release, an
+answer that is not a page, or after a reload) draws the page as the server does, and so does a
+second Back past an entry a script pushed on the same page. Without the Navigation API every
+navigation is a full load, and the browser fills the page itself.
+
+### Where a form posts
+
+Where a form posts decides what a browser without JavaScript is left at. A form that belongs to
+one page posts to that page's route (`#[route("/items/{id}", get = show, post = save)]`, the form's
+`action={url::Item { id }}`): the page drawn as its answer is at the page's own address, which
+answers a `GET`, so it can be bookmarked and shared, and a refusal drawn there keeps what the user
+typed. A page with several writes names each as a post of its own route, whose address is the
+page's with the post's name added and draws the page too
+([Several posts on one page](#several-posts-on-one-page)). A write several pages use gets a path
+of its own (`/watch`, `/sign-out`), and that write answers a redirect once it is done,
+`req.redirect(&page)` or `req.redirect_with_notice(&page, text)` to say what it did
+([Redirects](#redirects)), and draws a page only to refuse (`req.invalid`): drawn there after a
+success, the page would sit at an address with no `GET`, which answers 405 when it is reloaded
+from a bookmark or a shared link. The same holds for a post that comes from elsewhere to a path
+of its own (a payment provider's return, a sign-in provider's `form_post` callback): it
+redirects once it has what it needs. Either way, a page drawn as a post's answer is reloaded by
+posting again (the browser asks first), so a write that must not run twice carries a
+`SubmitKey` ([Forms](#forms)) or redirects too.
+
+A debug build answers a browser's plain post (no `data-patch`, asking for HTML) with a 500 that
+says so when a path whose route has no `GET` handler answers it with a page and a success status,
+so an app's router test fails there; the handler's cookies and `Clear-Site-Data` go out with the
+error, and the page's other headers do not. It reads the
+routes `#[corten::routes]` declares, so it does not see everything: a router built by hand from
+a `Table` is not checked, and a page such a route serves at a path a post-only macro route also
+matches is taken for that route's, a false 500; an `unstaged` route skips the stages the check
+runs in; an `any = ..` route answers `GET` too; and a release build compiles none of it, so it
+never runs in a production image or a smoke test against one.
+
+A patch is only for the runtime. `req.action()` returns `Some(action)` only in the request's
+effective `Mode::Action`; only that borrowed `corten::Action` has `patch` and `patch_with_status`.
+A request alone cannot build a patch. For the usual two-mode answer, keep
+`req.patch_or(view, || async { .. })`, whose other side draws a page or redirect. For a patch
+with reads or a status of its own, bind the builder and keep the fallback:
+
+```rust,ignore
+if let Some(action) = req.action() {
+    let current = read_part().await?;
+    return action.patch_with_status(status, Part { current: &current });
+}
+req.redirect(&url::Home)
+```
+
+It is not in the prelude, where a bare `Action` would clash with a post's address,
+`route::Action`; a function that takes it names it `corten::Action`. It has no public
+constructor and cannot be cloned or copied. It consumes itself to
+answer; obtain another by checking again. Its borrow prevents writing that request's mode
+while the builder still has a subsequent use. It reads `req.mode`, including an explicit
+application override, not the HTTP method: a part read uses GET too. `patch_or`, `invalid`
+and `invalid_with` already check the mode themselves and keep their signatures.
+`patch_or_with` checks too and passes the builder to its part closure, `|action| async move
+{ action.patch(view) }`; its page closure receives no builder. Both branches keep their lazy
+reads and the same caller and answer-kind contracts.
+
+The type checks construction, not arbitrary responses. A handler can still override `req.mode`
+before checking, or replace a response through `DerefMut` or raw HTTP.
+[Choice 58](../design.md#choice-plain-request-patch)'s debug check therefore stays: it answers
+a browser's plain HTML request (any method, a top-level
+navigation where fetch metadata is sent) that got a marked patch with a 500 naming the route.
+It uses the original request, and preserves `Set-Cookie` and `Clear-Site-Data` on the error.
+A runtime fetch and a client not asking for HTML are not checked by that guard
+([design Choice 58](../design.md#choice-plain-request-patch)). Both checks here leave out a request
+whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
+HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page, and a
+relayed upstream answer ([a `Relay`](app.md#websockets-and-relays)), checked by the upstream.
+A navigation a service worker passes on with `fetch(event.request)` is left out too, though the
+worker may show its answer as the tab's page: it reaches the server as `navigate` to `empty`,
+the tab's and a frame's alike. Corten's own worker answers a navigation from navigation preload,
+which keeps the destination and is checked, and passes one on only when the browser sent no
+preload for it (the worker was not yet active as it began); an app's own worker that passes on
+every navigation turns the checks off for them.
+Browsers send fetch metadata only to a secure context (HTTPS or `localhost`), so a debug build
+opened over plain HTTP at another address (a phone on the LAN) gets none, and a page's own
+`fetch` that asks for HTML there is taken for a navigation and gets a false 500. The patch check
+does not see an `unstaged` route, a fragment answered without the patch's `corten-patch` header
+(a response built by hand, or one put in place of the handler's through `DerefMut`), or a
+release build, which compiles none of it.
+
+### Several posts on one page
+
+A screen with several writes (a row's price, photo and hold; a draft's save, publish and rename)
+names each as a post of its page's own route, beside its plain `post` or instead of it:
+
+```rust,ignore
+#[corten::routes]
+mod url {
+    #[route("/inventory", get = inventory, post(price) = set_price, post(photo) = add_photo, post(hold) = hold)]
+    pub struct Inventory {
+        #[route(query)]
+        pub view: super::View,
+    }
+}
+```
+
+The routes module gives the route a method for each name, whose value is the page's own address
+with `do=` and the name: `url::Inventory { view }.price()` is `/inventory?page=3&do=price`. A
+form posts there (`action={at.price()}`), and another button in the same form sends to another
+(`<button formaction={at.hold()}>`), as a browser does without JavaScript and the runtime does for
+a `data-patch` form. Each handler takes the page's `Params`, so the view the write was sent from
+is its own, and it goes back there:
+
+```rust,ignore
+async fn set_price(req: Req, Params(p): Params<url::Inventory>, Form(f): Form<Price>) -> HtmlResult {
+    // .. save f
+    req.patch_or(PriceCell { .. }, || async { req.redirect(&url::Inventory { view: p.view }) }).await
+}
+```
+
+The router reads only the address's query for `do` (key and name percent-decoded, as `Params`
+reads the query), before anything reads the body, so a urlencoded form and a multipart upload
+(`Upload<T>`, [Files](#files)) are chosen the same way, and the chosen handler's extractor still
+owns the body and its limit. A post with no `do` goes to
+the plain `post`. A name the page has no post for, `do` sent twice, or no `do` where the page has
+no plain `post` answers 400 with the names it has. A `GET` or `HEAD` of a post's address draws
+the page and runs nothing.
+
+The compiler checks the rest: a page names only the posts it has (`at.sell()` is no method),
+each has one handler, a page with posts has a `get` and is in no API's module, none of its query
+parameters is `do`, a name is an ASCII identifier and not one of the route's own methods (`href`,
+`at`), and a route with a type parameter cannot have posts. A post's address is not a link
+(`route::Action` is not an `Href`), so `req.redirect(&at.price())` does not compile: a write goes
+back to the page, not to its own address.
+
+A page drawn at a post's address (a refusal without JavaScript) stays there, so a post form in it
+without an `action` would send to that post again. A page with named posts gives every form its
+`action`, and a debug build answers such a page, drawn at an address with `do`, with a 500 that
+says so (a route without named posts is not read, so it may have a `do` of its own) ([Limit 29](../design.md#limit-page-action-address)).
+
+A post's address is the view the page was drawn at. A tab or a choice that puts itself in the
+address in the browser (corten-ui's `TabGroup` and `Choice` replace the entry's URL) rewrites no
+form, so a named post sent after one goes back to the view the page was drawn at, not the tab
+shown. A write that should follow such a tab sends it as a field, or the tab is a link that draws
+the page at its view.
+
+### Seeing what went over the wire
+
+What the runtime sent and what the server answered are the browser's to show, not Corten's: its
+network panel lists each navigation and submit the runtime sends with its `corten` header
+(`nav`, `page`, `action`), the form fields a `data-patch` submit sent, and the fragments the
+answer carried, as received after content decoding (answers and live streams are compressed with
+the `compress` feature). Chromium's also lists a `<corten-live>` stream's events as they arrive
+(its EventStream tab), each with its `id` when its fragment has a cursor
+([Resuming](live-data.md#resuming)); the other engines' panels were not checked. A panel records
+only while it is open, and a stream opens with the page, so open it and reload. The runtime has no
+diagnostics hook, so it does no work for one and opens no second stream, and its own fields are
+not an API to read (`source` on a `<corten-live>`, say;
+[design Limit 25](../design.md#limit-wire-diagnostics)). What an app wants to know about its own
+outcomes is a typed event its markup dispatches ([Typed events](scripts.md#typed-events)), from a
+submit's patch or a live fragment alike, and a submit that got no answer it can draw is
+`corten:error` (below).
+
+## Forms
+
+A form is for what the server has to answer: a write, or data the page does not have. Sorting,
+filtering or totalling what the page already shows is faster in a handler, with no request
+([Server or browser](scripts.md#server-or-browser)).
+
+`#[derive(Fields)]` gives a form struct its field names as `FieldName` constants, so markup and
+validation cannot misspell them: `Errors` takes nothing else. A name carries the type its control
+sends (`condition: Option<Condition>` is a `FieldName<Condition>`), so a control that takes a typed
+name (`SubmitKey::field`, corten-ui's `Picker`, `Number` and `RequiredWhen`) cannot be given another
+field's; `name={..}` and `Errors` take a name of any type, and `.untyped()` drops the type for a
+list of names of several fields (`[f.email.untyped(), f.price.untyped()]`). Validation stays in the app; `Errors` carries the first message per field.
+A handler is given a field's control by the same name, `on:change={js::fill(f.weight)}`, with no ref
+in the component that draws it ([Scripts](scripts.md#form-fields)).
+Any name works, including ones the DOM gives a form's own properties (`action`, `method`, `id`): the runtime
+posts a `data-patch` form to its own `action` and `method` whatever its controls are named. An app's own
+script that reads `form.action` gets the control instead, as in any page; read `getAttribute("action")`.
+The same struct reads JSON too (feature `json`): `Fields` makes it a `FromJson` with its schema,
+so a data client's `Json<Input>` body or an agent tool's input is the form's struct, with its
+rules (derive nothing beside it for that; a generic struct is one wherever its `Deserialize`
+applies, read by serde_json).
+`FieldName`, `Errors` and `Form` are all in the prelude, and so is `Result`, whose error type
+defaults to `corten::Error`: a handler returns `Result`, and a helper that checks one field
+returns `Result<u32, Errors>`, both under `use corten::prelude::*`.
+
+```rust,ignore
+if let Err(errors) = check(&input) {
+    // 422: the form as a patch for the runtime, the JSON error with `fields` for JSON clients,
+    // or the whole page for a browser without JavaScript (only then is `page` called).
+    return req.invalid(&errors, AlertForm { input: &input, errors: &errors }, page).await;
+}
+```
+
+A refusal whose form needs a read of its own (the batch as it is now, for "someone moved it
+on") is `req.invalid_with`: the form side runs only for the patch, the page side only for the
+page, and a data client gets the Problem Details document (feature `json`) with neither read. The form side gets
+a `FormPatch`, which draws a patch and nothing else, so it cannot answer a page by mistake:
+
+```rust,ignore
+return req
+    .invalid_with(
+        &errors,
+        |form| async {
+            let batch = store.batch(id).await?;
+            form.draw(BatchPanel { batch: &batch, errors: &errors })
+        },
+        || page(&req, &store, id, &errors),
+    )
+    .await;
+```
+
+A JSON handler has no form to show again: it `?`s the same check, after the `?` of the load
+it checks against. `JsonResult<T>`'s error is a `JsonError`, which takes either: field errors
+are the 422 with `fields`, anything else is answered as any failure of a JSON route
+(`examples/card-market`'s `POST /api/alerts`, whose form and MCP tool call the same
+`set_alert`):
+
+```rust,ignore
+async fn alert_json(State(source): State<Source>, Json(input): Json<CreateAlert>) -> JsonResult<AlertSet> {
+    let item = source.item(&input.id).await?.ok_or_else(Error::not_found)?; // 500 or 404
+    let t = Msg::default();
+    // 422, {"title","status","detail","fields":{"email":".."}}
+    let message = set_alert(t, &item, &input.email, &input.target_price)?;
+    Ok(Json(AlertSet { message, partner: None }))
+}
+```
+
+On a page, `?` on `Errors` does not compile: `HtmlResult`'s error is an `Error`, and a
+page's form answers with `req.invalid`, which shows the form again. Under an API with its own
+error shape (`Api::errors`), the 422 stays a Problem Details document with its `fields` and
+`form` members, since a status and a message have no place for them; every other failure is
+written in the API's.
+
+`Form` (a form's body, or a `GET` form's query string) and `Params` (a route's own parameters,
+below) read what a browser sends the way it sends it, a key once per value. A form's type derives
+`Fields` alone, and a word in a form or a link `UrlValue` alone: each implements serde's
+`Deserialize` the way serde's derive would, from the same `#[serde(..)]` attributes (`rename`,
+`rename_all`, `alias`, `default`, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`,
+`expecting`), so the names a form posts, a link writes and the handler reads are one list. An
+attribute that reads the type some other way (`flatten`, `with`, `deserialize_with`, `from`,
+`try_from`, `transparent`, `remote`, `tag`, `untagged`) does not compile; such a field needs a
+type of its own that implements `Deserialize`.
+
+| Field type | Reads | A browser sends |
+|---|---|---|
+| `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group drawn with one option checked |
+| `Entry<T>` of a number type | the text as sent and the number it reads as, `None` when blank or not a number | an `<input type="number">` the user types in |
+| `Entry<Day>`, `Entry<LocalDateTime>` | the text as sent and the day, or the date and time on the visitor's clock, it reads as, `None` when blank or not one | an `<input type="date">` or `<input type="datetime-local">` the user fills in |
+| `FormZone` | the zone the form was drawn in, the only zone its date and time fields are read in; not one, or not sent, is a 422 that names the field | the hidden input a `DrawZone` draws, `zone.field(f.zone)` |
+| `bool`, with `#[serde(default)]` | `true` for `on` or `true`, `false` when missing | a checkbox: `on` when checked, nothing when not |
+| `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=`; a radio group with none checked sends nothing |
+| `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
+
+A number the user types is an `Entry` of its type: the text as sent and the number it reads as.
+Its allowed values are a `Bounds` constant of that type, which gives the input its `min`, `max`
+and `step` and the handler its check, so the rule is declared once. The browser uses the
+attributes for native validation, and `Bounds::read` gives the handler the number within
+the bounds, or `None` for the field's message, whatever the client sent:
+
+```rust,ignore
+const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
+
+#[derive(Fields)]
+struct Line { copies: Entry<u32> }
+
+// <input type="number" name={f.copies} value={&input.copies} {..COPIES}> writes min="0" max="3"
+// step="1", and after a refusal the text as it was sent (a number input shows `9`, past max, as
+// typed, and `two` as empty; a text input with inputmode="numeric" shows either)
+let Some(copies) = COPIES.read(&input.copies) else {
+    errors.add(f.copies, t.copies_from_to(COPIES.min(), COPIES.max()));
+    return req.invalid(&errors, ..).await;
+};
+```
+
+A decimal with no step, such as a ratio or percentile, uses
+`Bounds::<f64>::any_step(min, max)`. It writes HTML's `step="any"` and holds every finite
+number in range. Use `Bounds::<f32>::any_step` for an `f32` field. Only any-step bounds take
+`.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive number bound, so the input
+gets the endpoint itself, just like an inclusive `min` or `max`. Shifting the hint inward can
+block a value the server accepts. Correctness and a form that works without JavaScript matter
+more than catching every invalid value before it is sent. The hint is advisory: the browser
+can send the endpoint, and the handler's authoritative `Bounds` check refuses it with a typed
+field error and HTTP 422. Show the logical rule in a visible hint and in the field error.
+
+Even an unshifted hint can block a server-valid decimal spelling about one float step inside
+an exclusive end in Chromium and WebKit. For example, with an `f64` minimum of
+`0.0010000000000000002`, the server accepts `0.0010000000000000005` but those browsers can
+block it before submission. If the field must accept such spellings, leave `{..BOUNDS}` off
+the input and use `step="any"` without the offending `min` or `max` hint. `NumberField` adds
+its bounds internally, so replace that field with a plain `<input type="number" step="any">`
+without the offending hint. In either case, keep `Bounds::input_value(&entry)` for redisplay
+and the exclusive `Bounds::read(&entry)` check in the handler.
+
+```rust,ignore
+const DISCOUNT: Bounds<f64, AnyStep> =
+    Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+
+// <input type="number" name={f.discount} value={DISCOUNT.input_value(&input.discount)} {..DISCOUNT}> writes
+// min="0" max="100" step="any".
+let Some(discount) = DISCOUNT.read(&input.discount) else {
+    let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
+    errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent."));
+    return req.invalid(&errors, ..).await;
+};
+```
+
+Declare any-step bounds as constants. Ends must be finite and ordered, and at least one
+representable value must remain after excluding ends. For a plain any-step input, use
+`Bounds::input_value` to prefill from an `Entry`: like `NumberField`, it uses exponent notation
+past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
+unchanged.
+It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
+existing formatting. See [Choice 64](../design.md#choice-exclusive-ends) for when to revisit this choice.
+
+Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
+`Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
+cannot opt into any step: a number input that allows `2.5` cannot feed an integer.
+
+A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
+handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
+anything from a browser that does not check (`inputmode="numeric"` on a text input, `novalidate`,
+another client). So a typed number is for one a page writes itself (a link's parameter, a hidden
+input, a select's value), where one that does not read came from no page of the app's; an
+optional one is `Option<u32>`, `None` when blank. Both read HTML's syntax for a number, as a
+number input sends it, so an integer takes a whole number however the browser wrote it (`3`,
+`3.0`, `1e1`) and refuses `3.5` (`corten::form::read_number`), in a form and in a route's
+query; a path parameter reads as written (`3.0` is no link of the app's). An optional `Entry` is
+blank or within its bounds, `input.weight.is_blank() || WEIGHT.read(&input.weight).is_some()`,
+and one not sent at all (a disabled input) is blank. corten-ui's `NumberField` takes an `Entry`
+field and its `Bounds` ([UI](ui.md)).
+
+A choice (a `<select>`, radios) is a `#[derive(UrlValue)]` enum, and its field's type says
+whether the form can leave it out. A `<select>` always sends one of its options, and so does a
+radio group drawn with one option checked, so their field is the enum. A radio group drawn with
+none checked sends nothing until the user picks one, so its field is `Option<Enum>`, and the
+handler adds the field's message when it is `None`, as it does for an `Entry` that does not
+read; a `<select>` whose first option is a blank placeholder (`value=""`) reads `None` the same
+way. Give each radio `required` too, so the browser asks before the form is sent; the handler's
+check is what a browser without scripts, or another client, gets. A word the page never offers (a
+post edited by hand) is a 422 and the error page, as a typed number from a select is: it came
+from no page of the app's.
+
+```rust,ignore
+#[derive(Clone, Copy, PartialEq, UrlValue)]
+#[serde(rename_all = "snake_case")]
+enum Basis { Observed, Manual }
+
+#[derive(Fields)]
+struct Pricing { basis: Option<Basis> }
+
+// <div role="radiogroup" aria-label=.. {..e.aria(f.basis)}>
+//     <label><input type="radio" name={f.basis} value={Basis::Observed} required>..</label>
+//     <label><input type="radio" name={f.basis} value={Basis::Manual} required>..</label>
+// </div>
+// {e.message(f.basis)}
+let Some(basis) = input.basis else {
+    errors.add(f.basis, t.choose_basis());
+    return req.invalid(&errors, ..).await;
+};
+```
+
+A value the app stores itself and draws back (a delay its rate limiter writes) must be one its
+bounds hold, or the browser will not send the form until the user changes it: under `corten dev`
+the browser's console names such a control in a form when the page, a navigation or a patch draws
+it, whether its attributes come from `Bounds` or are written by hand.
+
+A date and time the user picks (`<input type="datetime-local">`) is what their clock read
+(`2026-11-13T14:05`), with no zone: an `Entry<corten::i18n::LocalDateTime>`. It is drawn in a zone
+and read in the same one, which the form carries. The page draws in a `corten::form::DrawZone`:
+`zone.field(f.zone)` writes the zone as a hidden input, `zone.name()` is its name for the visitor,
+and `zone.local(at)` writes an instant as the input's `value` (`zone.min(at)` and `zone.max(at)`
+its bounds, below). The post reads the hidden input as a `corten::form::FormZone` field, and
+`input.when.at(&input.zone)` is the instant, `None` for the field's message. The page takes its zone from the request
+(`DrawZone::from(req.zone())`, with the `zones` feature and `App::client_zone()`; else `Utc` or an
+`Offset`), and a form drawn again after a refused post from the zone the post sent
+(`DrawZone::from(&input.zone)`), so a time typed under `UTC` is not shown again as Chicago's. The
+post never reads in `req.zone()`: that is UTC on a browser's first page and in a `Public` page, and
+the visitor's own zone on the post after it, so a form read in it would store a time moved by the
+visitor's offset.
+
+The compiler checks part of this: `Entry::at`, `Entry::at_keeping` and `LocalDateTime::at` take
+only a `FormZone`, which is made only by deserializing what a client sent (a form, a query), never
+from a zone (no `FormZone::from(req.zone())`, no `at(req.zone())`, no `at(&draw_zone)`);
+`zone.field` takes only a `FormZone` field's name; and an instant becomes an
+input's time only through a `DrawZone`. It does not check that the form draws the hidden input (a
+form without it compiles, and its post is a 422), that the input and the times come from the same
+`DrawZone`, or that a form drawn again uses the posted zone. Nor is a `FormZone` proof that this
+form drew it: a client can send another zone a `DrawZone` writes, and the handler's own bounds on
+the instant are what keep it within what the app allows.
+
+```rust,ignore
+#[derive(Fields)]
+struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+
+// The post: unchanged, the field keeps the stored instant; changed, it is read in the form's zone.
+let Some(live_at) = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= now) else {
+    errors.add(f.live_at, t.live_at_between(..));
+    return req.invalid(&errors, ..).await; // the form drawn again with DrawZone::from(&input.zone)
+};
+
+// The form, drawn with `let zone = DrawZone::from(req.zone())` (`DrawZone::from(Utc)` on a
+// Public page), or `DrawZone::from(&input.zone)` when drawn again:
+// {zone.field(f.zone)}
+// <label>{t.goes_live(zone.name())}
+//   <input type="datetime-local" name={f.live_at}
+//       value={zone.local(stored).map(LocalDateTime::floor_minute)}  (&input.live_at when drawn again)
+//       min={zone.min(listed)}
+//       max={zone.max(now)}>
+// </label>
+```
+
+Show the zone's name (`zone.name()`: `UTC`, `-06:00`, `America/Chicago`) with the field. Without
+JavaScript the browser never reports its zone, so the form is drawn and read in UTC, and the
+visitor types a time in UTC only if the page says so: the guarantee holds when the page draws the
+name, which Corten cannot check. A browser's first page is the same until the next page. A
+`Public` page is the same for everyone, so it draws in `DrawZone::from(Utc)`; `req.zone()` there is
+UTC too, and a debug build logs a warning each time a `Public` answer reads it.
+
+Where the clocks change, a time on the clock names no instant (`02:30` on the morning they go from
+2 to 3) or two (`01:30` on the night they go back), and `at` has one answer, Temporal's default and
+iCalendar's: a skipped time moves forward by the gap (`03:30`), and a repeated one is the earlier
+instant, before the clocks go back. So an instant in the repeated hour, drawn and sent back
+unchanged, reads as the earlier one. An input counts its steps (a minute) from its `min`, else its
+`value`, so a `min` or `value` with seconds or a fraction of one is off a step and the form is not
+sent until the visitor picks a time on one (`corten dev` names such a control drawn with a value):
+draw every instant rounded down to the minute, the `value` with `floor_minute`, the `min` and the
+`max` with `zone.min(at)` and `zone.max(at)`. Rounding all of them down keeps their order, so a
+stored time in the same minute as the `min` (stored a few seconds after the listing) is not drawn
+before it, which would stop the form being sent even when the visitor changes another field.
+Where the clocks go back a later instant reads earlier on the clock (`01:45` before the change,
+`01:30` after it), so a `min` drawn at its own reading could be after the value of a later
+instant; `zone.min` draws it at the offset the clocks go back to when they do so within the day
+after it, and `zone.max` at the offset before when they did within the day before it, so the
+bounds hold every value between them, an hour wider near the change. An edit form reads the field with
+`at_keeping(&input.zone, stored)`, which is the stored instant, seconds and the second `01:30`
+included, when the field comes back as it was drawn. The input then allows the part of a minute
+before a `min` with seconds, up to an hour beside a bound near a change of the clocks, and a time
+the clocks skip or repeat near a bound reads outside it, so the handler's own comparison is the
+check, and refuses those with the field's message. A tz database zone's rules end late on
+9999-12-30 UTC (jiff's range): past that a time is neither drawn (`None`, no attribute) nor read
+(`None`, the field's message), rather than taken as UTC.
+
+A `LocalDateTime` is not an instant, so `t.date` and a field typed as one do not take it. A day
+(`<input type="date">`) is an `Entry<Day>` in no zone, and `day.start(&input.zone)` is the instant
+it begins where the visitor is, in the zone the form carries, a `GET` form's query included: the
+first instant the clock there reads the day, as Temporal's `startOfDay` gives, so where the clocks
+skip midnight it is the change, not `00:00` moved forward by the gap as a typed time would be
+(`day.start(req.zone())` only for a day that comes with no form, such as a link's parameter). A
+time of day alone (`<input type="time">`) names no day, so it has no reader; a date
+and a time the user picks together are one `datetime-local`.
+
+`#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
+sends nothing when no box is checked and the form would fail exactly then. A required list is a
+validation rule (`errors.add(f.ids, ..)` when it is empty), so the user gets a message, not an
+error page; `corten_ui::CheckboxGroup` around the boxes has the browser say so before the form is
+sent, and a field required only for one choice of another (a refund amount for a partial refund)
+is `corten_ui::RequiredWhen`. The handler's check stays: it is what a browser without scripts
+gets. A box outside the `<form>`, in a table row, joins it with `form={ArchiveFormId}`
+(an `Id`); `examples/seller-desk` posts its checked rows that way.
+
+A route's handler reads its parameters back as the route's `Params`: the struct's fields, owned
+(a `&'a str` is a `String`, a `&'a [T]` a `Vec<T>`), read from the path and the query the way
+the struct writes them. So a link and the handler that reads it cannot disagree about a
+parameter's name or type, and a request whose parameters do not fit is a 400. A typed route's
+list field writes the parameter once per item, and reads every value back:
+
+```rust,ignore
+#[corten::routes]
+mod url {
+    #[route("/search", get = search)]
+    pub struct Search<'a> { pub q: Option<&'a str>, pub condition: &'a [&'a str] }
+}
+
+// <a href={url::Search { q: None, condition: &["nm", "lp"] }}> is /search?condition=nm&condition=lp
+async fn search(req: Req, Params(search): Params<url::Search<'_>>) -> HtmlResult {
+    let (q, conditions): (&Option<String>, &Vec<String>) = (&search.q, &search.condition);
+    ..
+}
+```
+
+A missing parameter is `None` for an `Option`, empty for a list, and a field's
+`#[serde(default)]` for anything else, as a link leaves those out. A word an enum parameter
+does not have (`?state=due_now` after the app renamed it, or an address edited by hand) reads as
+missing too, so a filter, a sort or a tab falls back to its default and the page still shows: a
+bookmark outlives the words it was written with; a `#[route(prefix = ..)]` entry whose key or
+value is such a word is left out of the map. A parameter with neither `Option` nor a default
+still refuses it (400), and so does a value that is not a word (`?page=two`), a list holding one,
+or a form's body, which the page that sent it just wrote. In a `#[corten::routes]`
+module a route with a parameter in its path holds each of its handlers to taking its own
+`Params`: one that reads the path another way (axum's `Path`), or reads another route's, does
+not compile.
+
+A path parameter matches a nonempty value: `/items//edit` does not match
+`/items/{id}/edit`, and `/shelves//` does not match `/shelves/{id}/`. A catch-all must
+also be nonempty, but may contain empty segments (`/files/a//b`); it can answer a path such as
+`/items//edit` when the parameter route does not match. Without another matching route the
+answer is 404. Matching is case-sensitive
+and keeps trailing slashes distinct. Corten pins the matchit version it tests, so a fresh app
+gets these same rules ([design Choice 48](../design.md#choice-matchit)).
+
+A parameter may be followed by plain text in its segment, as a file's extension is:
+`#[route("/sitemap/{kind}/{page}.xml")] pub struct SitemapPage<'a> { pub kind: &'a str, pub page: u32 }`
+links to `/sitemap/items/3.xml`, and `Params` reads `page` as `3`. A segment that does not end in
+the text (`/sitemap/items/3.json`), or is only the text, is a 404 before the handler runs,
+whatever its method; one whose value is not the type (`x.xml`) is a 400, as any parameter is,
+and the value reads as any path parameter's does (a `bool` is `true` or `false`).
+The router matches the segment whole, so the route takes every path of its shape, as
+`/sitemap/{kind}/{page}` would: a `/{*page}` catch-all does not answer `/sitemap/items/3.json`
+either (`req.serves` agrees), and the app's middleware sees that 404 with the route's
+`MatchedPath`. Two routes of a module that differ only in that text (`{name}.rss` and
+`{name}.atom`) do not compile, and two in different modules, areas or APIs stop the app at
+startup: give each a segment of its own. A route with a parameter where another has its catch-all,
+after the same segments (`/{name}.txt` and `/{*page}`), which the router cannot hold, does not
+compile either when both are in one module, and stops the app at startup otherwise;
+`/docs/{name}.md` beside `/{*page}` is fine. Text before a parameter (`item_{id}`) does not
+compile.
+
+A `#[derive(Route)]` link always stays on this site. A path that starts with a catch-all
+(`/{*page}`) could otherwise write `//evil.example/x` for a value from the request that starts
+with `/`, which a browser reads as another site's address; the link writes that second `/` as
+`%2F` (`/%2Fevil.example/x`), which the catch-all reads back as the same value. A route path that
+itself starts with `//` does not compile, nor does a hand-written `Route` with one where the app
+adds it. A hand-written `write_href` must start with exactly one `/` and write no `\` or control
+character, which a browser reads as `/` or drops;
+`redirect_with_notice` and `resend_to` check the address they send and answer an error otherwise,
+so neither is an open redirect.
+
+Nor does a link open another page of the site than the one its values name, so some values cannot
+be a path parameter ([the limit on path values](../design.md#limit-path-values)): `.` and `..`,
+which a browser resolves away before it asks (`/items/..` opens `/`, and `%2e` is a dot to it
+too), a `{*rest}` value with such a segment (`public/../private/x`), and an empty path parameter
+anywhere, which the router does not match (`/{user}/posts` would also be `//posts`, another host).
+A debug build panics when
+such a link is written, naming the route by its module path (`shop::url::Item`) and the field; a
+release build writes `%FF` after the value (`/items/..%FF`), which the route answers with a 400,
+and logs that as an error once for each route and field. A refusal counts only when the subscriber
+then in place takes an error event of Corten's, as Corten's default subscriber and a level or
+target filter do; a subscriber that filters on an event's message text or its line can disagree
+with that check either way: a refusal it drops still uses up the one line, and one it would log
+may never be logged. A value that only contains dots
+(`a.b`, `.hidden`) is written as it is. Refuse unreadable values where the app stores them (a slug, a
+user name, a file key), so no link reaches the check. A route's own path with a `.` or `..`
+segment, or that text after a parameter, does not compile. These are checks of
+`#[derive(Route)]` links: a `Route` written by hand writes its own values in `write_href`, and
+nothing checks them.
+
+Links write a route's parameters by name with `Display`, so `Params` refuses what would read them
+back differently: a `#[serde(..)]` key on the route struct that links do not follow (`alias`,
+`flatten`, `skip`, `skip_deserializing`, `with`, `deserialize_with`, `borrow` on a
+field; `default`, `deny_unknown_fields`, `from`, `try_from`, `transparent` on the struct), on the
+route or on a `#[route(query)]` set it includes, and a set that borrows. A struct's `default`
+is refused because a link of the default writes nothing for what it fills (`None`, an empty
+list), which the default would read back as its own value; give the field its own
+`#[serde(default)]` or `#[serde(default = "path")]` instead. Such a route still writes
+links; a handler that takes its `Params` does not compile, and the error names the key or the
+borrowed type.
+
+When several routes carry the same parameters (a list's filters, which its `<corten-live>` rows,
+its bulk preview and its confirm need too), declare them once as a query set and include it:
+
+```rust,ignore
+#[derive(Clone, Default, Route, Fields)]
+#[route(query)]
+struct ItemQuery { search: Option<String>, page: Option<u32>, #[serde(default)] status: Vec<String> }
+
+#[derive(Route)] #[route("/items")]      struct Items     { #[route(query)] filters: ItemQuery }
+#[derive(Route)] #[route("/items/live")] struct ItemsLive { #[route(query)] filters: ItemQuery }
+
+// ItemsLive { filters: items.filters.clone() } is /items/live?search=..&page=..
+async fn items(req: Req, Params(items): Params<Items>) -> HtmlResult { .. } // items.filters
+```
+
+Each of `ItemQuery`'s fields is written as the route's own parameter, so a route that must carry
+the filters cannot leave one out: a filter added to `ItemQuery` is in every route at once. The
+handler reads it as its route's `Params` field, each of the set's fields by its key as the route
+reads its own (a list, a prefix field and a set inside the set included; the set needs no
+`Deserialize` for it), and the filter form names its inputs `ItemQuery::FIELDS`. A
+`#[route(query)]` field whose type is not a query set does not compile, and neither does a route
+whose own parameters and its sets' could be read back as each other's: one name written twice, or
+a prefix another name starts with.
+
+A set's plain field refuses the page when its key is sent twice (a link edited by hand, an old
+one), and a list field reads every value. When the value is a rule over what was sent (a listing
+that counts only when every `listing` sent names the same one, `filtered` when any `dimension.*`
+has a value), make it a plain struct that implements `corten::route::FromQuery` (its error is a
+`corten::form::FormError`) with two derived sets of the same names: `Link`, which writes its
+links as narrow as the value, and `Read`, which reads every value sent for `from_query` to judge:
+
+```rust,ignore
+#[derive(Route)] #[route(query)]
+pub struct ChoiceLink<'a> { pub listing: Option<&'a str>, #[route(prefix = "dimension.")] pub options: &'a [(String, String)] }
+
+#[derive(Route)] #[route(query)]
+pub struct ChoiceRead { pub listing: Vec<String>, #[route(prefix = "dimension.")] pub options: Vec<(String, String)> }
+
+pub struct Choice { pub listing: Option<String>, pub options: Vec<(String, String)> }
+
+impl FromQuery for Choice {
+    type Link<'a> = ChoiceLink<'a>;
+    type Read = ChoiceRead;
+    fn link(&self) -> ChoiceLink<'_> { ChoiceLink { listing: self.listing.as_deref(), options: &self.options } }
+    fn from_query(read: ChoiceRead) -> Result<Self, FormError> { /* the rule */ }
+}
+
+#[derive(Route)] #[route("/items/{slug}")]
+pub struct Item<'a> { pub slug: &'a str, #[route(query)] pub choice: Choice }
+```
+
+The route reads it back as its `Params` field (`Read`, then `from_query`), so every handler gets the
+rule already applied, and no parameter name is written as a string. A `Read` and a `Link` with
+different names do not compile, and the route checks the set's names against its own. `from_query`
+must give back the value `link` wrote, or a link and its handler disagree: test the round trip
+through the app's router (a link's `href()` requested, and the page shows the value). Its error
+refuses the page with a 400, as a parameter that does not read does (`serde::de::Error::custom`
+makes one; start its message with the parameter's name). A derived set cannot implement `FromQuery` too. A set of plain fields stays derived.
+
+A parameter is named as serde reads its field, so `#[serde(rename_all = "camelCase")]` or a
+field's `#[serde(rename = "priceMin")]` renames it in links as well: addresses that are already
+shared or indexed keep working, and the link and the handler cannot disagree. A path parameter
+keeps the name the path gives it, so renaming one does not compile.
+
+A parameter renamed after its addresses were shared keeps reading its older name in a `FromQuery`
+set: a field of its `Read` set marked `#[route(read_only)]`, which `Params` reads and nothing
+writes, and `from_query` takes the new name, or the older one when the new one is missing. Only a
+`Read` set has one: a set with one is not a set a link or a route writes, and a route's own field
+cannot be one, so no link can be given a value for it that goes nowhere. A route that includes the
+set (one without type parameters) checks its own names against the older one too, so no other
+parameter can take it:
+
+```rust,ignore
+#[derive(Route)]
+#[route(query)]
+pub struct TermsRead { pub q: Vec<String>, #[route(read_only)] pub search: Vec<String> }
+// from_query: read.q.into_iter().chain(read.search).find(|t| !t.is_empty())
+```
+
+When the parameters' names are data (an option per product dimension, a filter per attribute),
+mark a map field with a prefix, and each entry is written as `prefix` + key = value, in order:
+
+```rust,ignore
+#[derive(Route)]
+#[route("/items/{slug}")]
+struct Item<'a> { slug: &'a str, #[route(prefix = "dimension.")] dimensions: &'a BTreeMap<String, String> }
+
+// Item { slug: "pika", dimensions: &picked } is /items/pika?dimension.form=graded&dimension.grade=PSA%208
+async fn item(req: Req, Params(item): Params<Item<'_>>) -> HtmlResult { .. } // item.dimensions: the entries, prefix taken off
+```
+
+The field is a `BTreeMap`, or a `Vec` or slice of pairs (kept in its order, repeats and all);
+a `HashMap` does not compile, because its order would make the same link differ between
+renders. The key and the value are percent-encoded. The prefix is letters, digits and `-._~`;
+no other parameter's name may start with it, and no two prefixes may start one another, because
+the handler could not tell them apart: both are compile errors.
+
+Measured in a release build (Docker on a Windows workstation, best of five runs): the item page's two-field
+alert form reads in 673 ns with `corten::Form` and 871 ns with axum's `Form`, request included.
+200 ids read into a `Vec<String>` in 22.3 µs; one comma-joined field split in the handler took
+6.5 µs, most of the difference being 200 strings instead of one.
+
+In the form, the errors are read within the form's id, the `#[derive(Id)]` of the element a
+refusal replaces: `let e = errors.within(PriceId(id));`. Then `<input name={f.price}
+{..e.aria(f.price)}>` sets `aria-invalid` and `aria-describedby`, `{e.message(f.price)}` prints
+the message it points at, with the id `{form id}-{field}-error` (`price-s1-price-error`), so two
+refused forms with a field of the same name (a price in every row) never share a message id.
+A field with a hint of its own (a format, a size limit) names it to the spread,
+`{..e.aria(f.price).hint(&PriceHintId(id))}`, which writes one `aria-describedby` naming the hint
+and then the message. A browser keeps only an attribute's first value, so a start tag that writes
+`aria-describedby` or `aria-invalid` beside `e.aria(..)` does not compile.
+
+A control with a label takes its id from the field too: `e.id(f.price)` is `{form id}-{field}`
+(`price-s1-price`), the label's `for={e.id(f.price)}`, and `<input {..e.control(f.price)}>`
+writes that `id`, the `name` and what `e.aria(..)` writes, so the label, the control and its
+message are named from the one field with no `#[derive(Id)]` of their own, and two forms' (or two
+features') fields of one name never share an id. A form whose fields never have a message
+(the browser checks them with `required`, or a refusal answers for the whole page) has no
+`Errors`: `let e = Within::none(LookUpId);` names its fields the same way, never an empty
+`Errors` made for it, and `e.message(..)` writes nothing, so a form that later gains messages
+changes that one line. (A `#[derive(Id)]` whose text is the same,
+`PriceS1PriceId`, is not compared with these: the link-time check covers derived ids only.)
+`.hint()` adds the hint, whose id is `HintId(&e.id(f.price))` (`price-s1-price-hint`): use it
+for a control named from its field, and `e.aria(..).hint(&PriceHintId(id))` for one that keeps an
+id of its own. In the kit's `Field`, which always writes the hint's element (empty for `hint=""`),
+give the control `.hint()` always: an empty hint describes nothing, so a helper that draws fields
+from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget names it in its
+`attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
+`HintId(&id)` element with text, and the element `id` without that hint in its
+`aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
+that draws such a hint and no element `id` (a radio group without an id). A lone `<` in
+`raw(..)` can be text; script and stylesheet source and inert templates do not supply hint
+text. The scan respects browser scope when closing list items, definition items and
+paragraphs, so the second item's text in `<li id=qty-hint><li>Outside` is not part of the
+hint. An `<input>` that closes a `<select>` lets a following block close the hint paragraph.
+A nested form start the browser ignores does not close a hint paragraph. The scan does not
+follow all of the browser's tree building or computed visibility
+([Limit 33](../design.md#limit-developer-markup-scan)). A patch that redraws the
+hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
+ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
+what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
+a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
+`{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
+element around the radios takes it, as a `role="radiogroup"` (a plain `<fieldset>` may not
+carry `aria-invalid` either).
+The runtime focuses the first invalid field and scrolls it into view (unless the user has moved
+on to another part of the page while waiting).
+
+A group of fields several forms share (an address) is a `Fields` struct of its own, put in a form
+with `#[fields(group)]`. Its fields post under the field's name, `ship_to.street`, so a form can
+hold two of one type (where it ships from and to), each read into its own value as its own type (a
+number stays a number). A component draws the group once for every form that has one, given its
+names: `<AddressInputs f={f.ship_to} />`, where `f: AddressGroupFields` (the
+names of an `Address` put in a form as a group; in a row it is `AddressRowGroupFields<'k>`, and in
+a row of a row `AddressRowGroupFields<'k, Row<'k>>`, so a group drawn both at a form's top and in
+its rows takes a component for each). A group whose
+fields a form can all leave out (checkboxes, `Option`s, file inputs) needs `#[serde(default)]` on the group's
+field as well, or it does not compile: a form that sends none of them would otherwise be refused.
+A group is never an `Option` (that does not compile either): a form sends a group's fields one by
+one, so a group the form may leave out is a group of `Option`s with `#[serde(default)]`.
+Keys under a field's name (`go.x`, `go.y`) are its group's, so a plain field sent only that way (an
+image button `name={f.go}` sends `go.x` and `go.y`, never `go`) is refused with a message that
+says so, unless it is an `Option`, which reads as `None`.
+
+Rows of the same fields (one per API domain, a line of an intake, a shipment) are a map from each
+row's key to a `Fields` struct, `#[fields(rows)] #[serde(default)] domains: BTreeMap<Domain,
+DomainLimits>`. A row's field is named by its key, `f.domains.at(&row.domain).max_concurrent`,
+posted as `domains[seller-portal].max_concurrent`, so it is the key, not the row's place in the
+form, that puts each value in its row: a row the browser leaves out (its inputs disabled) leaves
+the others where they are, and an unchecked checkbox is `false` in its own row. A row is in the
+map when the form sends any of its fields, so give each row one the browser always sends (a
+value, or a hidden input); a row of checkboxes alone, all unchecked, is not read at all. `at`
+takes only a reference to the map's key type. An error on one row's field marks that input only, with its own message id
+(`limits-domains[seller-portal].max_concurrent-error`):
+
+```rust,ignore
+#[derive(Fields)]
+struct DomainLimits { max_concurrent: u32, #[serde(default)] adaptive: bool }
+
+#[derive(Fields)]
+struct Limits { #[fields(rows)] #[serde(default)] domains: BTreeMap<Domain, DomainLimits> }
+
+let f = Limits::FIELDS;
+html! {
+    for row in rows {
+        let max = f.domains.at(&row.domain).max_concurrent;
+        <input name={max} value={row.max_concurrent} {..e.aria(max)}> {e.message(max)}
+    }
+}
+errors.add(f.domains.at(&Domain::SellerPortal).max_concurrent, "At least 1.");
+```
+
+Group, row and key types may be paths: `#[fields(group)] ship_to: addresses::Address`,
+`#[fields(rows)] #[serde(default)] lines: BTreeMap<keys::Sku, items::Line>` and
+`#[fields(map)] #[serde(default)] counts: BTreeMap<keys::Sku, u32>` need no imports of the
+types' bare names. A path back to the form's own type is still recursive and does not compile;
+a path to a different type with the same name is allowed.
+
+A key is a `RowKey`: text, an integer, or a `#[derive(UrlValue)]` enum, whose key is the word
+serde reads (`seller-portal`), so it reads back as the same variant. Its characters other than letters, digits, `-` and `_` are %-encoded in the name, so any text is
+a key, and a key sent any other way (`%61` for `a`) is refused, so one key cannot reach a row two
+ways. An integer key is read only as it writes itself: `07`, `+7` and `-0` are refused, for the
+same reason. An enum with a variant serde reads by more than its word (`#[serde(alias)]`,
+`#[serde(other)]`) is not a `RowKey`, so naming its row does not compile: two keys the form tells
+apart would be one row on the server.
+
+One plain value per key (a count per SKU) is a map without a row struct:
+`#[fields(map)] #[serde(default)] counts: BTreeMap<Sku, u32>`. Each key's value is a field of its
+own, `f.counts.at(&sku)`, posted as `counts[sku]`, with its own error, and its keys follow the
+rules above.
+
+A row holds plain fields, groups, rows and maps. A list whose items each own a list (a pricing
+policy's rules and each rule's conditions, an order's lines and each line's parts) is rows in a
+row: `Rule`, the type of `#[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule>`, has
+`#[fields(rows)] #[serde(default)] conditions: BTreeMap<u32, Condition>` of its own. Each field is
+named through every row it is in, `f.rules.at(&1).conditions.at(&0).kind`, posted as
+`rules[1].conditions[0].kind`, read into rule 1's conditions, and an error on it marks that one
+input. Each key is written in its own brackets by the rules above, so no app builds or splits a
+key that joins two. A component that draws one inner row takes its names as
+`ConditionRowFields<'a, Row<'a>>` (`corten::form::Row`: the rule's row it is in), and one that
+draws a row of the form's own rows `RuleRowFields<'a>`:
+
+```rust
+# use std::collections::BTreeMap;
+# use corten::prelude::*;
+use corten::form::Row;
+
+#[derive(Fields)]
+struct Condition { kind: Option<String>, value: Option<String> }
+
+#[derive(Fields)]
+struct Rule { offset: Option<String>, #[fields(rows)] #[serde(default)] conditions: BTreeMap<u32, Condition> }
+
+#[derive(Fields)]
+struct Policy { #[fields(rows)] #[serde(default)] rules: BTreeMap<u32, Rule> }
+
+#[derive(Id)]
+struct PolicyFormId;
+
+#[component]
+fn ConditionInputs<'a>(f: ConditionRowFields<'a, Row<'a>>, e: &'a Within<'a, PolicyFormId>) -> impl Render {
+    html! { <input {..e.control(f.kind)}> {e.message(f.kind)} }
+}
+
+#[component]
+fn RuleInputs<'a>(f: RuleRowFields<'a>, rule: &'a Rule, e: &'a Within<'a, PolicyFormId>) -> impl Render {
+    html! {
+        <input {..e.control(f.offset)}>
+        for key in rule.conditions.keys() {
+            <ConditionInputs f={f.conditions.at(key)} e={e} />
+        }
+    }
+}
+
+let kind = Policy::FIELDS.rules.at(&1).conditions.at(&0).kind;
+assert_eq!(kind.to_string(), "rules[1].conditions[0].kind");
+let read: Policy = corten::form::from_bytes(b"rules%5B1%5D.offset=5&rules%5B1%5D.conditions%5B0%5D.kind=grade").unwrap();
+assert_eq!(read.rules[&1].conditions[&0].kind.as_deref(), Some("grade"));
+let mut errors = Errors::new();
+errors.add(kind, "Choose what the condition tests.");
+assert!(errors.has(kind) && !errors.has(Policy::FIELDS.rules.at(&2).conditions.at(&0).kind));
+
+let e = errors.within(PolicyFormId);
+let drawn = html! { <RuleInputs f={Policy::FIELDS.rules.at(&1)} rule={&read.rules[&1]} e={&e} /> }.to_html();
+assert!(drawn.contains(r#"name="rules[1].conditions[0].kind" aria-invalid="true""#));
+```
+
+Rows go as deep as the types do, and the reader follows a key only as deep as the type it reads
+into, however many brackets a client sends. A type whose rows reach its own type would let a
+client choose the depth, so it does not compile: rows of the type itself are refused in so many
+words, and rows that reach it through another type (a `Rule` with rows of `Group`, whose rows are
+`Rule`s) are a cycle in reading the types' `SHAPE`, which rustc reports as a cycle error (E0391)
+naming `SHAPE`. That error at a `#[derive(Fields)]` means such rows. A group of groups and rows in
+a group do not compile, and neither does `#[serde(flatten)]`: a group is named under its field so
+two of one type cannot clash.
+
+A refusal no single field explains (a rule across fields, or a service the handler wrote to
+saying no: "The policy was retired meanwhile.") is the form's own message:
+`errors.add_form(text)`, shown with `{errors.form_message()}` at the top of the form, a
+`role="alert"` paragraph that is announced when the patch arrives. It is a live region of its
+own, so it goes inside no other: in the UI kit's look it is
+`<FormAlert errors={&errors} .. />`, the destructive `Alert` around the message, not
+`form_message()` inside an `Alert`. JSON clients get it first in
+`message` and as `form`; an agent tool gets it first in its error.
+
+A submit refused for the state it was made against rather than its input (a stale revision, a step
+already taken or out of order, a record deleted meanwhile), or while another request acts on the
+same thing ([below](#work-that-must-not-run-twice-at-once)), is
+`errors.refuse(Refusal::Conflict, text)` (`Refusal::Gone` for a deleted one). It is the form's
+message, and `req.invalid` answers it with 409 (410) in every mode instead of 422: the form drawn
+again with what the user typed, the page without JavaScript, the Problem Details document for a data
+client. A service the handler calls for the submit that failed or did not answer (a carrier, a
+payment provider, another app) is `errors.refuse(Refusal::Upstream, text)`: 502, the same three
+answers, with the form drawn again so the user can send it once more. The service may have applied
+it, so the retry must be recognized as the same work: by its `SubmitKey`, or the handler checks
+what is done already under a lock and sends the service a key made from what it acts on
+([below](#work-that-must-not-run-twice-at-once)). The runtime keeps the
+form's `SubmitKey` (below) over whatever key the patch drew, and the form drawn for the page without
+JavaScript writes the posted key again, `input.submit.again(f.submit)` where it would write
+`SubmitKey::field(f.submit)`. A proxy in front of the app that swaps 5xx bodies for a page of its
+own (nginx's `proxy_intercept_errors`, a CDN's error pages) hides the redrawn form; let the app's
+502 through. A failure of the app itself (its database) is no refusal: it is `?`'d, and the error
+page answers it. An action with no form to draw again (a Publish button) answers its refusal
+with corten-ui's failed `Toast` in place of the form, the refusal's own text in it:
+`req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`
+([Toaster](ui.md)). A post that can be refused is a `data-patch` form: a plain post's refusal draws the
+whole page and leaves the address at the action's URL, whose GET may not exist. The one exception is
+a download, which must be a plain post ([below](#files)): its refusal redirects to the page that
+says why.
+
+A 502 or a dropped connection can hide a write that committed, and the user, the browser or the
+runtime then sends it again. Add a `SubmitKey` field to the form struct and draw it with
+`SubmitKey::field`, a hidden input with a fresh random UUID v4. A UUID is what most APIs take as
+an idempotency key, so the app passes the key on as it is for a write that belongs to this
+submission:
+
+```rust,ignore
+#[derive(Fields)]
+struct OrderInput { quantity: u32, submit: SubmitKey }
+
+html! { <form method="post" action={url::Orders} data-patch>{SubmitKey::field(f.submit)} .. </form> }
+
+async fn order(req: Req, State(db): State<Db>, Form(input): Form<OrderInput>) -> HtmlResult {
+    // In the same transaction as the write: a key seen before answers with the first outcome.
+    let placed = db.place_once(input.submit.as_str(), input.quantity).await?;
+    req.redirect(&url::Order { id: placed.id })
+}
+```
+
+A write that only the submission identifies (placing a new order, sending a message) carries a
+`SubmitKey`. Work on something the app's data already names (one label per order, one charge
+per invoice) takes a lock and leaves out what is done already instead, with no `SubmitKey`, and
+gives the provider a key made from what it names
+([below](#work-that-must-not-run-twice-at-once)).
+
+The same key is sent for as long as the submission has no answer: a page reloaded after a post
+posts it again, and the runtime sends a `data-patch` form again with it after a network error, a
+5xx, an abort (a navigation) or an answer whose body was cut off on the way. Once a whole answer
+arrives, any status below 500, the runtime gives the form a new key, so the next submit is a new
+one. A patch never sets the key: the runtime keeps the form's own over the one the patch drew, so
+a 5xx patch (`Refusal::Upstream`) cannot swap in a fresh key before the retry. A form sent again before the first had an answer (a
+browser without JavaScript, a data client) is the same submission: the app answers it with what
+it did the first time, and the user sees that and can send the change. A `data-patch` form's
+change made while its write is out waits for the answer instead, and goes under the new key
+(below). The key is the app's to store, next to the write (Corten keeps
+no store); `corten_cluster::begin` takes it as its idempotency key. A field that is not a UUID v4
+(in either case; it is kept lowercase) is a 422 that names it. Make the field
+`Option<SubmitKey>` when data clients post the same form without one.
+
+A form that a script makes from a `<template>` (rows of a list drawn in the browser, each with its
+own form) draws its key field with `SubmitKey::template_field(f.submit)`, which holds no key. When
+its form is first sent, a `data-patch` form or a plain post, the runtime gives an empty submit key
+a new one before any `on:submit` handler or listener added after the runtime loads, so each copy
+is a submission of its own and an
+`on:submit` handler that reads the form sees the key that is sent; the app never needs the key's
+format. A `data-patch` copy then keeps and renews its key as above. A plain post's copy keeps it
+for as long as the page does: one the browser restores from its back-forward cache still has it;
+one it loads again, after Back or a reload, copies the template again, with no key. A script that sends the form itself calls
+`form.requestSubmit()`, which fires the submit; `form.submit()` fires none, so the key is sent
+empty and refused. Drawn with `SubmitKey::field`, every copy would carry the template's one key,
+and the app would apply only the first copy's submit. Put it only in a `<template>`: without
+JavaScript nothing fills it, and a `SubmitKey` posted empty is refused with the same 422 as a
+malformed one (an `Option<SubmitKey>` reads it as none). A debug build's page that draws one
+outside a `<template>` a script copies is an error. A declarative shadow root,
+with `shadowrootmode="open"` or `shadowrootmode="closed"`, needs its own key when the
+browser attaches it to its host; a template the browser leaves inert does not. Only HTML
+inputs are checked as submit-key fields, not foreign elements named `input`. A script that copies a
+form already on the page, rather than a template, empties the copy's key field
+(`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so
+a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes
+away. A page that draws a key with `SubmitKey::field` is also never shared, whatever its route
+says: a cache that gave one visitor's page to the next would have the second visitor's submit
+taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
+without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control` and
+the others [caching](app.md#caching) lists), so the browser asks again before reusing it, the
+app does not keep it, and `corten dev` logs it; one that says `no-store` goes out `private,
+no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer it is drawn
+for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
+live stream's fragment
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
+stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
+carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
+when a fragment it gives draws a key and its settled answer has no bare `private` in
+`Cache-Control` or carries one of the CDN caching headers [caching](app.md#caching) lists.
+
+An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
+reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
+a retry, a malformed key is refused before the tool runs, and the tool gets a `SubmitKey`. MCP
+has no key field of its own, so the key is an argument, and a tool whose input requires one is
+marked `idempotentHint`, which lets clients retry it on their own; so a tool takes a key only
+when it stores it. Two differences from a form's key: the agent makes it, not the server,
+so store it per caller and tool (an agent may reuse a key another sent), and answer a repeat
+whose arguments differ from the first with `ToolError::Refused` rather than the first outcome;
+and leave the field without a doc comment, which would replace the retry instruction in its
+description. A write that is idempotent already ("set the quantity to 5") needs no key and is
+added with `Tools::idempotent_tool`, which marks it so; only the app knows which writes are.
+
+A key makes one submission apply once. It does not keep two submissions apart: two tabs that
+each press "Buy postage" send two keys, and both run. That takes a lock and a check of what is
+done already ([below](#work-that-must-not-run-twice-at-once)).
+
+The key is a form field and not the `Idempotency-Key` header that some HTTP APIs read. A browser
+without JavaScript cannot set a header, so a field is the one way that works for every client,
+and a data client posts the same field. The header is still an IETF draft
+(`draft-ietf-httpapi-idempotency-key-header`); a second place for the key would wait for it to
+be a standard, with a rule for a request that sends both.
+
+A `data-patch` form has one submit in flight. Pressing the same button again with the same values
+while it is pending sends nothing (a double click). A newer submit of a read (a GET: a search, a
+filter) aborts the older one, whose answer is worth nothing now. While a write is pending, any
+newer submit of the form waits instead: the server may already have applied the write, and its
+answer is the page's next state. Once the runtime has drawn the write's answer (a patch or a
+page) and it took the write (2xx) or refused only its input (422), or the write was done with
+nothing to draw (a bare `204` or `205`, below), it sends the latest of the submits that waited, from the form as it is then,
+so the version or count the answer wrote goes out with it, under the form's new key. Its
+`on:submit` handlers ran at the press and do not run again, and the browser does not check the
+form's constraints again (the server checks what it gets). Several presses while the write is
+out are one submit of where the form ended. A form the answer replaced is found by its `id`, so
+give a form that a patch redraws, or that sits in an element a patch redraws, one: a form that
+left the page without an id is not sent, since its values are the ones from before the answer.
+The waiting submit is dropped, and the user sends it again, when the write gets no answer (the
+network failed, or the browser is leaving the page) or one the runtime does not draw (a proxy's
+502), which `corten:error` reports; when the write is refused for the state it was made against
+(`Errors::refuse`, a 409 or 410), which the user reads before anything else goes; or a 5xx,
+after which the server may or may not have applied the write; when the answer sends the browser
+elsewhere (Corten's own redirect, `corten-location`, or a reload), or removed the form or the
+pressed button; and a navigation aborts everything, so a
+late answer never patches a page it was not meant for. A screen whose every press is a step of
+its own (a count's + and -, each a delta the server adds) keeps its own ordered queue in its
+script: the form sends where the user ended up, not each step.
+
+A `204 No Content` or `205 Reset Content` that is not Corten's redirect (`corten-location`), a
+patch or a page (`StatusCode::NO_CONTENT`, the answer for a write with nothing to say) is the
+submit done with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): the page stays as it is, the form
+gets a new key as after any whole answer below 500, a submit that waited goes, and nothing says it
+failed. `fetch` follows a `Location` redirect itself, so a write redirected to an address that
+answers a bare `204` or `205` counts as that answer. A `205`
+asks the client to put the form back as it came, so the runtime resets it, a GET's form too,
+unless the user changed a field after it was sent or pressed again with other values while it
+was out: their work is kept, as against a patch. A change is a control whose state is not the
+one it was sent with: a `<select>`'s chosen options, a `<textarea>`'s text, a checkbox's or
+radio's checkedness, a file input's files by each one's name, size and last-modified time (so
+another file of the same name is a change), and any other input's value (a hidden input, a button
+and an image input have none here); a number or date input holding text the browser cannot read
+(`validity.badInput`, whose value is `""` as an empty one's is) is a change too. So is a control
+added to the form since it was sent, a hidden input among them. A control removed since is not
+counted, and a form-associated custom element's state or an `<output>` that changed is reset
+without being noticed. The reset is the browser's `form.reset()`, which fires
+`reset` on the form and no `input` or `change`, so a script that mirrors a field's value from its
+input events listens for `reset` too. A browser without JavaScript stays on the page for either
+and resets nothing, since the HTML standard aborts a navigation answered `204` or `205`. It also
+keeps the submit key it sent, so its next submit is the same submission and gets the first one's
+outcome: a write with a `SubmitKey` that must also work without JavaScript answers with a page or
+a redirect, not a bare `204` or `205`.
+
+When a `data-patch` submit gets any other answer the runtime cannot draw, it dispatches `corten:error` on
+the form (it bubbles), with `detail.status`: the answer's status (a proxy's 502 page), or 0 when
+there was none or its body was cut off (`detail.error` says why). A submit abandoned for a newer
+one or a navigation dispatches nothing. A read of the page can draw over the form while its write
+is out (a navigation started before the press, or the page reading itself again). A failure that
+comes while a navigation is on its way is said once none is left: each counts until it ends or is
+abandoned, and one that abandons another counts in its place. So the draw does not take away what
+the page says; a navigation that hangs (an answer or a stylesheet that never comes) holds it as long
+as it hangs. A form no navigation can draw over hears it at once: one outside `<main>` (in the
+layout's header, or a dialog there) and outside the layout's elements that are the page's (`page`
+in `html!`, or with an `id` one of them had, as a patch may draw one again without the mark),
+while no navigation on its way reads the whole page (one after a write). When the
+read drew over the form, the event goes to the form in its place: the one with its `id`, marked
+`data-patch`, with the same `action` and `method`, drawn with no navigation to another address
+since the press, that has sent no submit itself. A page a submit's answer draws (a `GET`
+`data-patch` form's `<main>`, a write's own page) is the page on screen, even while the address
+already shows a navigation still on its way, and these rules still pick the form. One limit follows:
+a `GET` `data-patch` form whose `action` is another path draws that path's `<main>` without counting
+as a navigation to another address, so a form there with the same `id`, `action` and `method`
+hears the failure of the page it drew over ([Choice 74](../design.md#choice-failure-in-place)). Any other form,
+one of another page with the same `id` among them, does not get it: the event goes to the
+document, where `on:document:corten:error` hears it, since an event on a form no longer in the
+page reaches no handler. corten-ui's
+`Toaster` in the layout says it with its `failed` message, so no write fails silently. A failure
+held for a navigation is said on the page that navigation draws, even one the user started after
+the write failed: the toaster closes a toast as a navigation starts, before this one is shown, so
+the failure is said on that page rather than lost. A screen
+that says it its own way (beside the form, as watchlist's watch form does with
+`on:corten:error={js::failed(..)}`, or by sending again from its script) calls
+`preventDefault()` in its handler (the event is cancelable), and the toaster says nothing. The
+form that sent it keeps what the user typed, so the page can say what happened and the user can
+send it again: with the same key after a 5xx or no whole answer, and with a new one after a whole
+answer below 500, as above. A form a read drew in its place keeps neither: it is the read's
+markup, with the values and the submit key the server drew, so sending it again is a new
+submission, which carries a new key, so the server cannot know it repeats the one that failed, and
+may apply both. A script
+that needs what the server decided on a submit that did draw (saved at version 4, refused,
+stale) gets it from the answer itself; see [Typed events](scripts.md#typed-events).
+
+A patch replaces markup but not the user's work: a field typed into after the form was sent (or,
+in a `<corten-live>` patch, any field the user changed) keeps its value, and focus and the caret
+stay on the matching element. When the patch takes the focused element away (a row removed with
+its Remove button, the last row of a list drawn again without it) or its new markup cannot take
+focus (a button now disabled), focus goes to the nearest element around it that is still there,
+made focusable for the move (`tabindex="-1"`, removed once focus moves to another element), so a
+keyboard or screen reader user stays in the part of the page they were in rather than at the top
+of the document. A list is announced as a list; give a `<section>` or `<div>` that may take focus
+this way an accessible name (`aria-labelledby` its heading), and say what happened in a status
+message. A row with an id is found by it, so focus lands on its list, not on another row; Tab
+then goes on from the start of the list. A file input keeps the files the user chose, which markup cannot
+give back, so a refusal can redraw the input with `aria-invalid` and its message and the files
+are still there to send again; only a successful answer to the form that sent them takes them
+(found by each file's name, size and last-modified time, so another file of the same name chosen
+while it was on its way stays, and the same file chosen again goes). What the user opened stays open: a `<dialog>` (modal again if it
+was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
+its place). One the user left as the server sent it takes the new markup's state, so a dialog
+the server sent open and now sends closed closes (replaced closed: no `close` event fires, and
+focus does not go back to what opened it). A dialog or `<details>` the user closed opens again
+when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
+did, the focused control of the form, else the form) is outside it: pressing it is newer than
+the user's close, so a Preview button beside a dialog opens it on every press, not only the
+first. It opens as drawn, so not modal; `on:connect={corten_ui::dialog::modal(target)}` makes it
+modal again. A button inside a dialog with `form=` naming a form outside it counts as inside, and
+so does Enter in a field of a dialog that a form with no submit button wraps. When the form has
+a submit button outside the dialog, Enter sends it through that button (the browser makes its
+default button the submitter), so the press counts as outside. It only opens: one the user opened stays
+open even when such an answer draws it closed. Outside is where the button was when it was
+pressed, so removing it, redrawing the dialog, replacing its form earlier in the same answer, or
+a write's answer redrawing it while its submit waits, does not make a press inside one outside. A submit from inside
+the element (a form in the dialog, sent before the user pressed Escape), an element inside the
+one replaced, a `<corten-live>` fragment, a `ReadAgain` read and a script's `patch()` keep what
+the user left. A popover stays as the user left it, since no markup shows one. A `data-patch`
+submit answered with a whole page instead of a patch redraws `<main>` from the new markup, so
+its dialogs and `<details>` open or close as drawn; the layout's elements outside `<main>` keep
+what the user left. A dialog the server draws `open` is open but not
+modal; give it `on:connect={corten_ui::dialog::modal(target)}` ([headless components](ui.md)). Everything else is the server's.
+
+Each top-level element of a patch replaces the element with its `id`, and the browser drops one
+without an id (and any text outside an element), so a refusal drawn inside a wrapper `<div>`
+would never show. `action.patch`, `action.patch_with_status` and `req.invalid` therefore take a
+`Patch`, which the compiler checks: `html!` whose top-level elements each have `id={..}` with a
+`#[derive(Id)]` type (in every branch of an `if` or `match` among them, whether or not it runs),
+`Remove`, or a component declared `-> impl Patch`, whose markup must be such an `html!`:
+
+```rust,ignore
+#[component]
+pub fn Status(text: &str) -> impl Patch {
+    html! { <p id={StatusId} role="status">{text}</p> }   // the root has the id
+}
+```
+
+Rows known only from data (the fields of the items a write touched) are a `for` among the
+patch's parts, with its `let`s and branches, as in a page:
+
+```rust,ignore
+action.patch(html! {                                    // from req.action(), or use req.patch_or
+    <QueueTotals queue={&queue} />
+    for sku in &taken {
+        let label = label_of(sku);
+        if sku.counted {
+            <QuantityField id={FieldId(sku.id)} label={&label} quantity={0} />
+        } else {
+            {Remove(FieldId(sku.id))}
+        }
+    }
+})
+```
+
+A component that says `-> impl Render` is not a patch, so one that is drawn by the page and sent
+by an action says `-> impl Patch`, as a layout says `-> impl Document`. When a view is refused,
+the error names the kind of part that is not a patch (`ComponentOrExpressionNotAPatch`,
+`IdNotADeriveIdType`, `TextOrElementWithoutId`), though not where it is: look for that kind among
+the view's top-level parts. A `corten::live`
+fragment is already text, so debug builds check it when it is sent instead (it panics, naming the
+element).
+
+If a part writes the enclosing component's refs, give it the component's typed
+[`ComponentNameRefs` bundle](scripts.md#lists-and-larger-components) in both renders:
+`<SetPicker bundle={InventoryRefs} instance={instance} set={set} />` on the page and
+`action.patch(SetPicker { bundle: InventoryRefs, instance, set })` in the handler. The part uses
+the bundle's getter, `ref={bundle.picker()}`, in its markup. The bundle
+identifies the owner type, not an instance. A patch targets a document-wide ID, so when an
+owner appears more than once, give each part an instance-specific `#[derive(Id)]` ID such as
+`SetPickerId(instance)`. Keep that target under the intended owner so its script can resolve
+the refs. A missing target gets the normal patch diagnostic and nothing is inserted; the bundle
+does not check the target's ancestry if an ID is reused.
+
+The runtime parses a patch as a `<template>`'s content, as the HTML standard's "in template"
+insertion mode reads it: the first top-level element other than a `<template>`, `<script>`,
+`<style>`, `<link>`, `<meta>`, `<title>` or another tag a document's head holds decides how
+the rest is read. After any other
+element, table parts (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`,
+`<col>`, `<colgroup>`) are dropped. After a table part, a table part of another kind is dropped
+or put in a `<tbody>`, `<tr>` or `<colgroup>` the browser adds, a `<table>` is dropped, a
+table part inside a later top-level element that is not a table part (a `<div>` after the rows)
+is moved out of it, a `<table>` there is taken apart, its parts moved out, and a `<form>` there or
+at the top level loses what it holds (its fields, or text, are moved out of it; a form of only
+whitespace or comments is not reported); a table or form inside a row's cell is kept. After a `<col>`, everything but a `<col>` or
+`<template>` is dropped. A `<template>`'s content (`Append`'s rows, or a `<template>` inside an
+element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
+a table part. So a patch that sends a table's header row beside a summary loses the row.
+Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
+`<table>` or `<form>` in what follows. Some shapes are lost wherever they are written, and
+`html!` refuses them when it compiles, where its markup writes the first element: a table part
+after a first `<table>` (dropped, or, where the patch began with a table part, the table taken
+apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
+`<col>`; and after a first other table part, a `<table>` at the top level or in a later element
+(taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
+lands is in or around it (a form holding a `<div>`, or one in a `<div>`, but not one in an `<svg>`
+or `<math>`, which is theirs and kept as written), whose content is moved
+out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Other shapes depend on
+what the patch began with: a `<p>` and then a `<tr>` lose the row on their own, but after a first
+`<tr>` both are kept. Passing the first shape directly to `action.patch`, `action.patch_with_status`,
+`req.patch_or`, `req.invalid`, or `form.draw` fails when a build generates code for that call.
+`cargo check` alone does not run this check. A build checks the send even inside a literal
+`if false`; it does not wait for a request to take that branch. The doc-hidden
+`__private::PatchShape` is no longer dyn-compatible; supported APIs, including `dyn Patch`,
+are unchanged. The check also names the lost element when one kind of literal table part makes
+the browser drop or wrap another. The markup itself still compiles where
+it can be part of a larger view. Components, borrowed patches, collections and `corten::live`
+fragments are checked as drawn in debug builds. Like every `html!` refusal, these rest only on the markup
+between the two elements: with output the markup does not show before the lost element's start
+tag (an expression, a component, or a `<script>` or `<style>` whose text holds a `<`, in the
+first element, between the two, or in a later element that holds the lost one, before it), the
+shape compiles (`raw("<table>")` there would keep the row), and the debug check finds it. What a
+lost top-level element holds does not save it, since the parse loses it at its start tag:
+`<tr id={RowId}></tr><table id={TableId}>{text}</table>` is still refused, and so is a row with
+an expression in it after a first `<table>`. Debug builds check each patch as it is sent (`action.patch`,
+`req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
+links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
+the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
+`<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, as a page's body would, so a patch
+with one is read both ways. A debug-build test of the app that draws such a patch fails with the
+500 too. A release build sends shapes the compiler cannot see as drawn, so a mix only some data
+draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
+covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
+end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
+`<math>` holds by their own rules (a `<title>` or `<style>` there holds elements, a CDATA section is
+text) only to find where it ends, so a row holding an icon with a `<title>` is checked like any
+other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, and a
+`<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
+`<noframes>`'s as text, and it ignores the end tag `html!` writes for a `<param>` or a
+`<basefont>`, as the browser does. Where text decides (in a `<form>` a table's reading would
+put in empty, in a table, row group, row or column group, after a first `<col>`, and at the top
+level) it reads the text with its character references decoded: a numeric one, `&Tab;` and
+`&NewLine;` (whitespace), and `html!`'s own escapes and `&nbsp;` (which show), so a form that
+holds only `&#32;` is kept and one that holds `&nbsp;` loses it; a NUL, which the parser ignores
+there, shows nothing. It reports a loss only from the tokens it reads as the browser does, and
+stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` in a `<form>`, a
+`<noscript>`) or markup placed with `raw` does:
+
+1. an end tag left out, one written otherwise than `</name>` (`</div ignored>`), or one that
+   closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
+   `<math>`, closes it);
+2. an HTML element's start tag ending `/>`, and a start tag the patch ends in before its `>`
+   (`<col data-note='` at the end, which the browser drops with what follows its `<`);
+3. a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in it), a
+   CDATA section outside an `<svg>` or `<math>` or not ended by `]]>`, and a doctype other than
+   `<!DOCTYPE html>` (a quoted `>` in one ends it early);
+4. where text decides, a named character reference it does not decode (`&bogus;`), and in a
+   table, row group, row or column group, or after a first `<col>`, any text that shows (a `<`
+   that starts no tag among it), which the browser moves out or drops;
+5. a script whose text a `<!--` and a `<script` carry past its first `</script>` and over an
+   element, which may be text written for it or the patch's elements lost in it;
+6. in a `<form>` a table's reading would put in empty, any token before what it holds but a
+   comment, a bogus comment (`<!note>`, `</ x>`), a `<!DOCTYPE html>` and a void element's end
+   tag (`</input>`);
+7. an element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which `html!`
+   refuses;
+8. an HTML `<image>`, which the browser reads as an `<img>`; a `<plaintext>`; a `<noscript>`,
+   whose content Firefox reads as text and Chromium and WebKit as elements; and an `<html>`,
+   `<body>`, `<head>`, `<frame>` or `<frameset>`;
+9. an element the browser does not put where it is written: a table part outside a table;
+   anything in a `<table>`, row group or row but its own parts and a `<script>`, `<style>` or
+   `<template>`, and in a column group (a `<colgroup>`) anything but a `<col>` or `<template>`;
+   an element that closes one open around it (a `<div>` in a `<p>`, an `<li>` in an `<li>`, a
+   heading in a heading, an `<option>` in an `<option>`, an `<a>` in an `<a>`, an `<svg>` or
+   `<math>` between them too); a `<form>` in a `<form>`; what a `<select>` holds but its
+   options; and, after a first table part, a `<form>`, `<table>` or table part in an SVG or
+   MathML integration point (`<foreignObject>`, `<desc>`, `<title>`, `<mi>` ..) that is not in a
+   top-level table part, and a `<template>` in one anywhere, past which Firefox reads the rest of
+   the patch as a body's (a later row is dropped there, and kept in Chromium and WebKit).
+
+A row or cell written straight in a `<table>` is read as kept, since the browser only adds the
+`<tbody>` or `<tr>` around it. At a stop the check still reports a loss found before, and
+otherwise logs a warning naming where it stopped, since what follows was not checked: markup
+written through `raw` is checked only as far as these rules reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+a page's table takes apart too). A patch that
+begins with a `<col>` from an area's handler is refused even on a page that already has the area's
+stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
+what the page linked, so send the `<col>`s in a `<colgroup>` with an id. Neither the check nor
+`html!` reads how deep markup nests: Chromium attaches an element nested deeper than 512 elements
+at depth 512, in a page as in a patch.
+
+## Work that must not run twice at once
+
+Some work on something the app's data already names must not run while the same work is running, or
+run again once it is done: a paid call for it (postage for an order, a charge for an invoice), a
+batch over the same rows. A `SubmitKey` does not cover it, since two submissions (two tabs, two
+people) have two keys. A write only the submission identifies (placing a new order, sending a
+message) has nothing to leave out, and takes a `SubmitKey` instead ([above](#forms)). The handler
+takes a lock, and under it reads what the work changes and leaves out what is done already. The lock
+alone keeps two runs apart only while they overlap: a second submit made after the first finished
+finds it free.
+
+The lock lives where every instance of the app sees it. A `Mutex` or an `AtomicBool` in a static
+holds within one process, and an app is often more than one: a blue/green or rolling release runs
+the old and the new side by side while traffic moves, and an app scaled out runs several. A click
+each of them answers takes each process's lock, and both buy. In Postgres the lock is an advisory
+lock taken in a transaction kept open for the work. It ends with the transaction (a commit, a
+rollback, a statement that failed, a connection that closed), and the check and the record of what
+was bought run on that transaction, so they commit with the lock's release:
+
+```rust,ignore
+/// A kind of work that must not overlap: the first half of Postgres's two-part advisory lock
+/// key. One enum numbers them all, so two kinds cannot share a number (the compiler refuses it).
+#[derive(Clone, Copy)]
+#[repr(i32)]
+pub enum OneAtATime {
+    BuyingPostage = 1,
+    Rebuilding = 2,
+}
+
+/// Held while the work runs. Dropping it rolls the transaction back on a task sqlx spawns, so the
+/// lock ends a moment later: end it with `release` or `abandon` before it is taken again.
+pub struct Held(Transaction<'static, Postgres>);
+
+impl OneAtATime {
+    /// `None` while a request in this process or another holds it for `key` (a seller's id).
+    /// All of it, the wait for a connection included, takes at most `CALL` (the budget below
+    /// counts on it); the pool's `acquire_timeout` is every page's (sqlx's default is 30 s).
+    pub async fn take(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<Held>> {
+        // Past it, an I/O timeout: the lock or the database was slow, not only the pool.
+        let late = |_| sqlx::Error::Io(std::io::ErrorKind::TimedOut.into());
+        timeout(CALL, self.take_now(pool, key)).await.map_err(late)?
+    }
+
+    async fn take_now(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<Held>> {
+        // Each statement sees what committed before it, so the check sees the last holder's
+        // record whatever the database's default is.
+        let mut tx = pool.begin_with("BEGIN ISOLATION LEVEL READ COMMITTED").await?;
+        // Postgres cancels a statement after 5 s. A statement that fails aborts the transaction,
+        // which releases the lock at once (and undoes these `SET LOCAL`s), so the work stops at
+        // any database error (`?`), never catching one and carrying on. A transaction left
+        // waiting 10 s between statements (above one carrier call) ends with its session, and
+        // the lock with it: a host cut off.
+        sqlx::query("SET LOCAL statement_timeout = '5s'").execute(&mut *tx).await?;
+        sqlx::query("SET LOCAL idle_in_transaction_session_timeout = '10s'").execute(&mut *tx).await?;
+        let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1, $2)")
+            .bind(self as i32)
+            .bind(key)
+            .fetch_one(&mut *tx)
+            .await?;
+        Ok(taken.then_some(Held(tx)))
+    }
+}
+
+impl Held {
+    /// The transaction the lock is in: the work's reads and writes go here.
+    pub fn conn(&mut self) -> &mut PgConnection {
+        &mut self.0
+    }
+
+    /// Ends the hold, keeping what it wrote.
+    pub async fn release(self) -> sqlx::Result<()> {
+        self.0.commit().await
+    }
+
+    /// Ends the hold now, keeping nothing it wrote.
+    pub async fn abandon(self) -> sqlx::Result<()> {
+        self.0.rollback().await
+    }
+}
+
+/// How a buy went. Each label the carrier returned is recorded, unless the database fails (case 1
+/// below).
+enum Bought {
+    /// Every order has a label: bought now, or already.
+    All,
+    /// Stopped with orders left: the budget was spent, or the signal aborted (the client left,
+    /// shutdown began).
+    Unfinished,
+    /// The carrier failed or did not answer for an order.
+    Failed,
+    /// Another request holds the lock (before the first order, or between two).
+    Busy,
+}
+
+/// How long a buy starts work on orders for, and how long one carrier call may take. No order and
+/// no call starts with less than `CALL` left, so the calls end within `BUDGET`. On a live
+/// connection the last call's record and commit take at most a statement timeout each (5 s); an
+/// order started near the end takes at most all of `take` (`CALL`), then the check and the end of
+/// the hold at their statement timeout, before the next stops. Either way 25 s in all, which leaves
+/// 5 s of the route's 30 s deadline for the rest of the request (the body, the caller, the answer's
+/// read).
+const BUDGET: Duration = Duration::from_secs(15);
+const CALL: Duration = Duration::from_secs(5);
+
+async fn buy(
+    req: Req,
+    signal: Signal,
+    Caller(seller): Caller<Seller>,
+    State(db): State<Db>,
+    Form(input): Form<BuyInput>,
+) -> HtmlResult {
+    let (shared, orders, seller) = (db.clone(), input.orders.clone(), seller.id);
+    // On a task that finishes if the client leaves: a label bought but not recorded is paid for
+    // and lost. Its signal stops it starting calls, never a call under way, and it commits what
+    // it bought.
+    let bought = signal
+        .finish(move |signal| async move {
+            let end = Instant::now() + BUDGET;
+            let stop = || signal.is_aborted() || end.saturating_duration_since(Instant::now()) < CALL;
+            for order in &orders {
+                if stop() {
+                    return Ok(Bought::Unfinished);
+                }
+                // A lock for each order, committed with its record: a run that ends anywhere (a
+                // lost connection, a killed process) loses at most the record of the call under
+                // way. Keyed by what must not overlap (the seller whose orders these are), taken
+                // from what the server checked (the caller), never from an unchecked form value.
+                let Some(mut held) = OneAtATime::BuyingPostage.take(&shared.pool, seller).await? else {
+                    return Ok(Bought::Busy);
+                };
+                // Under the lock: whether this order is the seller's and has no label yet (one
+                // statement, as `record` is). Every hold is ended before the run goes on or
+                // answers: a dropped one ends a moment later, and the next `take` (this run's, or
+                // the user's resend) could find it still held and refuse.
+                if !shared.unlabeled(held.conn(), seller, order).await? {
+                    held.release().await?;
+                    continue;
+                }
+                if stop() {
+                    held.abandon().await?;
+                    return Ok(Bought::Unfinished);
+                }
+                // The carrier is sent the order's id as its idempotency key (below).
+                match timeout(CALL, shared.carrier.label(order)).await {
+                    Ok(Ok(label)) => shared.record(held.conn(), order, &label).await?,
+                    // Here every carrier error stops the batch as a failure to answer; what it
+                    // bought before is committed. A carrier that answers no (a bad address) is
+                    // better the app's own 422, `errors.add_form` naming the order, since a resend
+                    // would fail the same way.
+                    Ok(Err(_)) | Err(_) => {
+                        held.abandon().await?;
+                        return Ok(Bought::Failed);
+                    }
+                }
+                held.release().await?;
+            }
+            Ok::<_, Error>(Bought::All)
+        })
+        .await?;
+    let (why, text) = match bought {
+        Bought::All => return req.redirect(&url::Labels),
+        // Not a failure: what is left goes out with the next submit.
+        Bought::Unfinished => {
+            let left = "Some orders are left to buy. Send them again.";
+            return req.redirect_with_notice(&url::Buy, left);
+        }
+        Bought::Busy => (
+            Refusal::Conflict,
+            "Postage for this account is being bought. \
+             Send this again once it is done to buy what it left.",
+        ),
+        Bought::Failed => (
+            Refusal::Upstream,
+            "The carrier did not answer for every order. \
+             The orders below show what has a label; send this again to buy the rest.",
+        ),
+    };
+    let mut errors = Errors::new();
+    errors.refuse(why, text);
+    req.invalid_with(
+        &errors,
+        |form| async {
+            let orders = db.orders(seller, &input.orders).await?; // as committed now
+            form.draw(BuyPanel { orders: &orders, errors: &errors })
+        },
+        || page(&req, &db, &errors),
+    )
+    .await
+}
+```
+
+What it gives:
+
+1. Two buys for one seller never buy at once, on any instance, while the lock is held (its session
+   outlives a host cut off from the database by at most the idle timeout after its last whole
+   statement, 10 seconds, kept above `CALL` so a call still running there ends first; one cut off in
+   the middle of a statement holds it until the network gives up, which the server's TCP keepalives
+   bound, or on Postgres 17 a `SET LOCAL transaction_timeout` set above the work's own bound; case 1
+   below), and one after another the second leaves out what the first recorded. Each order is bought
+   under its own hold of the lock and committed with its label, so a run that ends anywhere loses at
+   most the record of the call under way. A repeat (a second tab after the first finished, a retry
+   whose answer was lost) finds nothing to buy and goes to the labels once the first is done (while
+   it runs, whichever of the two meets the other's lock stops with the 409 below, and neither buys
+   an order twice), so the form needs no `SubmitKey`.
+2. A busy lock is `Refusal::Conflict`: a 409 whose form shows the orders as committed, which
+   leaves out what the other buy has not committed yet, so the message asks for a resend once it
+   is done; the resend buys only what is left. A buy that meets the other between two orders stops
+   there, with the labels it bought committed.
+3. A carrier that fails or does not answer for an order ends the batch there: the labels bought
+   before it commit, and the answer is `Refusal::Upstream` ([above](#forms)), a 502 whose form shows
+   what has a label, so the seller sends the rest again. A batch that stops for time (its budget
+   spent, the client gone, shutdown) commits what it bought too, and is no failure: a redirect back
+   to the form with a notice, where the form lists the orders still without a label. A batch that
+   does not fit one request in the normal case goes to [a queue](app.md#a-queue-a-request-fills)
+   instead. A failure of the app itself (its database) is `?`'d to the error page, and rolls back
+   the order under way (case 1 below).
+
+What it does not give, which is the app's to design for its provider:
+
+1. **A call whose record is lost.** A call that failed or timed out may still have been applied by
+   the provider, and its order stays without a label; a database failure after a paid call rolls
+   back that order's record; and the lock ends with its connection (a network fault, the
+   transaction's timeouts) or its process (killed at shutdown) while a call can still be under way,
+   and that call's record rolls back. The next buy then calls again for that order. What answers it
+   is the provider's idempotency key, made from what is bought (the order), not from the submission,
+   so the call made again is the same purchase. How long a provider keeps a key, and what it does
+   with one sent again after a failure, with changed details or while the first call still runs, is
+   the provider's; the app makes its keys to fit. A provider with no keys (most email and SMS
+   services) cannot be made to send exactly once: the app chooses at most once (a row claimed and
+   committed before each call, the call only where the claim was new) or at least once.
+2. **Timeouts beyond its own.** The work's worst case on a live connection (the budget, then the
+   last record and the commit at their statement timeout: 25 seconds here) is under the route's
+   deadline (`App::deadline`, 30 seconds unless set; an [area](app.md#areas) of its own sets
+   another), past which the client gets the 503 page while the work goes on, so what the request
+   does outside the work (reading the body, the caller, the read the refusal draws) fits in what is
+   left, bounded as the app's other reads are. The wait for a connection counts against the budget,
+   so `take` bounds all of it itself: the pool's `acquire_timeout` (sqlx's default is 30 seconds) is
+   every page's, and an order started late would wait past the deadline. `statement_timeout` bounds
+   the database's work, not the app's wait for an answer: a connection lost mid-statement waits
+   until the network gives up, and is case 1.
+3. **Shutdown.** `serve` waits for a handler whose client is still there up to its deadline, and for
+   work whose handler is gone until `App::shutdown_grace` has passed since shutdown began (5 seconds
+   unless set, shared with the app's tasks). Shutdown aborts the work's signal, so it starts no more
+   calls and, on a live connection, ends within one call, a record and the commit (15 seconds here)
+   once a call has started; before a call, nothing paid is under way, and an order's lock and check
+   end within their own timeouts. An app with this work sets the grace above that
+   (`.shutdown_grace(Duration::from_secs(20))`) and the platform's wait before it kills the process
+   above the longer of the deadline and the grace (`docker stop` waits 10 seconds, set by Compose's
+   `stop_grace_period`; Kubernetes 30, `terminationGracePeriodSeconds`). A process killed sooner is
+   case 1.
+
+Notes:
+
+1. The second part of the key names what must not overlap: a seller's id lets two sellers buy at
+   once, and 0 is one lock for all. A key that is not an `int4` (a `bigint` id, a UUID, a name)
+   is `hashtext($2::text)`, an internal Postgres function whose 32 bits can collide, which now and
+   then refuses a submit that would not have overlapped.
+2. The lock's transaction is one pooled connection for as long as an order's work runs, and the
+   work uses it rather than taking more. Work that takes a second connection while it holds the lock
+   (a claim committed apart from it) holds two, and when concurrent buys' first connections take
+   the whole pool, each waits for a second that none can get; a semaphore with fewer permits than
+   the pool has connections, taken before the first, leaves room for the seconds. The same
+   semaphore, well under the pool's size, keeps a few buys at once from leaving the app's pages
+   waiting for a connection (or the work takes a small pool of its own). Work that runs
+   for minutes takes a leased row instead, the claim [the queue](app.md#a-queue-a-request-fills)
+   shows: taken while its lease is past, renewed while the work runs, and taken over by another
+   process once a dead one's lease runs out.
+3. Another store's lock is a lease (Redis: `SET name token NX PX 30000`, released only by the
+   token's holder), which expires under longer work unless it is renewed, as the queue renews its
+   claim. The lock is the app's, over its own store and driver, as its other reads and writes
+   are: about thirty lines that only apps with such work need, so Corten gives no lock.
+   A schedule that must run once across instances claims each run instead
+   ([On a schedule](app.md#on-a-schedule)).
+4. The lock holds only between instances that all take it. The release that brings it in (and one
+   that changes a lock's kind or key) overlaps instances that do not, so it goes out without the
+   old and the new running side by side: the old drained first.
+
+### When the work's snapshot must follow the lock
+
+The lock above is taken inside the work's transaction. Under `READ COMMITTED` that costs nothing,
+as each statement takes a new snapshot. Work that reads one snapshot throughout (`REPEATABLE READ`
+or `SERIALIZABLE`: a rebuild that must see one state of many tables) takes it at the transaction's
+first statement that reads (a `SET LOCAL` does not), which is the lock itself, and the snapshot is
+taken when that statement starts, before the lock is granted. A lock that waits
+(`pg_advisory_xact_lock`) then reads the database as it was before the last holder committed, every
+time; one that refuses does only if the holder commits while that statement runs. Such work takes
+the lock on the session, before `BEGIN`, and releases it after `COMMIT`.
+
+A session lock outlives the transaction, and that is the hazard. Rust drops the handler's future
+when the client leaves or the deadline passes ([Cancellation](cancellation.md)), so the unlock
+after it never runs, and the connection goes back to the pool still holding the lock. A take on
+any other connection then finds it held (`pg_try_advisory_lock` refuses every user, and
+`pg_advisory_lock` waits until the deadline's 503) until the pool retires that connection
+(sqlx's `max_lifetime`, 30 minutes unless set, or its `idle_timeout`, 10 minutes idle); a take
+that gets the same connection succeeds, as a session's advisory locks are its own to take again.
+The same holds for any state a connection keeps past its transaction: a `SET` without `LOCAL`, a
+temporary table, a `LISTEN`. So the connection that takes a session lock
+never goes back: `close_on_drop()` before the lock makes a dropped hold close it, which ends the
+session and its lock.
+
+```rust,ignore
+/// Held while work whose snapshot follows the lock runs. Its connection never returns to the pool:
+/// a dropped hold (the client left, the deadline passed, a `?`) closes it on a task sqlx spawns,
+/// which ends the lock a moment later.
+pub struct SessionHeld(PoolConnection<Postgres>);
+
+impl OneAtATime {
+    /// `None` while another request, here or on another instance, holds it for `key`. All of
+    /// it, the wait for a connection included, takes at most `CALL`, as `take` does.
+    pub async fn take_session(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<SessionHeld>> {
+        let late = |_| sqlx::Error::Io(std::io::ErrorKind::TimedOut.into());
+        timeout(CALL, self.take_session_now(pool, key)).await.map_err(late)?
+    }
+
+    async fn take_session_now(self, pool: &PgPool, key: i32) -> sqlx::Result<Option<SessionHeld>> {
+        let mut conn = pool.acquire().await?;
+        // Before the lock, so no path returns the connection with it.
+        conn.close_on_drop();
+        // Session settings are safe on a connection that is never reused. A session left idle
+        // 10 s (a host cut off), in a transaction or between the lock and `BEGIN` or `COMMIT` and
+        // the unlock, ends, and its lock with it (`idle_session_timeout`: Postgres 14 and later; on 13, which has no such setting, this
+        // `SET` fails, and so would every take).
+        // The statement timeout is every statement's on this session, the work's too: work with
+        // longer statements sets its own in its transaction (`SET LOCAL statement_timeout`).
+        sqlx::query("SET statement_timeout = '5s'").execute(&mut *conn).await?;
+        sqlx::query("SET idle_in_transaction_session_timeout = '10s'").execute(&mut *conn).await?;
+        sqlx::query("SET idle_session_timeout = '10s'").execute(&mut *conn).await?;
+        let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+            .bind(self as i32)
+            .bind(key)
+            .fetch_one(&mut *conn)
+            .await?;
+        Ok(taken.then_some(SessionHeld(conn)))
+    }
+}
+
+impl SessionHeld {
+    /// The session: the work begins its transaction here, after the lock.
+    pub fn conn(&mut self) -> &mut PgConnection {
+        &mut self.0
+    }
+
+    /// Ends the hold now, after the work's commit or rollback: the unlock, then the close, so the
+    /// next `take_session` finds it free.
+    pub async fn release(mut self) -> sqlx::Result<()> {
+        sqlx::query("SELECT pg_advisory_unlock_all()").execute(&mut *self.0).await?;
+        self.0.close().await
+    }
+}
+
+async fn rebuild(signal: Signal, State(db): State<Db>) -> HtmlResult {
+    let shared = db.clone();
+    let rebuilt = signal
+        .finish(move |_| async move {
+            let Some(mut held) = OneAtATime::Rebuilding.take_session(&shared.pool, 0).await? else {
+                return Ok(false);
+            };
+            // The snapshot, taken after the lock, sees everything the last holder committed.
+            let mut tx = held.conn().begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ").await?;
+            shared.rebuild(&mut *tx).await?;
+            tx.commit().await?;
+            held.release().await?;
+            Ok::<_, Error>(true)
+        })
+        .await?;
+    // ..
+}
+```
+
+The work runs in `signal.finish`, so a client that leaves does not stop it between the commit and
+the release. The closing connection is the guard for every other drop: a `?` before `release`,
+a `timeout` around part of the work, a process stopped at shutdown. The cost is a new connection
+for each run (the pool opens one when it is next needed), paid only by work that takes a session
+lock. A take that waits for the lock instead of refusing (`pg_advisory_lock`) waits at most the
+`statement_timeout` set before it, and still within `take_session`'s bound.
+
+Corten gives no helper for this, for the reason in note 3: the lock is the app's, over its own
+driver. What Corten decides is that a handler's future is dropped, and [Cancellation](cancellation.md)
+says what that means for state a connection keeps.
+
+## Files
+
+A form with a file input posts `multipart/form-data` (`enctype="multipart/form-data"`), which
+`Form` does not read (it answers 415). The handler takes `Upload<T>` instead; an upload that is
+one of a page's several posts is a named post
+([Several posts on one page](#several-posts-on-one-page)), which the router chooses from the
+address, so only its `Upload` reads the body. The input is named
+by a `Files` field of the form struct, so the markup (`name={f.photos}`), the files and `Errors`
+all take the same `FieldName`:
+
+```rust,ignore
+#[derive(Fields)]
+struct NewListing { title: String, price: u32, photos: Files }
+
+async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
+    let f = NewListing::FIELDS;
+    upload.limit(60 << 20); // what the request keeps; the route's body_limit (2 MiB) unless set
+    let (mut photos, mut errors) = (Vec::new(), Errors::new());
+    while let Some(mut file) = upload.next_file().await? {
+        if !file.is(f.photos) { continue }
+        if !matches!(file.content_type(), "image/jpeg" | "image/png" | "image/webp") {
+            errors.add(f.photos, "Photos can be JPEG, PNG or WebP.");
+        } else if photos.len() == 24 {
+            errors.add(f.photos, "A listing can have 24 photos.");
+        } else {
+            match file.bytes_up_to(10 << 20).await? {
+                Some(bytes) => photos.push((file.filename().to_string(), bytes)),
+                None => errors.add(f.photos, "Each photo can be up to 10 MB."),
+            }
+        }
+    }
+    let input = upload.fields().await?;
+    if !errors.is_empty() {
+        return req.invalid(&errors, ListingForm { input: &input, errors: &errors }, page).await;
+    }
+    ..
+}
+```
+
+The body is read as the handler asks for it. `next_file` reads the text fields before the next
+file and keeps them. `fields` reads the rest and reads the fields into `T` by `Form`'s rules (a
+422 when they do not fit). A file the handler does not read is skipped, not stored. A file input
+left empty is no file: the browser sends it as a part with an empty file name and no bytes, which
+`FormData` keeps as an empty `File`, and `next_file` passes over it, since the user chose
+nothing. A route cannot tell such an input from one the form does not have; both are no file
+([design](../design.md#limits)). A part with bytes is a file even when it comes with no name;
+`filename()` is then empty.
+
+To hand a file on without holding it (to an object store or a storage API), read it piece by
+piece with `file.chunk()`. Each piece is passed on as it arrives, and the request keeps one piece
+at a time, not the file.
+
+`upload.limit(bytes)` bounds what the request takes of the body: its fields and the files it reads,
+or passes on piece by piece with `chunk()`, together. Set it before reading. A file the handler
+passes over is read past and does not count (its part's headers do), and one over its own `bytes_up_to(max)` needs room
+for that `max` as it goes over, then counts nothing (the rest is read past): so with a limit that
+has room for the photo's 10 MB, a photo over it (up to the 64 MiB below), or one of the wrong type,
+is the photo's message, not a 413. A body is read no
+further than 64 MiB past the limit, what is read past included, where the connection is closed.
+Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error
+page.
+To draw the form again with a message instead, read in one block and match its outcome once,
+since any read can find the body over the limit:
+
+```rust,ignore
+let read = async {
+    let mut photos = Vec::new();
+    while let Some(mut file) = upload.next_file().await? {
+        photos.push(file.bytes_up_to(10 << 20).await?);
+    }
+    Ok::<_, UploadError>((upload.fields().await?, photos))
+};
+match read.await {
+    Ok((input, photos)) => { .. }
+    Err(UploadError::TooLarge { .. }) => { /* the form, "The photos are over 60 MB together." */ }
+    Err(other) => Err(other.into()),
+}
+```
+
+The fields are not read then (they may come after the files), so the form is drawn from what
+the page had. The rest of the body is read past, up to 64 MiB, and not kept: a browser that is
+still sending when the answer comes reports a network error and never shows the answer. Past
+that the connection is closed. The limit for one file, the types a field accepts and how many files
+it takes are the handler's rules, so it checks them and adds a message to `Errors`. The form
+is then drawn again with its other fields kept and the message next to the input.
+
+A client that sends nothing for a minute while the handler reads a file, passes one over or reads
+the fields is `UploadError::Stalled`, a 408, as for [`pieces_up_to`](#http-types) (nginx's
+`client_body_timeout`). The minute holds for each piece, and is also the body's allowance against
+a client that sends a byte now and then, which would reset it forever: the reads may wait for the
+client that minute plus a second for every 240 bytes that came (Kestrel's minimum rate), in all,
+and past that the read is `Stalled` too. Time the handler spends between reads (writing a piece to
+a slow store) is not counted, so the bound holds as long as the handler asks for the next piece
+when it is done with one; a read dropped and begun again (inside a `timeout` or `select!`) does
+not start the minute again. So a large upload sent at any real speed is never cut off, and the
+route's deadline ([app guide](app.md)) is what bounds it in all; one that stops while a body over
+the limit is read past is still the 413. `upload.idle(d)` changes the minute (and so the
+allowance), and `upload.idle(None)` leaves only the route's deadline, for both. A page's deadline
+is 30 seconds unless set, so there a client that stops is caught by the deadline first: since the
+handler was waiting for the body, that answer is a 408 too (the error page's `Failure::Failed`
+with status 408, or the JSON 408), not the deadline's 503. The idle time matters on a route whose
+deadline is longer (an upload API's).
+
+A JSON route takes an upload the same way. One with no text fields still names its file input
+with a `Files` field and takes the file by that name (`file.is(..)`); the struct is not dead code,
+since `#[derive(Fields)]` marks a `Files` field read. In an [API](app.md#json-only-routes) its
+refusals are the API's failures, as a `Json<T>` body that does not parse is: a body that is not multipart
+(415), one that breaks the format (400) or is over the limit (413), each in Problem Details, or the
+API's own shape when it sets `Api::errors`. `?` on an `UploadError` makes it a `JsonError` with
+its status:
+
+```rust
+use corten::{http::StatusCode, prelude::*, Error};
+
+/// A CSV export a client posts as `multipart/form-data` in its `file` input.
+#[derive(Fields)]
+struct Export { file: Files }
+
+async fn import(mut upload: Upload<Export>) -> JsonResult<serde_json::Value> {
+    upload.limit(5 << 20);
+    let missing = || Error::new("A CSV file is required.").with_status(StatusCode::BAD_REQUEST);
+    let Some(mut file) = upload.next_file().await? else { return Err(missing().into()) };
+    if !file.is(Export::FIELDS.file) {
+        return Err(missing().into());
+    }
+    let Some(csv) = file.bytes_up_to(4 << 20).await? else {
+        return Err(Error::new("The export can be up to 4 MB.").with_status(StatusCode::PAYLOAD_TOO_LARGE).into());
+    };
+    Ok(Json(serde_json::json!({ "rows": csv.split(|b| *b == b'\n').count() })))
+}
+# let _: Methods = post(import);
+```
+
+The `content_type` a file arrives with is what the client said, as its name is. It decides which
+message the user sees, never how the bytes are sent back: a file named `me.png` may hold HTML.
+To serve an upload, read its type from its first bytes and answer it as a `Media`, whose type is
+one the app names:
+`Media::new("image/png", bytes)`. Kept at a URL that names its bytes (a keyed hash of them,
+`/pictures/{id}`), `Public::immutable(..)` lets every cache keep it for a year, cookies or not,
+and its handler cannot read who is asking; anywhere else it is `private, no-cache` like the rest
+of the app, except on a route that says [`unstaged`](app.md#a-route-outside-the-stages), which sends the
+caching its handler set. The watchlist example's
+profile picture (`examples/watchlist/src/account.rs`) does both.
+
+A file the user downloads names itself on its `Media`: `.attachment("shipments-2026-10-29.csv")`
+to save it, `.inline("packing-slips.pdf")` to show it where the browser can and save it under
+that name. It stays private unless the handler says `Public`, so a user's export is not cached
+for anyone else; one that is `Public` and 1,024 bytes or more (a CSV, a PDF, a picture) is also kept
+by the app and given again without its handler until its lifetime ends
+([the pages the app keeps](app.md#the-pages-the-app-keeps)). Corten writes a name that is not plain ASCII as `filename*=UTF-8''..` (RFC 6266),
+which browsers read, and a quote or line break in a name taken from user data cannot change the
+header. The browser still cleans the name it saves (a `/`, a `:`, a control character), and an
+empty name lets it name the file from the URL. Link to a download with `download`
+(`<a href={export} download>`), or `data-reload` for a file the browser shows: without one, the
+runtime fetches the link on hover and again on click, running the handler twice.
+
+```rust,ignore
+async fn export(caller: Caller<Viewer>) -> corten::Result<Media> {
+    let csv = shipments_csv(&caller).await?;
+    Ok(Media::new("text/csv", csv).attachment("shipments.csv"))
+}
+```
+
+An export too large to hold (every order as CSV, an archive) is `Media::stream(type, chunks)`,
+with `chunks` a stream of `Result<Bytes, E>`: each chunk goes out as it is made, so the client
+has the first before the last exists, and the stream is pulled only as fast as the client reads,
+so memory stays at a few chunks. When the client leaves, the stream is dropped, and with it what
+makes it: a cursor closes, a channel's sender fails. Read what can fail before returning it (the
+first page of rows, the file being there), since that error is still an error page; once the
+stream starts, the status and headers are sent, and an `Err` chunk ends the connection without
+the body's end, so the browser reports the download failed, and the error is logged with each
+cause under its message, as a handler's error is. It cannot become an error page or a redirect.
+`E` is anything `Error::new` takes: an error type (`std::io::Error`, a client's or a store's), a
+`String` or `&str` message, which is logged alone, or a `corten::Error`, so a stream made with
+the app's own `?` (of `corten::Result<Bytes>`) logs the error it holds; a type of the app's that
+only implements `Display` implements `std::error::Error` to be one.
+`Media::stream_sized(type, length, chunks)` sends a `Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
+the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd,
+else gzip, never brotli, ended when the stream ends; uncompressed for a client that takes neither
+zstd nor gzip), so make chunks of some kilobytes, a few hundred rows, not a row each. No `ETag`
+is made for a stream, and the request's deadline bounds the handler, not the download:
+`App::send_timeout` closes the connection of a client that stops reading, but nothing bounds a
+source that stops making chunks while the client waits, so give each page's read a time
+limit (a query timeout). A failed chunk is logged with the media type only, so its error should
+say which export it was.
+auction-room's bid history (`examples/auction-room/src/app.rs`, `history`) reads a lot's bids a
+page at a time this way.
+
+```rust,ignore
+async fn export(State(store): State<Store>) -> corten::Result<Media> {
+    // The first page before the answer: a store that fails now is an error page.
+    let first = store.orders_after(0).await?;
+    let pages = futures_util::stream::try_unfold((Some(first), 0), move |(page, after)| {
+        let store = store.clone();
+        async move {
+            let page = match page {
+                Some(page) => page,
+                None => store.orders_after(after).await?,
+            };
+            let Some(last) = page.last().map(|order| order.id) else { return Ok(None) };
+            Ok(Some((Bytes::from(csv(&page)), (None, last))))
+        }
+    });
+    Ok(Media::stream("text/csv", pages).attachment("orders.csv"))
+}
+```
+
+A download the handler may refuse (posted from a page, at the revision the page showed, when the
+run has moved on) answers `PageOr<Media>` (or `PageOr<Relay>` for another service's file): the
+file, or the page saying why, or a redirect to it, each `.into()` it. The user stays on the page
+with the reason instead of an error page, and the page is private like any other. The form is a
+plain `method="post"` form, not `data-patch`: the runtime draws a patch or a page, and a file
+answered to a `data-patch` submit is not saved (it dispatches `corten:error`). Inside `Public`,
+name the variant (`.map(PageOr::Page)`), since `.into()` cannot infer the type there. This is the
+one refusal that redirects: a plain post's page drawn at the action's URL would leave the user
+there, so a stale download answers a redirect to its page with the reason, where a `data-patch`
+form's refusal is a 409 drawn in place.
+
+```rust,ignore
+async fn download(req: Req, at: Params<url::Download<'_>>, Form(form): Form<At>) -> corten::Result<PageOr<Media>> {
+    match claim(&at.id, form.revision).await {
+        Ok(csv) => Ok(Media::new("text/csv", csv).attachment("run.csv").into()),
+        Err(Stale) => Ok(req.redirect(&url::Run { id: &at.id, said: Some(Said::Stale) })?.into()),
+    }
+}
+```
+
+A browser cannot be given its files back by markup. A patch keeps the files chosen in the input
+it replaces until a successful answer, so the user can send them again. Without JavaScript the
+page asks for them again. A body that is not multipart is a 415, and one that breaks the format
+is a 400. A slow upload may need its area's own deadline (`Area::deadline`, see
+[Cancellation](cancellation.md)).
+
+## Filters and lists that grow
+
+A list's filters are a GET form: every choice is in the address, so the results can be shared,
+bookmarked, reloaded and reached with Back, and the form works without a script. To apply a
+filter as soon as it changes, a handler submits the form (`form.requestSubmit()` on `change`).
+Mark the form `data-keep-place` and its navigation keeps the user where they were: the scroll
+position stays, and focus returns to the control the user is on when the form goes (by id, else
+by its name inside its nearest ancestor with an id, falling back to `<main>`, and its value for
+a checkbox or radio). Among repeated matches there it keeps the same index, leaving out inputs of
+`type="hidden"` but counting controls that are disabled, carry the `hidden` attribute or sit
+inside an `inert` element, so a preceding control entering or leaving those states does not move
+focus. If the control at that index cannot take focus, or the ancestor holds no match at that
+index, focus is not restored. Only when nothing under the ancestor matches (it is gone, or every
+match in it) does it look for the control in `<main>`, by the index it had there.
+Give the filter form or rail a `#[derive(Id)]` id to keep other forms' copies out of the count.
+**Limit:** Without the control's own stable id, correspondence depends on matching controls
+keeping their order, inside that ancestor or in `<main>`. Inserting, removing or reordering
+matches ahead of the control can leave focus unrestored or move it to another one, and a
+matching field that switches to or from `type="hidden"` across the swap counts as inserted or
+removed. A control that moves to another ancestor, or itself turns `type="hidden"`, can lose
+focus to another match too. Give the control its own `#[derive(Id)]` id when its matches can
+change; an id on its form only keeps other forms' copies out of the count
+([Limit 28](../design.md#limit-keep-place-identity)). Focus returns with its caret to the one they changed, or for
+a text field that applies when it loses focus, the one they moved to. The page keeps what the user sees around it too: an element that
+scrolls on its own (a filter rail) keeps its scroll, and a `<details>` open on screen stays open
+while one they closed stays closed, so the control is in view and can take focus even when the
+server draws a group open only while one of its options is chosen. Without the mark a navigation goes to the top of
+the new page, as a link should. A link can carry the mark too. A submit button's `formmethod`
+decides how the form goes, as without the runtime: a POST button in a GET form (Save next to
+Apply) is the browser's own post, and a GET button in a POST form is swapped in like any GET.
+A `data-patch` form reads its button the same way: an unknown `formmethod` (`put`) is a GET, an
+empty `formaction` is the page's own address, a `formenctype` of `multipart/form-data` sends
+multipart, and a `dialog` method closes its dialog without sending anything. Its body is the one
+the browser would send: a file field is the file's name unless the form is multipart, line
+breaks are CRLF, and `text/plain` is `name=value` lines ending in CRLF, nothing escaped, with
+`content-type: text/plain`. An `on:submit` handler that calls `event.preventDefault()` while the
+event is dispatched (a `confirm()`, a check of its own) stops it, as it stops any form; one that
+waits for something first (a `<dialog>` that asks) cannot, so it cancels first and sends the form
+again itself (`form.requestSubmit()`). One that stops the submit's propagation keeps it from the
+page's outer handlers, and the runtime still sends it. Its answer always
+patches the page it was sent from: a `target` or `formtarget` on it is not followed.
+
+```rust,ignore
+<form method="get" action={url::Search} data-keep-place on:change={js::apply(target)}>
+    <label><input type="checkbox" name={f.in_stock} checked={q.in_stock}>"In stock"</label>
+    <button>"Apply"</button>
+</form>
+```
+
+`apply` is the component's script; the runtime has no attribute for it, since a behavior is a
+function the markup calls ([scripts](scripts.md)). On the form, `change` from any control applies
+it: a checkbox, a radio or a select at once, a text field or `<textarea>` when it loses focus
+after its value changed (Enter in a text field sends it too, as it always does). Keep the
+button, so the form works without a script. An app with filter forms on several screens keeps
+these functions in one `script!` module, listed once ([shared scripts](scripts.md#shared-scripts)),
+rather than a copy per screen: the markup then calls the module (`filters::apply(target)`), and
+a component with no other behavior needs no `js` of its own.
+
+```js
+// @ts-check
+
+/** @param {HTMLFormElement} form */
+export function apply(form) {
+  form.requestSubmit();
+}
+
+/** The form goes as `button`, a submit button of it, so its `formaction` and `formmethod` decide where. @param {HTMLFormElement} form @param {HTMLButtonElement} button */
+export function applyWith(form, button) {
+  form.requestSubmit(button);
+}
+```
+
+`applyWith` is a variant: `on:change={js::applyWith(target, redraw)}` on the form, with
+`let redraw = refs();` and `ref={redraw}` on a submit button of the form (not `type="button"`,
+which `requestSubmit` refuses), sends it as that button. To apply for one control only, while the
+form's other controls wait for its button, put the handler on that control and pass the form as a
+ref: `let form = refs();`, `ref={form}` on the form, `on:change={js::apply(form)}` (or
+`js::applyWith(form, redraw)`) on the control. The ref's type is checked when the crate
+compiles, so the call takes only a form. Enter in one of the form's text fields still sends it,
+as its default button.
+
+### Choosing focus before a filter navigation
+
+A handler that applies filters but should leave the user in another control moves focus there
+**before** calling `requestSubmit()`. `data-keep-place` snapshots the focused control and its
+text selection when the navigation starts, not when its answer arrives. For example, changing
+a category can clear the old search and leave the search field ready to type:
+
+```rust,ignore
+// Inside a #[component(js)] component, with the form's fields and current query:
+let form = refs();
+html! {
+    <form ref={form} method="get" action={url::Search} data-keep-place>
+        <label>"Category"
+            <select name={f.category} on:change={js::applyToSearch(form, f.search)}>
+                // The category options, with the current one selected.
+            </select>
+        </label>
+        <label>"Search"
+            <input id={SearchId} type="search" name={f.search} value={q.search}>
+        </label>
+        <button>"Apply"</button>
+    </form>
+}
+```
+
+`SearchId` is a `#[derive(Id)]` id, kept on the search field in every answer. The form ref and
+the [field argument](scripts.md#form-fields) pass the form and search control without a selector.
+The ref's element type is checked at the call; the field lookup checks for one input of that
+name when the handler runs.
+
+```js
+/** @param {HTMLFormElement} form @param {HTMLInputElement} search */
+export function applyToSearch(form, search) {
+  search.value = "";
+  search.focus({ preventScroll: true });
+  search.select();
+  form.requestSubmit();
+}
+```
+
+The same sequence goes in a keyboard handler after it changes the category. `select()` selects
+the field's text (an empty range here); leave out the assignment to keep and select an existing
+search instead. `preventScroll` avoids scrolling to the field before the navigation keeps the
+page's place. Setting the value does not dispatch `change`, so this sends once. Set focus and
+selection before submitting rather than relying on work after `requestSubmit()`: changes made
+after the navigation has started are too late for its snapshot. The answer must render the
+field with the value the GET form sent; keeping focus and selection does not keep an old value
+over what the server draws. If the user focuses a control outside the swapped content while
+the answer is on its way and it still has focus after the swap, the runtime leaves it alone.
+
+This is the component's behavior, not a second navigation API or a built-in focus attribute.
+It keeps focus across a client swap only: without the Navigation API, or when a changed layout
+requires a full document load, the browser loads the form's answer as usual. The Apply button
+still works without a script.
+
+### Keeping other query values
+
+A GET form sends only its own controls, and drops its `action`'s query. On a screen whose address
+holds more than one form changes (the seller and the page, and the research a second form sets),
+each form wraps its controls in `keep_query(&at, &html! { .. })`: the controls are drawn, and every
+key of the route's query that none of them names (`name=`, a `#[route(query)]` set's key, a
+`#[route(prefix)]` entry's) becomes a hidden input, in the encoding the route's links use. There
+is no list of names, so a key is neither dropped nor sent twice, and a field added to the route
+later is kept by every such form. Every control the form sends goes inside, a named submit button
+included; the route can be a `&dyn Href` a shared form is given. Lent (`&html!`), the controls
+borrow what they use, so the page around the form reads the same locals. A form that starts a new
+search passes the route with the fields it resets cleared (`&url::Search { page: None, ..at.clone() }`),
+so they are not kept.
+
+```rust,ignore
+<form method="get" action={&at}>
+    {keep_query(&at, &html! {
+        <select name={f.grade}>..</select>
+        <button>"Price"</button>
+    })}
+</form>
+```
+
+A list that grows (Load more, the next page of results) answers with only the new rows:
+`view::Append(ResultsId, rows)` adds them at the end of the element with that id, and the rows
+the page has stay as they are. Load more is a GET form with `data-patch`, so without JavaScript
+it loads the page with one page more. `req.patch_or` answers both: the patch with JavaScript, and
+the page otherwise (its closure runs only then):
+
+```rust,ignore
+let more = html! { {Append(ResultsId, html! { for r in &page { <Result r={r} /> } })} <LoadMore next={next} /> };
+req.patch_or(more, || async { req.page(results_page(&req, &q, next)) }).await
+```
+
+The address does not change with an appended page, so a reload shows the first page again;
+a list whose length must survive a reload puts it in the address with a link instead.
+`examples/watchlist`'s news page has both.
+
+## Redirects
+
+After a successful write, `req.redirect(&route)` sends the browser on (post/redirect/get), with
+and without JavaScript. It takes a typed route, a return address from outside the code that
+`corten::Local::parse` checked is on this site (see the app guide's sign-in item), or an
+`corten::http::Uri` for a URL outside the app; a path written as text does not compile.
+
+To bring the browser back to what the user acted on (a review on page 2 of a long list, a row
+after an edit), redirect to a place on the page: `route.at(ReviewId(&id))` is the route with
+`#review-7`, taken from the element's `#[derive(Id)]` type, so the markup and the URL cannot
+spell it differently. `href={route.at(..)}` links to one the same way, and a link to an element
+on the page it is in (a validation summary's link to the field it names, a skip link) is
+`href={FeedbackId.fragment()}`, a bare `#feedback` written the same way: it is a jump within the
+document, never a request, so it is an attribute value and not an address `req.redirect` takes.
+The browser scrolls to a route's place after a full load and after the runtime's navigation
+alike. A link, a form or a redirect the runtime follows (a push or a replace) runs the browser's
+own scroll to the fragment once the new page is drawn (the Navigation API's
+`NavigateEvent.scroll()`), so the element matches `:target` either way (a section CSS shows or
+highlights when linked to), an `<a name>` anchor is found as an `id` is, the fragment is
+percent-decoded as HTML decodes it, focus moves to the element when it can take focus, and a page
+without a place starts at its top. A focus handler runs in that scroll, as on a full load: the
+runtime neither scrolls nor moves focus after it, and an address it changes
+(`history.replaceState`) ends the navigation there. The runtime sees that focus moved by a
+`focus` listener it adds in the capture phase on `window` for the length of the scroll; a page
+listener added there earlier that stops the event (`stopImmediatePropagation`) and puts focus back
+hides the move, and the runtime may then scroll to the element again. Focus is then the Navigation API's to reset,
+as after any navigation the runtime draws, unless it moved during the navigation (to the element,
+or by the user while the page loaded), which stays. For an element that cannot take focus (a
+heading), a full load starts the next Tab from it; after a client swap, Chromium (159) starts it
+at the top instead, because the reset comes after the scroll and no browser API moves that
+starting point. Back and forward put back the scroll position instead, and a `data-keep-place`
+navigation keeps it.
+Firefox (159) may skip that scroll on a client swap, or leave `:target` unset or still on an
+element the swap left in place (outside `<main>`). The runtime then scrolls to the element itself
+when it is shown, but without the browser's steps that first reveal a target inside a hidden
+ancestor (`hidden="until-found"`), focus it and start the next Tab from it, which a full load at
+that address takes: such a target stays hidden. A section that must show when linked to does not
+rely on `:target` or `hidden="until-found"` alone there. The runtime fetches the page again even
+when only the `#id` differs from the address, since the write may have changed it.
+A client navigation the server sends to a place gets `corten-location` instead of a 303,
+because `fetch` follows a redirect but drops its fragment, and so does the whole page the
+runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
+on to a place lands there. So does one sent to another site
+(a `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
+`connect-src`, else CORS): the browser goes there itself, in one request to the app. The same
+holds for `req.moved`. Each of these answers varies on `corten`, and one to the runtime's fetch
+is kept by the browser alone, so a cache never hands a full load's 303 to the runtime or its
+`corten-location` to a full load.
+
+A place on a page outside the app (another site, another app of the same product) has an id
+that page's markup owns, so it is text: `Elsewhere::at(&uri, "fee-calculator")` is
+`https://example.com/compare?x=1#fee-calculator`, and `req.moved` and `req.redirect` take it.
+A `corten::http::Uri` alone cannot carry it: it drops a `#fragment` it parses.
+
+```rust,ignore
+async fn report(req: Req, Params(at): Params<url::Report<'_>>) -> HtmlResult {
+    // ... record the report of at.review on at.slug ...
+    req.redirect(&url::Account { slug: &at.slug, reported: Some(&at.review) }.at(ReviewId(&at.review)))
+}
+```
+
+### Sending the same form on
+
+A redirect is followed with a `GET`, so the form's body is gone. When a write must hand the
+same form to another handler, `req.resend_to(&route)` answers `307 Temporary Redirect`, which the
+browser follows with the same method and body. The usual reason is a cookie the next request must
+present: a visitor's first write makes a guest (or names the browser) and nothing else, then
+sends the form on with the cookie, so the write runs as someone the request named and a lost
+answer leaves nothing half done:
+
+```rust,ignore
+async fn save(req: Req, mut visitor: Visitor, form: Form<AlertInput>) -> HtmlResult {
+    if visitor.known().is_none() {
+        // `visitor.with_cookie` sets the cookie that names the browser.
+        return Ok(visitor.with_cookie(req.resend_to(&url::FirstAlert)?));
+    }
+    save_first(req, visitor, form).await
+}
+```
+
+It works with and without JavaScript: the browser follows a plain form's 307, and the runtime's
+`fetch` for a `data-patch` form follows it with the same `FormData`, so the handler at `to` answers
+the form as this one would have (a patch, a redirect, a 422). `to` is a page of the app
+(`OnSite`), and a form's body is never sent to another site: an address that is not a path on
+this site (one a hand-written `Route`'s `write_href` writes) is an error; on a
+`GET`, which a redirect repeats as it is, `resend_to` is an error that says to use
+`req.redirect`. The form goes on as it was sent, its `SubmitKey` included, so the first handler
+must not keep that key as used.
+The handler at `to` cannot assume the cookie arrived (a browser may refuse it: WebKit keeps no
+`Secure` cookie over plain `http://`), and a handler that sends the form back to its own route
+marks the address, since a browser stops after about 20 redirects. `examples/watchlist`'s first
+alert does this (`alerts::save`). The body crosses the network twice, so a form with large files
+gets its cookie from an earlier page instead.
+
+### Saying what a write did
+
+The page a write redirects to often says what it did ("Batch 3517 deleted."). That is not part of
+the page's address: written into a query value, a reload says it again, a copied link shares it
+and Back to the page asks for it again. `req.redirect_with_notice(&to, text)` carries it instead, and the page it
+lands on reads it once with `req.notice()`:
+
+```rust,ignore
+async fn delete(req: Req, Params(at): Params<url::Delete>) -> HtmlResult {
+    store::delete(at.id).await?;
+    req.redirect_with_notice(&url::Batches, format_args!("Batch {} deleted.", at.id))
+}
+
+// In the layout, where the app says what an action did:
+<Toaster close="Dismiss" seconds={5} toast={Toast { message: req.notice(), failed: false }} failed="That did not go through, and may not have been saved. Check and try again." />
+```
+
+The text rides in a cookie (`__Host-corten-notice`, `HttpOnly`, a minute) for the path it
+redirected to (its escapes decoded, so `a%20b` and `a b` are one page); another page neither shows
+nor removes it, and the answer of the page it was for removes it, so it is said once. A `HEAD`
+request leaves it for the `GET`. That answer is private, as one for a signed-in caller is. A
+notice is text, escaped where it renders, cut at 500 bytes. A page the browser restores from its
+back-forward cache is the page as it was left, toaster and all; Corten does not ask the server for
+it. It is for a page of the app: a route, a place on one, a checked `Local` or a
+`#[derive(Href)]` enum of those (`OnSite`); a URL of another site does not compile.
+
+A client navigation runs only the page inside `<main>`, not the layout around it, so a notice the
+layout holds is not drawn there; the navigation a write's redirect starts is the exception, which
+fetches the whole page and draws again what changed around `<main>` (the [views
+guide](views.md)), a notice the layout holds included. When the page did not render the notice,
+its answer hands it to the runtime, which dispatches `corten:notice` on the document
+(`detail.message`) once the page is swapped in, and it bubbles; corten-ui's `Toaster` shows it, and
+a component's markup hears it with `on:document:corten:notice={..}`. A page that
+renders it itself (a status line in the form it sent the user back to) is not sent it twice. When
+the navigation has to load the page in full instead (its layout changed), the runtime keeps the
+notice for that load in session storage and dispatches the event once the page's modules have
+connected; the page loaded then does not draw it, since the fetch before it read it, so a page
+whose status line would have said it shows it through `corten:notice` alone.
+
+A browser refuses a `Secure` cookie, and so a `__Host-` one, from a plain `http://` origin other
+than loopback: a tool served on the LAN as `http://automation.lan:3001` or `http://192.168.1.5`.
+Corten sees that in the write (an `Origin` of this host over `http://`, no `Sec-Fetch-Site`) and
+sets the notice in a plain `corten-notice` cookie instead (`HttpOnly`, `SameSite=Lax`, a minute),
+with nothing for the app to do. A page reads that one only from a request without
+`Sec-Fetch-Site`, which current browsers send to every secure origin, so on HTTPS another site on
+the domain cannot plant a notice in it there; a browser too old to send it (Safari before 16.4,
+Firefox before 90) could be shown one, as text. An app served only over HTTPS says so with
+`Policy::hsts()`, and then Corten never sets or reads the plain cookie, and refuses that write
+from a plain `http://` page as it refuses another site's
+([WebSockets and relays](app.md#websockets-and-relays), item 1). `localhost` and
+`127.0.0.1` count as secure and keep `__Host-corten-notice`. A notice from a `GET` handler (no
+`Origin` to tell by) always rides in `__Host-corten-notice`, so on a plain-http LAN address it
+is lost: redirect with a notice from the write.
+
+On a full load (the first page, or without JavaScript) the server draws the page, layout and all,
+so the notice shows only where the page renders `req.notice()`: render it in the layout, once. A
+page that renders it twice shows it twice, and one that does not render it drops it (a debug
+build logs a warning).
+
+A page handler may redirect too (an old URL; a `Caller` sending someone to sign in does the
+same). A client
+navigation follows it: the page it was sent to is swapped in and replaces the requested URL
+in the history, so Back skips the URL that redirected.
+
+When a page has moved for good (an item asked for by an old slug or its id, a renamed
+category), answer `req.moved(&route)`: a `301 Moved Permanently`, so search engines give the
+old URL's place to the new one, and the browser keeps the redirect for a day (its own copy
+only; a shared cache does not) and goes straight there next time. Any parameter the new URL
+needs is a field of its route; the old URL's other parameters are not carried over. A
+`data-patch` form that gets it is sent on, as by `redirect`. Use `redirect` after a write.
+
+## A read that has not caught up yet
+
+A write is often read back from a projection that is a moment behind: the page after the
+redirect says "saved, updating" and should read itself again shortly. `ReadAgain`, among the
+page's head tags, asks for that:
+
+```rust,ignore
+let again = cart.behind(&receipt).then_some(ReadAgain { after: Duration::from_secs(2) });
+req.page(html! { <Layout req={&req} title="Cart" head={again}>{cart_view(&cart)}</Layout> })
+```
+
+However the page was reached (a full load, a link, a `data-patch` form's redirect), the runtime
+fetches the address after the delay, as it is then (so a query a script put in it with
+`history.replaceState`, as corten-ui's `rows::sort`, `TabGroup` and a choice do, is read too),
+and swaps it in: the history entry is replaced, the scroll
+position stays, the focused element keeps focus (found again as a `data-keep-place` navigation
+finds it, [above](#filters-and-lists-that-grow)), an answer the same as
+the last read's is not swapped, and a hidden tab waits until it is shown. After a `data-patch`
+write's redirect each read is of the whole page, as the write's was, so what changed around
+`<main>` (a count the layout could not read yet) is drawn too ([views guide](views.md)); a page a
+plain `<form method="post">` loaded in full reads `<main>` again. On a page the runtime
+swapped in, a notice the page drew (`req.notice()`) is sent back with each read, for that page
+only, so `req.notice()` answers it there too: the read draws the page as it was, the notice stays
+until the user moves on or the page loads in full, and what they typed stays (a page that loaded in full draws its first
+read again without the notice). Each answer asks again or not, so the reads stop once the write is in; give up after a
+while (the receipt's age) so a page never polls without end. A navigation to another history entry stops them, one on its way puts the next read off until it
+lands, and a read a script's `replaceState` cancels on its way is made again after the delay.
+Without JavaScript the browser reloads the page (`<meta http-equiv="refresh">` in `<noscript>`).
+
+A `data-patch` form's answer can be in the same state: the write is in, but the read that
+draws the part it replaces is behind. Rather than wait for the read, or redirect to a page only
+to show "saving", the patch says where to read it again: `ReadAgain { after }.from(route)`, a
+patch instruction like `Remove` and `Append`. It takes the route by value (a borrowed one works where the route outlives the patch, as in a
+handler), so a component that is both part of the page and the patch builds it in its body and
+returns it. After the delay the runtime fetches the route as a
+GET `data-patch` form would (`corten: action`) and applies the patch it answers, which asks again
+while it is still behind. The route's URL carries what the read waits for (the write's receipt),
+since the page's address does not; its handler answers the part with `req.patch_or`, and so the
+page without JavaScript, at the same URL. The route says `patches`, and its `get` handler returns
+`HtmlResult<Patches>`, which only `action.patch`, `action.patch_with_status`, `req.patch_or`,
+`req.patch_or_with`, `req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
+`patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
+and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
+build rather than the page. A route given by hand, a `#[derive(Route)]` struct, is not one: the
+compiler cannot see the handler that serves it. A route that says `patches` mounted by hand
+(`Area::route`, `Api::route`) takes only a `get` handler that returns `HtmlResult<Patches>`, or
+the app does not build: `get(h)` carries what `h` answers (`Methods<S, Patches>`), and those two
+check it where they check the route's path, when the code that mounts it is compiled
+(`cargo build`, or `cargo test` where a test or the library reaches it; not `cargo check`, and
+not `cargo test` when only a binary's `main` mounts it). An answer type of the app's own cannot
+say it answers a patch (`type Kind = AnyAnswer;` is all it can say). What is checked is the
+handler's answer. Four things can still answer the read otherwise: a stage or an extractor that
+answers before the handler runs (a `Caller` that refuses someone signed out answers
+`Mode::Action` with a `204` and `corten-location`, sending the browser to sign in), a handler
+that replaces its answer's response through `DerefMut` (`*res = ..`), which its type does not
+see, a handler that writes `req.mode` (to `Mode::Document`, say) before `patch_or`,
+`invalid` or `invalid_with`, which then answer the mode it wrote, the page or a redirect, as
+for any handler, and another route at the same path, mounted with a page handler where the
+`patches` route's own module is not.
+
+```rust,ignore
+#[corten::routes]
+mod url {
+    #[route("/alerts", get = alerts, patches)]
+    pub struct Alerts<'a> { pub after: Option<&'a str> }
+}
+
+async fn pause(req: Req, Params(at): Params<url::Pause<'_>>) -> HtmlResult {
+    let receipt = alerts::pause(&at.id).await?;
+    let from = url::Alerts { after: Some(&receipt) };
+    let Some(action) = req.action() else {
+        return req.redirect(&from); // without JavaScript, nothing to read here: the page reads it
+    };
+    let alerts = alerts::read(&receipt).await?;
+    let again = alerts.behind.then(|| ReadAgain { after: Duration::from_secs(2) }.from(&from));
+    action.patch(html! { <AlertList alerts={&alerts} /> {again} })
+}
+
+async fn alerts(req: Req, Params(at): Params<url::Alerts<'_>>) -> HtmlResult<Patches> {
+    // With patch_or: the list, with `ReadAgain::from` while behind, as the patch; the page otherwise.
+}
+```
+
+The reads wait while the tab is hidden or a form's answer is on its way, keep what the user
+typed, opened and focused, as any patch does, and stop once an element the patch put on the
+page is replaced (a later patch of it, a navigation away) or a read fails. A read that fails without a
+patch (the error page: the server has logged it) or offline stops them quietly and leaves the
+part as it was; any answer that is a patch is applied whatever its status, so a handler whose
+read failed after the write can say so in place (`action.patch_with_status(StatusCode::BAD_GATEWAY,
+..)` in `Mode::Action`: "Saved; reload to see it"). A success that is not a patch, which the
+handler of a route that says `patches` does not answer (but a stage before it, a response
+replaced through `DerefMut`, or a handler that writes `req.mode` before `patch_or`, `invalid`
+or `invalid_with` can), is logged in the console and stops the reads.
+
+A page can ask the same of its parts, with the same `ReadAgain::from` among its markup: when the
+whole page would be the wrong thing to read again (a form the user is filling in, a payment
+provider's frame that would lose what was typed), only the parts are. However the page was
+reached, the runtime starts the read once the page is on the screen, as for a patch; it stops
+when the page is left, or an element with an id beside the tag is replaced (a form's answer,
+which brings its own read). A part's answer that asks again puts its own tag in the old one's
+place, as does any patch with a `ReadAgain` (a form's answer, a script's, a live one) that puts an
+element with an id beside the tag, and the read is
+sent to the tag's `data-from` as it is then, so a script may change it
+(corten-ui's `rows::sort` puts a table's order in it; an answer to a read whose `data-from`
+changed while it was on its way is dropped and the part read again). Without JavaScript the tag
+does nothing, so a page that should still update then puts `ReadAgain` in its head as well: with
+JavaScript a page that reads parts again is not read whole.
+
+```rust,ignore
+let again = alerts.behind.then_some(ReadAgain { after: Duration::from_secs(2) });
+let parts = again.map(|again| again.from(&from)); // the route answers the list as a patch
+req.page(html! {
+    <Layout req={&req} title="Alerts" head={again}>
+        <AlertForm />
+        <AlertList alerts={&alerts} />
+        {parts}
+    </Layout>
+})
+```
+
+`examples/watchlist`'s alerts page has all three.
+
+A part the page does not wait for at all (a slow read, such as recommendations) is read the same
+way, once and with no delay: `ReadAgain::now(route)` inside the part drawn waiting, and the page's
+own handler answers both with `req.patch_or_with(part, page)`, whose sides are closures, so the
+part's read is not the page's and the page's is not the part's. It is read once; a page that
+waits for one and asks in its head to be read again still is, on its interval, and when its
+`<main>` changed it draws the part waiting again, which reads it again, so its interval needs
+room for the part. The runtime marks the element the tag is in, and only it, `aria-busy="true"`
+while the read is on its way and `data-corten-read-failed` if the read does not replace it (no
+patch, an error page, a redirect); a stylesheet hides the link to the page with the part read in,
+which a browser without JavaScript follows, only while the part is busy
+([A slow part](live-data.md#a-slow-part)).
+
+A page whose changing part a `<corten-live>` relays ([live data](live-data.md)) already keeps
+itself fresh with JavaScript; reading it whole would replace the `<corten-live>` and open its
+stream again. While the job the stream follows runs, it asks a browser without JavaScript only:
+
+```rust,ignore
+let again = job.running.then_some(ReadAgain { after: Duration::from_secs(2) }.without_javascript());
+```
+
+With JavaScript the `<corten-live>` alone keeps the page fresh, so its stream should send the
+job's last state before it ends: when a stream ends, the element stays as its last fragment drew
+it, and nothing reads the page again. Only a stream that follows the job counts: a page whose
+`<corten-live>` relays something else (a price ticker) while it waits for a write keeps plain
+`ReadAgain`.
+
+Do not send a `Refresh` header: Chromium, Firefox and WebKit keep a full load's `Refresh` after
+the runtime has navigated away, and then load the first URL again. Debug builds answer 500 to a
+page that sends one.
+
+
+## Errors
+
+A page handler returns `HtmlResult`; any `std::error::Error` converts with `?` and becomes a
+500. A record that is not there is `Error::not_found()` (`load(id).await?.ok_or_else(Error::not_found)?`),
+and `Error::status(StatusCode::CONFLICT)` (or `.with_status(..)` on an error) sets any other
+status. A handler that refuses the caller (the record is not theirs) returns the refusal an
+extractor gives, `Err(Refused::forbidden())?`, which the error page treats as the request's
+fault; `.with_status(..)` on it makes it a plain failure at that status. The app's error page is
+rendered in the request's mode (a page or a swap) and the message is logged, never shown, except
+under `corten dev`. A handler that answers in a shape of its own reads both: `error.to_string()`
+is the message the log has, and `error.status_code()` the status. The message is written for the
+log, so it can name a 5xx's internals or the cause a `.with_status(..)` hid (a refusal answered as
+a 404 says `refused: 403 Forbidden`); send it only where the error is meant for the client. An extractor's own rejection (a
+path segment that does not parse, a form of the wrong type) gets the error page too when a
+browser asked; a field the user types is text or an `Entry`, so its mistake is a message
+instead. The page is given a `Failure` that says which case it is
+([error pages](app.md#error-pages)).
+
+A client that asked for JSON, every route whose handler returns `JsonResult<T>`, and every
+request under an [`App::api`](app.md#json-only-routes) prefix, gets every failure in one shape
+(a route that says [`unstaged`](app.md#a-route-outside-the-stages) outside an API's prefix answers its
+failures as plain text instead),
+the standard one: an RFC 9457 Problem Details document, sent as `application/problem+json`,
+`{"title":"Not Found","status":404,"detail":"No item 7."}`. `title` is the status's reason. A
+4xx's `detail` is the error's message or the rejection's text; a 5xx has no `detail`, only the
+status (the message is logged, and shown under `corten dev`). If a JSON body has a value that
+does not fit a field, `Json<T>` uses the same serde reader to report that field's path in its
+422 whether `T` has a derived `FromJson` fast path or delegates to serde. Validation errors add
+the fields as an extension member:
+`{"title":"Unprocessable Entity","status":422,"detail":"email: ...","fields":{"email":"..."}}`,
+and a message about the whole form (`Errors::add_form`) is `form` too.

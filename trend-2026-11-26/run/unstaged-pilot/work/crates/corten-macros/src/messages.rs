@@ -1,0 +1,1261 @@
+//! `messages!`: message catalogs read at compile time into a type with one method per key.
+//!
+//! Every locale must have every key of the first, with the same placeholders, or the build fails.
+//! Each message is split into text and arguments here, so rendering one is a few string pushes.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
+
+use crate::{
+    derive::string,
+    json::{self, Value},
+    tokens::{err, escape, is_ident, is_punct, q, stream, string_value, Error},
+};
+
+const RESERVED: &[&str] = &[
+    "as",
+    "async",
+    "await",
+    "break",
+    "const",
+    "continue",
+    "crate",
+    "dyn",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "fn",
+    "for",
+    "if",
+    "impl",
+    "in",
+    "let",
+    "loop",
+    "match",
+    "mod",
+    "move",
+    "mut",
+    "pub",
+    "ref",
+    "return",
+    "self",
+    "Self",
+    "static",
+    "struct",
+    "super",
+    "trait",
+    "true",
+    "type",
+    "unsafe",
+    "use",
+    "where",
+    "while",
+    "yield",
+    "abstract",
+    "become",
+    "box",
+    "do",
+    "final",
+    "gen",
+    "macro",
+    "override",
+    "priv",
+    "try",
+    "typeof",
+    "unsized",
+    "virtual",
+    "locale",
+    "index",
+    "from_index",
+    "negotiate",
+    "js",
+    "by_key",
+    "number",
+    "percent",
+    "change",
+    "money",
+    "parse_money",
+    "date",
+    "time",
+    "date_time",
+    "relative",
+];
+
+#[derive(Debug, PartialEq)]
+pub enum Part {
+    Text(String),
+    Arg(String),
+}
+
+/// CLDR's plural categories, in the order of a locale's plural table (`LocaleData::plurals`).
+const CATEGORIES: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
+const OTHER: usize = 5;
+
+/// A catalog entry: a message, or a plural message's form per category (`cards_one`,
+/// `cards_other`), `other` always there.
+#[derive(Debug, PartialEq)]
+enum Message {
+    Plain(Vec<Part>),
+    Plural([Option<Vec<Part>>; 6]),
+}
+
+struct Locale {
+    tag: String,
+    span: Span,
+    file: String,
+    messages: Vec<(String, Message)>,
+    /// Its number, currency and date data, as the tokens of a `LocaleData`.
+    data: &'static str,
+}
+
+pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
+    let tokens: Vec<TokenTree> = input.into_iter().collect();
+    let usage = "expected: messages! { pub struct Msg { \"en\" => \"locales/en.json\", \"fr\" => \"locales/fr.json\" } }";
+    let mut i = 0;
+    let mut attrs = TokenStream::new();
+    while is_punct(tokens.get(i), '#') {
+        attrs.extend(tokens[i..i + 2].iter().cloned());
+        i += 2;
+    }
+    let mut vis = TokenStream::new();
+    if is_ident(tokens.get(i), "pub") {
+        vis.extend([tokens[i].clone()]);
+        i += 1;
+        if let Some(TokenTree::Group(g)) = tokens.get(i) {
+            if g.delimiter() == Delimiter::Parenthesis {
+                vis.extend([tokens[i].clone()]);
+                i += 1;
+            }
+        }
+    }
+    if !is_ident(tokens.get(i), "struct") {
+        return err(tokens.get(i).map_or(Span::call_site(), TokenTree::span), usage);
+    }
+    let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(body))) = (tokens.get(i + 1), tokens.get(i + 2)) else {
+        return err(Span::call_site(), usage);
+    };
+    let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    let mut locales = Vec::new();
+    let entries: Vec<TokenTree> = body.stream().into_iter().collect();
+    let mut j = 0;
+    while j < entries.len() {
+        let (Some(TokenTree::Literal(tag)), true, true, Some(TokenTree::Literal(path))) =
+            (entries.get(j), is_punct(entries.get(j + 1), '='), is_punct(entries.get(j + 2), '>'), entries.get(j + 3))
+        else {
+            return err(entries[j].span(), usage);
+        };
+        let (Some(tag_text), Some(path_text)) = (string_value(tag), string_value(path)) else {
+            return err(tag.span(), usage);
+        };
+        if tag_text.is_empty() || !tag_text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return err(tag.span(), format!("{tag_text:?} is not a language tag like \"en\" or \"pt-BR\""));
+        }
+        let file = std::path::Path::new(&root).join(&path_text);
+        let text = std::fs::read_to_string(&file).map_err(|e| (path.span(), format!("cannot read {}: {e}", file.display())))?;
+        let value = json::parse(&text).map_err(|e| (path.span(), format!("{path_text}: {e}")))?;
+        let mut flat = Vec::new();
+        flatten("", value, &mut flat).map_err(|e| (path.span(), format!("{path_text}: {e}")))?;
+        let mut parsed = Vec::with_capacity(flat.len());
+        for (key, message) in flat {
+            let parts = parse_message(&message).map_err(|e| (path.span(), format!("{path_text}: {key:?}: {e}")))?;
+            parsed.push((key, parts));
+        }
+        let messages = group(parsed).map_err(|e| (path.span(), format!("{path_text}: {e}")))?;
+        if locales.iter().any(|l: &Locale| l.tag == tag_text) {
+            return err(tag.span(), format!("{tag_text:?} is listed twice"));
+        }
+        let data = locale_data(&tag_text).map_err(|e| (tag.span(), e))?;
+        check_forms(&tag_text, data, &messages).map_err(|e| (path.span(), format!("{path_text}: {e}")))?;
+        locales.push(Locale { tag: tag_text, span: path.span(), file: file.display().to_string(), messages, data });
+        j += 4;
+        if is_punct(entries.get(j), ',') {
+            j += 1;
+        }
+    }
+    if locales.is_empty() {
+        return err(body.span(), usage);
+    }
+    if locales.len() > 255 {
+        return err(body.span(), "at most 255 locales");
+    }
+    check(&locales)?;
+
+    let mut methods = TokenStream::new();
+    // The messages with arguments again, unfilled, for a script to fill in: `t.js().key()`.
+    let mut js_methods = TokenStream::new();
+    // `by_key`'s arms: a catalog key to its pieces in this locale.
+    let mut key_arms = TokenStream::new();
+    let mut seen = BTreeSet::new();
+    // The structs a message's arguments are passed in by name, in a module named after the
+    // catalog (`Msg` is `msg`).
+    let module_name = snake_case(&name.to_string());
+    let module: TokenStream = module_ident(&module_name).into();
+    // Each struct's name, with the key it is for: two keys cannot share one.
+    let mut structs: BTreeMap<String, &str> = BTreeMap::new();
+    let mut arg_structs = TokenStream::new();
+    let default = &locales[0];
+    for (key, message) in &default.messages {
+        let method = method_name(key).map_err(|e| (default.span, e))?;
+        if !seen.insert(method.clone()) {
+            return err(default.span, format!("two keys become the method {method}; rename one of them"));
+        }
+        if args_of(message).len() >= 2 {
+            if matches!(module_name.as_str(), "self" | "super" | "crate") {
+                return err(
+                    name.span(),
+                    format!("{name}'s messages with two or more arguments take them in the module {module_name}, which Rust reserves; rename the type"),
+                );
+            }
+            let struct_name = camel_case(&method);
+            if !struct_name.starts_with(|c: char| c.is_ascii_alphabetic()) || struct_name == "Self" {
+                return err(
+                    default.span,
+                    format!("the key {key:?} takes its arguments in a struct named after it, and {struct_name:?} cannot be one; rename the key"),
+                );
+            }
+            if let Some(other) = structs.insert(struct_name.clone(), key) {
+                return err(
+                    default.span,
+                    format!("the keys {other:?} and {key:?} both take their arguments in {module_name}::{struct_name}; rename one of them"),
+                );
+            }
+        }
+        let parts = match message {
+            Message::Plain(parts) => parts,
+            Message::Plural(_) => {
+                let (method, js_method, key_arm, def) = plural(&locales, key, &method, &vis, &module);
+                arg_structs.extend(def);
+                methods.extend(method);
+                js_methods.extend(js_method);
+                key_arms.extend(key_arm);
+                continue;
+            }
+        };
+        let args = arg_names(parts);
+        let doc = format!(" {}: {}", default.tag, display(parts));
+        let pieces_for = |locale: &Locale| -> TokenStream { pieces(plain_of(locale, key)) };
+        let found = if locales.len() == 1 {
+            pieces_for(default)
+        } else {
+            let mut arms = TokenStream::new();
+            for (n, locale) in locales.iter().enumerate().skip(1) {
+                arms.extend(q(
+                    "__A0 => __A1,",
+                    &[TokenTree::Literal(proc_macro::Literal::u8_unsuffixed(n as u8)).into(), pieces_for(locale)],
+                ));
+            }
+            arms.extend(q("_ => __A0,", &[pieces_for(default)]));
+            q("match self.0 __A0", &[stream([TokenTree::Group(Group::new(Delimiter::Brace, arms))])])
+        };
+        key_arms.extend(q("__A0 => ::core::option::Option::Some(__A1),", &[string(key).into(), found]));
+        let body_for = |locale: &Locale| -> TokenStream {
+            let parts = plain_of(locale, key);
+            if args.is_empty() {
+                return stream([string(&plain_text(parts))]);
+            }
+            writes(parts)
+        };
+        let mut by_locale = if locales.len() == 1 {
+            body_for(default)
+        } else {
+            let mut arms = TokenStream::new();
+            for (n, locale) in locales.iter().enumerate().skip(1) {
+                arms.extend(q(
+                    "__A0 => __A1,",
+                    &[TokenTree::Literal(proc_macro::Literal::u8_unsuffixed(n as u8)).into(), body_for(locale)],
+                ));
+            }
+            arms.extend(q("_ => __A0,", &[body_for(default)]));
+            q("match self.0 __A0", &[stream([TokenTree::Group(Group::new(Delimiter::Brace, arms))])])
+        };
+        if !args.is_empty() {
+            let wire_for = |locale: &Locale| -> TokenStream {
+                let parts = plain_of(locale, key);
+                stream([string(&wire(parts))])
+            };
+            let by_locale = if locales.len() == 1 {
+                wire_for(default)
+            } else {
+                let mut arms = TokenStream::new();
+                for (n, locale) in locales.iter().enumerate().skip(1) {
+                    arms.extend(q(
+                        "__A0 => __A1,",
+                        &[TokenTree::Literal(proc_macro::Literal::u8_unsuffixed(n as u8)).into(), wire_for(locale)],
+                    ));
+                }
+                arms.extend(q("_ => __A0,", &[wire_for(default)]));
+                q("match self.0 __A0", &[stream([TokenTree::Group(Group::new(Delimiter::Brace, arms))])])
+            };
+            let names: Vec<&str> = args.iter().map(String::as_str).collect();
+            let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+            let js_doc =
+                format!(" {}: {}, for a handler whose JSDoc takes Message<{}>.", default.tag, display(parts), quoted.join(" | "));
+            js_methods.extend(q(
+                "#[doc = __A0] #[inline] __A1 const fn __A2(self) -> ::corten::i18n::Template<__A3> { ::corten::i18n::Template::new(__A4) }",
+                &[
+                    string(&js_doc).into(),
+                    vis.clone(),
+                    ident(&method).into(),
+                    TokenTree::Literal(proc_macro::Literal::u64_suffixed(crate::script::message_id(&names))).into(),
+                    by_locale,
+                ],
+            ));
+        }
+        if args.is_empty() {
+            methods.extend(q(
+                "#[doc = __A0] #[inline] __A1 const fn __A2(self) -> &'static str { __A3 }",
+                &[string(&doc).into(), vis.clone(), ident(&method).into(), by_locale],
+            ));
+        } else {
+            let mut params = TokenStream::new();
+            let mut take = TokenStream::new();
+            if args.len() == 1 {
+                params.extend(q("__A0: impl ::corten::i18n::Arg,", &[arg_ident(&args[0]).into()]));
+            } else {
+                let (def, param, taken) = named_args(&module, &method, &doc, &args, &|_| q("::corten::i18n::Arg", &[]));
+                arg_structs.extend(def);
+                params = param;
+                take = taken;
+            }
+            by_locale = q(
+                "__A1 ::corten::i18n::Text::new(move |__corten_sink: &mut ::corten::i18n::Sink<'_>| __A0)",
+                &[stream([TokenTree::Group(Group::new(Delimiter::Brace, by_locale))]), take],
+            );
+            methods.extend(q(
+                "#[doc = __A0] #[inline] __A1 fn __A2(self, __A3) -> ::corten::i18n::Text<impl Fn(&mut ::corten::i18n::Sink<'_>)> { __A4 }",
+                &[
+                    string(&doc).into(),
+                    vis.clone(),
+                    ident(&method).into(),
+                    params,
+                    by_locale,
+                ],
+            ));
+        }
+    }
+
+    let mut tags = TokenStream::new();
+    let mut files = TokenStream::new();
+    for locale in &locales {
+        tags.extend(q("__A0,", &[string(&locale.tag).into()]));
+        files.extend(q("const _: &[u8] = ::core::include_bytes!(__A0);", &[string(&locale.file).into()]));
+    }
+    let name_tokens: TokenStream = TokenTree::Ident(name.clone()).into();
+    let count = locales.len();
+    let mut data = TokenStream::new();
+    for locale in &locales {
+        let tokens: TokenStream = locale.data.parse().map_err(|_| (locale.span, "corten: bad locale data".to_string()))?;
+        data.extend(q("&__A0,", &[tokens]));
+    }
+    methods.extend(q(
+        "#[doc(hidden)] #[inline] fn __corten_locale(self) -> &'static ::corten::i18n::__private::LocaleData {
+            static DATA: [&::corten::i18n::__private::LocaleData; __A1] = [__A0];
+            DATA[self.0 as usize]
+        }
+        /// `n` (an integer or a `corten::i18n::Decimal`) in this locale: `1,234,567` in en.
+        #[inline] __A2 fn number(self, n: impl ::corten::i18n::Number) -> ::corten::i18n::Formatted {
+            ::corten::i18n::Formatted::number(self.__corten_locale(), n.to_decimal())
+        }
+        /// A ratio as a percentage in this locale, with at most `digits` fraction digits (rounded
+        /// half away from zero, trailing zeros dropped): `t.percent(Decimal::new(29, 3), 2)` is
+        /// `2.9%` in en, `2,9 %` in fr and `%2,9` in tr.
+        #[inline] __A2 fn percent(self, ratio: impl ::corten::i18n::Number, digits: u8) -> ::corten::i18n::Formatted {
+            ::corten::i18n::Formatted::percent(self.__corten_locale(), ratio.to_decimal(), digits)
+        }
+        /// A ratio as a change in this locale (a price's move today): a percentage with exactly
+        /// `digits` fraction digits (rounded half away from zero) and a sign, none when it rounds
+        /// to zero, so a column of them lines up: `t.change(Decimal::new(6, 3), 2)` is `+0.60%` in
+        /// en, `+0,60 %` in fr and `+%0,60` in tr.
+        #[inline] __A2 fn change(self, ratio: impl ::corten::i18n::Number, digits: u8) -> ::corten::i18n::Formatted {
+            ::corten::i18n::Formatted::change(self.__corten_locale(), ratio.to_decimal(), digits)
+        }
+        /// An amount of money in this locale: `t.money(Minor(123450), USD)` is `$1,234.50` in en and
+        /// `1 234,50 $US` in fr.
+        #[inline] __A2 fn money(self, amount: impl ::corten::i18n::Amount, currency: ::corten::i18n::Currency) -> ::corten::i18n::Formatted {
+            ::corten::i18n::Formatted::money(self.__corten_locale(), &amount, currency)
+        }
+        /// An amount of money with its sign in this locale (a difference between two amounts): a
+        /// plus sign on a gain and none on what rounds to zero, as Intl's `signDisplay` `exceptZero` writes it:
+        /// `t.signed_money(Minor(320), USD)` is `+$3.20` in en and `+3,20 $US` in fr.
+        #[inline] __A2 fn signed_money(self, amount: impl ::corten::i18n::Amount, currency: ::corten::i18n::Currency) -> ::corten::i18n::Formatted {
+            ::corten::i18n::Formatted::signed_money(self.__corten_locale(), &amount, currency)
+        }
+        /// Money as a person types it in this locale, in the currency's minor units: what
+        /// `money` writes, read back: `$1,299.50` is `Some(Minor(129950))` in USD in en, and `12,50`
+        /// is `Some(Minor(1250))` in fr. With or without
+        /// the symbol or code and the group separators; a sign, a group of the wrong size, another
+        /// locale's decimal separator, more fraction digits than the currency shows, or an amount
+        /// over `u64` is `None`.
+        #[inline] __A2 fn parse_money(self, text: &str, currency: ::corten::i18n::Currency) -> ::core::option::Option<::corten::i18n::Minor<u64>> {
+            ::corten::i18n::__private::parse_money(self.__corten_locale(), text, currency)
+        }
+        /// A date in this locale: `Mar 22, 2026` (en, `Medium`). An instant is written in UTC unless
+        /// `.zone(..)` says otherwise (or in the visitor's zone, with `App::zoned_dates`); a
+        /// `corten::i18n::Day` is that day in every zone.
+        #[inline] __A2 fn date<__D: ::corten::i18n::DateValue>(self, at: __D, style: impl ::corten::i18n::DateOnly) -> __D::Text {
+            ::corten::i18n::DateValue::date_text(at, self.__corten_locale(), style)
+        }
+        /// A time with its zone in this locale, in UTC unless `.zone(..)` says otherwise: `3:04 PM UTC` (en, `Short`).
+        #[inline] __A2 fn time(self, at: impl ::core::convert::Into<::std::time::SystemTime>, style: ::corten::i18n::TimeStyle) -> ::corten::i18n::When {
+            ::corten::i18n::When::time(self.__corten_locale(), at.into(), style)
+        }
+        /// A date and a time with its zone in this locale, in UTC unless `.zone(..)` says otherwise:
+        /// `Mar 22, 2026, 3:04 PM UTC` (en, `Medium`, `Short`).
+        #[inline] __A2 fn date_time(
+            self,
+            at: impl ::core::convert::Into<::std::time::SystemTime>,
+            date: ::corten::i18n::DateStyle,
+            time: ::corten::i18n::TimeStyle,
+        ) -> ::corten::i18n::When {
+            ::corten::i18n::When::date_time(self.__corten_locale(), at.into(), date, time)
+        }
+        /// `at` relative to `now` in this locale, in the largest unit it has a whole one of:
+        /// `in 10 hours` (en, `Long`) for 10 h 35 min ahead, `3 min. ago` (`Short`).
+        /// `corten_ui::RelativeTime` keeps it current in the browser.
+        #[inline] __A2 fn relative(
+            self,
+            at: impl ::core::convert::Into<::std::time::SystemTime>,
+            now: impl ::core::convert::Into<::std::time::SystemTime>,
+            style: ::corten::i18n::RelativeStyle,
+        ) -> ::corten::i18n::Relative {
+            ::corten::i18n::Relative::new(self.__corten_locale(), at.into(), now.into(), style)
+        }",
+        &[data, TokenTree::Literal(proc_macro::Literal::usize_unsuffixed(count)).into(), vis.clone()],
+    ));
+    methods.extend(q(
+        "/// The message whose catalog key (the dotted key, as in the JSON) is `key`, with its
+        /// arguments taken by name from `args`: for a key an API answers with. `None` when the
+        /// catalog has no such key or `args` lacks one of the message's arguments.
+        __A0 fn by_key<'__corten_a, __CortenArgs: ::corten::i18n::Args + ?Sized>(
+            self,
+            key: &str,
+            args: &'__corten_a __CortenArgs,
+        ) -> ::core::option::Option<::corten::i18n::Found<'__corten_a, __CortenArgs>> {
+            // An expression, not a `return` in the match: a catalog with no messages has only the
+            // last arm, and code after a match whose every arm returns would be unreachable.
+            let pieces: ::core::option::Option<&'static [::corten::i18n::__private::Piece]> =
+                match key { __A1 _ => ::core::option::Option::None };
+            ::corten::i18n::Found::new(pieces?, args)
+        }",
+        &[vis.clone(), key_arms],
+    ));
+    {
+        let js_tokens: TokenStream = TokenTree::Ident(Ident::new(&format!("{name}Js"), name.span())).into();
+        js_methods.extend(q(
+            "#[doc(hidden)] #[inline] fn __corten_locale(self) -> &'static ::corten::i18n::__private::LocaleData { __A0(self.0).__corten_locale() }
+            /// This locale's number format, for a handler whose JSDoc takes a NumberFormat: it writes format(n) as t.number(n) does.
+            #[inline] __A1 fn number(self) -> ::corten::i18n::NumberFormat { ::corten::i18n::NumberFormat::new(self.__corten_locale()) }
+            /// This locale's percentage format, for a handler whose JSDoc takes a PercentFormat: it writes format(ratio) as t.percent(ratio, digits) does.
+            #[inline] __A1 fn percent(self, digits: u8) -> ::corten::i18n::PercentFormat { ::corten::i18n::PercentFormat::new(self.__corten_locale(), digits) }
+            /// This locale's change format, for a handler whose JSDoc takes a PercentFormat: it writes format(ratio) as t.change(ratio, digits) does.
+            #[inline] __A1 fn change(self, digits: u8) -> ::corten::i18n::PercentFormat { ::corten::i18n::PercentFormat::change(self.__corten_locale(), digits) }
+            /// An amount's format in `currency`, for a handler whose JSDoc takes a MoneyFormat: it writes format(minor) as t.money(Minor(minor), currency) does.
+            #[inline] __A1 fn money(self, currency: ::corten::i18n::Currency) -> ::corten::i18n::MoneyFormat { ::corten::i18n::MoneyFormat::new(self.__corten_locale(), currency) }
+            /// A signed amount's format in `currency`, for a handler whose JSDoc takes a MoneyFormat: it writes format(minor) as t.signed_money(Minor(minor), currency) does.
+            #[inline] __A1 fn signed_money(self, currency: ::corten::i18n::Currency) -> ::corten::i18n::MoneyFormat { ::corten::i18n::MoneyFormat::signed(self.__corten_locale(), currency) }
+            /// A date's format, for a handler whose JSDoc takes a DateFormat: it writes format(at) as t.date(at, style) does.
+            #[inline] __A1 fn date(self, style: impl ::corten::i18n::DateOnly) -> ::corten::i18n::DateFormat { ::corten::i18n::DateFormat::date(self.__corten_locale(), style) }
+            /// A time's format, for a handler whose JSDoc takes a DateFormat: it writes format(at) as t.time(at, style) does.
+            #[inline] __A1 fn time(self, style: ::corten::i18n::TimeStyle) -> ::corten::i18n::DateFormat { ::corten::i18n::DateFormat::time(self.__corten_locale(), style) }
+            /// A date and time's format, for a handler whose JSDoc takes a DateFormat: it writes format(at) as t.date_time(at, date, time) does.
+            #[inline] __A1 fn date_time(self, date: ::corten::i18n::DateStyle, time: ::corten::i18n::TimeStyle) -> ::corten::i18n::DateFormat {
+                ::corten::i18n::DateFormat::date_time(self.__corten_locale(), date, time)
+            }",
+            &[name_tokens.clone(), vis.clone()],
+        ));
+        let doc =
+            format!(" The messages of {name} with arguments, unfilled, and its formats, for handlers to fill in from a script.");
+        let to_js = " This locale's messages with arguments, for a handler to fill in: js::count(total, t.js().rows_selected()) passes one, and the script calls label({ count }).";
+        methods.extend(q(
+            "#[doc = __A0] #[inline] __A1 const fn js(self) -> __A2 { __A2(self.0) }",
+            &[string(to_js).into(), vis.clone(), js_tokens.clone()],
+        ));
+        js_methods = q(
+            "#[doc = __A0] #[derive(Clone, Copy, Debug)] #[allow(dead_code)] __A1 struct __A2(u8);
+            #[allow(dead_code, non_snake_case)]
+            impl __A2 { __A3 }",
+            &[string(&doc).into(), vis.clone(), js_tokens, js_methods],
+        );
+    }
+    let mut out = attrs;
+    out.extend(q(
+        TYPE,
+        &[
+            vis.clone(),
+            name_tokens,
+            files,
+            tags,
+            TokenTree::Literal(proc_macro::Literal::usize_unsuffixed(count)).into(),
+            methods,
+            crate::locale_data::SYMBOL_CURRENCIES.parse().expect("the list of currencies parses"),
+        ],
+    ));
+    out.extend(js_methods);
+    if !arg_structs.is_empty() {
+        let doc = format!(" The arguments of {name}'s messages that take two or more, by name.");
+        out.extend(q(
+            "#[doc = __A0] #[allow(dead_code)] __A1 mod __A2 { __A3 }",
+            &[string(&doc).into(), vis, module, arg_structs],
+        ));
+    }
+    Ok(out)
+}
+
+/// The messages type and its `Messages` impl: the type's name and visibility, the catalogs it
+/// rebuilds on, its tags, their count, its methods and `SYMBOL_CURRENCIES`, in that order.
+const TYPE: &str = "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    __A0 struct __A1(u8);
+    // Rebuild when a catalog changes.
+    const _: () = { __A2 };
+    // The locale data indexes corten's list of currencies with a symbol: the same list, or no build.
+    const _: () = ::corten::i18n::__private::same_currencies(__A6);
+    #[automatically_derived]
+    impl ::corten::i18n::Messages for __A1 {
+        const LOCALES: &'static [&'static str] = &[__A3];
+        fn from_index(index: usize) -> Self { if index < __A4 { __A1(index as u8) } else { __A1(0) } }
+        fn index(self) -> usize { self.0 as usize }
+    }
+    #[allow(non_snake_case, clippy::too_many_arguments)]
+    impl __A1 { __A5 }";
+
+fn brace(tokens: TokenStream) -> TokenStream {
+    stream([TokenTree::Group(Group::new(Delimiter::Brace, tokens))])
+}
+
+fn index(n: usize) -> TokenStream {
+    TokenTree::Literal(proc_macro::Literal::u8_unsuffixed(n as u8)).into()
+}
+
+/// `each` of every locale, chosen by the messages value's locale.
+fn by_locale(locales: &[Locale], each: &dyn Fn(&Locale) -> TokenStream) -> TokenStream {
+    if locales.len() == 1 {
+        return each(&locales[0]);
+    }
+    let mut arms = TokenStream::new();
+    for (n, locale) in locales.iter().enumerate().skip(1) {
+        arms.extend(q("__A0 => __A1,", &[index(n), each(locale)]));
+    }
+    arms.extend(q("_ => __A0,", &[each(&locales[0])]));
+    q("match self.0 __A0", &[brace(arms)])
+}
+
+/// `each` of a plural message's forms in `locale`, chosen by `__corten_form`, its category.
+fn by_form(locale: &Locale, key: &str, each: &dyn Fn(&[Part]) -> TokenStream) -> TokenStream {
+    let Message::Plural(forms) = &locale.messages.iter().find(|(k, _)| k == key).expect("checked").1 else {
+        unreachable!("checked: a key is plural in every locale or in none")
+    };
+    let mut arms = TokenStream::new();
+    for (c, form) in forms.iter().enumerate().take(OTHER) {
+        if let Some(parts) = form {
+            arms.extend(q("__A0 => __A1,", &[index(c), each(parts)]));
+        }
+    }
+    arms.extend(q("_ => __A0,", &[each(forms[OTHER].as_deref().expect("checked"))]));
+    q("match __corten_form __A0", &[brace(arms)])
+}
+
+/// A message's runs for `by_key`: `&[Piece::Text(..), Piece::Arg(..)]`.
+fn pieces(parts: &[Part]) -> TokenStream {
+    let mut list = TokenStream::new();
+    for part in parts {
+        list.extend(match part {
+            Part::Text(text) => {
+                q("::corten::i18n::__private::Piece::Text(__A0, __A1),", &[string(text).into(), string(&escape(text)).into()])
+            }
+            Part::Arg(name) => q("::corten::i18n::__private::Piece::Arg(__A0),", &[string(name).into()]),
+        });
+    }
+    q("&[__A0]", &[list])
+}
+
+/// A block that writes a message's runs to `__corten_sink`.
+fn writes(parts: &[Part]) -> TokenStream {
+    let mut body = TokenStream::new();
+    for part in parts {
+        match part {
+            Part::Text(text) => {
+                body.extend(q("__corten_sink.text(__A0, __A1);", &[string(text).into(), string(&escape(text)).into()]))
+            }
+            Part::Arg(arg) => body.extend(q("__corten_sink.arg(&__A0);", &[arg_ident(arg).into()])),
+        }
+    }
+    brace(body)
+}
+
+/// A plural message's method (`t.cards(count)`), its script's (`t.js().cards()`) and its
+/// `by_key` arm. The form is the count's plural category in the locale, by the table
+/// `t.relative` uses, and `{count}` is written as `t.number(count)` writes it.
+fn plural(
+    locales: &[Locale],
+    key: &str,
+    method: &str,
+    vis: &TokenStream,
+    module: &TokenStream,
+) -> (TokenStream, TokenStream, TokenStream, TokenStream) {
+    let default = &locales[0];
+    let Message::Plural(forms) = &default.messages.iter().find(|(k, _)| k == key).expect("a default key").1 else {
+        unreachable!("a plural message")
+    };
+    let shown: Vec<String> = forms.iter().flatten().map(|parts| display(parts)).collect();
+    let args = args_of(&default.messages.iter().find(|(k, _)| k == key).expect("a default key").1);
+    let body = by_locale(locales, &|locale| by_form(locale, key, &writes));
+    let doc = format!(" {}: {} (by the count's plural category).", default.tag, shown.join(" | "));
+    let (params, take, def) = if args.len() == 1 {
+        (q("count: impl ::corten::i18n::Count,", &[]), TokenStream::new(), TokenStream::new())
+    } else {
+        let (def, param, take) = named_args(module, method, &doc, &args, &|i| {
+            if i == 0 {
+                q("::corten::i18n::Count", &[])
+            } else {
+                q("::corten::i18n::Arg", &[])
+            }
+        });
+        (param, take, def)
+    };
+    let method_tokens = q(
+        "#[doc = __A0] #[inline] __A1 fn __A2(self, __A3) -> ::corten::i18n::Text<impl Fn(&mut ::corten::i18n::Sink<'_>)> {
+            __A5
+            ::corten::i18n::Text::new(move |__corten_sink: &mut ::corten::i18n::Sink<'_>| {
+                let __corten_data = self.__corten_locale();
+                let __corten_form = ::corten::i18n::__private::plural(__corten_data, ::corten::i18n::Count::magnitude(&count));
+                let count = ::corten::i18n::Formatted::number(__corten_data, ::corten::i18n::Number::to_decimal(&count));
+                let _ = &count;
+                __A4
+            })
+        }",
+        &[string(&doc).into(), vis.clone(), ident(method).into(), params, body, take],
+    );
+    let wires = by_locale(locales, &|locale| {
+        let Message::Plural(forms) = &locale.messages.iter().find(|(k, _)| k == key).expect("checked").1 else {
+            unreachable!("checked")
+        };
+        let mut list = TokenStream::new();
+        for form in forms {
+            list.extend(q("__A0,", &[string(&form.as_deref().map(wire_json).unwrap_or_default()).into()]));
+        }
+        q("[__A0]", &[list])
+    });
+    let names: Vec<&str> = args.iter().map(String::as_str).collect();
+    let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+    let js_doc = format!(
+        " {}: {}, for a handler whose JSDoc takes Message<{}>: the script picks the form by count, as the server does.",
+        default.tag,
+        shown.join(" | "),
+        quoted.join(" | ")
+    );
+    let js_method = q(
+        "#[doc = __A0] #[inline] __A1 fn __A2(self) -> ::corten::i18n::Template<__A3> {
+            ::corten::i18n::Template::plural(self.__corten_locale(), __A4)
+        }",
+        &[
+            string(&js_doc).into(),
+            vis.clone(),
+            ident(method).into(),
+            TokenTree::Literal(proc_macro::Literal::u64_suffixed(crate::script::message_id(&names))).into(),
+            wires,
+        ],
+    );
+    let found = by_locale(locales, &|locale| by_form(locale, key, &pieces));
+    let key_arm = q(
+        "__A0 => {
+            let __corten_form = ::corten::i18n::__private::plural(self.__corten_locale(), ::corten::i18n::__private::count(args)?);
+            let __corten_pieces: &'static [::corten::i18n::__private::Piece] = __A1;
+            ::core::option::Option::Some(__corten_pieces)
+        }",
+        &[string(key).into(), found],
+    );
+    (method_tokens, js_method, key_arm, def)
+}
+
+/// The number, currency and date data for `tag`: its own, its alias's, or (without either) that
+/// of the tag without its last subtag (`fr-LU` has `fr`'s).
+fn locale_data(tag: &str) -> Result<&'static str, String> {
+    use crate::locale_data::{ALIASES, LOCALES};
+    let mut candidate = tag;
+    loop {
+        let same = |t: &&str| t.eq_ignore_ascii_case(candidate);
+        let target = ALIASES.iter().find(|(a, _)| same(a)).map_or(candidate, |(_, b)| *b);
+        if let Some((_, data)) = LOCALES.iter().find(|(t, _)| t.eq_ignore_ascii_case(target)) {
+            return Ok(data);
+        }
+        match candidate.rfind('-') {
+            Some(dash) => candidate = &candidate[..dash],
+            None => {
+                return Err(format!(
+                    "corten has no number and date data for {tag:?} or its language: the locales it has are the ones in scripts/locale-data.mjs"
+                ))
+            }
+        }
+    }
+}
+
+/// Every locale's data, `&[(tag, &LocaleData)]`: for corten's own test against Intl.
+pub fn all_locales() -> TokenStream {
+    let mut list = TokenStream::new();
+    for (tag, data) in crate::locale_data::LOCALES {
+        let tokens: TokenStream = data.parse().expect("locale data");
+        list.extend(q("(__A0, &__A1),", &[string(tag).into(), tokens]));
+    }
+    q("&[__A0]", &[list])
+}
+
+fn ident(name: &str) -> TokenTree {
+    TokenTree::Ident(Ident::new(name, Span::call_site()))
+}
+
+/// The module a catalog's argument structs are in: its name in snake case, raw when that is a
+/// Rust keyword (`Type` is `r#type`). `self`, `super` and `crate` cannot be raw; the caller
+/// refuses them before the module is used.
+fn module_ident(name: &str) -> TokenTree {
+    match name {
+        "self" | "super" | "crate" => ident("__corten_messages"),
+        _ if RESERVED.contains(&name) && !METHODS.contains(&name) => TokenTree::Ident(Ident::new_raw(name, Span::call_site())),
+        _ => ident(name),
+    }
+}
+
+/// Names that are a method of the messages type but not a Rust keyword: an argument may use them.
+const METHODS: &[&str] =
+    &["locale", "index", "from_index", "negotiate", "js", "by_key", "number", "money", "date", "time", "date_time"];
+
+/// An argument's parameter: the catalog's name in snake case (`{updatedAt}` is `updated_at`), raw
+/// when it is a Rust keyword (`{type}` is `r#type`), so a catalog shared with other apps compiles
+/// as it is. `by_key` and `Message<..>` keep the catalog's name.
+fn arg_ident(name: &str) -> TokenTree {
+    let snake = snake_case(name);
+    if RESERVED.contains(&snake.as_str()) && !METHODS.contains(&snake.as_str()) {
+        TokenTree::Ident(Ident::new_raw(&snake, Span::call_site()))
+    } else {
+        ident(&snake)
+    }
+}
+
+/// `pager_summary` (or `pagerSummary`) is `PagerSummary`: the name of the struct a message's
+/// arguments are passed in.
+fn camel_case(method: &str) -> String {
+    method
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default()
+        })
+        .collect()
+}
+
+/// A message with two or more arguments takes them by name, in a struct of the catalog's module
+/// (`msg::PagerSummary { range_start, range_end, total }`), so two values cannot be passed in each
+/// other's place and rewording the default text cannot reorder a call. Returns the struct, the
+/// method's parameter and the statement that takes the struct apart into the arguments' names.
+/// `bound(i)` is the `i`th argument's trait.
+fn named_args(
+    module: &TokenStream,
+    method: &str,
+    doc: &str,
+    args: &[String],
+    bound: &dyn Fn(usize) -> TokenStream,
+) -> (TokenStream, TokenStream, TokenStream) {
+    let name: TokenStream = ident(&camel_case(method)).into();
+    let mut generics = TokenStream::new();
+    let mut fields = TokenStream::new();
+    let mut impls = TokenStream::new();
+    let mut names = TokenStream::new();
+    for (i, arg) in args.iter().enumerate() {
+        // A name no key's struct can take (a key `t1` is the struct `T1`).
+        let ty: TokenStream = ident(&format!("__T{i}")).into();
+        generics.extend(q("__A0,", std::slice::from_ref(&ty)));
+        let field: TokenStream = arg_ident(arg).into();
+        let field_doc = format!(" {{{arg}}}");
+        fields.extend(q("#[doc = __A0] pub __A1: __A2,", &[string(&field_doc).into(), field.clone(), ty]));
+        impls.extend(q("impl __A0,", &[bound(i)]));
+        names.extend(q("__A0,", &[field]));
+    }
+    let struct_doc = format!("{doc}\n\n The arguments of `{method}`, by name: each field is the argument the text names.");
+    let def = q(
+        "#[doc = __A0] #[derive(Clone, Copy, Debug)] pub struct __A1<__A2> { __A3 }",
+        &[string(&struct_doc).into(), name.clone(), generics, fields],
+    );
+    let param = q("__corten_args: __A0::__A1<__A2>", &[module.clone(), name.clone(), impls]);
+    let take = q("let __A0::__A1 { __A2 } = __corten_args;", &[module.clone(), name, names]);
+    (def, param, take)
+}
+
+/// `updatedAt` as `updated_at`, `itemID` as `item_id`; a snake case name as it is.
+fn snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    let mut previous = '_';
+    for c in name.chars() {
+        if c.is_ascii_uppercase() {
+            if previous.is_ascii_lowercase() || previous.is_ascii_digit() {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+        previous = c;
+    }
+    out
+}
+
+/// Nested objects become dotted keys, in file order.
+fn flatten(prefix: &str, value: Value, out: &mut Vec<(String, String)>) -> Result<(), String> {
+    match value {
+        Value::Object(entries) => {
+            for (key, value) in entries {
+                let full = if prefix.is_empty() { key } else { format!("{prefix}.{key}") };
+                flatten(&full, value, out)?;
+            }
+            Ok(())
+        }
+        Value::String(text) if prefix.is_empty() => Err(format!("expected an object of messages, found {text:?}")),
+        Value::String(text) => {
+            if out.iter().any(|(k, _)| *k == prefix) {
+                return Err(format!("{prefix:?} appears twice"));
+            }
+            out.push((prefix.to_string(), text));
+            Ok(())
+        }
+        other => Err(format!("{prefix:?} is {}; messages are strings", other.kind())),
+    }
+}
+
+/// The forms of a plural message become one entry: `cards_one` and `cards_other` are the
+/// plural message `cards` (the suffixes i18next uses). Its `_other` is required, since it is the
+/// form for a count no other category takes.
+fn group(flat: Vec<(String, Vec<Part>)>) -> Result<Vec<(String, Message)>, String> {
+    let mut out: Vec<(String, Message)> = Vec::new();
+    for (key, parts) in flat {
+        let form = CATEGORIES.iter().position(|c| {
+            key.strip_suffix(c)
+                .and_then(|k| k.strip_suffix('_'))
+                .is_some_and(|base| !base.is_empty() && !base.ends_with(['.', '_', '-']))
+        });
+        let Some(form) = form else {
+            if out.iter().any(|(k, _)| *k == key) {
+                return Err(format!("{key:?} is a message and the plural message {key:?} ({key}_other, ...); rename one"));
+            }
+            out.push((key, Message::Plain(parts)));
+            continue;
+        };
+        let base = &key[..key.len() - CATEGORIES[form].len() - 1];
+        match out.iter_mut().find(|(k, _)| k == base) {
+            Some((_, Message::Plural(forms))) => forms[form] = Some(parts),
+            Some((_, Message::Plain(_))) => {
+                return Err(format!("{base:?} is a message and the plural message {base:?} ({key}, ...); rename one"))
+            }
+            None => {
+                let mut forms: [Option<Vec<Part>>; 6] = Default::default();
+                forms[form] = Some(parts);
+                out.push((base.to_string(), Message::Plural(forms)));
+            }
+        }
+    }
+    if let Some((key, _)) = out.iter().find(|(_, m)| matches!(m, Message::Plural(forms) if forms[OTHER].is_none())) {
+        return Err(format!(
+            "the plural message {key:?} has no {key}_other, the form for any count no other form takes (a key that only \
+             ends like a plural form needs another name)"
+        ));
+    }
+    Ok(out)
+}
+
+/// The plural categories a locale's whole numbers fall in, each with the smallest number that
+/// does, read from its `LocaleData` (`plurals: [..], millions: ..`).
+fn categories(data: &str) -> Result<[Option<u64>; 6], String> {
+    let bad = || "corten: bad locale data (plurals)".to_string();
+    let table = data.split_once("plurals: [").and_then(|(_, rest)| rest.split_once(']')).ok_or_else(bad)?.0;
+    let millions = data.split_once("millions: ").and_then(|(_, rest)| rest.split_once(',')).ok_or_else(bad)?.0;
+    let mut first = [None; 6];
+    for (n, category) in table.split(", ").map(str::parse::<usize>).chain([millions.trim().parse()]).enumerate() {
+        let category = category.map_err(|_| bad())?;
+        let n = if n == 200 { 1_000_000 } else { n as u64 };
+        let slot = first.get_mut(category).ok_or_else(bad)?;
+        slot.get_or_insert(n);
+    }
+    Ok(first)
+}
+
+/// A plural message in `tag` has a form for each category its whole numbers fall in, and
+/// `_other`, and no other: a form no count reaches is text nobody reads.
+fn check_forms(tag: &str, data: &str, messages: &[(String, Message)]) -> Result<(), String> {
+    let used = categories(data)?;
+    for (key, message) in messages {
+        let Message::Plural(forms) = message else { continue };
+        for (c, form) in forms.iter().enumerate() {
+            match (form, used[c]) {
+                (None, Some(n)) => {
+                    return Err(format!(
+                        "the plural message {key:?} has no {key}_{}, which {tag} uses for {n} (CLDR's plural rules)",
+                        CATEGORIES[c]
+                    ))
+                }
+                (Some(_), None) if c != OTHER => {
+                    let zero = if c == 0 { "; a text for no items is a message of its own, chosen in the view" } else { "" };
+                    return Err(format!(
+                        "{key}_{} is a form {tag} never uses: no whole number is in its {} category{zero}",
+                        CATEGORIES[c], CATEGORIES[c]
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A message's arguments, in order: a plural message's `count` first, then the others as its
+/// forms use them, `_other`'s first.
+fn args_of(message: &Message) -> Vec<String> {
+    match message {
+        Message::Plain(parts) => arg_names(parts),
+        Message::Plural(forms) => {
+            let mut names = vec!["count".to_string()];
+            for parts in forms[OTHER].iter().chain(forms[..OTHER].iter().flatten()) {
+                for name in arg_names(parts) {
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+            }
+            names
+        }
+    }
+}
+
+/// The message `key` of `locale`, which `check` found to be a plain one there as in the default.
+fn plain_of<'a>(locale: &'a Locale, key: &str) -> &'a [Part] {
+    match &locale.messages.iter().find(|(k, _)| k == key).expect("checked").1 {
+        Message::Plain(parts) => parts,
+        Message::Plural(_) => unreachable!("checked: a key is plural in every locale or in none"),
+    }
+}
+
+/// `{name}` is an argument, `{{` and `}}` are braces, any other brace is an error.
+pub fn parse_message(message: &str) -> Result<Vec<Part>, String> {
+    let mut parts = Vec::new();
+    let mut text = String::new();
+    let mut chars = message.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                text.push('{');
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                text.push('}');
+            }
+            '{' => {
+                let mut name = String::new();
+                loop {
+                    match chars.next() {
+                        Some('}') => break,
+                        Some(c) => name.push(c),
+                        None => return Err("a { is not closed (write {{ for a brace)".into()),
+                    }
+                }
+                let valid = name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if !valid {
+                    return Err(format!("{{{name}}} is not an argument name like {{count}} (write {{{{ for a brace)"));
+                }
+                // The only names Rust cannot give a parameter, even as `r#name`, and the generated
+                // code's own.
+                if matches!(snake_case(&name).as_str(), "self" | "super" | "crate" | "_") || name.starts_with("__corten") {
+                    return Err(format!("{{{name}}} cannot be an argument's name in Rust; rename it in the catalog"));
+                }
+                // Two names that make one parameter (`{updatedAt}` and `{updated_at}`).
+                if let Some(Part::Arg(other)) =
+                    parts.iter().find(|p| matches!(p, Part::Arg(o) if *o != name && snake_case(o) == snake_case(&name)))
+                {
+                    return Err(format!(
+                        "{{{other}}} and {{{name}}} are both the parameter {}; use one name in the catalog",
+                        snake_case(&name)
+                    ));
+                }
+                if !text.is_empty() {
+                    parts.push(Part::Text(std::mem::take(&mut text)));
+                }
+                parts.push(Part::Arg(name));
+            }
+            '}' => return Err("a } without a { (write }} for a brace)".into()),
+            c => text.push(c),
+        }
+    }
+    if !text.is_empty() {
+        parts.push(Part::Text(text));
+    }
+    Ok(parts)
+}
+
+/// A message as a handler argument, as it goes in `data-on` (HTML-escaped): text and argument
+/// names alternating, text first and last: %["","count"," selected"].
+fn wire(parts: &[Part]) -> String {
+    format!("%{}", wire_json(parts))
+}
+
+/// A message's text and argument names alternating, as an HTML-escaped JSON array.
+fn wire_json(parts: &[Part]) -> String {
+    let mut pieces = vec![String::new()];
+    for part in parts {
+        match part {
+            Part::Text(text) => pieces.last_mut().expect("text first").push_str(text),
+            Part::Arg(name) => {
+                pieces.push(name.clone());
+                pieces.push(String::new());
+            }
+        }
+    }
+    let mut json = String::from("[");
+    for (i, piece) in pieces.iter().enumerate() {
+        if i > 0 {
+            json.push(',');
+        }
+        json.push('"');
+        for c in piece.chars() {
+            match c {
+                '"' => json.push_str("\\\""),
+                '\\' => json.push_str("\\\\"),
+                c if (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}' => json.push_str(&format!("\\u{:04x}", c as u32)),
+                c => json.push(c),
+            }
+        }
+        json.push('"');
+    }
+    json.push(']');
+    escape(&json)
+}
+
+/// The arguments in order of first use.
+fn arg_names(parts: &[Part]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for part in parts {
+        if let Part::Arg(name) = part {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+    }
+    names
+}
+
+fn plain_text(parts: &[Part]) -> String {
+    parts.iter().map(|p| if let Part::Text(t) = p { t.as_str() } else { "" }).collect()
+}
+
+fn display(parts: &[Part]) -> String {
+    parts
+        .iter()
+        .map(|p| match p {
+            Part::Text(t) => t.clone(),
+            Part::Arg(a) => format!("{{{a}}}"),
+        })
+        .collect()
+}
+
+/// `item.listing_count` is the method `item_listing_count`.
+pub fn method_name(key: &str) -> Result<String, String> {
+    let name: String = key.chars().map(|c| if c == '.' || c == '-' { '_' } else { c }).collect();
+    let valid = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        Err(format!("the key {key:?} cannot be a method name; use letters, digits and _ (dots become _)"))
+    } else if RESERVED.contains(&name.as_str()) {
+        Err(format!("the key {key:?} is a word Rust or messages! uses (t.number, t.change, ...); put it under a group (\"button.{name}\") or rename it"))
+    } else {
+        Ok(name)
+    }
+}
+
+/// Every locale has exactly the default's keys, each with the same arguments.
+fn check(locales: &[Locale]) -> Result<(), Error> {
+    let default = &locales[0];
+    for locale in &locales[1..] {
+        for (key, message) in &default.messages {
+            let Some((_, theirs)) = locale.messages.iter().find(|(k, _)| k == key) else {
+                return err(
+                    locale.span,
+                    format!("the {:?} catalog has no {key:?}, which the {:?} catalog has", locale.tag, default.tag),
+                );
+            };
+            let plural = |m: &Message| matches!(m, Message::Plural(_));
+            if plural(message) != plural(theirs) {
+                let (is, isnt) = if plural(message) { (&default.tag, &locale.tag) } else { (&locale.tag, &default.tag) };
+                return err(locale.span, format!("{key:?} is a plural message ({key}_other, ...) in {is:?} but not in {isnt:?}"));
+            }
+            let ours: BTreeSet<String> = args_of(message).into_iter().collect();
+            let other: BTreeSet<String> = args_of(theirs).into_iter().collect();
+            if ours != other {
+                return err(
+                    locale.span,
+                    format!("{key:?} takes {} in {:?} but {} in {:?}", list(&ours), default.tag, list(&other), locale.tag),
+                );
+            }
+        }
+        if let Some((key, _)) = locale.messages.iter().find(|(k, _)| !default.messages.iter().any(|(d, _)| d == k)) {
+            return err(
+                locale.span,
+                format!("the {:?} catalog has {key:?}, which the {:?} catalog does not", locale.tag, default.tag),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn list(names: &BTreeSet<String>) -> String {
+    if names.is_empty() {
+        "no arguments".into()
+    } else {
+        names.iter().map(|n| format!("{{{n}}}")).collect::<Vec<_>>().join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `messages!` type checks, in a `const`, that the locale data's `slots` index
+    /// `corten`'s list of currencies with a symbol: the call is in the type's template, with the
+    /// list it is given (a `TokenStream` exists only inside a macro, so the template is what a
+    /// test can read), and the list is the generator's, in key order.
+    #[test]
+    fn every_messages_type_checks_its_currencies_are_cortens() {
+        assert!(TYPE.contains("const _: () = ::corten::i18n::__private::same_currencies(__A6);"));
+        let list = crate::locale_data::SYMBOL_CURRENCIES;
+        let keys: Vec<u32> = list
+            .strip_prefix("&[")
+            .and_then(|l| l.strip_suffix(']'))
+            .expect("a slice")
+            .split(", ")
+            .map(|k| k.parse().expect("a key"))
+            .collect();
+        assert!(keys.len() > 100 && keys.len() < 255, "{} currencies", keys.len());
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "in key order");
+    }
+
+    #[test]
+    fn messages_split_into_text_and_arguments() {
+        assert_eq!(
+            parse_message("Show all {count} offers").unwrap(),
+            vec![Part::Text("Show all ".into()), Part::Arg("count".into()), Part::Text(" offers".into())]
+        );
+        assert_eq!(parse_message("{{literal}} {n}").unwrap(), vec![Part::Text("{literal} ".into()), Part::Arg("n".into())]);
+        assert!(parse_message("{open").is_err());
+        assert!(parse_message("close}").is_err());
+        assert!(parse_message("{Count}").is_err());
+        assert_eq!(
+            parse_message("a {type}").unwrap(),
+            vec![Part::Text("a ".into()), Part::Arg("type".into())],
+            "a keyword is a raw parameter"
+        );
+        assert!(parse_message("{self}").unwrap_err().contains("rename it in the catalog"));
+        assert!(parse_message("{_}").is_err());
+        assert_eq!(parse_message("{updatedAt}").unwrap(), vec![Part::Arg("updatedAt".into())], "the catalog's name is kept");
+        assert_eq!(
+            (snake_case("updatedAt"), snake_case("itemID"), snake_case("v2Name"), snake_case("count")),
+            ("updated_at".into(), "item_id".into(), "v2_name".into(), "count".into())
+        );
+        let both = parse_message("{updatedAt} {updated_at}").unwrap_err();
+        assert!(both.contains("{updatedAt} and {updated_at} are both the parameter updated_at"), "{both}");
+        assert_eq!(arg_names(&parse_message("{a} {b} {a}").unwrap()), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn argument_structs_are_named_after_their_method() {
+        assert_eq!(camel_case("pager_summary"), "PagerSummary");
+        assert_eq!(camel_case("pagerSummary"), "PagerSummary");
+        assert_eq!(camel_case("item_image"), camel_case("itemImage"), "one name, so the macro refuses the pair");
+        assert_eq!(camel_case("_1"), "1", "not an identifier, so the macro refuses it");
+    }
+
+    #[test]
+    fn a_message_for_a_script_alternates_text_and_names() {
+        assert_eq!(wire(&parse_message("{n} selected").unwrap()), "%[&quot;&quot;,&quot;n&quot;,&quot; selected&quot;]");
+        assert_eq!(
+            wire(&parse_message("\"{a}{b}\" & <\u{2028}>").unwrap()),
+            r#"%[&quot;\&quot;&quot;,&quot;a&quot;,&quot;&quot;,&quot;b&quot;,&quot;\&quot; &amp; &lt;\u2028&gt;&quot;]"#
+        );
+    }
+
+    fn parts(key: &str) -> (String, Vec<Part>) {
+        (key.to_string(), parse_message("{count} x").unwrap())
+    }
+
+    #[test]
+    fn the_forms_of_a_plural_message_are_one_entry() {
+        let grouped = group(vec![parts("grid.cards_one"), parts("title"), parts("grid.cards_other")]).unwrap();
+        assert_eq!(
+            grouped.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            ["grid.cards", "title"],
+            "in the place of its first form"
+        );
+        let Message::Plural(forms) = &grouped[0].1 else { panic!("plural") };
+        assert!(forms[1].is_some() && forms[OTHER].is_some() && forms[0].is_none());
+        let no_other = group(vec![parts("step_one")]).unwrap_err();
+        assert!(no_other.contains("has no step_other"), "{no_other}");
+        let both = group(vec![parts("cards"), parts("cards_other")]).unwrap_err();
+        assert!(both.contains("is a message and the plural message"), "{both}");
+        let both = group(vec![parts("cards_other"), parts("cards")]).unwrap_err();
+        assert!(both.contains("is a message and the plural message"), "{both}");
+        // A bare suffix, or one after a dot or another underscore, is a key of its own.
+        let plain = group(vec![parts("other"), parts("nav.one"), parts("a__other"), parts("x-_one")]).unwrap();
+        assert!(plain.iter().all(|(_, m)| matches!(m, Message::Plain(_))), "{plain:?}");
+    }
+
+    #[test]
+    fn a_plural_message_has_exactly_the_forms_its_language_uses() {
+        let data = |tag| locale_data(tag).unwrap();
+        let first = |tag| categories(data(tag)).unwrap();
+        assert_eq!(first("en"), [None, Some(1), None, None, None, Some(0)]);
+        assert_eq!(first("fr"), [None, Some(0), None, None, Some(1_000_000), Some(2)]);
+        assert_eq!(first("pl"), [None, Some(1), None, Some(2), Some(0), None], "pl's whole numbers are never other");
+        assert_eq!(first("ja"), [None, None, None, None, None, Some(0)]);
+        let entry = |forms: &[usize]| {
+            let mut all: [Option<Vec<Part>>; 6] = Default::default();
+            for &c in forms {
+                all[c] = Some(Vec::new());
+            }
+            vec![("cards".to_string(), Message::Plural(all))]
+        };
+        assert!(check_forms("en", data("en"), &entry(&[1, OTHER])).is_ok());
+        assert!(check_forms("fr", data("fr"), &entry(&[1, 4, OTHER])).is_ok());
+        assert!(check_forms("ja", data("ja"), &entry(&[OTHER])).is_ok());
+        assert!(check_forms("pl", data("pl"), &entry(&[1, 3, 4, OTHER])).is_ok(), "other is always allowed");
+        let missing = check_forms("fr", data("fr"), &entry(&[1, OTHER])).unwrap_err();
+        assert!(missing.contains("has no cards_many, which fr uses for 1000000"), "{missing}");
+        let extra = check_forms("en", data("en"), &entry(&[0, 1, OTHER])).unwrap_err();
+        assert!(extra.contains("cards_zero is a form en never uses") && extra.contains("a message of its own"), "{extra}");
+        let extra = check_forms("ja", data("ja"), &entry(&[1, OTHER])).unwrap_err();
+        assert!(extra.contains("cards_one is a form ja never uses"), "{extra}");
+    }
+
+    #[test]
+    fn a_plural_message_takes_count_first() {
+        let mut forms: [Option<Vec<Part>>; 6] = Default::default();
+        forms[1] = Some(parse_message("a card from {seller}").unwrap());
+        forms[OTHER] = Some(parse_message("{count} cards from {seller} in {set}").unwrap());
+        assert_eq!(args_of(&Message::Plural(forms)), ["count", "seller", "set"]);
+    }
+
+    #[test]
+    fn keys_become_method_names() {
+        assert_eq!(method_name("item.listing_count").unwrap(), "item_listing_count");
+        assert_eq!(method_name("nav.sign-in").unwrap(), "nav_sign_in");
+        assert!(method_name("type").is_err());
+        assert!(method_name("change").is_err(), "a method messages! writes");
+        assert!(method_name("button.change").is_ok());
+        assert!(method_name("1st").is_err());
+    }
+
+    #[test]
+    fn nested_objects_flatten_and_non_strings_are_refused() {
+        let mut out = Vec::new();
+        flatten("", json::parse(r#"{"a": {"b": "x"}, "c": "y"}"#).unwrap(), &mut out).unwrap();
+        assert_eq!(out, vec![("a.b".to_string(), "x".to_string()), ("c".to_string(), "y".to_string())]);
+        assert!(flatten("", json::parse(r#"{"a": 1}"#).unwrap(), &mut Vec::new()).is_err());
+        assert!(flatten("", json::parse(r#"{"a.b": "x", "a": {"b": "y"}}"#).unwrap(), &mut Vec::new()).is_err());
+    }
+}

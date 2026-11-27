@@ -1,0 +1,8 @@
+comparison change-unstaged placement 23 workload unstaged
+A base-p26592 49e31e8d2665f00f34bfc96fe1b4ad6828628b36a883e7b359e6248c886ff2ad
+B head-p26592 c5572d55bb609a46eb59609228c712f7239d9d4fdaed4c5beec14b60a5640bce
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 31
+started 2026-11-27T00:25:20Z
+ended 2026-11-27T00:26:22Z

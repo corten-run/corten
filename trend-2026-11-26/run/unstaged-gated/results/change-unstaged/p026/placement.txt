@@ -1,0 +1,8 @@
+comparison change-unstaged placement 26 workload unstaged
+A base-p21776 811870cda23e6ef17279d8aaaace4a5d56aa6001644c4cfb87ff0a88aa46bc18
+B head-p21776 1619b1c6a6dd23fccbb6390ee67c6b625b93bdbe39b2e25775aa6a34dfa09998
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 14
+started 2026-11-27T00:07:38Z
+ended 2026-11-27T00:08:40Z

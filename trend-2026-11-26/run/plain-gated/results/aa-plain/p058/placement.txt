@@ -1,0 +1,8 @@
+comparison aa-plain placement 58 workload plain
+A base-p7440 8a9cd7cbfc68c66b3bddb55290cbc099bd85faa9839d4d7bec93fef803e2cbc6
+B base-p16736 05907a9a0810e658a0747d6392ef3ac6a1d2e6d4ae74650714fc3f42a1e872a6
+run 71d38362-90d1-4d5b-ad40-8630371e59db
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 17
+started 2026-11-26T20:16:10Z
+ended 2026-11-26T20:17:13Z

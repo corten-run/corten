@@ -1,0 +1,8 @@
+comparison aa-unstaged placement 27 workload unstaged
+A base-p36576 c88634f2f7ae4658d2c2a2523f63314cdf4e2ca6a1617ddf7969fd595f29dd1d
+B base-p31712 3cc55e5cb656f4d374c3e7ed889a0a2ce4bca674dd63e3b810513b393d8cf770
+run fb996431-964f-4429-8afe-056d8a47895e
+plan f0bbf7474f7da005fa329efafc8a8d470522cc3da07ac545d652bf2e6030b8c8
+seq 16
+started 2026-11-27T00:09:43Z
+ended 2026-11-27T00:10:45Z
