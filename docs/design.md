@@ -11532,12 +11532,13 @@ rules something out.
     over fewer decides nothing. The figures a
     connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
-    head's first run's rounded figure a connection differed by 1 byte from base's three equal
-    figures; a rounded figure cannot say how head's growth in bytes stands to base's, and those
-    growths were not recorded
+    head's median rounded figure a connection was 1 byte above base's three equal figures. Rounding
+    keeps the order, so head's growth was above base's, and over 5,000 connections in 4,096-byte
+    pages by one or two pages: a rise, which the rule of that time, on rounded figures with no
+    allowance, failed. The growths in bytes were not recorded
     ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)),
-    so that run's idle verdict is indeterminate, in neither direction, and the hosted job's
-    growths on its head decide it. No run is taken again for its
+    so the rule above, which allows one page, cannot decide that run (one page passes, two fail),
+    and the hosted job's growths on its head decide it. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
