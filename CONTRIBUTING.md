@@ -679,18 +679,22 @@ must both be the first, so a read again that loads the page in full, even before
 returns, is not taken for the load's own document. The check that navigating away stops the
 reads leaves the page of a write that has not landed by its header's News link, clicked by
 Playwright as soon as the page is in, and requires only that the page start no read of the alerts
-page from that press on: no fetch of `/alerts` other than a prefetch the page started after its
-press, the press (a capture listener in the page for a click on the link) and each fetch's start
-numbered in the page by one count in the order they happen, from notes the page has before it is
+page from that press on: no GET fetch of `/alerts` other than a prefetch the page started after its
+press (a write is not a read), the press (a capture listener in the page for a click on the link)
+and each such fetch's start numbered in the page by one count in the order they happen, each fetch
+carrying its number on the request, from notes the page has before it is
 asked to navigate, so a fetch started in the same instant as the press counts as after it (News
 can come from a prefetch sent before the press, so no request marks the moment it left), and no
 load of `/alerts` in the page's request log from just before Playwright is asked to click, a
-boundary at or before the press, read 2.2 s after News is drawn; a document replaced meanwhile,
-which leaves no notes, fails it. A try counts only when the page's note of its press shows its
+boundary at or before the press, read 2.2 s after News is drawn, the failure naming the page's
+fetches and those loads apart; a document replaced meanwhile, which leaves no notes, fails it.
+Each try's navigation's own fetch is answered as that of the check that a page reached by the
+runtime's navigation reads itself again is, still saving when the server already says `Saved.`, so a navigation that reaches the server after the write
+lands still leaves a read to stop. A try counts only when the page's note of its press shows its
 read again still armed (the head's read-again tag, with no part's tag in `<main>`) and its next
-read not yet due (no fetch of `/alerts` started since the navigation's own, the first after the
-try asked the page to navigate), so a read again that drew `Saved.` and stopped, or was on its
-way, before the press cannot pass it; a try that does not count is tried again, up to five
+read not yet due (the one fetch of `/alerts` started by the press being that try's navigation's
+own, by the number it carried to the route), so a read again that drew `Saved.` and stopped, or
+was on its way, before the press, or another read, cannot pass it; a try that does not count is tried again, up to five
 in all, and the check fails when none counts; a read after the press fails it on any try. The page's `fetch` is put back and its press
 listener removed however it ends, an install of them the page runs only after that removal doing
 nothing. Its route and request listener are
