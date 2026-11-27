@@ -37,7 +37,7 @@ function standIn() {
     '  if [ "${STAND_IN_RESULT:-}" = "" ]; then',
     `    echo '{"reason":"build-finished","success":true}'`,
     '  else',
-    `    echo '{"reason":"compiler-message","target":{"name":"probe","src_path":"src/main.rs"},"message":{"level":"error","code":{"code":"E0599"},"message":"no method named \`own_http1\` found for struct \`App\` in the current scope","spans":[{"is_primary":true,"file_name":"src/main.rs","text":[{"text":"    Ok(app.own_http1(true))","highlight_start":12,"highlight_end":21}]}]}}'`,
+    `    echo '{"reason":"compiler-message","target":{"name":"probe","src_path":"src/main.rs"},"message":{"level":"error","code":{"code":"E0599"},"message":"no method named \`own_http1\` found for struct \`corten::App<M>\` in the current scope","spans":[{"is_primary":true,"file_name":"src/main.rs","text":[{"text":"    Ok(app.own_http1(true))","highlight_start":12,"highlight_end":21}]}]}}'`,
     `    if [ "$STAND_IN_RESULT" = extra ]; then echo '{"reason":"compiler-message","message":{"level":"error","message":"something else failed"}}'; fi`,
     `    if [ "$STAND_IN_RESULT" != incomplete ]; then echo '{"reason":"build-finished","success":false}'; fi`,
     '    if [ "$STAND_IN_RESULT" = other-status ]; then exit 2; fi',
