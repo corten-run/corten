@@ -256,11 +256,14 @@ is retained as explicitly not implemented: no save-to-browser-reload harness exi
 Each needs a workload-specific port or an explicit historical/unsupported/not-run label;
 grouping never removes it or invents new measurements. No new cadence is defined here.
 
-A group's published result commits its report, summary and provenance, small enough to diff.
-The collected archive and other raw output stay outside the tree. A maintainer chooses where the
-archive is kept and publishes it there, and the provenance records where it can be fetched and its
-SHA-256 (`archiveSha256`); the digest alone is not a locator
-([Benchmark results](../../CONTRIBUTING.md#benchmark-results)). `npm run check` fails on a file
+A group's published result commits its report and provenance, and a summary only if it fits
+and is approved for disclosure. The collected archive and other raw output stay outside the
+tree. Provenance records the original's SHA-256 (`archiveSha256`) and where it can be fetched.
+For an original that must stay in controlled custody, the
+[grouped results publication exception](../../CONTRIBUTING.md#benchmark-results) instead
+requires independent replay of that original in place, a custody reference, and a separate
+downloadable export with its own digest. Do not record the export as the original or use it to
+qualify a group. `npm run check` fails on a file
 under `bench/` with an archive suffix or over 256 KiB, in any commit of the pull request, unless
 the base's `scripts/bench-size.allow` lists it at that path and blob, or it is a dependency lock
 file at a path `LOCKS` in `scripts/bench-size.mjs` lists, beside its manifest; the

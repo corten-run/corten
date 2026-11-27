@@ -439,6 +439,23 @@ there, and the committed provenance records a locator it can be fetched from and
 digest alone is not a locator: it checks a copy but does not say where one is (a group result's
 `provenance.json` records the digest as `archiveSha256`).
 
+For a result collected by the grouped workload controller, an original with private control
+material may stay at its controlled location. Do not copy it to a publication store, even a
+private one. A maintainer records a stable custody reference and a way for authorized reviewers
+to inspect the original in place. Before publication, an independent reviewer must rehash that
+original, run the unchanged native checks at the measured commit, and confirm they produced
+the report's inputs. If the reviewer cannot reach or verify the original, do not publish.
+
+For this route, keep the original's SHA-256 in provenance, but do not give an export as its
+locator. Publish a separate, credential-free export at a maintainer-approved locator with its
+own SHA-256. It must contain enough inputs to recompute the report's headline results, selected
+by the exporter rather than copied as raw records. In the results review, bind the measured
+commit, original archive, published report and export digests, and independently regenerate the
+export from the verified evidence. The export is for checking reported numbers, not for native
+replay or qualifying a group. The original stays available in custody for later authorized
+reviews. This exception changes only grouped results publication, not collection, validation,
+or any other benchmark's publishing procedure.
+
 A benchmark's `.gitignore` keeps part of its default raw output out of `git add`, not all of it.
 `bench/fullstack` ignores a round's packed `raw.tar.xz`, but not the loose raw files of a round
 not yet packed; `node bench/fullstack/pack.mjs <round>` packs them and prints the archive's
