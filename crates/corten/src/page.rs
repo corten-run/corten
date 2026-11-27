@@ -672,7 +672,7 @@ pub struct NavLinks<T> {
     /// The group the runtime ranks these links in (`data-nav-group`): 32 bits of a hash of the
     /// entries, so a patch's nav does not join another of the page's, and two equal navs agree
     /// anyway. Navs made to collide only mark the wrong link after a navigation. A nav with other
-    /// addresses writes its group from [`Also`]'s `text`, followed by a `+`.
+    /// addresses writes its group, followed by a `+`, from [`Also`] ([`Also::write_text`]).
     group: [u8; 8],
     /// The entries' other addresses ([`NavTo::also`]), when one has some; none, and the nav is drawn
     /// as it was before they existed.
@@ -682,37 +682,61 @@ pub struct NavLinks<T> {
 /// The other addresses of a nav's entries ([`NavTo::also`]).
 struct Also {
     /// Their paths ([`pathname`]), one entry's after another, separated by spaces within an entry,
-    /// not escaped.
+    /// not escaped; then, from `text` on, what each link writes as its `data-nav-group` value
+    /// ([`Also::write_text`]).
     paths: String,
     /// Each entry that has some, in the nav's order: where its URL ends in [`NavLinks`]'s `urls`,
-    /// which names the entry, and where its paths end.
-    ends: Vec<(usize, usize)>,
-    /// What each link writes as its `data-nav-group` value, escaped: first the group and its `+`,
-    /// for a link without other addresses, then for each entry of `ends` the group, its `+`, the
-    /// quote that closes the attribute, and ` data-nav-also="` with the entry's paths, which the
-    /// link's closing quote ends. So a link carries its other addresses in the text it already
-    /// writes, and is no larger than a link of a nav without them.
-    text: String,
-    /// Where each entry of `ends` has its text end in `text`.
-    tails: Vec<usize>,
+    /// which names the entry, where its paths end, and where its `data-nav-group` value ends.
+    ends: Vec<(usize, usize, usize)>,
+    /// Where the `data-nav-group` values start in `paths`.
+    text: usize,
 }
 
 impl Also {
-    /// Writes `text` and `tails` once the group is known.
+    /// Writes after the paths, escaped, what each link writes as its `data-nav-group` value: first
+    /// the group and its `+`, for a link without other addresses, then for each entry of `ends` the
+    /// group, its `+`, the quote that closes the attribute, and ` data-nav-also="` with the entry's
+    /// paths, which the link's own closing quote ends. So a link carries its other addresses in the
+    /// text it already writes, and is no larger than a link of a nav without them; and the text
+    /// shares the paths' allocation.
     #[cold]
     #[inline(never)]
     fn write_text(&mut self, group: &[u8; 8]) {
         let group = std::str::from_utf8(group).expect("hex digits");
-        let Also { paths, ends, text, tails } = self;
-        text.push_str(group);
-        text.push('+');
+        let Also { paths, ends, text } = self;
+        *text = paths.len();
+        paths.push_str(group);
+        paths.push('+');
         let mut start = 0;
-        for &(_, end) in ends.iter() {
-            text.push_str(group);
-            text.push_str(r#"+" data-nav-also=""#);
-            crate::view::escape_into(&paths[start..end], text);
-            tails.push(text.len());
-            start = end;
+        for (_, end, written) in ends.iter_mut() {
+            paths.push_str(group);
+            paths.push_str(r#"+" data-nav-also=""#);
+            if crate::ascii::any(paths[start..*end].as_bytes(), crate::ascii::html) {
+                let these = paths[start..*end].to_owned();
+                crate::view::escape_into(&these, paths);
+            } else {
+                paths.extend_from_within(start..*end);
+            }
+            *written = paths.len();
+            start = *end;
+        }
+    }
+
+    /// The `data-nav-group` value of the link whose URL is `url` and ends at `url_end`: its
+    /// entry's, when it has other addresses, else the plain group's. Only an entry whose URL is a
+    /// path on this site has some ([`other_addresses`]), and such a URL, never empty, ends where no
+    /// other entry's does but an empty URL straight after it, which has none. Out of line and
+    /// reached only from a nav that has some, so a link of a nav without them looks nothing up.
+    #[cold]
+    #[inline(never)]
+    fn group(&self, url: &str, url_end: usize) -> &str {
+        let plain = self.text..self.text + 9;
+        match self.ends.binary_search_by_key(&url_end, |&(of, ..)| of) {
+            Ok(i) if !url.is_empty() => {
+                let start = if i == 0 { plain.end } else { self.ends[i - 1].2 };
+                &self.paths[start..self.ends[i].2]
+            }
+            _ => &self.paths[plain],
         }
     }
 }
@@ -723,25 +747,15 @@ impl<T> NavLinks<T> {
     /// runtime ranks the links in the page, the server ranked them all.
     pub fn links(&self) -> impl Iterator<Item = (NavLink<'_>, &T)> {
         let mut start = 0;
-        let plain = match self.also.as_deref() {
-            Some(also) => &also.text[..9],
-            None => std::str::from_utf8(&self.group).expect("hex digits"),
-        };
-        // The next entry with other addresses: its index in `ends` and where its text starts.
-        let mut next = self.also.as_deref().map(|also| (also, 0, 9));
+        let plain = std::str::from_utf8(&self.group).expect("hex digits");
+        let also = self.also.as_deref();
         self.entries.iter().map(move |(end, section, depth, item, prefetch)| {
             let url = &self.urls[start..*end];
             start = *end;
-            let mut group = plain;
-            if let Some((also, i, from)) = &mut next {
-                // Only an entry whose URL is a path on this site has other addresses
-                // ([`other_addresses`]); such a URL is never empty, and ends where no other entry's
-                // does but an empty URL straight after it, which has none.
-                if also.ends.get(*i).is_some_and(|&(of, _)| of == *end) && !url.is_empty() {
-                    group = &also.text[*from..also.tails[*i]];
-                    (*i, *from) = (*i + 1, also.tails[*i]);
-                }
-            }
+            let group = match also {
+                None => plain,
+                Some(also) => also.group(url, *end),
+            };
             (
                 NavLink {
                     url,
@@ -763,8 +777,8 @@ pub struct NavLink<'a> {
     url: &'a str,
     section: bool,
     current: bool,
-    /// The group, and for a link with other addresses its `data-nav-also` after it ([`Also`]'s
-    /// `text`).
+    /// The group, and for a link with other addresses its `data-nav-also` after it
+    /// ([`Also::write_text`]).
     group: &'a str,
     prefetch: bool,
 }
@@ -866,9 +880,8 @@ pub(crate) fn own_key_for_tests(url: &str) -> (Option<usize>, String) {
 #[inline(never)]
 fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Also>>) {
     let had = also.is_some();
-    let held = also.get_or_insert_with(|| {
-        Box::new(Also { paths: String::with_capacity(64), ends: Vec::with_capacity(4), text: String::new(), tails: Vec::new() })
-    });
+    let held =
+        also.get_or_insert_with(|| Box::new(Also { paths: String::with_capacity(128), ends: Vec::with_capacity(4), text: 0 }));
     let paths = &mut held.paths;
     let from = paths.len();
     for other in std::iter::once(others.first).chain(others.rest.iter().copied()) {
@@ -902,7 +915,7 @@ fn other_addresses(others: &Others<'_>, url_end: usize, also: &mut Option<Box<Al
     }
     let end = paths.len();
     if end > from {
-        held.ends.push((url_end, end));
+        held.ends.push((url_end, end, 0));
     } else if !had {
         *also = None;
     }
@@ -955,7 +968,7 @@ fn rank_by_keys<T>(path: &str, urls: &str, entries: &mut [(usize, bool, Option<u
                 holds_path(&page, &own, entry.1)
             }
         };
-        if let Some(&(_, end)) = next.filter(|&&(url_end, _)| url_end == entry.0) {
+        if let Some(&(_, end, _)) = next.filter(|&&(url_end, ..)| url_end == entry.0) {
             for other in also.paths[from..end].split(' ') {
                 depth = depth.max(holds_path(&page, other, entry.1));
             }
@@ -999,7 +1012,7 @@ pub(crate) fn nav_links<'a, T>(path: &str, entries: impl IntoIterator<Item = (Na
             let hash = entries.iter().fold(text, |hash, entry| {
                 crate::fnv::extend(crate::fnv::extend(hash, &[entry.1 as u8]), &(entry.0 as u64).to_le_bytes())
             });
-            also.ends.iter().fold(crate::fnv::extend(hash, also.paths.as_bytes()), |hash, &(url_end, end)| {
+            also.ends.iter().fold(crate::fnv::extend(hash, also.paths.as_bytes()), |hash, &(url_end, end, _)| {
                 crate::fnv::extend(crate::fnv::extend(hash, &(url_end as u64).to_le_bytes()), &(end as u64).to_le_bytes())
             })
         }
