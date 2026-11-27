@@ -1253,6 +1253,52 @@ async fn a_request_is_held_to_its_deadline() {
     assert_eq!(answers[1], answers[0]);
 }
 
+/// A connection keeps one timer for its requests' deadlines on Corten's connection as on hyper's
+/// (`docs/design.md#choice-deadline-timer`): none at its first request to wait, made at its
+/// second, and taken by each that waits after it. The timer is the connection's task's, so a
+/// connection handed to hyper has the one it made, and a request with a body waits on it. It is
+/// dropped with the connection.
+#[tokio::test]
+async fn a_connection_keeps_its_deadlines_timer_and_takes_it_to_hyper() {
+    use crate::deadline::{LIVE, TAKEN};
+    let app = || {
+        let wait = || async {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            "waited"
+        };
+        let read = |body: Bytes| async move {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            format!("read {}", body.len())
+        };
+        let table = Table::new().route("/", get(|| async { "hi" })).route("/wait", get(wait)).route("/read", crate::router::post(read));
+        App::new(Routes::from(table)).deadline(Duration::from_secs(5))
+    };
+    let waits = format!("GET /wait HTTP/1.1\r\n{HOST}\r\n");
+    let posts = format!("POST /read HTTP/1.1\r\n{HOST}content-length: 5\r\n\r\nhello");
+    for own in BOTH {
+        let served = Served::start(app(), own).await;
+        let (timers, taken) = (LIVE.get(), TAKEN.get());
+        let mut client = TcpStream::connect(served.addr).await.unwrap();
+        let mut seen = Vec::new();
+        // The two with a body are hyper's on either connection, and everything behind them.
+        for request in [&waits[..], GET, &waits, &waits, &posts, &posts, GET, &waits] {
+            client.write_all(request.as_bytes()).await.unwrap();
+            assert_eq!(statuses(&one(&mut client).await), [200], "own: {own}: {request}");
+            seen.push((LIVE.get() - timers, TAKEN.get() - taken));
+        }
+        // How many timers the connection has, and how many of its deadlines have taken one.
+        assert_eq!(seen, [(0, 0), (0, 0), (1, 0), (1, 1), (1, 2), (1, 3), (1, 3), (1, 4)], "own: {own}");
+        drop(client);
+        let dropped = tokio::time::timeout(Duration::from_secs(10), async {
+            while LIVE.get() != timers {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        assert!(dropped.await.is_ok(), "own: {own}: the connection's timer is dropped with it");
+        served.stop().await;
+    }
+}
+
 /// `App::max_connections` holds on both connections: a second connection is not served while the
 /// first is open, and is once it closes, whether the first is still Corten's own or was handed to
 /// hyper.
