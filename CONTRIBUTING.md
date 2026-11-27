@@ -441,20 +441,24 @@ digest alone is not a locator: it checks a copy but does not say where one is (a
 
 For a result collected by the grouped workload controller, an original with private control
 material may stay at its controlled location. Do not copy it to a publication store, even a
-private one. A maintainer records a stable custody reference and a way for authorized reviewers
-to inspect the original in place. Before publication, an independent reviewer must rehash that
-original, run the unchanged native checks at the measured commit, and confirm they produced
-the report's inputs. If the reviewer cannot reach or verify the original, do not publish.
+private one. In Git, record only a stable, opaque custody reference. Keep the access instructions
+in the controlled location, where a maintainer can arrange read-only access for authorized
+reviewers. Before publication, an independent reviewer rehashes the original, verifies that the
+replay inputs came from those exact archive bytes, and runs the unchanged native checks at the
+measured commit. If the reviewer cannot reach or verify the original, do not publish.
 
 For this route, keep the original's SHA-256 in provenance, but do not give an export as its
-locator. Publish a separate, credential-free export at a maintainer-approved locator with its
-own SHA-256. It must contain enough inputs to recompute the report's headline results, selected
-by the exporter rather than copied as raw records. In the results review, bind the measured
-commit, original archive, published report and export digests, and independently regenerate the
-export from the verified evidence. The export is for checking reported numbers, not for native
-replay or qualifying a group. The original stays available in custody for later authorized
-reviews. This exception changes only grouped results publication, not collection, validation,
-or any other benchmark's publishing procedure.
+locator. Record a separate, maintainer-approved export locator and SHA-256 in provenance.
+Document how the export selects the inputs needed to recompute each headline result and
+comparison, retaining the measured group and profile, pass counts, failures and eligibility.
+Do not copy raw records. The independent results review regenerates the export from the verified
+evidence, fetches and hashes it at the final locator, and recomputes the reported results and
+comparisons. Bind the measured commit, original archive, published report and export digests in
+the review. Check every published file, including the export and provenance, for private data;
+publish no credentials, custody instructions or local control metadata. The export is for
+checking reported numbers, not for native replay or qualifying a group. The original stays
+available in custody for later authorized reviews. This exception changes only grouped results
+publication, not collection, validation, or any other benchmark's publishing procedure.
 
 A benchmark's `.gitignore` keeps part of its default raw output out of `git add`, not all of it.
 `bench/fullstack` ignores a round's packed `raw.tar.xz`, but not the loose raw files of a round
