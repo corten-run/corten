@@ -755,9 +755,11 @@ parses a patch before it lets it go, within 15 seconds of the read; one that doe
 never sent, and fails the check. Once News is drawn, an observer in the page notes any element of the
 held answer (its status line, marked) entering it, and the answer is let go: the browser must finish
 loading that exact request with it (its `requestfinished`, with the answer's own `smoke-held`
-header) within five seconds of the release, by the time the check heard it, and then no part read
-may follow the held one in the log, as it stands 2.2 s later, nor the held answer ever enter the
-News page. The check that a read the server
+header) within five seconds of the release, by the time the check heard it. Without the Navigation
+API (WebKit) the page leaves by a full load, which takes the runtime's reads with its document: News
+must then be a new document, and the browser must have cancelled the held read, which is never
+received; with it, News must be drawn in the same document. Then no part read may follow the held
+one in the log, as it stands 2.2 s later, nor the held answer ever enter the News page. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
 sent while the check fills or focuses the form is not taken for it. That read must be of the receipt
