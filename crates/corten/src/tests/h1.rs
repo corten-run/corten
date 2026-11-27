@@ -2587,7 +2587,7 @@ fn a_header_name_is_the_one_http_makes_of_it_however_it_is_spelled() {
     ];
     names.extend(others.map(str::to_owned));
     for name in names {
-        let head = built(&format!("GET / HTTP/1.1\r\n{name}: v\r\n\r\n")).ok().expect(&name);
+        let head = built(&format!("GET / HTTP/1.1\r\n{name}: v\r\n\r\n")).expect(&name);
         let made = ::http::HeaderName::from_bytes(name.as_bytes()).unwrap();
         let (got, value) = head.parts.headers.iter().next().expect(&name);
         assert_eq!(got, &made, "{name}");
@@ -2707,7 +2707,7 @@ fn a_browsers_head_is_made_into_the_request_it_was_before() {
             let name = ::http::HeaderName::from_bytes(name.as_bytes()).unwrap();
             made.append(name, ::http::HeaderValue::from_str(value.trim_start()).unwrap());
         }
-        let got = built(&format!("GET / HTTP/1.1\r\n{}\r\n\r\n", head.join("\r\n"))).ok().expect("taken");
+        let got = built(&format!("GET / HTTP/1.1\r\n{}\r\n\r\n", head.join("\r\n"))).expect("taken");
         assert_eq!(lines(&got.parts.headers), lines(&made), "{head:?}");
         assert!(got.keep_alive, "{head:?}");
     }
@@ -2729,11 +2729,11 @@ fn the_names_that_frame_a_request_or_its_connection_are_read_in_any_spelling() {
         assert!(scanned.hypers, "{name}");
     }
     for name in ["connection", "Connection", "CONNECTION", "cOnNeCtIoN"] {
-        let closes = built(&format!("GET / HTTP/1.1\r\n{HOST}{name}: close\r\n\r\n")).ok().expect(name);
+        let closes = built(&format!("GET / HTTP/1.1\r\n{HOST}{name}: close\r\n\r\n")).expect(name);
         assert!(!closes.keep_alive, "{name}");
-        let keeps = built(&format!("GET / HTTP/1.0\r\n{HOST}{name}: keep-alive\r\n\r\n")).ok().expect(name);
+        let keeps = built(&format!("GET / HTTP/1.0\r\n{HOST}{name}: keep-alive\r\n\r\n")).expect(name);
         assert!(keeps.keep_alive, "{name}");
-        let alone = built(&format!("GET / HTTP/1.0\r\n{HOST}\r\n")).ok().expect(name);
+        let alone = built(&format!("GET / HTTP/1.0\r\n{HOST}\r\n")).expect(name);
         assert!(!alone.keep_alive, "{name}");
     }
 }
