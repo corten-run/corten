@@ -12400,9 +12400,9 @@ rules something out.
     8,368 and 6,928 each, 17.2% fewer. A staged API route's `GET` goes from 18,354 to 17,096
     (6.9%) and a 12 KB page from 33,220 to 32,186 (3.1%), each with three allocations fewer.
     With a browser's header lines, since the names a browser usually sends are taken by their
-    bytes (below), the same `GET` goes from 23,893 to 22,487 (5.9% fewer), a text answer from
-    25,841 to 24,557 (5.0% fewer) and the page, compressed, from 211,834 to 210,629 (0.6% fewer),
-    each with six allocations fewer, at `53c46ce23`; before that, nothing of the saving was left
+    bytes (below), the same `GET` goes from 23,894 instructions to 22,484 (5.9% fewer; 19
+    allocations to 13), a text answer from 25,841 to 24,556 (5.0% fewer; 20 to 14) and the page,
+    compressed, from 211,834 to 210,627 (0.6% fewer; 28 to 22), at `7fd1cd46a`; before that, nothing of the saving was left
     in instructions with those lines, though three allocations were (23,894 to 23,811, 25,841 to
     25,877 and 211,835 to 211,950 at `568aa8d1a`).
     A request with a body costs the same on both to a tenth of a percent (22,838 and 22,815,
@@ -12437,8 +12437,11 @@ rules something out.
     for the switch (the counts with it on are of the kit's probe with that one call added), a
     connection handed to hyper holds more idle memory than hyper's own (below), and its reason is
     a win in cycles. No cycles or times have been taken for it, so it claims no
-    CPU-cost win, and the plan that would read one across placements
-    ([Choice 72](#choice-placement-runs)) is not yet declared.
+    CPU-cost win. The plan that would read one across placements
+    ([Choice 72](#choice-placement-runs)) was posted on this change's pull request on
+    2026-11-27 and does not cover a request with a browser's header lines: every request it
+    sends has a `Host` line and nothing else, so it reads none of the names taken by their bytes
+    (below), whose saving is claimed in instructions only.
 
     **What the connection is** (`crates/corten/src/h1.rs`). One loop for a connection: it reads a
     request's head, calls the connection's service with it, writes the answer into one buffer and
@@ -12877,58 +12880,93 @@ rules something out.
     among those it has a constant for, and copies any other into an allocation of its own. A
     navigation from Chromium has seven names of that kind (four `Sec-Fetch-` lines and three
     client hints), and every fetch Corten's runtime makes has an eighth, `corten`. So
-    `field_name` (`crates/corten/src/h1/head.rs`) matches nineteen names by their bytes first,
-    each in all lower case and in the capitals browsers write, and gives `http`'s constant for it
-    or the same `HeaderName` made once when the crate compiles. A `HeaderName` compares and hashes
+    `field_name` (`crates/corten/src/h1/head.rs`) matches twenty names by their bytes first, each
+    in two spellings, and gives `http`'s constant for it or the same `HeaderName` made once when
+    the crate compiles; a debug build checks each against what `from_bytes` makes of the same
+    bytes, so every debug test holds every arm (a release build counts the same with the check
+    and without it). A `HeaderName` compares and hashes
     by its lower-case text, so each is equal to what `from_bytes` makes of the same bytes, which
     every name in another spelling and every other name still goes to, to be read and refused as
-    it was; a name with a byte `from_bytes` refuses is equal to none of the nineteen. The names
+    it was; a name with a byte `from_bytes` refuses is equal to none of the twenty. The names
     that frame a request (`Content-Length`, `Transfer-Encoding`, `Expect`, `Upgrade`) are read
     from their bytes by `scan`, in any spelling, and are not touched, and `Connection`, which
     `build` reads for keep-alive by the `HeaderName` made of it, is the same name whichever way it
-    came. The nineteen are what the heads Playwright 1.65.1's Chromium, Firefox and WebKit sent
-    over HTTP/1.1 had on requests with no body (a navigation, a link followed, a reload, an image
-    and the runtime's fetch): `Host`, which every HTTP/1.1 request has (RFC 9112 3.2);
-    `User-Agent`, `Accept`, `Accept-Encoding`, `Connection`, `Upgrade-Insecure-Requests`,
-    `Sec-Fetch-Site`, `Sec-Fetch-Mode` and `Sec-Fetch-Dest`, from all three; `Referer` and
-    `Cookie`, from all three once there is one to send; `Accept-Language`, from Firefox and
-    WebKit (headless Chromium sent none); `Sec-Fetch-User`, from Chromium and Firefox on a
-    navigation the user made; `If-None-Match`, from Chromium and Firefox again for what came with
-    an `ETag`, which Corten writes for its assets; `sec-ch-ua`, `sec-ch-ua-mobile` and
-    `sec-ch-ua-platform`, from Chromium on every request and in lower case; `Priority`, from
-    Firefox; and `corten`, on every fetch of the runtime's, in lower case. Left out are
+    came. The twenty are the names the heads of Chromium 159.0.8154.6, Firefox 159.0 and WebKit
+    27.2 had over HTTP/1.1 on requests with no body (`node scripts/request-heads.mjs` drives them
+    through Playwright 1.65.1 over a navigation, a link followed, a reload, a stylesheet, an
+    image and the runtime's fetches, and prints each name as it came): `Host`, which every
+    HTTP/1.1 request has (RFC 9112 3.2); `User-Agent`, `Accept`, `Accept-Encoding`,
+    `Connection`, `Upgrade-Insecure-Requests`, `Sec-Fetch-Site`, `Sec-Fetch-Mode` and
+    `Sec-Fetch-Dest`, from all three; `Referer` and `Cookie`, from all three once there is one to
+    send; `Accept-Language`, from Firefox and WebKit (headless Chromium sent none);
+    `Sec-Fetch-User`, from Chromium and Firefox on a navigation the user made; `If-None-Match`,
+    from all three again for what came with an `ETag`, which Corten writes for its assets;
+    `sec-ch-ua`, `sec-ch-ua-mobile` and `sec-ch-ua-platform`, from Chromium on every request;
+    `Priority`, from Firefox on every request; `corten`, which the runtime
+    (`crates/corten/js/corten.js`) gives every fetch it makes; and `purpose`, which it gives a
+    prefetch of a link the pointer rests on, with `corten`. Each is taken in the spelling the
+    browsers wrote and in one other. The browsers wrote every name with each word's first letter
+    a capital but the client hints, `corten` and `purpose`, which Chromium wrote in lower case
+    (WebKit wrote `Purpose`), and Chromium wrote `accept` so on the runtime's fetch of a feed,
+    whose header the runtime writes so. The other spelling is a front end's. A browser that
+    speaks HTTP/2 or HTTP/3 to a front end sends every name in lower case (RFC 9113 8.2, RFC
+    9114 4.2); nginx passes each name on as it came (`ngx_http_proxy_create_request` copies it)
+    and writes its own `Host` and `Connection`; HAProxy writes every name in lower case unless
+    told otherwise (its configuration manual, 1.3.2, and `h1-case-adjust`); Envoy does the same
+    on HTTP/1.1 unless set to keep a name's case or write it proper-cased (its header casing
+    page); and Google Cloud's load balancers say a name may reach the app in lower case (their
+    target proxies page; for Amazon's no document was found). Behind any of those the lower-case
+    spelling of every name is the one that comes. Go's `net/http`, which Caddy's
+    `reverse_proxy` and `httputil.ReverseProxy` send with, writes every name in its canonical
+    form (`textproto.CanonicalMIMEHeaderKey`: a capital at the start and after each hyphen) and
+    puts `Host` and `User-Agent` first; that is the capital spelling of every name but the client
+    hints, which it writes `Sec-Ch-Ua`, so theirs are taken in that form, and `Corten` and
+    `Purpose` are its spelling (and WebKit's) of the runtime's two. Left out are
     `If-Modified-Since`, which a browser sends only for an answer that had a `Last-Modified`,
     which Corten does not write; `Cache-Control`, which Chromium sent on a reload alone; and
     `Origin`, `Pragma` and `Content-Type`, which no browser sent on a request without a body (one
     with a body is hyper's). Of two orders counted, this is the cheaper: the list the other way
-    round, names and spellings both (when it had four names more, those since left out), cost 10
-    to 24 instructions more on a browser's head.
+    round, names and spellings both (before `purpose` was on it), cost 10 to 26 instructions more
+    on the browsers' heads and Go's, and 34 fewer on Chromium's navigation with every name
+    lowered.
 
-    Counted by `bench/request-cost` with the switch on, at `53c46ce23` against `2f8984ddc`, the
-    head of this Choice before it: the `GET` with a browser's lines goes from 23,810 instructions
-    to 22,487 (5.6% fewer) and from 16 allocations to 13, a text answer from 25,876 to 24,557
-    (5.1%) and the compressed page from 211,949 to 210,629 (0.6%), each with three allocations
-    fewer. Every other case without a body costs 70 to 76 fewer for its `Host` line, one at a
-    time and 16 at a time (`pipeline` 9,335 to 9,260, 6,929 to 6,853 at 16), with no allocation
-    fewer; a request with a body costs what it did (22,811 and 22,812); and with the switch off
-    no case moves by more than 1 instruction or by any allocation. Against hyper's connection,
-    then, a browser's `GET` costs 5.9% fewer instructions and six allocations fewer (23,893 and 19
-    with the switch off), its text answer 5.0% fewer and its page 0.6% fewer. Scratch cases of
-    the kit's shortest request with one line more, counted on the same two builds and committed
-    nowhere, read what each name is worth: a name `http` has a constant for costs 85 to 161 fewer
-    for its line, one it has none for 224 to 274 fewer and an allocation, and a name off the list,
-    or on it in a third spelling, from 6 fewer to 16 more, for the look along the list. Whole
-    heads cost 2,734 fewer from a Chromium navigation (33,191 to 30,457, and seven allocations
-    fewer), 2,264 from Firefox's (five fewer), 1,760 from WebKit's (three fewer) and 262 from
-    curl's three lines. An idle connection holds what it did on both sides: with the switch on,
-    7,340 to 7,354 bytes after one request and after three of a browser's on both builds, 3,667
-    to 3,731 before a byte (six readings of each build), and 21,373 to 21,726 after one or three
-    with a body; with it off, three readings of the head before a byte were above base's three by
-    278,528 bytes over 5,000 connections at the median, more than those three spanned, and three
-    more of each then read 17,397 to 17,469 bytes a connection on base and 17,398 to 17,492 on
-    the head, whose new code hyper's connection never runs. These idle figures are of another
-    machine than the ones above, which reads more for hyper's connection, so they compare the two
-    builds and not the two connections.
+    Counted by `bench/request-cost` at `7fd1cd46a` against `2f8984ddc`, the head of this Choice
+    before it, with the switch on (the kit's probe with the one call added): the `GET` with a
+    browser's lines goes from 23,810 instructions to 22,484 (5.6% fewer; 16 allocations to 13),
+    a text answer from 25,876 to 24,556 (5.1%; 17 to 14) and the compressed page from 211,949 to
+    210,627 (0.6%; 25 to 22). Every other case without a body costs 71 to 76 fewer for its
+    `Host` line, one at a time and 16 at a time (`pipeline` 9,335 to 9,260, 6,928 to 6,853 at
+    16), with no allocation fewer; a request with a body costs what it did (22,811 and 22,812);
+    and with the switch off no case moves by more than 1 instruction or by any allocation.
+    Scratch cases of the kit's shortest request with one line more, counted with the switch on
+    on builds of the same code and committed nowhere, read what each name is worth, less the 75
+    the request's own `Host` saves: a name `http` has a constant for saves 88 to 132 for its line
+    in either spelling, one it has none for 225 to 269 and an allocation, `purpose` 228 of them;
+    a name off the list costs from 5 fewer to 9 more for the look along the list, and a listed
+    name in a third spelling (`USER-AGENT`, `Sec-fetch-site`, `Sec-CH-UA`) 15 to 18 more. Whole
+    heads cost 2,601 fewer from Chromium's navigation as it came (32,412 to 29,811, and seven
+    allocations fewer), 2,531 from Chromium's fetch (seven), 2,195 from Firefox's fetch (five),
+    1,763 from WebKit's navigation (three) and 264 from curl's three lines (none). Chromium's
+    navigation as a front end that lowers every name passes it costs 2,583 fewer (32,412 to
+    29,829, seven), where without the lower-case spellings of the names browsers write with
+    capitals it costs 710 fewer, and the same navigation as Go writes it 2,499 fewer (32,502 to
+    30,003, seven); those spellings cost 7 to 23 on a head that has none of them. Listing `purpose`
+    saves 237 more on a request with that line, and costs up to 6 on a head without it. The check that each name is the one `from_bytes` makes
+    compiles to nothing in a release build: the same builds without it counted the same, to 1,
+    in every case. What an idle connection holds is decided by the rule from the hosted job's
+    reading, taken once: at `309a2a1dc` against `2f8984ddc`, with the switch off, no reading rose
+    (13,279,232 to 13,303,808 bytes over 5,000 connections before a byte on both builds,
+    42,147,840 to 42,160,128 after one request and 62,599,168 to 62,603,264 after three of a
+    browser's). On another machine, which reads more for hyper's connection, the readings taken
+    beside the counts at three heads of this change read no rise by the rule after a request,
+    but before a byte two of six comparisons read one: with the
+    switch off at `53c46ce23`, the head's three 278,528 bytes over 5,000 connections above base's
+    at the median against 86,016 allowed, and with it on at `bb900a05f`, 49,152 above against
+    40,960; the others read none (at `7fd1cd46a`, 20,480 above against 376,832 with it off and
+    126,976 below with it on). Before a byte neither connection has run the change's code, and
+    with the switch off it never runs; the two are recorded as read and not explained, and the
+    three more readings of each build at `53c46ce23`, taken after the first rise was read,
+    decide nothing.
 
     What is left of a browser's head is the map and the values. Each value is checked again by
     `HeaderValue` after `httparse` has checked the same bytes, which only an `unsafe` constructor
@@ -13063,14 +13101,23 @@ rules something out.
     nowhere;
     no cycles or times taken);
     measured (what the names a browser usually sends cost and save, by `bench/request-cost` the
-    same way at `53c46ce23` against `2f8984ddc`, with the switch off and on, every reading
-    `compare.mjs` names (after `53c46ce23` no file under `crates/` differs but in its tests and a
-    comment, so the counts were not taken again), and by scratch cases of one line more and of
-    whole heads added to the kit for the count and committed nowhere, on the same builds; the other order and the slots
-    on builds made for the count from `2f8984ddc` with the switch on and committed nowhere, and
-    the values taken alone by a search for this change on builds of the same kind; which names
-    a browser sends, from the heads Playwright 1.65.1's Chromium, Firefox and WebKit sent over
-    HTTP/1.1 to a server that printed them, one capture, committed nowhere);
+    same way at `7fd1cd46a` against `2f8984ddc`, with the switch off and on, every reading
+    `compare.mjs` names, after which no file under `crates/` differs; by scratch cases of one
+    line more and of whole heads added to the kit for the count and committed nowhere, on builds
+    of the same code and of `bb900a05f` (the list without `purpose`) with the switch on, and of
+    that list without the lower-case spellings, in the other order and without the debug check,
+    each committed nowhere; the slots on builds made for the count from `2f8984ddc` with the
+    switch on and committed nowhere, and the values taken alone by a search for this change on
+    builds of the same kind; the idle readings, the hosted job's at `309a2a1dc`, which the rule
+    takes, and another machine's at `53c46ce23`, `bb900a05f` and `7fd1cd46a`, which decide
+    nothing);
+    platform (the names Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2 send over HTTP/1.1
+    on requests without a body, each in its case, as `scripts/request-heads.mjs` reads them
+    through Playwright 1.65.1, one capture; that a browser on HTTP/2 or HTTP/3 sends names in
+    lower case, RFC 9113 8.2 and RFC 9114 4.2; that nginx's proxy passes a name as it came and
+    writes its own `Host` and `Connection`, HAProxy and Envoy lower every name on HTTP/1.1 by
+    default, Google Cloud's load balancers may, and Go's `net/http` writes each name in its
+    canonical form, `Host` and `User-Agent` first, as their documents and source read);
     measured (the gate's long run, seed 20261124, at `53c46ce23`, its streams now with the listed
     names among their lines in both spellings and in some others: 252,454 streams, 252,260
     answered alike, the app answering in 178,547 of them, 194 in the one listed class, none
@@ -13161,7 +13208,8 @@ rules something out.
     the 48 instructions it was at an earlier head; the look for a client's end is found to be more
     than hyper's own, or a way is found to know the client's end without it; `http` changes how
     a `HeaderName` is made or compared, or gains a constant for a name on the list; a browser is
-    found to send a name on most requests that the list lacks, or no longer to send one it has;
+    found to send a name on most requests that the list lacks, or no longer to send one it has,
+    or a front end named above changes the case it writes a name in;
     or hyper is fixed where the gate met it, which lets the gate send bodies over pipes that hold
     little.
 
@@ -13178,9 +13226,15 @@ rules something out.
     as `Cargo.lock` has them, hyper's server parse, encoder, read strategy, write queue and its
     look for a client's end read against `crates/corten/src/h1.rs` and
     `crates/corten/src/h1/head.rs` at `68f3437a0`; 2026-11-27, the names' counts and idle
-    figures with `bench/request-cost` on `53c46ce23` against `2f8984ddc`, with the switch off and
-    on, the gate's long run on both, the heads of Playwright 1.65.1's three browsers, and http
-    1.5.0's `HeaderName` as `Cargo.lock` has it read against `field_name`.
+    figures with `bench/request-cost` on `7fd1cd46a` against `2f8984ddc`, with the switch off and
+    on, the hosted job's idle readings at `309a2a1dc`, and the gate's long run on both;
+    2026-11-27, the browsers' heads by `node scripts/request-heads.mjs --heads` in Playwright's
+    `v1.65.1-noble` image, its Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2, beside
+    nginx's proxy module source and directives, HAProxy's configuration manual, Envoy's header
+    casing page, Google Cloud's target proxies page, and Go's `net/http`, `textproto` and
+    Caddy's proxy transport as each was published that day, read for the case each writes a
+    name in (no version of those was recorded);
+    2026-11-27, http 1.5.0's `HeaderName` as `Cargo.lock` has it read against `field_name`.
 
 ## Rules
 
