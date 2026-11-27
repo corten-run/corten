@@ -200,7 +200,7 @@ export function controllerState(s, round, options) {
   validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "trixieUpstream", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored", "createPending", "createContradicted",
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "pendingRetirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "gitSource", "trixieUpstream", "quietBootstrap", "remainingPlacement", "launchHostKeySha256", "createErrored", "createPending", "createContradicted",
     "skipHostChromium"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
@@ -265,6 +265,23 @@ export function controllerState(s, round, options) {
       for (const key of ["archiveSha256", "evidenceSha256", "evidence", "bootstrapReady"])
         assert.equal(s[key], undefined, "unused retirement cannot claim campaign evidence");
     } else assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "failed setup requires preserved archive evidence");
+  }
+  if (s.pendingRetirement !== undefined) {
+    // The digest of a v2 or v3 setup receipt, saved just before the receipt is published.
+    // An interrupted receipt is recovered only with exactly these bytes.
+    const p = s.pendingRetirement;
+    assert.ok(p && typeof p === "object" && !Array.isArray(p), "pending retirement record required");
+    assert.deepEqual(Object.keys(p).sort(), ["evidenceSha256", "kind"]);
+    assert.equal(p.kind, "setup-failed", "only a controlled setup retirement records its receipt digest");
+    full(p.evidenceSha256, /[a-f0-9]{64}/, "pending retirement hash");
+    assert.ok(s.control, "pending retirement requires a controlled host");
+    // Only a bound, archived but unretired setup failure can be retiring: retire() runs
+    // from a starting or running host whose archive is preserved, and the retirement
+    // state that carries the intent removes the digest.
+    assert.ok(["starting", "running"].includes(s.status) && s.id && s.ip, "pending retirement requires a bound starting or running host");
+    for (const key of ["retirement", "deletionIntentAt", "destroyedAt"])
+      assert.equal(s[key], undefined, "pending retirement cannot coexist with a retirement or deletion");
+    assert.ok(s.archiveSha256 && s.evidenceSha256 && s.evidence, "pending retirement requires preserved archive evidence");
   }
   if (s.createPending !== undefined) {
     // An accepted POST whose create action had not settled when the launch stopped.

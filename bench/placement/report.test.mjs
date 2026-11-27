@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { readMap, record } from "./map.mjs";
-import { problems as maskProblems, sed, starts, stated, values } from "./mask.mjs";
+import { finalBlock, problems as maskProblems, sed, starts, stated, values } from "./mask.mjs";
 import { gauss, rng } from "./model.mjs";
 import { pads } from "./pads.mjs";
 import { LIMIT } from "./pilot.mjs";
@@ -46,6 +46,8 @@ test("the example plan is usable, and each field that is not is named", () => {
   bad((p) => { p.workloads.push(p.workloads[0]); }, "used once");
   bad((p) => { p.workloads[0].declared = " "; }, "declared");
   bad((p) => { p.workloads[0].request.headers = ["Accept-Encoding"]; }, 'each "Name: value"');
+  // A fragment is refused: curl drops it and wrk 4.1.0 sends it, so the answers and the load would ask for different targets.
+  bad((p) => { p.workloads[0].request.path = "/page#top"; }, "request.path, from /, of printable ASCII, with no quote, backslash or fragment (#)");
   bad((p) => { p.workloads[0].mask = [{ header: "Date" }]; }, "Date is left out of every comparison");
   bad((p) => { p.workloads[0].reduction = 2; }, "reduction");
   bad((p) => { delete p.workloads[0].seed; }, "seed");
@@ -112,6 +114,26 @@ test("the mask: only named headers, each differing between two starts, one with 
   has(stated([{ header: "age", range: [0, 2] }], one), '"3", not a number from 0 to 2');
   has(stated([{ header: "age", range: [0, 3] }], one.replace("age: 3", "age: soon")), '"soon", not a number from 0 to 3');
   has(stated([{ header: "age", range: [0, 3] }], "HTTP/1.1 200 OK\r\n\r\n"), "sent 0 times, not once");
+  // An interim 1xx response's header lines are no evidence for the answer's own: both checks read the final response's alone.
+  const hinted = (early, last) => `HTTP/1.1 103 Early Hints\r\n${early}\r\nHTTP/1.1 200 OK\r\n${last}content-type: text/html\r\n\r\n`;
+  has(stated([{ header: "age", range: [0, 3] }], hinted("age: 1\r\n", "")), "sent 0 times, not once");
+  assert.deepEqual(stated([{ header: "age", range: [0, 3] }], hinted("age: 9\r\n", "age: 2\r\n")), []);
+  has(starts([{ header: "age", range: [0, 3] }], hinted("age: 1\r\n", ""), hinted("age: 2\r\n", "")), "sent it 0 and 0 times");
+  assert.deepEqual(starts([{ header: "etag" }], hinted("", 'ETag: "a"\r\n'), hinted("", 'ETag: "b"\r\n')), []);
+  // The final block runs from its status line to its own blank line: a line inside it that reads
+  // like a status line is one of its header lines, and what curl writes after that blank line (a
+  // chunked response's trailers, these bytes as curl 7.88.1 wrote them) is in no block.
+  const embedded = "HTTP/1.1 200 OK\r\nAge: 99\r\nHTTP/1.1 200 : x\r\nAge: 2\r\ncontent-length: 4\r\n\r\n";
+  has(stated([{ header: "age", range: [0, 3] }], embedded), "age: sent 2 times, not once");
+  has(starts([{ header: "age", range: [0, 3] }], embedded, embedded.replace("Age: 2", "Age: 1")), "sent it 2 and 2 times");
+  const trailed = (head, trailers) => `HTTP/1.1 200 OK\r\n${head}Transfer-Encoding: chunked\r\n\r\n${trailers}`;
+  has(stated([{ header: "age", range: [0, 3] }], trailed("", "Age: 2\r\n")), "age: sent 0 times, not once");
+  has(stated([{ header: "age", range: [0, 3] }], trailed("", "HTTP/1.1 200 : x\r\nAge: 2\r\n")), "age: sent 0 times, not once");
+  assert.deepEqual(stated([{ header: "age", range: [0, 3] }], trailed("Age: 2\r\n", "Age: 9\r\n")), []);
+  has(starts([{ header: "age", range: [0, 3] }], trailed("", "Age: 1\r\n"), trailed("", "Age: 2\r\n")), "sent it 0 and 0 times");
+  assert.deepEqual(finalBlock(trailed("", "HTTP/1.1 200 : x\r\nAge: 2\r\n")), { line: "HTTP/1.1 200 OK", code: "200", lines: ["HTTP/1.1 200 OK", "Transfer-Encoding: chunked"] });
+  assert.equal(finalBlock(hinted("age: 9\r\n", "age: 2\r\n")).line, "HTTP/1.1 200 OK");
+  assert.equal(finalBlock("age: 2\r\n\r\n"), null);
   has(maskProblems([{ header: "age", range: [3, 0] }]), "range");
   // A range of one value could never hold a header that two starts send differently.
   has(maskProblems([{ header: "age", range: [0, 0] }]), "age's range is not [low, high] with low under high");
@@ -511,6 +533,50 @@ test("the inputs: every file the plan names by path, listed with its SHA-256 as 
   const locked = spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), "gated", "plain", join(dir, "work")], { encoding: "utf8", env });
   assert.equal(locked.status, 1);
   assert.ok(locked.stderr.includes("the probe's directory holds a Cargo.lock"), locked.stderr);
+});
+
+test("the expected difference: it ends with one bodies line with the SHA-256s in full, whether the bodies differ or not, and any other is refused before anything is written", () => {
+  const dir = join(tmp, "expected"), env = { ...process.env };
+  delete env.DRYRUN;
+  mkdirSync(join(dir, "probe", "src"), { recursive: true });
+  writeFileSync(join(dir, "probe", "src", "main.rs"), PROBE);
+  writeFileSync(join(dir, "plan.json"), JSON.stringify(plan(numbered((p) => { p.workloads[0].expect = "expect.txt"; }))));
+  const resolve_ = (text, work) => { writeFileSync(join(dir, "expect.txt"), text); return spawnSync(process.execPath, [join(here, "plan.mjs"), join(dir, "plan.json"), "gated", "plain", join(dir, work)], { encoding: "utf8", env }); };
+  const headers = "5c5\n< corten-shell: 618f\n---\n> corten-shell: c21c\n", digests = `sha256 ${"a".repeat(64)} and ${"b".repeat(64)}`;
+  const differ = `bodies differ: 6124 and 6124 bytes, ${digests}`, same = `bodies same: 6124 bytes, sha256 ${"a".repeat(64)}`;
+  for (const [work, text] of [["bodies", `${headers}${differ}\n`], ["body-only", `bodies differ: 6124 and 6125 bytes, ${digests}\n`], ["headers", `${headers}${same}\n`]]) {
+    const r = resolve_(text, work);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(join(dir, work, "plan", "expect.txt"), "utf8"), text);
+  }
+  // What turns.sh cannot write is refused, since the placement would fail after its build: the
+  // lengths alone (the kit's line before it bound the bodies' digests), a digest cut short, a
+  // difference in the headers with no bodies line (which binds no body), a bodies line that is
+  // not the last or not the only one, and a file with no difference at all.
+  const why = "does not end with one bodies line as turns.sh writes it";
+  for (const [work, text] of [
+    ["lengths", `${headers}bodies differ: 6124 and 6124 bytes\n`],
+    ["short", `${headers}bodies differ: 6124 and 6124 bytes, sha256 ${"a".repeat(16)} and ${"b".repeat(16)}\n`],
+    ["short-same", `${headers}bodies same: 6124 bytes, sha256 ${"a".repeat(16)}\n`],
+    ["header-only", headers],
+    ["not-last", `${same}\n${headers}`],
+    ["two", `${headers}${same}\n${same}\n`],
+    ["unended", `${headers}${same}`],
+    ["empty", ""],
+  ]) {
+    const r = resolve_(text, work);
+    assert.equal(r.status, 1, `${work}: ${r.stderr}`);
+    assert.ok(r.stderr.includes(`expect.txt, the workload's expected difference: ${why}`) && r.stderr.includes("record the difference again with this kit"), `${work}: ${r.stderr}`);
+    assert.equal(existsSync(join(dir, work)), false);
+  }
+  // A "bodies same" line alone is one turns.sh never writes: it writes that line only after the
+  // headers' diff, and nothing when neither the headers nor the bodies differ.
+  for (const [work, text] of [["same-alone", `${same}\n`], ["same-after-blank", `\n${same}\n`]]) {
+    const r = resolve_(text, work);
+    assert.equal(r.status, 1, `${work}: ${r.stderr}`);
+    assert.ok(r.stderr.includes(`expect.txt, the workload's expected difference: is a "bodies same" line alone, which turns.sh writes only after the headers' diff`) && r.stderr.includes("record the difference again with this kit"), `${work}: ${r.stderr}`);
+    assert.equal(existsSync(join(dir, work)), false);
+  }
 });
 
 test("the inputs: a file name the list cannot hold and a symbolic link are refused, each in its own words", () => {
