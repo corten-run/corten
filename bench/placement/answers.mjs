@@ -7,13 +7,14 @@
 // An answer is captured by curl, once, the request as the kit has always sent it (curl's own
 // Accept and User-Agent left out unless the plan's lines have one, no configuration file, no
 // proxy, its URL taken literally (no globbing, and no dot segment removed: the path is the
-// request target as the plan gives it, as wrk sends it), 10 s), its header lines as curl writes them (-D),
-// an interim 1xx response's included, and its body as received, straight into files this process
-// has just created and holds open; its status is the final response's, as curl reports it and as
-// the last status line it wrote says. The headers' difference is the system diff's, run once, on
-// the masked headers' files, through those descriptors, under timeout of its own (10 s, KILL 2 s
-// later), so neither curl (--max-time 10) nor diff outlives a stop of this process by more than
-// its own bound. Every byte stays a Buffer from capture to file; text is made of it only to say something.
+// request target as the plan gives it, as wrk sends it under the kit's get.lua; a custom script
+// can send another), 10 s), its header lines as curl writes them (-D), an interim 1xx response's
+// included, and its body as received, straight into files this process has just created and
+// holds open; its status is the final response's, as curl reports it and as the status line of
+// the final response's block it wrote says (mask.mjs, finalBlock). The headers' difference is the
+// system diff's, run once, on the masked headers' files, through those descriptors, under timeout
+// of its own (10 s, KILL 2 s later), so neither curl (--max-time 10) nor diff outlives a stop of
+// this process by more than its own bound. Every byte stays a Buffer from capture to file; text is made of it only to say something.
 //
 //   node answers.mjs compare <say> <answers dir> <A port> <B port> <path> <headers.txt> <status> <mask.json> [<expect>]
 //       A's answer twice and B's once, each of the planned status. Writes <name>.raw-headers,
@@ -39,7 +40,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, constants, fstatSync, lstatSync, openSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { problems, starts, stated } from "./mask.mjs";
+import { finalBlock, problems, starts, stated } from "./mask.mjs";
 
 /** A failure this module says as it is, with no stack. */
 export class Refusal extends Error {}
@@ -125,7 +126,7 @@ const brief = (err) => err.toString("latin1").trim().split("\n").at(-1)?.slice(0
  * new first and hands curl as its descriptors 3 and 4, so what it captured is in those very files,
  * whatever is put at their paths since; its standard output is the final response's status alone
  * (-w). Resolves to { raw, body, status, line }: the bytes as curl wrote them, the final status
- * and the last status line of raw, which must state it.
+ * and the status line of raw's final response block (mask.mjs, finalBlock), which must state it.
  */
 export async function capture(port, path, lines, prefix, { bound = 15000 } = {}) {
   if (!/^\/[\x21-\x7e]*$/.test(path) || path.includes("#")) refuse(`the request's path ${JSON.stringify(path.slice(0, 80))} is not one curl sends as it is: a path from /, of printable ASCII, with no fragment (#)`);
@@ -143,16 +144,20 @@ export async function capture(port, path, lines, prefix, { bound = 15000 } = {})
       if (r.code !== 0) refuse(`the answer on ${port} could not be taken whole: curl ended with ${r.signal ?? `status ${r.code}`}${r.err.length ? ` (${brief(r.err)})` : ""}`);
       const raw = whole(head), status = r.out.toString("latin1"), { line, code } = finalLine(raw);
       if (!/^[1-9]\d{2}$/.test(status)) refuse(`curl reported no final status for the answer on ${port}: ${JSON.stringify(status.slice(0, 40))}`);
-      if (code !== status) refuse(`curl reported the final status ${status} on ${port}, and the last status line it wrote, ${JSON.stringify(line.slice(0, 80))}, does not say so (${prefix}.raw-headers)`);
+      if (code !== status) refuse(`curl reported the final status ${status} on ${port}, and the status line of the final response it wrote, ${JSON.stringify(line.slice(0, 80))}, does not say so (${prefix}.raw-headers)`);
       return { raw, body: whole(body), status, line };
     } finally { closeSync(body); }
   } finally { closeSync(head); }
 }
 
-/** The last status line of headers as curl wrote them (the final response's, after any interim 1xx), and its status: { line, code }. */
+/**
+ * The status line of the final response's block of headers as curl wrote them (mask.mjs,
+ * finalBlock: after any interim 1xx block, never a line inside a block or a trailer after it), and
+ * its status: { line, code }, "" and null when the headers start with no status line.
+ */
 function finalLine(raw) {
-  const lines = raw.toString("latin1").split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => /^HTTP\//.test(l)), line = lines.at(-1) ?? "";
-  return { line, code: /^HTTP\/[0-9.]+ (\d{3})(?: |$)/.exec(line)?.[1] ?? null };
+  const b = finalBlock(raw.toString("latin1"));
+  return { line: b?.line ?? "", code: b?.code ?? null };
 }
 
 /**
@@ -160,7 +165,8 @@ function finalLine(raw) {
  * LF taken off, every Date line left out, each line of a header the plan masks "<name>: <masked>",
  * and every other byte as it is (no whitespace folded, every line kept, however many). An interim
  * 1xx response's block is part of them, compared like the final one's: an answer sent with early
- * hints differs from one sent without.
+ * hints differs from one sent without; so are any chunked trailers curl wrote after the final
+ * block, though the mask's checks read the final block alone (mask.mjs).
  */
 export function masked(raw, mask) {
   const names = new Set(mask.map((m) => m.header.toLowerCase())), out = [];

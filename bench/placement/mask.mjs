@@ -9,9 +9,10 @@
 // in the plan, a list of { "header": name } with an optional "range": [low, high] (numbers, low
 // under high). The kit takes a range and no single value: a header that two starts must send
 // differently cannot also be one stated value in every answer. Both checks read the final
-// response's header lines alone: an interim 1xx response's (early hints, say) are no evidence
-// for the answer's own, so a masked header an interim block sends and the final one does not is
-// sent 0 times. The interim block stays in the headers compared (answers.mjs).
+// response's header block alone (final, below): an interim 1xx response's (early hints, say) are
+// no evidence for the answer's own, so a masked header an interim block sends and the final one
+// does not is sent 0 times, and neither are the chunked trailers curl writes after the final
+// block's blank line. The interim block and the trailers stay in the headers compared (answers.mjs).
 //   node mask.mjs sed <mask.json>                       the sed script that masks those values
 //   node mask.mjs starts <mask.json> <headers> <headers>  two starts of one binary: exit 1 unless
 //                                                       each masked header was sent once by both
@@ -47,13 +48,33 @@ export function sed(mask) {
   }).join("");
 }
 
+const STATUS = /^HTTP\/[0-9.]+ (\d{3})(?: |$)/;
+
 /**
- * The final response's header lines of headers as curl -D saves them: from the last status line
- * on, so an interim 1xx response's block before it is left out (all of headers when no line is one).
+ * The final response's block of headers as curl -D saves them: { line, code, lines }, its status
+ * line, that line's status and its lines from the status line to the blank line that ends it, or
+ * null when headers do not start with a status line. A block starts with a status line, at the
+ * start of headers or right after the blank line that ends an interim 1xx block, and ends at its
+ * own blank line; the first block whose status is not 1xx (or the last, when no block follows a
+ * 1xx one) is the final one. A line inside a block that reads like a status line is one of its
+ * header lines, and whatever curl writes after the final block's blank line (a chunked response's
+ * trailers) belongs to no block, even a trailer that reads like a status line.
  */
+export function finalBlock(headers) {
+  const lines = headers.split("\n").map((l) => l.replace(/\r$/, ""));
+  for (let at = 0; ;) {
+    const code = STATUS.exec(lines[at] ?? "")?.[1];
+    if (code === undefined) return null;
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== "") end++;
+    if (!code.startsWith("1") || !STATUS.test(lines[end + 1] ?? "")) return { line: lines[at], code, lines: lines.slice(at, end) };
+    at = end + 1;
+  }
+}
+
+/** The final response's header lines (finalBlock), one per line; none when headers start with no status line. */
 export function final(headers) {
-  const at = headers.lastIndexOf("\nHTTP/");
-  return at < 0 ? headers : headers.slice(at + 1);
+  return finalBlock(headers)?.lines.join("\n") ?? "";
 }
 
 /** The values a response's header lines give a header, in order. */

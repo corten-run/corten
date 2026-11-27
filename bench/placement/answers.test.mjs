@@ -109,6 +109,32 @@ test("a masked header's stated range is held by the final response's header line
   assert.ok(readFileSync(join(dir, "A.headers"), "latin1").startsWith("HTTP/1.1 103 Early Hints\nage: <masked>\n\nHTTP/1.1 200 OK\nage: <masked>\n"));
 });
 
+test("the final response is its block alone: a line inside it that reads like a status line neither ends it nor is its status, and chunked trailers after it are no evidence for the mask", LINUX, async (t) => {
+  const mask = [{ header: "age", range: [0, 3] }];
+  // curl takes "HTTP/1.1 200 : x" inside the 200's block as a header line: Age is sent twice in
+  // that block, and its status line is the block's first.
+  const embedded = await raw("HTTP/1.1 200 OK\r\nAge: 99\r\nHTTP/1.1 200 : x\r\nAge: 2\r\n");
+  t.after(embedded.close);
+  assert.equal((await capture(embedded.port, "/page", [], join(fresh(), "x"))).line, "HTTP/1.1 200 OK");
+  await refused(compare({ dir: fresh(), ports: [embedded.port, embedded.port], path: "/page", lines: [], status: 200, mask, say: () => {} }), "a masked header is not within the range the plan states: A: age: sent 2 times, not once");
+  // A chunked answer whose trailers curl writes after the final block's blank line, kept in the
+  // headers compared and read by neither mask check, even a trailer that reads like a status line.
+  const chunked = async (head, trailers) => {
+    const s = tcp((c) => { let got = Buffer.alloc(0); c.on("data", (d) => { got = Buffer.concat([got, d]); if (got.includes("\r\n\r\n")) c.end(`HTTP/1.1 200 OK\r\n${head}transfer-encoding: chunked\r\nconnection: close\r\n\r\n4\r\naaaa\r\n0\r\n${trailers}\r\n`, "latin1"); }); c.on("error", () => {}); });
+    await new Promise((done) => s.listen(0, "127.0.0.1", done));
+    t.after(() => new Promise((done) => s.close(done)));
+    return s.address().port;
+  };
+  for (const trailers of ["Age: 2\r\n", "HTTP/1.1 200 : x\r\nAge: 2\r\n"]) {
+    const port = await chunked("", trailers), dir = fresh();
+    await refused(compare({ dir, ports: [port, port], path: "/page", lines: [], status: 200, mask, say: () => {} }), "a masked header is not within the range the plan states: A: age: sent 0 times, not once");
+    assert.ok(readFileSync(join(dir, "A.raw-headers"), "latin1").endsWith(`\r\n\r\n${trailers}`), trailers);
+  }
+  const port = await chunked("Age: 2\r\n", "Age: 9\r\n"), dir = fresh();
+  assert.equal((await compare({ dir, ports: [port, port], path: "/page", lines: [], status: 200, mask, say: () => {} })).outcome, "same");
+  assert.ok(readFileSync(join(dir, "A.headers"), "latin1").endsWith("\n\nage: <masked>\n"));
+});
+
 test("two starts' proof of the mask reads each start's final response alone: an Age only interim 103s send, differing, does not show the final one differs", () => {
   const dir = fresh(), mask = join(dir, "mask.json"), early = (n, last = "") => `HTTP/1.1 103 Early Hints\r\nAge: ${n}\r\n\r\nHTTP/1.1 200 OK\r\n${last}content-type: text/plain\r\n\r\n`;
   writeFileSync(mask, JSON.stringify([{ header: "age", range: [0, 3] }]));

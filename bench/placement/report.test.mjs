@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { readMap, record } from "./map.mjs";
-import { problems as maskProblems, sed, starts, stated, values } from "./mask.mjs";
+import { finalBlock, problems as maskProblems, sed, starts, stated, values } from "./mask.mjs";
 import { gauss, rng } from "./model.mjs";
 import { pads } from "./pads.mjs";
 import { LIMIT } from "./pilot.mjs";
@@ -46,7 +46,7 @@ test("the example plan is usable, and each field that is not is named", () => {
   bad((p) => { p.workloads.push(p.workloads[0]); }, "used once");
   bad((p) => { p.workloads[0].declared = " "; }, "declared");
   bad((p) => { p.workloads[0].request.headers = ["Accept-Encoding"]; }, 'each "Name: value"');
-  // A fragment is never sent: curl and wrk would ask for the path without it.
+  // A fragment is refused: curl drops it and wrk 4.1.0 sends it, so the answers and the load would ask for different targets.
   bad((p) => { p.workloads[0].request.path = "/page#top"; }, "request.path, from /, of printable ASCII, with no quote, backslash or fragment (#)");
   bad((p) => { p.workloads[0].mask = [{ header: "Date" }]; }, "Date is left out of every comparison");
   bad((p) => { p.workloads[0].reduction = 2; }, "reduction");
@@ -120,6 +120,20 @@ test("the mask: only named headers, each differing between two starts, one with 
   assert.deepEqual(stated([{ header: "age", range: [0, 3] }], hinted("age: 9\r\n", "age: 2\r\n")), []);
   has(starts([{ header: "age", range: [0, 3] }], hinted("age: 1\r\n", ""), hinted("age: 2\r\n", "")), "sent it 0 and 0 times");
   assert.deepEqual(starts([{ header: "etag" }], hinted("", 'ETag: "a"\r\n'), hinted("", 'ETag: "b"\r\n')), []);
+  // The final block runs from its status line to its own blank line: a line inside it that reads
+  // like a status line is one of its header lines, and what curl writes after that blank line (a
+  // chunked response's trailers, these bytes as curl 7.88.1 wrote them) is in no block.
+  const embedded = "HTTP/1.1 200 OK\r\nAge: 99\r\nHTTP/1.1 200 : x\r\nAge: 2\r\ncontent-length: 4\r\n\r\n";
+  has(stated([{ header: "age", range: [0, 3] }], embedded), "age: sent 2 times, not once");
+  has(starts([{ header: "age", range: [0, 3] }], embedded, embedded.replace("Age: 2", "Age: 1")), "sent it 2 and 2 times");
+  const trailed = (head, trailers) => `HTTP/1.1 200 OK\r\n${head}Transfer-Encoding: chunked\r\n\r\n${trailers}`;
+  has(stated([{ header: "age", range: [0, 3] }], trailed("", "Age: 2\r\n")), "age: sent 0 times, not once");
+  has(stated([{ header: "age", range: [0, 3] }], trailed("", "HTTP/1.1 200 : x\r\nAge: 2\r\n")), "age: sent 0 times, not once");
+  assert.deepEqual(stated([{ header: "age", range: [0, 3] }], trailed("Age: 2\r\n", "Age: 9\r\n")), []);
+  has(starts([{ header: "age", range: [0, 3] }], trailed("", "Age: 1\r\n"), trailed("", "Age: 2\r\n")), "sent it 0 and 0 times");
+  assert.deepEqual(finalBlock(trailed("", "HTTP/1.1 200 : x\r\nAge: 2\r\n")), { line: "HTTP/1.1 200 OK", code: "200", lines: ["HTTP/1.1 200 OK", "Transfer-Encoding: chunked"] });
+  assert.equal(finalBlock(hinted("age: 9\r\n", "age: 2\r\n")).line, "HTTP/1.1 200 OK");
+  assert.equal(finalBlock("age: 2\r\n\r\n"), null);
   has(maskProblems([{ header: "age", range: [3, 0] }]), "range");
   // A range of one value could never hold a header that two starts send differently.
   has(maskProblems([{ header: "age", range: [0, 0] }]), "age's range is not [low, high] with low under high");

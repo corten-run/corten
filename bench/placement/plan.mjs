@@ -89,7 +89,8 @@ export function problems(plan) {
     why.push(...unknown(w, "workload", at), ...unknown(w.request, "request", `${at}: request`));
     if (!(printable(w.declared) && w.declared.trim())) bad(`${at}: declared, what the plan says of the workload before the run`);
     const r = w.request ?? {};
-    // A fragment is no part of a request target: curl and wrk would send the path without it.
+    // A fragment is no part of a request target. curl drops it, so the captured answers would be of
+    // the path without it, while wrk 4.1.0 sends "/p#marker" verbatim: the two would ask for different targets.
     if (!/^\/[\x21-\x7e]*$/.test(r.path ?? "") || /['"\\#]/.test(r.path)) bad(`${at}: request.path, from /, of printable ASCII, with no quote, backslash or fragment (#)`);
     if (!Array.isArray(r.headers) || !r.headers.every((h) => printable(h) && /^[A-Za-z0-9-]+: ?\S/.test(h))) bad(`${at}: request.headers, each "Name: value"`);
     if (r.script !== undefined && !relative(r.script)) bad(`${at}: request.script, a path from the plan file to a wrk script`);
