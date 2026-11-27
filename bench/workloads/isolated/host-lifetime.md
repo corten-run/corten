@@ -24,10 +24,12 @@ failure (`executable-recheck-reference`) from a different device/inode
 (`executable-recheck-size-or-mtime`), and ctime-only change
 (`executable-recheck-ctime`). The labels retain no values and do not identify
 the process, prove an exec or exit, or show that bytes were unchanged. Each
-mismatch rejects the census. Only a catalog interval can establish an executable
-successor as described below. A failed closing procfs stat during a catalog
-rename is `executable-recheck-renamed`; otherwise it retains the
-`executable-recheck` operation and the existing process-read rules.
+mismatch rejects the census. Only a catalog interval or an interval of the exact
+native JSON API preparation command can establish an executable successor as
+described below. During a process rename in a catalog or exact native JSON API
+preparation census, a failed closing procfs stat is `executable-recheck-renamed`;
+otherwise it retains the `executable-recheck` operation and the existing
+process-read rules.
 
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
@@ -152,9 +154,11 @@ It can recover only through a new complete snapshot. A still-listed PID whose
 executable remains unreadable exhausts the budget and blocks proof. Permission,
 I/O, non-process read failures and PID/start-tick changes still fail immediately.
 
-A catalog child can replace its image via exec between the two executable
-reads. A different device/inode at the closing read alone is not enough to
-retry. The immediately preceding admitted sample must bind the same PID,
+A child of a catalog command or the native JSON API preparation command can
+replace its image via exec between the two executable reads. JSON API fixture
+generation and timing still use their existing observer. A different device/inode
+at the closing read alone is not enough to retry. The immediately preceding
+admitted sample must bind the same PID,
 start ticks and cgroup to the opening executable, or bind its parent as
 described below. The pinned descriptor must still match every identity field.
 Discard the entire failed attempt.
@@ -207,7 +211,8 @@ native runner failure or the cause of an exception-free accounting gap.
 
 ## Catalog Build Startup
 
-Catalog commands use the same pinned executable descriptors as browser commands.
+Catalog commands and the native JSON API preparation command use the same pinned
+executable descriptors as browser commands.
 The sampler still reads each member's PID, start ticks, name, cgroup and executable
 bookends, with both recursive membership censuses. It seals the exact executable
 bytes after the final resource sample, using the existing bounded helper. Catalog

@@ -167,12 +167,12 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       });
       const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
-      // A catalog rename is retryable as name churn only after proving the
+      // A pinned census rename is retryable as name churn only after proving the
       // image is unchanged. A PID/start mismatch still fails before that read.
-      const catalogRename = previousProcesses && recheckOperation === "process-name-recheck" && rechecked.comm !== identity.comm;
-      if (!catalogRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+      const censusRename = previousProcesses && recheckOperation === "process-name-recheck" && rechecked.comm !== identity.comm;
+      if (!censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       if (pending) {
-        try { observing(catalogRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
+        try { observing(censusRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
         catch (error) {
           // Anchor both images to accepted evidence; never promote this failed census.
           if (allowSuccessor && previousProcesses && observationOperations.get(error) === "executable-recheck-inode"
@@ -188,7 +188,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
           throw error;
         }
       } else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
-      if (catalogRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+      if (censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
   }
@@ -489,6 +489,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const controllers = readFileSync(join(root, parent, "cgroup.subtree_control"), "utf8").trim().split(/\s+/);
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
+  const catalog = binding.request.group === "catalog-page";
+  const executableCensus = catalog || terminalClockPolicy(binding, invocation, round, "prepare") === "preparation";
   const commandCpus = boundCommandCpuSet(binding);
   const liveCpus = commandCpus && liveGroup(binding.request.group) ? nativeControlPartition(binding).cpus : null;
   const captureDocker = browser || liveCpus !== null;
@@ -530,9 +532,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     throw error;
   }
   const executables = new Map();
-  // Catalog build commands introduce large CLI/plugin executables during live
-  // sampling. Pin them now and seal their bytes after the final sample.
-  pending = captureDocker || commandCpus || binding.request.group === "catalog-page" ? participantExecutables() : null;
+  // Build commands introduce CLI/plugin executables during live sampling.
+  // Pin their images now and seal their bytes after the final sample.
+  pending = captureDocker || commandCpus || executableCensus ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   let firstDockerGap;
   function noteDockerGap(error) { firstDockerGap ??= dockerGapDiagnostic(error); }
@@ -541,7 +543,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     dockerStartupRechecks ??= { count: 0, first: diagnostic }; dockerStartupRechecks.count++;
   }
   const observerFailures = { count: 0, first: null, last: null };
-  let sampleOperation, lastSampleAt = null, previousCatalogProcesses = binding.request.group === "catalog-page" ? [] : null;
+  let sampleOperation, lastSampleAt = null, previousCensusProcesses = executableCensus ? [] : null;
   function notifyFault() {
     if (faultNotified) return;
     faultNotified = true;
@@ -556,7 +558,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
     const entry = { phase, operation: proofFailure?.operation ?? observationOperations.get(error) ?? sampleOperation, code,
       ...(proofFailure?.executableRef ? { executableRef: proofFailure.executableRef } : {}),
-      at: Date.now(), samples, lastSampleAt, ...(timing?.attempts ? { catalogCensus: timing } : {}) };
+      at: Date.now(), samples, lastSampleAt, ...(catalog && timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
   function sample(timing) {
@@ -571,7 +573,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function collectSample(timing) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
-    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCatalogProcesses), initial = [], keys = new Set();
+    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses), initial = [], keys = new Set();
     if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
       && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
     const processes = observed.processes;
@@ -593,7 +595,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     }
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
-    if (binding.request.group === "catalog-page") previousCatalogProcesses = processes;
+    if (executableCensus) previousCensusProcesses = processes;
     samples++; lastSampleAt = observed.at;
     return observed;
   }
@@ -617,7 +619,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
         timer = setInterval(() => {
-          const timing = binding.request.group === "catalog-page" ? { entryGapMs: Date.now() - lastSampleAt } : null;
+          const timing = executableCensus ? { entryGapMs: Date.now() - lastSampleAt } : null;
           try {
             sample(timing);
           } catch (error) {
