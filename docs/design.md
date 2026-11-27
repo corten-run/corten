@@ -3218,9 +3218,11 @@ rules something out.
     neither, 33,214 to 33,215 and `page-browser`, tagged after a search as before, 211,828 to
     211,836; the unstaged cases within one; allocations a request the same in all 19 cases
     and idle memory no higher. A scope is 336 bytes before and after, with each of its other
-    fields at the offset it had and the new byte beside `own` (x86-64 Linux, rustc 1.100.0;
-    `a_scope_s_layout` in `crates/corten/src/router.rs` holds the size and that the byte is in
-    `own`'s word). How the search is compiled decides more than the change does on a tagged
+    fields at the offset it had and the new byte beside `own` (x86-64 Linux, rustc 1.100.0,
+    all features; without the `types` feature a scope is 328 bytes with the byte, `own` at 320
+    and the byte at 321, read on the change alone; `a_scope_s_layout` in
+    `crates/corten/src/router.rs` holds the size for each and that the byte is in `own`'s
+    word). How the search is compiled decides more than the change does on a tagged
     page: at `dd17a6e8c`, which handed the stage the byte itself where `10bfc8a21` hands it by
     reference, `page-browser` counted 211,891, 55 more, the lookup of `Cache-Control` a call
     there); value

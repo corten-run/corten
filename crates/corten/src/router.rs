@@ -1513,7 +1513,9 @@ mod tests {
         // reads no cache line it did not read.
         //
         // Measured on x86_64-unknown-linux-gnu with rustc 1.99.1, in a debug and a release
-        // build: 336 bytes, as before the byte was kept, `own` at 328 and the byte at 329.
+        // build: with the `types` feature, 336 bytes, as before the byte was kept, `own` at 328
+        // and the byte at 329; without it (an API's `Mount` keeps no OpenAPI document), 328
+        // bytes, `own` at 320 and the byte at 321.
         //
         // The layout is the compiler's, so the test can fail in two ways:
         // - a scope grew, or the byte left `own`'s word, after a change to `Scope`: that makes
@@ -1522,7 +1524,7 @@ mod tests {
         //   the byte; a scope that only shrank needs the measurement lowered and nothing else;
         // - another toolchain moved the layout with no such change. Measure both profiles again
         //   and move the measurement and the version above with it.
-        const MEASURED: usize = 336;
+        const MEASURED: usize = if cfg!(feature = "types") { 336 } else { 328 };
         let size = std::mem::size_of::<crate::app::Scope>();
         let (own, beside_a_tag) = crate::app::Scope::OWN_AND_BESIDE_A_TAG;
         eprintln!("scope: {size} bytes; own at {own}; beside_a_tag at {beside_a_tag}");
