@@ -5160,12 +5160,15 @@ async function stateWrites(browser, how, errors) {
 }
 
 /**
- * A marked answer that draws another page, `<main>` from another route or a patch whose address is
- * on another path, is a turn, as a visit to that page is: a write sent before it from the page it
- * left, its answer held until the marked one is drawn, then draws nothing (its 200 patch of the
- * panel the other page has too) and says nothing (its 503, on the other page's form of the same id,
- * action and method). And a marked patch's CSS variables are in before its address goes in: a
- * `navigate` listener as the runtime puts the address in reads them on the element it drew.
+ * A marked answer that draws another page, `<main>` from another route (a 503's too) or a patch
+ * whose address is on another path (once a page's `navigate` listener that holds the replace lets
+ * that address commit, too), is a turn, as a visit to that page is: a write sent before it from the
+ * page it left, its answer held until the marked one is drawn, then draws nothing (its 200 patch of
+ * the panel the other page has too) and says nothing (its 503, on the other page's form of the same
+ * id, action and method); and a press the marked answer's draw makes of a layout form whose write
+ * that turn ends is sent once the write has ended. And a marked patch's CSS variables are in before
+ * its address goes in: a `navigate` listener as the runtime puts the address in reads them on the
+ * element it drew.
  * @param {import("@playwright/test").Browser} browser @param {string[]} errors
  */
 async function markedBoundaries(browser, errors) {
@@ -5176,14 +5179,24 @@ async function markedBoundaries(browser, errors) {
   const answer = await fetch(home, { headers: { corten: "nav" } });
   await answer.arrayBuffer();
   const pageHeaders = Object.fromEntries(["corten-page", "corten-shell", "content-type"].flatMap((name) => (answer.headers.has(name) ? [[name, answer.headers.get(name) ?? ""]] : [])));
-  for (const [kind, status] of /** @type {const} */ ([["page", 200], ["page", 503], ["patch", 200]])) {
-    const name =
-      kind === "page"
-        ? `a write held while a marked form's page answer draws another route's page ${status === 200 ? "draws nothing on it once its 200 patch comes" : "says no corten:error on its form of the same id once its 503 comes"}`
-        : "a write held while a marked patch moves the address to another path draws nothing once its 200 patch comes";
+  // The write's answer's status, the marked answer's, and whether a page's `navigate` listener holds
+  // the marked answer's replace before its address goes in.
+  for (const [kind, status, drawn503, holds] of /** @type {const} */ ([["page", 200, false, false], ["page", 503, false, false], ["patch", 200, false, false], ["page", 200, true, false], ["patch", 200, false, true]])) {
+    const name = drawn503
+      ? "a write held while a marked form's 503 page answer draws another route's page draws nothing on it once its 200 patch comes"
+      : holds
+        ? "a write held while a marked patch's replace to another path is held until its address commits draws nothing once its 200 patch comes"
+        : kind === "page"
+          ? `a write held while a marked form's page answer draws another route's page ${status === 200 ? "draws nothing on it once its 200 patch comes" : "says no corten:error on its form of the same id once its 503 comes"}`
+          : "a write held while a marked patch moves the address to another path draws nothing once its 200 patch comes";
     const page = await browser.newPage();
     page.on("pageerror", (e) => errors.push(`boundary ${kind} ${status}: ${e.message}`));
     await page.goto(home);
+    if (holds && !(await page.evaluate(() => "NavigationPrecommitController" in window))) {
+      skip(name, "no precommitHandler");
+      await page.close();
+      continue;
+    }
     /** @type {() => void} */
     let release = () => {};
     const held = new Promise((resolve) => (release = () => resolve(undefined)));
@@ -5200,6 +5213,7 @@ async function markedBoundaries(browser, errors) {
         : route.fulfill(
             kind === "page"
               ? {
+                  status: drawn503 ? 503 : 200,
                   headers: pageHeaders,
                   body: '<form id="smoke-boundary-save" data-patch method="post" action="/smoke/address-boundary-save"><button>Boundary save</button></form><p id="smoke-boundary-panel">destination</p>',
                 }
@@ -5238,9 +5252,36 @@ async function markedBoundaries(browser, errors) {
       write.requestSubmit();
     });
     const saveSent = await posted;
+    // Held until the panel is drawn, then let go: the address commits after the panel drew.
+    if (holds)
+      await page.evaluate(() => {
+        const w = /** @type {any} */ (window);
+        /** @type {(value?: unknown) => void} */
+        let commit = () => {};
+        const holding = new Promise((resolve) => (commit = resolve));
+        Object.assign(w, { __commit: commit, __held: false });
+        w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+          if (w.__held || event.navigationType !== "replace" || new URL(event.destination.url).pathname !== "/smoke/address-boundary") return;
+          event.intercept({ precommitHandler: () => holding });
+          w.__held = true;
+        });
+      });
     await page.evaluate(() => /** @type {any} */ (window).__go.requestSubmit());
+    // Drawn while the address is held, before it commits.
+    const heldDrawn = holds
+      ? await page
+          .waitForFunction(() => document.getElementById("smoke-boundary-panel")?.textContent === "destination", undefined, { timeout: 5000 })
+          .then(() => page.evaluate(() => location.pathname === "/smoke/address" && /** @type {any} */ (window).__held), () => false)
+      : true;
+    if (holds) await page.evaluate(() => /** @type {any} */ (window).__commit());
+    // A 503 page answer moves no address.
+    const to = drawn503 ? "/smoke/address" : "/smoke/address-boundary";
     const drawn = await page
-      .waitForFunction(() => location.pathname === "/smoke/address-boundary" && document.getElementById("smoke-boundary-panel")?.textContent === "destination", undefined, { timeout: 5000 })
+      .waitForFunction(
+        (to) => location.pathname === to && document.getElementById("smoke-boundary-panel")?.textContent === "destination" && !(/** @type {any} */ (window).navigation?.transition),
+        to,
+        { timeout: 5000 },
+      )
       .then(() => true, () => false);
     release();
     // Long enough for the write's answer to come and, were it to, draw or be said.
@@ -5252,7 +5293,83 @@ async function markedBoundaries(browser, errors) {
       said: /** @type {string[]} */ (/** @type {any} */ (window).__said),
     }));
     await page.close();
-    check(name, saveSent && drawn && end.at === "/smoke/address-boundary?scope=week" && end.panel === "destination" && end.said.length === 0, JSON.stringify({ saveSent, drawn, ...end }));
+    const at = drawn503 ? "/smoke/address" : "/smoke/address-boundary?scope=week";
+    check(name, saveSent && heldDrawn && drawn && end.at === at && end.panel === "destination" && end.said.length === 0, JSON.stringify({ saveSent, heldDrawn, drawn, ...end }));
+  }
+
+  // A press the marked answer's draw makes (an element's `connectedCallback`) of a form of the
+  // layout whose write is on its way waits for that write as any press does, and is sent once the
+  // turn has ended it, as a press made once a visit began is.
+  const layoutSave = `${base}/smoke/address-boundary-layout`;
+  for (const kind of /** @type {const} */ (["page", "patch"])) {
+    const name = `a press a marked ${kind === "page" ? "page answer" : "patch to another path"}'s draw makes, of a layout form whose write it ends, is sent once that write has ended`;
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(`boundary press ${kind}: ${e.message}`));
+    await page.goto(home);
+    /** @type {string[]} */
+    const bodies = [];
+    await page.route(layoutSave, async (route) => {
+      const body = route.request().postData() ?? "";
+      bodies.push(body);
+      // The first is on its way as the marked answer draws, and never answered.
+      if (body !== "v=first") await route.fulfill({ status: 204 }).catch(() => {});
+    });
+    const drawnPress = '<p id="smoke-boundary-panel">destination<smoke-boundary-press></smoke-boundary-press></p>';
+    await page.route(`${destination}?scope=week`, (route) =>
+      route.request().headers()["corten"] !== "action"
+        ? route.continue()
+        : route.fulfill(kind === "page" ? { headers: pageHeaders, body: drawnPress } : { headers: { "corten-patch": "1", "content-type": "text/html" }, body: drawnPress }),
+    );
+    const first = page.waitForRequest((r) => r.url() === layoutSave, { timeout: 5000 }).then(() => true, () => false);
+    await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      customElements.define(
+        "smoke-boundary-press",
+        class extends HTMLElement {
+          connectedCallback() {
+            const form = /** @type {HTMLFormElement | null} */ (document.getElementById("smoke-boundary-layout"));
+            if (!form || w.__pressed) return;
+            w.__pressed = true;
+            /** @type {HTMLInputElement} */ (form.elements.namedItem("v")).value = "second";
+            form.requestSubmit();
+          }
+        },
+      );
+      const layout = document.createElement("form");
+      layout.id = "smoke-boundary-layout";
+      layout.dataset.patch = "";
+      layout.method = "post";
+      layout.action = "/smoke/address-boundary-layout";
+      const field = document.createElement("input");
+      field.name = "v";
+      field.value = "first";
+      layout.append(field);
+      // Outside `<main>`, which the page answer draws, as a layout's form is.
+      document.body.append(layout);
+      const panel = document.createElement("p");
+      panel.id = "smoke-boundary-panel";
+      panel.textContent = "home";
+      const go = document.createElement("form");
+      go.id = "smoke-boundary-go";
+      go.dataset.patch = "";
+      go.dataset.address = "";
+      go.action = "/smoke/address-boundary";
+      const scope = document.createElement("input");
+      scope.type = "hidden";
+      scope.name = "scope";
+      scope.value = "week";
+      go.append(scope);
+      /** @type {Element} */ (document.querySelector("main")).append(panel, go);
+      w.__go = go;
+      layout.requestSubmit();
+    });
+    const firstSent = await first;
+    const second = page.waitForRequest((r) => r.url() === layoutSave && r.postData() === "v=second", { timeout: 5000 }).then(() => true, () => false);
+    await page.evaluate(() => /** @type {any} */ (window).__go.requestSubmit());
+    const secondSent = await second;
+    const end = await page.evaluate(() => ({ at: location.pathname + location.search, pressed: !!(/** @type {any} */ (window).__pressed) }));
+    await page.close();
+    check(name, firstSent && secondSent && end.pressed && end.at === "/smoke/address-boundary?scope=week", JSON.stringify({ firstSent, secondSent, ...end, bodies }));
   }
 
   const page = await browser.newPage();

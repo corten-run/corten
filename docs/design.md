@@ -12645,12 +12645,17 @@ rules something out.
     for a submit a navigation cuts off, which the runtime aborts as it takes the navigation: the
     user has left the page it was for, and the form it would be said on with it. A marked answer
     that draws another page is a turn, as a visit to that page is: a page answer (`corten-page`,
-    another route's `<main>` included) as it is drawn, and a patch once its address on another path
-    is in. The runtime then does what it does as a visit begins, with the same code: it ends every
-    submit of another form on its way as the draw began (not one the draw itself made, which is
-    the new page's), numbering a write it cut off before its answer came, so the next navigation
-    reads the page whole, and counts the turn by which a failed write is said only on a form drawn
-    with no navigation to another address since its press. So a Save on its way draws nothing on
+    another route's `<main>` included, and a 5xx's, which puts no address in) as it is drawn, and a
+    patch once its address on another path is in (where a page's `navigate` listener holds the
+    replace, as the held navigation commits that address). The runtime then does what it does as a
+    visit begins, with the same code: it ends every submit of another form on its way as the draw
+    began (not one the draw itself made, which is the new page's), numbering a write it cut off
+    before its answer came, so the next navigation reads the page whole, and counts the turn by
+    which a failed write is said only on a form drawn with no navigation to another address since
+    its press. A press the draw made of a form whose write it ends (an element's
+    `connectedCallback` that presses a form of the layout), which waits for that write as any press
+    of the form does, is the new page's too, as a press made once a visit has begun is: it is sent
+    once that write has ended, as a press waiting for a write is. So a Save on its way draws nothing on
     the other page once its 200 patch comes, though that page has an element of the id it patches,
     and its 503 fires `corten:error` on no form there, though one has its id, `action` and
     `method`. A patch that changes only the query draws on the same page, and is no turn: a write
@@ -12664,7 +12669,7 @@ rules something out.
     say so: a press of its form made then (a later listener cancelled that navigation) neither waits
     for it nor is answered by it. A form without the mark is as before the mark: a press the same
     as its aborted read sends nothing more, and a press of it after an aborted write waits for that
-    write, which sends nothing after it. A press waiting for a write of its form keeps its place as the
+    write, which sends nothing after it, but for one a marked answer's draw made (above). A press waiting for a write of its form keeps its place as the
     latest press and its entry whatever it was pressed as, and is sent as the form the write's answer drew sends it,
     fenced as that: a read only while its press still holds, on the entry it was pressed on, a
     post the form now sends by GET included, whose answer then puts its address in if it was
@@ -12919,9 +12924,14 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,518 bytes larger raw (46,502 to 50,020), 1,433
-    with gzip (16,718 to 18,151) and 1,278 with brotli (15,106 to 16,384), paid once a release by
-    every user (157, 77 and 65 larger than the build before this one, which let a write on its way
+    What it costs: the runtime every page loads is 3,743 bytes larger raw (46,502 to 50,245), 1,518
+    with gzip (16,718 to 18,236) and 1,359 with brotli (15,106 to 16,465), paid once a release by
+    every user (225, 85 and 81 larger than the build before this one, which, as a marked answer drew
+    another page, dropped a press its draw made of a form whose write it ended; ended no submit for
+    a marked answer's 5xx page, nor for a patch whose replace a page's `navigate` listener held
+    until its address on another path committed; and copied every submit on its way as any form's
+    answer drew, then searched that copy for each; that build was 157, 77 and 65 larger than the one
+    before it, which let a write on its way
     as a marked answer drew another page, `<main>` or a patch whose address is on another path,
     draw its 200 patch there or say its 503 on that page's form of the same id; counted a
     `currententrychange` a page dispatched itself as a change of the entry, so the entry's

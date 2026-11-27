@@ -2263,11 +2263,14 @@ address even beside elements that draw). A 4xx patch that
 draws (a 422) moves it, and so does a page answer
 (`<main>`) drawn in place. A patch's CSS variables (`data-vars`) are in before its address goes
 in, as a page answer's are, so a `navigate` listener that hears the replace sees the patch whole.
-A marked answer that draws another page, a page answer (`<main>`, another route's too) or a patch
-whose address is on another path, is a turn as a visit to that page is: a submit of another form
-sent from the page before it and still on its way (a Save) draws nothing and fires no
+A marked answer that draws another page, a page answer (`<main>`, another route's too, a 5xx's
+included) or a patch whose address is on another path (once that address commits, where a
+script's `navigate` listener holds the replace), is a turn as a visit to that page is: a submit of
+another form sent from the page before it and still on its way (a Save) draws nothing and fires no
 `corten:error` when its answer comes, and a write it cut off before its answer came makes the next
-navigation read the page whole, as one a link cuts off. A marked answer that changes only the
+navigation read the page whole, as one a link cuts off. A press the answer's own draw makes of a
+form whose write it cuts off (a layout form an element presses as it connects) is the new page's,
+and is sent once that write has ended. A marked answer that changes only the
 query, a patch, is no turn. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and one
