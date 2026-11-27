@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Http.Timeouts;
 namespace ItemPage.Pages;
 
 [RequestTimeout("Marketplace")]
-public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
+public sealed class MarketplaceModel(MarketplaceSource source, MarketplacePublicOrigin publicOrigin) : PageModel
 {
     public MarketplaceRecord Record { get; private set; } = null!;
     public MarketplaceFormat Format { get; private set; } = null!;
@@ -20,8 +20,7 @@ public sealed class MarketplaceModel(MarketplaceSource source) : PageModel
     async Task<IActionResult> Render(string locale, string id, AlertStore? alerts = null)
     {
         if (!MarketplaceFormat.Supported(locale)) return BadRequest();
-        if (alerts is not null && (Request.Headers["Sec-Fetch-Site"] == "cross-site"
-            || (Request.Headers.ContainsKey("Origin") && Request.Headers.Origin != $"{Request.Scheme}://{Request.Host}")))
+        if (alerts is not null && (Request.Headers["Sec-Fetch-Site"] == "cross-site" || !publicOrigin.Allows(Request)))
             return StatusCode(StatusCodes.Status403Forbidden);
         var traceParent = Request.Headers["traceparent"].ToString();
         var record = await source.Get(id, HttpContext.RequestAborted, traceParent);

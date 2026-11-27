@@ -9,6 +9,7 @@ import { limits } from "./process.mjs";
 
 // Allow one writer deadline of 100 ms samples, subject to both payload limits.
 export const storageLimits = Object.freeze({ bytes: hostObservationBytes, queuedBytes: 8 * 2 ** 20, frames: 300, records: 4096 });
+const sampleBatchFrames = 16, sampleBatchBytes = 256 * 2 ** 10;
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((key) => a[key] === b[key]);
 const codes = new Set(["ENOENT", "EEXIST", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ETIMEDOUT", "ERR_ASSERTION"]);
@@ -38,7 +39,7 @@ export function hostDurableWriter(directory) {
   let file, error, operation = "sample-open", closing = false, finalizing = false, complete = false, active = false, cleanup;
   let cancelled, interruptedStage;
   let bytes = 0, queuedBytes = 0, frames = 0, pendingRecords = 0, samples = 0;
-  let tail;
+  let tail, pendingBatch;
   const startup = startupReaders.get(directory);
   if (startup) startup.read = (timedOut) => hostStorageFailure(error)
     ?? (timedOut && interruptedStage ? Object.freeze({ operation: interruptedStage, code: "ETIMEDOUT" }) : undefined);
@@ -83,8 +84,8 @@ export function hostDurableWriter(directory) {
     operation = syncOperation;
     await guardDirectory(path);
   }
-  async function write(handle, value) {
-    const data = Buffer.from(value); let offset = 0;
+  async function write(handle, data) {
+    let offset = 0;
     while (offset < data.length) {
       healthy();
       const { bytesWritten } = await handle.write(data, offset, data.length - offset, null);
@@ -106,6 +107,7 @@ export function hostDurableWriter(directory) {
   }
   function stop() {
     closing = true;
+    pendingBatch = undefined;
     // Neither a rejected wait nor a timeout cancels an outstanding filesystem
     // operation. Its chain retains ownership and closes handles once it returns.
     cleanup ??= tail.then(async () => {
@@ -136,7 +138,7 @@ export function hostDurableWriter(directory) {
     ready: () => wait(ready),
     has: (key) => records.has(key),
     get error() { return error; },
-    get settled() { return cleanup ?? tail; },
+    get settled() { pendingBatch = undefined; return cleanup ?? tail; },
     state() { return { bytes, queuedBytes, frames, pendingRecords, samples, openFiles: handles.size, complete,
       pendingOwnership: active || frames !== 0 || handles.size !== 0, error: hostStorageFailure(error) ?? null }; },
     enqueue(initial, sample) {
@@ -155,13 +157,24 @@ export function hostDurableWriter(directory) {
         if (pendingRecords + entries.length > storageLimits.records) throw overLimit("queued-records");
         bytes += size; queuedBytes += size; frames++; pendingRecords += entries.length;
         for (const { key, value } of entries) records.set(key, digest(value));
+        if (!entries.length && pendingBatch && pendingBatch.samples.length < sampleBatchFrames
+          && pendingBatch.size + size <= sampleBatchBytes) {
+          pendingBatch.samples.push(sample);
+          pendingBatch.size += size;
+          return;
+        }
+        // Only the last, not-yet-started sample batch can grow. Schedule it
+        // immediately; an active append, record or wait boundary is never crossed.
+        const batch = { samples: [sample], size };
+        pendingBatch = entries.length ? undefined : batch;
         tail = tail.then(() => timed(async () => {
+          if (pendingBatch === batch) pendingBatch = undefined;
           for (const { key, value } of entries) {
             operation = "process-record-write";
             await guardDirectory(processes); healthy();
             const path = join(processes, `${key}.json`), handle = await opened(path, "wx");
             try {
-              await write(handle, value); await guardFile(handle, path);
+              await write(handle, Buffer.from(value)); await guardFile(handle, path);
               operation = "process-record-sync"; healthy(); await handle.sync(); healthy();
               await guardFile(handle, path);
             } catch (cause) { throw fail(cause); }
@@ -170,11 +183,13 @@ export function hostDurableWriter(directory) {
           }
           operation = "sample-write";
           await guardDirectory(directory); await guardFile(file, join(directory, "samples.jsonl"));
-          await write(file, sample); samples++;
-        })).finally(() => { queuedBytes -= size; frames--; pendingRecords -= entries.length; });
+          const data = batch.samples.length === 1 ? Buffer.from(sample)
+            : Buffer.concat(batch.samples.map((value) => Buffer.from(value)), batch.size);
+          await write(file, data); samples += batch.samples.length;
+        })).finally(() => { queuedBytes -= batch.size; frames -= batch.samples.length; pendingRecords -= entries.length; });
       } catch (cause) { const failure = fail(cause, "storage-admission"); stop(); throw failure; }
     },
-    drain() { return wait(tail); },
+    drain() { pendingBatch = undefined; return wait(tail); },
     abort() {
       if (!cancelled) {
         if (startup && active) interruptedStage = operation;

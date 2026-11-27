@@ -2219,8 +2219,9 @@ fn named(host: &[u8], names: Option<&[String]>) -> Asked {
 /// [`named`] with no names to hold the host to: whether it is a host and maybe a port at all.
 /// Every request to an app that answers to any host comes here, so it is in line where the
 /// request is read, and a `Host` of a name's own characters and a port is read once, its port
-/// from the end and its name four bytes at a look ([`without_port`], [`reg_name`]).
-#[inline]
+/// from the end and a name of letters, digits, `-` and `.` sixteen bytes at a look
+/// ([`without_port`], [`reg_name`]).
+#[inline(always)]
 fn any(host: &[u8]) -> Asked {
     // `[::1]:3000`: an IPv6 address is always in brackets.
     if host.first() == Some(&b'[') {
@@ -2297,17 +2298,78 @@ fn ends_with(name: &[u8], suffix: &[u8]) -> bool {
 
 /// Whether `name` is a `reg-name` (RFC 3986 3.2.2) of at least one byte: unreserved characters,
 /// sub-delimiters and percent-encoded bytes. No colon, so a second one in a `Host` is not a port's.
-#[inline]
+#[inline(always)]
 fn reg_name(name: &[u8]) -> bool {
+    // A name of 8 to 16 bytes, of the letters, digits, `-` and `.` most names are made of, is
+    // read in line sixteen bytes at a look, as its first eight and its last eight (which overlap
+    // in a name shorter than 16). Any other name is read out of line ([`spelled`]).
+    match (name.first_chunk::<8>(), name.last_chunk::<8>()) {
+        (Some(first), Some(last)) if name.len() <= 16 && unlike_a_name(first) | unlike_a_name(last) == 0 => true,
+        _ => spelled(name),
+    }
+}
+
+/// [`reg_name`] for a name it does not read in line: one longer than 16 bytes of letters,
+/// digits, `-` and `.` alone sixteen at a look ([`plain`]); a shorter one, and one with any
+/// other byte, by the table below, which says the same of these. The table reads on from the
+/// first byte no look before the one that found another byte read ([`plain`]), as the bytes
+/// before it are a name's as written and none is `%`.
+#[inline(never)]
+fn spelled(name: &[u8]) -> bool {
+    spelled_by(name, encoded)
+}
+
+/// [`spelled`], with the reader of percent-encoded bytes given ([`encoded`]; a test sees the
+/// bytes it is given: only those no look before the one that found another byte read).
+#[inline(always)]
+fn spelled_by(name: &[u8], encoded: impl FnOnce(&[u8]) -> bool) -> bool {
+    let from = match plain(name, unlike_a_name) {
+        Ok(()) => return true,
+        Err(from) => from,
+    };
+    let unread = &name[from..];
     // Few names hold a percent-encoded byte, so the name is read first for the bytes it holds
     // as they are, four to a look and then the one to three left over: a look at four costs
     // little more than a look at one, and a name is some tens of bytes.
     let written = |byte: &u8| AS_WRITTEN[usize::from(*byte)];
-    let (fours, rest) = name.as_chunks::<4>();
+    let (fours, rest) = unread.as_chunks::<4>();
     if fours.iter().all(|[a, b, c, d]| written(a) & written(b) & written(c) & written(d)) && rest.iter().all(written) {
         return !name.is_empty();
     }
-    encoded(name)
+    encoded(unread)
+}
+
+/// `Ok` when `name` is longer than 16 bytes and all letters, digits, `-` and `.`, each 16 from
+/// its start and then the last 16, which overlap the one before, looked at by `unlike`
+/// ([`unlike_a_name`]; a test counts the looks). It stops at the first look that finds another
+/// byte and gives the first byte no earlier look read: where that look starts, or, when the last
+/// 16 find it, the first byte after the whole sixteens, as the last 16 overlap the look before
+/// (32 for a name of 40, whose last 16 start at 24). Every byte before it is one of those, so a
+/// long `Host` is not read to its end before the table reads it, nor read again by the table up to
+/// there; 0 for a name of 16 bytes or fewer, which it does not look at.
+#[inline(always)]
+fn plain(name: &[u8], mut unlike: impl FnMut(&[u8; 16]) -> u8) -> Result<(), usize> {
+    let Some(last) = name.last_chunk::<16>().filter(|_| name.len() > 16) else { return Err(0) };
+    let (sixteens, _) = name.as_chunks::<16>();
+    match sixteens.iter().position(|each| unlike(each) != 0) {
+        Some(at) => Err(at * 16),
+        None if unlike(last) == 0 => Ok(()),
+        // The last 16 found it, so it is among the bytes after the whole sixteens.
+        None => Err(sixteens.len() * 16),
+    }
+}
+
+/// Nonzero when any of `bytes` is not a letter, a digit, `-` or `.`. Each byte is looked at with
+/// no early return, so the compiler reads them all at once: sixteen in one look, which two calls
+/// for eight are joined into.
+#[inline(always)]
+fn unlike_a_name<const N: usize>(bytes: &[u8; N]) -> u8 {
+    bytes.iter().fold(0, |unlike, &byte| {
+        let digit = byte.wrapping_sub(b'0') < 10;
+        let letter = (byte | 0x20).wrapping_sub(b'a') < 26;
+        let dash_or_dot = byte.wrapping_sub(b'-') < 2;
+        unlike | u8::from(!(digit | letter | dash_or_dot))
+    })
 }
 
 /// The bytes a `reg-name` holds as they are: unreserved characters and sub-delimiters.
@@ -2376,7 +2438,13 @@ pub(crate) struct HostCheck(Option<Arc<[String]>>);
 
 impl HostCheck {
     pub(crate) fn asked(&self, req: &Request) -> Asked {
-        asked(req, || host_lines(req.headers()), self.0.as_deref())
+        // Decided first, so the read for an app that answers to any host holds no names. The
+        // stages' check (`Policy::asked`) does not: there it made every staged request cost more
+        // (docs/design.md#choice-fixed-stages).
+        match self.0.as_deref() {
+            None => asked(req, || host_lines(req.headers()), None),
+            names => asked(req, || host_lines(req.headers()), names),
+        }
     }
 }
 
@@ -2953,7 +3021,7 @@ mod tests {
     /// RFC 9110 7.2's `uri-host [ ":" port ]` with RFC 3986 3.2.2's host and Corten's two
     /// choices (a name of no bytes is none, and an address in brackets is IPv6 or none), read
     /// from the start a byte at a time with no table: the other way round from [`any`], which
-    /// takes the port off the end and reads the name four bytes at a look.
+    /// takes the port off the end and reads the name many bytes at a look.
     fn is_host(host: &[u8]) -> bool {
         fn port(rest: &[u8]) -> bool {
             match rest {
@@ -2979,11 +3047,11 @@ mod tests {
         at > 0 && port(&host[at..])
     }
 
-    /// The reader's two short cuts, the port taken off the end and the name read four bytes at
-    /// a look, give what the grammar read a byte at a time gives ([`is_host`]): for every
-    /// value of up to four bytes of what a `Host` is made of and is not, and for names of each
-    /// length around a look's four bytes with each byte of them changed in turn. A name the
-    /// app does not hold is another host's when it is a host, and malformed when it is none.
+    /// The reader's short cuts, the port taken off the end and the name read sixteen or four
+    /// bytes at a look, give what the grammar read a byte at a time gives ([`is_host`]): for
+    /// every value of up to four bytes of what a `Host` is made of and is not, and for names of
+    /// each length around those looks with each byte of them changed in turn. A name the app
+    /// does not hold is another host's when it is a host, and malformed when it is none.
     #[test]
     fn a_host_read_four_bytes_at_a_look_is_what_the_grammar_says() {
         let names = ["shop.example".to_string(), ".corp.example".to_string()];
@@ -3050,6 +3118,31 @@ mod tests {
                 }
             }
         }
+        // A name of letters, digits, `-` and `.` alone, which is read sixteen bytes at a look,
+        // of each length up to two looks and a half, with ports of a few lengths: each of the 256
+        // bytes at each place in it.
+        let plain = b"Shop-2.example-cdn.region-9.example.TEST";
+        let ports: [&[u8]; 7] = [b"", b":", b"1", b":8080", b":1234567", b":12345678", b"a:12345"];
+        for length in 1..=plain.len() {
+            for port in ports {
+                let host = with(&plain[..length], port);
+                hold(&host);
+                for at in 0..host.len() {
+                    for byte in 0..=255 {
+                        let mut host = host.clone();
+                        host[at] = byte;
+                        hold(&host);
+                    }
+                }
+                // A percent-encoded byte at each place, whole and cut short: the table reads on
+                // from the first byte no look before the one that found its `%` read.
+                for at in 0..=length {
+                    for encoded in [&b"%4a"[..], b"%C3%A9", b"%4", b"%4g", b"%g4"] {
+                        hold(&[&plain[..at], encoded, &plain[at..length], port].concat());
+                    }
+                }
+            }
+        }
         // Each of the 256 bytes at each place in a name of up to nine.
         for length in 1..=9 {
             for at in 0..length {
@@ -3061,6 +3154,94 @@ mod tests {
             }
         }
         assert!(read > 100_000, "{read} values read");
+    }
+
+    /// A long `Host` that is no name is read sixteen bytes at a look only as far as the first look
+    /// that finds a byte no plain name has: `@` and 4,095 `a` is one look, where the old
+    /// reader stopped at its first byte as well, and a name that is one is read to its end. The
+    /// table reads on from the first byte no earlier look read, so 4,095 `a` and `_` is read once
+    /// and not again by the table from its start.
+    #[test]
+    fn a_long_name_that_is_none_is_not_read_to_its_end() {
+        let looks = |name: &[u8]| {
+            let mut looks = 0;
+            let plain = plain(name, |each| {
+                looks += 1;
+                unlike_a_name(each)
+            });
+            (plain, looks)
+        };
+        let mut name = vec![b'a'; 4096];
+        assert_eq!(looks(&name), (Ok(()), 257));
+        assert!(reg_name(&name));
+        name[0] = b'@';
+        assert_eq!(looks(&name), (Err(0), 1));
+        assert!(!reg_name(&name));
+        assert_eq!(any(&name), Asked::Malformed);
+        // A byte a name holds as written but a plain one does not: the table reads the rest.
+        name[0] = b'_';
+        assert_eq!(looks(&name), (Err(0), 1));
+        assert!(reg_name(&name));
+        name[0] = b'a';
+        name[100] = b'@';
+        assert_eq!(looks(&name), (Err(96), 7));
+        assert!(!reg_name(&name));
+        name[100] = b'a';
+        name[4095] = b'@';
+        assert_eq!(looks(&name), (Err(4080), 256));
+        assert!(!reg_name(&name));
+        name[4095] = b'_';
+        assert_eq!(looks(&name), (Err(4080), 256));
+        assert!(reg_name(&name));
+        assert_eq!(any(&[&name[..], b":8080"].concat()), Asked::Here);
+        // Found by the last 16 alone, after two whole sixteens: the table reads from byte 32.
+        let mut name = vec![b'a'; 40];
+        name[39] = b'_';
+        assert_eq!(looks(&name), (Err(32), 3));
+        assert!(reg_name(&name));
+        // A percent-encoded byte found by a look, and one whose `%` ends the look before its
+        // digits: the table and the encoded bytes are read from the first byte no earlier look
+        // read, 32 where the last 16 (from 24) found it and 16 where the second look did.
+        for (at, encoded, whole, from) in
+            [(37, &b"%4a"[..], true, 32), (37, b"%4g", false, 32), (31, b"%4a", true, 16), (31, b"%g4", false, 16)]
+        {
+            let mut name = vec![b'a'; 40];
+            name[at..at + 3].copy_from_slice(encoded);
+            assert_eq!(looks(&name).0, Err(from), "{}", String::from_utf8_lossy(&name));
+            assert_eq!(reg_name(&name), whole, "{}", String::from_utf8_lossy(&name));
+        }
+        // 16 bytes or fewer are none of its: `reg_name` reads them in line or by the table.
+        assert_eq!(looks(&[b'a'; 16]), (Err(0), 0));
+        assert_eq!(looks(b""), (Err(0), 0));
+        assert!(!reg_name(b""));
+    }
+
+    /// The percent-encoded bytes of a long name are read from the look that found the `%`, not
+    /// from the name's start: for 4,093 `a` and `%4a`, [`encoded`] is given its last 16 bytes
+    /// alone. The `unstaged-any-encoded` cost case does not by itself catch a reader given the
+    /// whole name, as the merge base it is counted against reads the whole name twice; this does.
+    #[test]
+    fn a_long_names_encoded_bytes_are_read_from_the_look_that_found_them() {
+        // Where in `name` the bytes given to the reader start and end.
+        let given = |name: &[u8]| {
+            let mut given = None;
+            let whole = spelled_by(name, |unread| {
+                let start = unread.as_ptr() as usize - name.as_ptr() as usize;
+                given = Some(start..start + unread.len());
+                encoded(unread)
+            });
+            (whole, given)
+        };
+        let mut name = vec![b'a'; 4093];
+        name.extend_from_slice(b"%4a");
+        assert_eq!(given(&name), (true, Some(4080..4096)));
+        name[4095] = b'g';
+        assert_eq!(given(&name), (false, Some(4080..4096)));
+        // A name the table holds as written is not given to it at all.
+        name[4093..].copy_from_slice(b"__a");
+        assert_eq!(given(&name), (true, None));
+        // A short name, which no look reads, is given whole.
+        assert_eq!(given(b"a%4a"), (true, Some(0..4)));
     }
 
     /// What a request asks for where no connection brought it (a test's, as these are): its

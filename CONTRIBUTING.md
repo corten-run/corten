@@ -600,9 +600,10 @@ establish a general ranking.
       command then drafts an issue for whoever made the run, naming the pull requests merged
       since the row before when the run's head descends from that row's commit, and since the
       release otherwise, and opens nothing. A run that is not past it has not shown the cost
-      to be under +2%. No run has been made, so no reading sees what counted changes add up to
-      in cycles, and a release takes the kit's counts of its candidate against the last release
-      whenever no row reads that candidate
+      to be under +2%. A row reads the one commit of `main` it names against the release it
+      names (the first, of 2026-11-26, `056aba61c` against `v0.2.0`) and no change merged after
+      that commit, and a release takes the kit's counts of its candidate
+      against the last release whenever no row reads that candidate
       ([RELEASING.md](RELEASING.md#readiness-checkpoints) says which row does).
 
       A reading published under the rule as it stood before this paragraph was on `main` stays

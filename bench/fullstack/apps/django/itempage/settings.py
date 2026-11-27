@@ -30,6 +30,14 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STORAGES = {"staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"}}
 
+if "MARKETPLACE_PUBLIC_ORIGIN" in os.environ:
+    from .marketplace_csrf import parse_public_origin
+
+    MARKETPLACE_PUBLIC_ORIGIN = parse_public_origin(os.environ["MARKETPLACE_PUBLIC_ORIGIN"])
+    MIDDLEWARE[MIDDLEWARE.index("django.middleware.csrf.CsrfViewMiddleware")] = (
+        "itempage.marketplace_csrf.MarketplaceCsrfViewMiddleware"
+    )
+
 # Keep the default benchmark profile unchanged; production qualification opts in.
 if os.environ.get("PROFILE") == "matched":
     from django.middleware.csp import CSP
