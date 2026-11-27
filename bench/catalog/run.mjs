@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { catalogPeers } from "../fullstack/inventory.mjs";
 import { sampleStats } from "./stats.mjs";
 import { commandRunner, failureReceipt, ownedContainer } from "./output.mjs";
 import { readFailedCheck } from "./check-result.mjs";
@@ -28,6 +29,7 @@ try {
   contract = await import("./contract.mjs");
   grouping = await import("./group.mjs");
   inventory = (await import("../fullstack/apps.mjs")).pageApps;
+  if (process.argv.includes("--group")) inventory = { ...inventory, ...catalogPeers };
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
@@ -37,6 +39,7 @@ const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } 
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
 const group = options.group === undefined ? null : groupDescriptor(options.group);
+const effectiveLeanApps = contract.recordedLeanApps({ group });
 const plan = timingPlan(options, sources, targets);
 const loadLayout = process.env.CATALOG_LOAD_LAYOUT;
 if (loadLayout !== undefined) assert.equal(options.group, "catalog-page", "generator qualification requires the catalog-page group");
@@ -54,12 +57,12 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
   measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec",
-    leanProfile: { name: leanProfile, apps: leanApps } } };
+    leanProfile: { name: leanProfile, apps: effectiveLeanApps } } };
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
 if (loadLayout !== undefined) summary.measurement.loadLayout = loadLayout;
 // Ungrouped runs header-check only the lean contenders (check.mjs); record that scope so
 // reports never present the mixed run as a feature-parity comparison.
-if (!group) summary.measurement.documentHeaders = { contract: groupDescriptor("catalog-page").documentHeaders, apps: [...leanApps] };
+if (!group) summary.measurement.documentHeaders = { contract: groupDescriptor("catalog-page").documentHeaders, apps: [...effectiveLeanApps] };
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
 if (group) Object.assign(summary.measurement, { apparatus,

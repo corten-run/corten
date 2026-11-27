@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { allApps } from "../fullstack/apps.mjs";
-import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile, verifyDocumentHeaderChecks } from "./contract.mjs";
+import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile, recordedLeanApps, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, inspectGroupEvidence } from "./group.mjs";
 import { dirname } from "node:path";
@@ -41,7 +41,7 @@ function documentHeaderScope(summary, group, apps) {
     assert.equal(recorded, undefined, "group runs record their document header contract in the group descriptor");
     return null;
   }
-  if (recorded !== undefined) assert.deepEqual(recorded, { contract: documentHeaderContract, apps: [...leanApps] }, "catalog document header scope differs");
+  if (recorded !== undefined) assert.deepEqual(recorded, { contract: documentHeaderContract, apps: recordedLeanApps(summary) }, "catalog document header scope differs");
   const evidence = Object.values(summary.apps).some((entry) => ["fixture", "api"].some((source) =>
     entry?.checks?.[source] && Object.hasOwn(entry.checks[source], "documentHeaders")));
   if (recorded === undefined && !evidence) return null;
@@ -68,7 +68,7 @@ export function inspectCatalog(summary, expectedCommit) {
   assert.ok(summary.apps && !Array.isArray(summary.apps), "missing apps");
   assert.ok(Array.isArray(summary.failures) && Array.isArray(summary.cleanupFailures), "missing failure records");
   if (summary.measurement?.leanProfile !== undefined) {
-    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: recordedLeanApps(summary) }, "catalog lean configuration differs");
   }
   const group = inspectGroupEvidence(summary, phases, aggregate);
   const workers = summary.savedEvidence?.schema === "catalog-saved-evidence/v4";
@@ -267,6 +267,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
     }
     console.log(renderCatalog(report));
+    // Preserve pre-header v3's original strict ledger semantics. For a header-checked
+    // group, do not let a retired roster qualify as the current comparison.
+    if (strict && summary.group?.documentHeaders && summary.group.contractSha256 !== groupDescriptor("catalog-page").contractSha256)
+      throw new Error("strict header-checked comparison requires this checkout's roster; use the measured checkout for a historical group");
     if (strict && !report.baseline) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; } })();
 }

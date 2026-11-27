@@ -1,10 +1,66 @@
 # Native JSON API Group
 
 This explicit, independent native runner implements the registry's `json-api` matrix:
-Corten, ordinary ASP.NET, FastAPI, Express, Spring, axum/Maud, Drogon, Gin and ASP.NET AOT.
+Corten, ordinary ASP.NET, FastAPI, Express, Spring, axum/Maud, Drogon, Gin, ASP.NET AOT and ntex.
 No app is filtered, substituted or borrowed from another framework. Both `catalog-v1`
 (strings-only records) and `marketplace-v2` (rich machine-numeric records) are measured in
 fixture and API modes. The four cases have `target: "json"` and `locale: null`.
+The nine-app historical contract can still be read; strict qualification uses its
+measured checkout, not the ten-app roster.
+
+### Optional transport comparison
+
+For a small **fixture-only diagnostic**, use the already-running native JSON app rather
+than a new group. Publish its port 8080 only on loopback; pass the full container ID:
+
+```sh
+node bench/json-api/transport.mjs FULL_CONTAINER_ID marketplace-v2 "middleware and gzip level from the measured image, or unknown"
+```
+
+Three arms share the same three rotating records, four sequential HTTP/1.1 lanes and
+150 scheduled requests/second by default. On a constrained generator, specify 30 or 75
+as the final argument for **every** adapter; never pool different rates. Compare persistent identity against persistent gzip to
+isolate compression; compare persistent identity against identity with a clean close
+every ten requests to isolate connection turnover. There is no fourth combined arm and
+no duplicate identity run per question. The driver warms each arm, rotates order over
+three passes, and reports each pass separately. Each received body is checked against
+the fixture after decoding. No validators, proxy, upstream or output cache should be in
+this experiment. Native source review is still required to rule out cached output.
+
+Read wire **body** bytes (not headers), successful throughput, p99, failures, dropped
+offers, observed connection counts and counted app CPU together. Wall latency stops at
+body receipt, before client decoding; validation still costs generator CPU. CPU brackets
+the pass using the container's cgroup v2 counter, including observer overhead. Compare
+codec CPU only for matching verified settings; the recorded operator declaration is not proof. Record
+the adapter, image, codec settings, host, CPU placement and resource budget when comparing
+deployments. A server ignoring gzip is unsupported for that arm; reconnects in a persistent
+arm or a generator that misses scheduled work invalidate the comparison. These short,
+fixed-rate observations do not establish maximum capacity or an official group result.
+The driver withholds ranges and paired deltas on missed offers, event-loop utilization
+of 80% or more, or p99 start lag of half a lane interval or more, including warmup.
+These checks can rule out a run; passing them does not prove the host was isolated.
+The pinned ntex adapter compresses the freshly serialized response in-process:
+`ntex 4.11.1`'s `src/http/encoding/encoder.rs` selects flate2's fast (level 1)
+for gzip. A framework-default axum adapter without a compression layer is unsupported,
+not a zero-cost compression result.
+The existing identity-only group and native-source gates remain unchanged in purpose.
+
+**Admission pilot, 2026-11-27.** The ntex 4.11.1 release adapter passed all four
+functional cases (500 records each, including numeric marketplace records and the
+upstream mutation/error checks). Source inspection confirmed fresh serde serialization
+and per-request in-process gzip, not pre-encoded fixture bytes. Keep ntex as a JSON
+peer, not an HTML or marketplace-page implementation.
+
+On one shared host we also tried the marketplace fixture with Corten and axum from
+`468264ace` and the new ntex adapter, each pinned to the same CPU with 1 GiB.
+At 30 offers/s (four lanes, 240 measured requests per arm per pass), complete
+persistent passes observed four sockets; complete turnover passes observed 24.
+The default axum image answered gzip negotiation with identity. Each adapter
+had at least one missing offer or inadequate generator headroom in an identity
+or comparison pass, so **none produced a three-pass paired estimate**. The pilot
+does not support ranking these apps by CPU or latency or quantifying the cost of
+reconnecting. Run the same command on an idle native Linux host before publishing
+a paired comparison; an official group round also requires the exact-image audits.
 
 ```sh
 node --test bench/json-api/*.test.mjs
@@ -60,7 +116,7 @@ boundary, not something an unsigned JSON receipt proves cryptographically.
 
 Missing images, routes, functional checks or native receipts leave their selected rows
 visible and incomplete. Every member/case is attempted. **No timing begins unless the entire
-36-cell matrix passes both gates.** In particular an AOT failure cannot be hidden by an
+40-cell matrix passes both gates.** In particular an AOT failure cannot be hidden by an
 ordinary ASP.NET result, and functional success alone never admits an app to load.
 
 ## Measurement And Evidence
@@ -93,7 +149,7 @@ load receipts must use their complete fixed native commands and inspected tool e
 All roles retain and replay the container's actual `Config.Entrypoint`, `Config.Cmd`, `Path`
 and `Args`. A same-image replacement command or executable is invalid apparatus, not a
 complete observed framework failure. Historical captures without these fields remain incomplete.
-The isolated audit handoff independently inspects all 18 app images and both Node/k6 tool images;
+The isolated audit handoff independently inspects each app's two payload images and both Node/k6 tool images;
 timing execution metadata must also equal those accepted image observations, not just a
 consistently rewritten runtime snapshot. No default command is invented by the runner.
 Both tools are prepared before checks, including check-only and negative attempts. The
@@ -111,7 +167,7 @@ phases require zero upstream read deltas; API cold reads must fit the successful
 attempt count. Both sources retain before/after counter observations, never a null placeholder.
 The timing order is pass, explicit registry profile, then app. App order rotates by
 `floor((pass - 1) * appCount / passes)`, the existing native marketplace convention; the
-three-pass offsets for nine apps are 0, 3 and 6. Every pass still covers all 36 cells.
+three-pass offsets for ten apps are 0, 3 and 6. Every pass covers all 40 cells.
 The runner saves and consumes the exact effective schedule in `summary.timingPlan`; the
 report rejects a missing or changed schedule. A saved plan alone is not execution evidence.
 
@@ -289,7 +345,7 @@ one more control reading. Its per-record starts must match the sweep counter, an
 the response-finish observer must show one completed 200 for every start and no
 aborts. A missing witness, non-200 answer, or unhealthy upstream setting leaves
 the observed app responses on disk but cannot establish a target failure.
-All 36 cells are attempted and all native source audits remain required, even for a negative
+Every app's four cells are attempted and all native source audits remain required, even for a negative
 cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
 with empty runs/aggregates and retained owned-container/network cleanup inventory.
 `inspectJson` returns `attemptComplete`, per-app `outcomes` and `comparisonEligibleApps`
@@ -410,7 +466,7 @@ timing. At least 528 MiB free disk is checked before each phase; this is not a f
 reservation. Fixed replay uses 64 KiB chunks/lines, at most 2,000,000 events / 128 metrics,
 and a growing typed latency vector capped at 16 MiB final size (under 32 MiB across growth
 allocations). Original bytes are never decompressed: no gzip is accepted on this path.
-At defaults, 108 fixed captures can retain at most **54 GiB of admitted raw streams**;
+At defaults, 120 fixed captures can retain at most **60 GiB of admitted raw streams**;
 stderr/auxiliary/raw-JSON/stat/app logs are additional. This is an evidence cap, not an
 estimate of native output or generator/internal-k6 memory. Actual native output, added
 CPU, collector/disk behavior and headroom still need measurement with pinned k6 before

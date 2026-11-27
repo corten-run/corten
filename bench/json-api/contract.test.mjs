@@ -10,9 +10,9 @@ import { result, runtimeInfo } from "./test-fixtures.mjs";
 import { executeMatrix } from "./matrix.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-test("explicit registry JSON selection includes nine native apps, four cases and both distinct ASP.NET rows", () => {
+test("explicit registry JSON selection includes ten native apps, four cases and both distinct ASP.NET rows", () => {
   const group = descriptor(), options = parseArgs(["j1", "--group", "json-api"]);
-  assert.deepEqual(options.apps, ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot"]);
+  assert.deepEqual(options.apps, ["corten", "aspnet", "fastapi", "express", "spring", "axum-maud", "drogon", "gin", "aspnet-aot", "ntex"]);
   assert.deepEqual(options.apps, selectedApps("json-api")); assert.deepEqual(group.cases, definition("json-api").cases);
   assert.equal(group.cases.length, 4); assert.ok(group.cases.every((p) => p.target === "json" && p.locale === null));
   for (const args of [["j1"], ["c1", "--group", "json-api"], ["j01", "--group", "json-api"],
@@ -43,8 +43,8 @@ test("observed runtime and audited native snapshots bind source, payload, image 
 
 test("timing plan covers every native app, payload and source without any HTML timing", () => {
   const options = parseArgs(["j1", "--group", "json-api"]), plan = timingPlan(options);
-  assert.equal(plan.length, 9 * 4 * 3);
-  assert.equal(new Set(plan.map((p) => `${p.app}:${p.profile.key}:${p.pass}`)).size, 108);
+  assert.equal(plan.length, 10 * 4 * 3);
+  assert.equal(new Set(plan.map((p) => `${p.app}:${p.profile.key}:${p.pass}`)).size, 120);
   for (const item of plan) {
     assert.deepEqual(item.stages, ["cold", "warmup", "fixed", "sat64", "sat256"]);
     assert.ok(route(item.profile).startsWith("/api/"));
@@ -106,9 +106,9 @@ test("fake native operations execute the full matrix, and any missing implementa
       failure: async (...args) => failures.push(args),
     };
     await executeMatrix({ ...options, checkOnly: fault === "check-only" }, io);
-    assert.equal(seen.filter(([op]) => op === "prepare").length, 18);
-    assert.equal(seen.filter(([op]) => op === "check").length, 36, "failures do not filter selected rows");
-    assert.equal(seen.filter(([op]) => op === "measure").length, fault === null ? 36 : 0);
+    assert.equal(seen.filter(([op]) => op === "prepare").length, 20);
+    assert.equal(seen.filter(([op]) => op === "check").length, 40, "failures do not filter selected rows");
+    assert.equal(seen.filter(([op]) => op === "measure").length, fault === null ? 40 : 0);
     if (fault === null) assert.ok(seen.findIndex(([op]) => op === "measure") > seen.findIndex(([op]) => op === "gate"));
     if (fault === "missing-aot") assert.equal(failures.length, 6);
   }

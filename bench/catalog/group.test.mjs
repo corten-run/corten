@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps, catalogPeers } from "../fullstack/inventory.mjs";
 import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 import { aggregate, parseArgs, phases, sources, targets } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
@@ -15,8 +15,8 @@ import { inspectCatalog, renderCatalog } from "./report.mjs";
 import { syntheticDocumentHeaders } from "./workers-fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const inventory = Object.fromEntries(Object.entries(allApps).filter(([, app]) => app.pages !== false));
-const names = ["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin"];
+const inventory = Object.fromEntries(Object.entries({ ...allApps, ...catalogPeers }).filter(([, app]) => app.pages !== false));
+const names = ["corten", "aspnet", "express", "fastapi", "axum-maud", "drogon", "gin", "proa"];
 const imageId = `sha256:${"b".repeat(64)}`;
 
 // Synthetic evidence for validator tests, not measurements or qualification claims.
@@ -49,7 +49,7 @@ function result() {
   return summary;
 }
 
-test("explicit catalog-page selection is exactly the approved registry seven, not a default or subset", () => {
+test("explicit catalog-page selection is exactly the registry eight, not a default or subset", () => {
   const descriptor = groupDescriptor("catalog-page");
   assert.deepEqual(descriptor.apps, names);
   assert.deepEqual(descriptor.apps, selectedApps("catalog-page"));
@@ -61,7 +61,7 @@ test("explicit catalog-page selection is exactly the approved registry seven, no
   assert.deepEqual(descriptor.correctnessTargets, ["page", "json"]);
   assert.deepEqual(parseArgs(["c1", "--group", "catalog-page"], inventory).apps, names);
   assert.equal(parseArgs(["c1"], inventory).group, undefined);
-  assert.equal(parseArgs(["c1"], inventory).apps.length, 20);
+  assert.equal(parseArgs(["c1"], Object.fromEntries(Object.entries(allApps).filter(([, a]) => a.pages !== false))).apps.length, 20);
   assert.deepEqual(parseArgs(["c1", "--apps", "gin"], inventory).apps, ["gin"]);
   descriptor.apps.pop();
   assert.deepEqual(groupDescriptor("catalog-page").apps, names, "caller mutation cannot change selection");
@@ -79,8 +79,8 @@ test("group CLI rejects other/missing/duplicate groups, overrides and incomplete
 test("the consumed timing plan covers both sources and every pass, with no JSON cold/warmup/load timing", () => {
   const options = parseArgs(["c1", "--group", "catalog-page"], inventory);
   const plan = timingPlan(options, sources, targets);
-  assert.equal(plan.length, 7 * 2 * 3);
-  assert.equal(new Set(plan.map((p) => `${p.app}:${p.key}:${p.pass}`)).size, 42);
+  assert.equal(plan.length, 8 * 2 * 3);
+  assert.equal(new Set(plan.map((p) => `${p.app}:${p.key}:${p.pass}`)).size, 48);
   for (const app of names) for (const source of sources) for (const pass of [1, 2, 3]) {
     assert.deepEqual(plan.filter((p) => p.app === app && p.source === source && p.pass === pass),
       [{ app, pass, ...definition("catalog-page").cases.find((c) => c.source === source) }]);
@@ -98,7 +98,7 @@ test("the consumed timing plan covers both sources and every pass, with no JSON 
   assert.ok(runner.includes("`TARGET=${target}`"), "k6 receives the plan's target");
 });
 
-test("complete group evidence reports only seven apps and page columns, disclosing stronger native gates", () => {
+test("complete group evidence reports only eight apps and page columns, disclosing stronger native gates", () => {
   const report = inspectCatalog(result(), "a".repeat(40));
   assert.equal(report.baseline, true);
   assert.deepEqual(Object.keys(report.apps), names);

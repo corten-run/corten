@@ -9,7 +9,7 @@ import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { syncBuiltinESMExports } from "node:module";
-import { allApps } from "../fullstack/apps.mjs";
+import { allApps, catalogPeers } from "../fullstack/inventory.mjs";
 import { aggregate, cpuSettings, expectedPageChecks, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
@@ -33,7 +33,8 @@ function fixture(passes = 1) {
   const files = new Map();
   const put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
   const group = groupDescriptor("catalog-page", { historical: true });
-  const options = parseArgs(["c1", "--group", "catalog-page", "--passes", String(passes), "--build"], allApps);
+  const options = parseArgs(["c1", "--group", "catalog-page", "--passes", String(passes), "--build"], { ...allApps, ...catalogPeers });
+  options.apps = group.apps;
   const commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
   const catalog = records(), fixtureText = `${JSON.stringify(catalog)}\n`;
   const fixtureSha256 = createHash("sha256").update(fixtureText).digest("hex");
@@ -62,7 +63,7 @@ function fixture(passes = 1) {
       put(`${source}/${app}/checks.log`, "checks completed\n"); put(`${source}/${app}/app.log`, "");
     }
   }
-  for (const { app, pass, ...profile } of timingPlan(options, sources, targets)) {
+  for (const { app, pass, ...profile } of timingPlan(options, sources, targets, group.contractSha256)) {
     const raw = `${profile.source}/${app}/p${pass}-page`, appName = `${summary.runId}-${app}`, upstreamName = `${summary.runId}-upstream`;
     const names = [appName, ...(profile.source === "api" ? [upstreamName] : [])];
     const probe = { path: "/catalog/record_1", first200At: "2026-11-07T16:00:00.200Z", successfulRequestMs: 2, bytes: 1000, attempts: 2 };
@@ -169,7 +170,7 @@ test("timed threshold outcomes retain every pass, failed requests and healthy pe
 test("lean v3 replay binds every functional and timed contender to the same exact profile", () => {
   for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 1 }]) {
     const f = timedFixture(fixture(), failure);
-    f.summary.measurement.leanProfile = { name: leanProfile, apps: [...leanApps] };
+    f.summary.measurement.leanProfile = { name: leanProfile, apps: f.summary.group.apps };
     assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /runtime lean profile differs/);
     for (const path of f.files.keys()) {
       if (path.endsWith("/checker.json")) {
@@ -841,7 +842,7 @@ test("catalog lean profile is bound to the saved runtime without relabeling hist
   const f = failedFixture();
   const original = JSON.parse(f.files.get(boundaryFile));
   verifyCheckBoundary(original, f.summary, "corten", "fixture", true);
-  f.summary.measurement.leanProfile = { name: leanProfile, apps: leanApps };
+  f.summary.measurement.leanProfile = { name: leanProfile, apps: f.summary.group.apps };
   assert.throws(() => verifyCheckBoundary(original, f.summary, "corten", "fixture", true), /lean profile/);
   const lean = structuredClone(original);
   lean.runtime.Config.Env.push(`PROFILE=${leanProfile}`);

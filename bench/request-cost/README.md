@@ -1,5 +1,10 @@
 # What a request costs the server, over a socket
 
+For HTTP/1.1 connection turnover under ordinary traffic, use the
+[JSON transport comparison](../json-api/README.md#optional-transport-comparison).
+It counts successful responses, CPU, latency and actual requests per connection; this
+probe instead explains an individual request's instruction, allocation and idle-memory cost.
+
 Three numbers for a change to the request path
 ([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), Pull requests, item 2), each read from a
 small Corten app, the [probe](probe/src/main.rs), built against the commit being measured:

@@ -19,7 +19,7 @@ test('production v2 dispatch retains missing matrix cells instead of rejecting t
   const group = descriptor();
   const report = inspectJson({ schema: 'json-api-results/v2', group, options: { apps: group.apps, group: 'json-api', round: 'j1', passes: 1 }, round: 'j1' }, { load() { throw new Error('missing'); } });
   assert.equal(report.attemptComplete, false);
-  assert.equal(Object.keys(report.apps).length, 9);
+  assert.deepEqual(Object.keys(report.apps), group.apps);
   for (const rows of Object.values(report.apps)) for (const row of Object.values(rows)) {
     assert.equal(row.projection.cells.length, 1);
     assert.equal(row.projection.cells[0].phases.fixed.state, 'missing');
@@ -34,7 +34,7 @@ test('production full official matrix retains normal99, continues and independen
   const group = descriptor(), failure = { app: group.apps[0], key: group.cases[1].key, pass: 2, phase: 'fixed', responses: ['ok', 'http429', 'http503'] };
   const f = await productionFixture(folder, { failure, passes: 3 });
   stage('fixture-done');
-  assert.equal(f.captured.length, 9 * 4 * 3 * 4);
+  assert.equal(f.captured.length, group.apps.length * group.cases.length * 3 * 4);
   assert.equal(f.captured.filter(c => c.code === 99).length, 1);
   const report = inspectJson(f.summary, { load: f.load });
   stage('negative-report-done');
@@ -168,7 +168,7 @@ test('production healthy full roster and explicit missing passes use saved-repla
   const f = await productionFixture(folder);
   const healthy = inspectJson(f.summary, { load: f.load });
   assert.equal(healthy.baseline, true, healthy.warnings.slice(0, 4).join('\n'));
-  assert.equal(healthy.comparisonEligibleApps.length, 9);
+  assert.deepEqual(healthy.comparisonEligibleApps, descriptor().apps);
   f.summary.options.passes = 3; f.summary.timingPlan = timingPlan(f.summary.options);
   f.summary.attemptComplete = false; f.summary.complete = false;
   const partial = inspectJson(f.summary, { load: f.load });

@@ -61,7 +61,7 @@ export function plan(name, evidence = []) {
 export function markdown() {
   const names = { corten: "Corten", aspnet: "ASP.NET Core", "aspnet-aot": "ASP.NET Core Native AOT (JSON only)",
     nextjs: "Next.js (Pages Router)", express: "Express", fastapi: "FastAPI", spring: "Spring Boot", django: "Django",
-    "axum-maud": "axum + Maud", drogon: "Drogon", gin: "Gin + templ", leptos: "Leptos", topcoat: "Topcoat",
+    "axum-maud": "axum + Maud", drogon: "Drogon", gin: "Gin + templ", leptos: "Leptos", topcoat: "Topcoat", proa: "Proa", ntex: "ntex",
     "react-router": "React Router", rails: "Rails + Hotwire", laravel: "Laravel + Livewire", nuxt: "Nuxt", sveltekit: "SvelteKit",
     astro: "Astro", "tanstack-start": "TanStack Start", phoenix: "Phoenix", react: "React", vue: "Vue", solid: "Solid", svelte: "Svelte", remix: "Remix" };
   return ["| Group | Popular challengers | Performance-oriented challengers | Required work |", "|---|---|---|---|",

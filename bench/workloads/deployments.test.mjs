@@ -75,8 +75,8 @@ test("all nine group contracts are pinned independently of historical catalog re
   assert.equal(groupDescriptor("catalog-page", { historical: true }).contractSha256,
     "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee");
   const hashes = {
-    "catalog-page": "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0",
-    "json-api": "b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9",
+    "catalog-page": "fff1d9843a1f4934744a0022f36d042c20fb4d7d910e3dc7eb96fef7b4fbc779",
+    "json-api": "ad8cf64f1285022b63ace2972c141996fda6cc7efcb792cd4e8a0ea6eea04ea4",
     "localized-marketplace": "9aa3ff1dd0561a54fe37419a5e71af474381f0df8cf1837e90faa1f4e6a9813b",
     "mixed-production": "147a4689167b2bfa0edba103a5fdbe533f7f7b17126fe15e1d0f782983b9a894",
     "fullstack-browser": "d4c219c71546b7c8cfdeb8b0e9b4c44cacc30cd42837dcfa5580db9d125f62d4",
@@ -453,7 +453,7 @@ test("an alternative needs a replayed representative comparison and independentl
 });
 
 test("CLI has only read-only inventory, no execution, tuning, receipt-promotion or app-subset flags", () => {
-  assert.equal(deploymentCli(["--all"]).length, 9); assert.equal(deploymentCli(["json-api"]).apps.length, 9);
+  assert.equal(deploymentCli(["--all"]).length, 9); assert.equal(deploymentCli(["json-api"]).apps.length, 10);
   for (const args of [[], ["--run"], ["catalog-page", "--qualified"], ["catalog-page", "--apps", "express"], ["catalog-page", "--memory", "2g"]]) assert.throws(() => deploymentCli(args));
   assert.deepEqual(Object.keys(outcomeKinds), ["app-capacity", "harness-failure", "functional-failure"]);
   const source = readFileSync(new URL("deployments.mjs", import.meta.url), "utf8");
