@@ -1593,27 +1593,37 @@ async fn an_idempotency_key_used_on_one_feed_is_refused_on_another() {
 
 /// Until `write`'s transaction ends, a `begin` that inserts the same idempotency key waits on it:
 /// observed in `pg_stat_activity` as an insert into the key table blocked by that backend, and
-/// as a task that has not returned. Ten seconds at most, so a `begin` that never blocks or a
-/// query that never shows fails the test instead of stalling it.
+/// as a task that has not returned. Ten seconds at most, every query included, so a `begin` that
+/// never blocks, a query that never shows it or one that never answers fails the test on time
+/// instead of stalling it.
 async fn blocked_on(pool: &PgPool, write: &mut Write, waiter: &tokio::task::JoinHandle<Result<Begin, Error>>) {
-    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(write.conn()).await.unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
-    loop {
-        assert!(!waiter.is_finished(), "the second begin returned while the first write's transaction was open");
-        let waiting: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity
-             WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO corten_idempotency%'",
-        )
-        .bind(holder)
-        .fetch_one(pool)
+    let end = tokio::time::Instant::now() + Duration::from_secs(10);
+    let holder: i32 = tokio::time::timeout_at(end, sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(write.conn()))
         .await
+        .expect("the first write's backend did not say its pid in time")
         .unwrap();
-        if waiting == 1 {
-            return;
+    let wait = async {
+        loop {
+            assert!(!waiter.is_finished(), "the second begin returned while the first write's transaction was open");
+            let waiting: i64 = tokio::time::timeout_at(
+                end,
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM pg_stat_activity
+                     WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO corten_idempotency%'",
+                )
+                .bind(holder)
+                .fetch_one(pool),
+            )
+            .await
+            .expect("pg_stat_activity did not answer in time")
+            .unwrap();
+            if waiting == 1 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(Instant::now() < end, "the second begin never waited on the first write's key");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    };
+    tokio::time::timeout_at(end, wait).await.expect("the second begin never waited on the first write's key");
 }
 
 #[tokio::test(flavor = "multi_thread")]
