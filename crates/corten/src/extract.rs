@@ -536,6 +536,12 @@ impl HttpBody for Ended {
 /// no length or a length of zero. That body has nothing to read and nothing to wait for, so the
 /// stream is not kept or boxed for it ([`Ended`]). A chunked body's end is in the body, so it has
 /// not ended here, whatever it holds.
+///
+/// What hyper hands on as ended was read for HTTP/1 alone, the one protocol Corten serves: there
+/// such a body has no channel to the connection behind it, so dropping it here releases nothing.
+/// An HTTP/2 stream's body would come through here without a compile error, and what hyper holds
+/// for one that ended with its headers is to be read before it does
+/// (`docs/design.md#choice-deadline-body`).
 pub(crate) fn arriving(body: hyper::body::Incoming) -> Body {
     if body.is_end_stream() {
         Body::new(Ended)
