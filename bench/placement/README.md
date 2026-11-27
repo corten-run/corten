@@ -124,8 +124,9 @@ and ignores `--sized-from`, so it sizes nothing and checks no K, and nothing of 
 gated part binds to its pilot, that the K passes, or that `build.sh`, `run.sh` and `report.mjs`
 take a part of that size. Resolving the gated part without `DRYRUN` shows the first two and
 builds nothing. Only a run shows the third, and a part that is read is run once, so a fault met
-there is not mended by running it again. The kit has gone down that path once, in a test read
-for nothing ([Tests](#tests) says what that run was and what no run has shown).
+there is not mended by running it again. The kit has gone down that path twice: in a test read
+for nothing, and then in the trend's first run, the first of the kit's runs that was read
+([Tests](#tests) says what each was and what no kept run has shown).
 
 `sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer, a
 failed request, a placement past its time limit, a second pad of a wrong size, files that are no
@@ -404,19 +405,30 @@ probe, and nothing else.
    results held the list of files the plan names by path. The `report.mjs` of that commit reads
    its results, and this one refuses them, as it refuses any results without that list.
 
-What no kept run shows, and the first plan that is read will meet for the first time:
+One run of the kit has been read, apart from those tests: the trend's first run
+([the trend](#the-trend)), kept under the tag `evidence/trend-2026-11-26`, by the trend's plan
+as `main` had it at `056aba61c`, the release `v0.2.0` against that commit. For each of `plain`
+and `unstaged` it ran a pilot of 100 placements, the size the rule asks, and then a gated part
+at the K that pilot sized, 60 and 28, with base and head different commits; every part ended
+complete and both A/As resolved. So the sizing check has run on a pilot of more than 30
+placements, and gated parts at a sized K whose sides differ were built, turned and reported.
+That it ran once, after one dry run, on a host the kit's `setup.sh` prepared and that was left
+alone from start to end, the tag cannot show: whoever made the run records it there.
 
-1. A pilot of the size the rule asks, and a K sized from it. The A/A that K = 93 came from had
-   30 placements, the fewest the kit takes, and the sizing check has not run on a host on more.
-2. A gated part at a sized K whose base and head differ, or in which a side has code aligned
-   beyond 16 bytes, so that each placement's second pad is chosen. The part that was turned had
-   one commit on both sides and no such code; the first dry run linked 18 placements with a
-   second pad and turned none.
-3. A run on a host that `setup.sh` prepared for it. `setup.sh` prepared the first dry run's
-   host and has not changed since; the other two runs borrowed a host that other work had
-   prepared, which had no git.
-4. A workload of Corten's own with a masked header that has a range (item 12 of
-   [what it does not do](#what-it-does-not-do)).
-5. A run that nobody looked in on. In the two later runs a login was made on the host while
-   turns ran, in the third only to ask whether the run's process was alive; a run that is read
-   does not allow it.
+What no kept run shows:
+
+1. A gated part in which a side has code aligned beyond 16 bytes, so that each placement's
+   second pad is chosen. Neither side of the trend's run has such code (its records list no
+   aligned section and no part had a second pad), the part the tests turned had one commit on
+   both sides and none, and the first dry run linked 18 placements with a second pad and turned
+   none.
+2. A workload of Corten's own with a masked header that has a range (item 12 of
+   [what it does not do](#what-it-does-not-do)). The trend's plan masks no header.
+3. A run on a host that `setup.sh` prepared for it, in what the run keeps. `setup.sh` prepared
+   the first dry run's host and has not changed since; the other two tests borrowed a host that
+   other work had prepared, which had no git; and the trend's run is said to have been on a host
+   it prepared by whoever made the run, whose output the tag leaves out.
+4. A run that nobody looked in on, in what the run keeps. In the two later tests a login was
+   made on the host while turns ran, in the third only to ask whether the run's process was
+   alive; a run that is read does not allow it. Whoever made the trend's run records that
+   nobody logged in while it ran.
