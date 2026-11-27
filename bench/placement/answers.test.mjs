@@ -3,8 +3,8 @@
 // bytes curl wrote alone, its header lines compared as they are (whitespace and every line), the
 // difference the system diff's, every file created new (a link put in its place first refused),
 // the handoff the trend and verify.sh read a comparison by, and a recorded turn's perf and wrk
-// output. The handoff and the turns on every platform; the captures on Linux, with curl and diff,
-// and servers of its own.
+// output. The handoff and the turns on every platform; the captures on Linux, with curl, diff
+// and timeout, and servers of its own.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ const tmp = realpathSync(mkdtempSync(join(tmpdir(), "placement-answers-")));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 let made = 0;
 const fresh = () => { const d = join(tmp, `a-${++made}`); mkdirSync(d); return d; };
-const LINUX = { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v curl && command -v diff"]).status === 0 ? false : "needs Linux with curl and diff" };
+const LINUX = { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v curl && command -v diff && command -v timeout"]).status === 0 ? false : "needs Linux with curl, diff and timeout" };
 
 /** A server on a port of its own: answer(q, s) answers each request. Resolves to { port, asked, close }. */
 async function serving(answer) {
@@ -51,6 +51,61 @@ test("the one request: Host and the plan's header lines alone, none of curl's ow
   // The files curl wrote are the bytes returned.
   assert.deepEqual([readFileSync(join(dir, "bare.raw-headers")), readFileSync(join(dir, "bare.body"))], [bare.raw, bare.body]);
   assert.equal(given.body.toString(), "aaaa");
+});
+
+test("the one request goes to the path as written: curl globs nothing, so /{a,b} or /p[1-2] is one request, not two whose bodies are joined", LINUX, async (t) => {
+  const s = await serving((q, r) => plain(`<${q.url}>`)(q, r));
+  t.after(s.close);
+  for (const path of ["/{a,b}", "/p[1-2]"]) {
+    s.asked.length = 0;
+    const r = await capture(s.port, path, [], join(fresh(), "x"));
+    assert.deepEqual(s.asked.map((a) => a.url), [path], path);
+    assert.equal(r.body.toString(), `<${path}>`);
+  }
+});
+
+test("the final response's status is the answer's, an interim 1xx's header lines kept and compared: 103 then 503 refused as 103, 103 then 200 accepted as 200", LINUX, async (t) => {
+  const hinted = (code) => (q, s) => { s.writeEarlyHints({ link: "</a.css>; rel=preload" }); s.statusCode = code; plain("aaaa")(q, s); };
+  const busy = await serving(hinted(503)), ok = await serving(hinted(200)), none = await serving(plain("aaaa"));
+  t.after(busy.close);
+  t.after(ok.close);
+  t.after(none.close);
+  await refused(compared([busy.port, busy.port], { status: 103 }), "HTTP/1.1 503 Service Unavailable from A");
+  const dir = fresh(), r = await compared([ok.port, ok.port], { dir });
+  assert.equal(r.outcome, "same");
+  assert.match(readFileSync(join(dir, "A.headers"), "latin1"), /^HTTP\/1\.1 103 Early Hints\nLink: <\/a\.css>; rel=preload\n\nHTTP\/1\.1 200 OK\n/);
+  // Early hints are part of the headers compared: an answer sent with them differs from one sent without.
+  assert.equal((await compared([ok.port, none.port])).outcome, "differ");
+  // A start too, run as verify.sh runs it.
+  const headers = join(dir, "headers.txt");
+  writeFileSync(headers, "");
+  const start = (port, st, prefix) => new Promise((done) => execFile(process.execPath, [join(here, "answers.mjs"), "start", "verify", String(port), "/page", headers, st, join(dir, prefix)], (e, stdout, stderr) => done({ status: e?.code ?? 0, stdout, stderr })));
+  const no = await start(busy.port, "103", "start-busy");
+  assert.equal(no.status, 1, no.stderr);
+  assert.ok(no.stderr.includes("verify: HTTP/1.1 503 Service Unavailable on "), no.stderr);
+  const yes = await start(ok.port, "200", "start-ok");
+  assert.equal(yes.status, 0, yes.stderr);
+  assert.equal(yes.stdout, `${sha256(readFileSync(join(dir, "start-ok.raw-headers")))}\n`);
+});
+
+test("a diff that stalls is gone within its own bound after the timeout around answers.mjs has stopped it", LINUX, async (t) => {
+  const s = await serving(plain("aaaa"));
+  t.after(s.close);
+  const stub = fresh(), pidFile = join(stub, "diff.pid");
+  writeFileSync(join(stub, "diff"), `#!/bin/sh\necho $$ >'${pidFile}'\nexec sleep 30\n`, { mode: 0o755 });
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  let pid = 0;
+  t.after(() => { if (pid && alive(pid)) process.kill(pid, "SIGKILL"); });
+  const code = `import(${JSON.stringify(new URL("./answers.mjs", import.meta.url).href)}).then((m) => m.compare({ dir: ${JSON.stringify(fresh())}, ports: [${s.port}, ${s.port}], path: "/page", lines: [], status: 200, mask: [], say: () => {}, diffSeconds: 5 }))`;
+  // As turns.sh runs answers.mjs, with an environment of PATH alone, but stopped at 2 s, before diff's own 5 s.
+  const wrapper = spawn("timeout", ["--foreground", "-k", "1", "2", process.execPath, "-e", code], { env: { PATH: `${stub}:${process.env.PATH}` }, stdio: "ignore" });
+  const status = await new Promise((done) => wrapper.on("close", done));
+  assert.equal(status, 124, "answers.mjs ended before the timeout around it");
+  pid = Number(readFileSync(pidFile, "utf8"));
+  assert.ok(alive(pid), "the stand-in diff was not running when answers.mjs was stopped");
+  const by = Date.now() + 8000;
+  while (alive(pid) && Date.now() < by) await new Promise((done) => setTimeout(done, 100));
+  assert.ok(!alive(pid), "the stand-in diff outlived answers.mjs past its own bound");
 });
 
 test("the one request goes to 127.0.0.1 itself, whatever proxy the environment names", LINUX, async (t) => {

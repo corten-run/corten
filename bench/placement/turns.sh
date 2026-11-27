@@ -38,8 +38,9 @@
 # missing, reported twice, not in a complete row, not a count above zero or not at exactly 100%
 # (perf's "100.00"), fails the placement and records nothing. answers.mjs is run with an
 # environment of PATH alone, so no NODE_OPTIONS of the caller's reaches it, and under timeout:
-# 60 s for the comparison (three curls of 10 s each, which it stops at 15 s), 30 s for the rest,
-# and KILL 5 s later.
+# 60 s for the comparison (three curls of 10 s each, which it stops at 15 s, and a diff under a
+# timeout of its own, 10 s), 30 s for the rest, and KILL 5 s later; curl's --max-time and diff's
+# timeout bound each even when answers.mjs is stopped before them.
 # Writes <out dir>/counts-<workload>.csv (pair,version,requests and a column per event),
 # raw-<workload>.log (every turn's perf and wrk output), answers/, serve-{A,B}.log (each server's
 # error output and serve.mjs's) and, while a server runs, serve-{A,B}.pid. answers/ (made afresh)
@@ -247,13 +248,14 @@ answers put "$ans/verdict.txt" "$verdict" || exit 1
 echo "$verdict"
 echo "turns: $workload: handoff sha256 $seal"
 turn() { # <pair> <base|head>: A's turns are the CSV's base rows, B's its head rows
-    if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
     # The turn's own two files, created new and empty for it (answers.mjs put refuses anything
     # already there), so what is read after it is what this turn's perf and wrk wrote, and a perf
-    # or wrk that wrote nothing leaves an empty one, which records nothing.
+    # or wrk that wrote nothing leaves an empty one, which records nothing. Made before its server
+    # starts, so nothing runs between that server's readiness and perf's attaching to it.
     tp=$out/turn-$1-$2.perf; tw=$out/turn-$1-$2.wrk
     answers put "$tp" || exit 1
     answers put "$tw" || exit 1
+    if [ "$2" = base ]; then fresh A; pid=$a; port=$aport; else fresh B; pid=$b; port=$bport; fi
     perf stat -x, -e "$events" -p "$pid" -o "$tp" -- sleep "$secs.4" 5>&- 6>&- &
     perfpid=$!
     sleep 0.1 5>&- 6>&-

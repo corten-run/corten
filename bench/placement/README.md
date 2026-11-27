@@ -228,12 +228,18 @@ one of the commands above with its output under `<run dir>/log`:
    neither a request nor its bound, and with `--noproxy '*'`, so no `http_proxy` or `ALL_PROXY`
    of the environment's answers for the servers, each bound to a second. The answers both
    scripts check are captured by `curl`, which `answers.mjs` runs with `--disable` and
-   `--noproxy '*'` as well: one request each, sending the `Host` line and the plan's header lines
+   `--noproxy '*'` as well, and `--globoff`, so a path such as `/{a,b}` is sent as it is and never
+   becomes two requests: one request each, sending the `Host` line and the plan's header lines
    (`curl`'s own `Accept` and `User-Agent` left out unless the plan has them), bound to 10 s, its
-   header lines kept as `curl` writes them and its body as received, and refused unless it has the
-   plan's status. Both scripts run `answers.mjs` with an environment of `PATH` alone (so no
-   `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a placement's comparison, which takes
-   three answers) and KILL 5 s after, and fail saying so when it is stopped. `serve.mjs` publishes its
+   header lines kept as `curl` writes them and its body as received, and refused unless its final
+   response has the plan's status. An interim `1xx` response (`103 Early Hints`) is not the
+   answer's status, but its header lines are kept and compared with the final response's, so an
+   answer with early hints differs from one without. Both scripts run `answers.mjs` with an
+   environment of `PATH` alone (so no `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a
+   placement's comparison, which takes three answers) and KILL 5 s after, and fail saying so when
+   it is stopped. That stop reaches `answers.mjs` alone, so each command it runs has a bound of its
+   own that outlives it: `curl`'s `--max-time`, and a `timeout` of 10 s, KILL 2 s after, around
+   `diff`. `serve.mjs` publishes its
    server's process number through a file it creates new, so anything already at that path, a FIFO
    included, stops the server and fails the start instead of holding `serve.mjs`. So a server that takes a
    connection and never answers holds neither script, nor a signal it has held off until that
@@ -446,9 +452,12 @@ tags `evidence/placement-sizing-1999` (an A/A's counts) and `evidence/placement-
 `git fetch` that brings them ([`tags.mjs`](tags.mjs)).
 
 `answers.test.mjs` runs `answers.mjs` on servers of its own; its captures and comparisons need
-Linux, `curl` and `diff` and are skipped elsewhere: the one request sends the `Host` line and the
-plan's header lines alone and reaches no proxy of the environment's; an answer of another status is
-refused by the comparison and by a start; the difference, the lengths, the SHA-256s and the kept
+Linux, `curl`, `diff` and `timeout` and are skipped elsewhere: the one request sends the `Host` line and the
+plan's header lines alone, to the path as written (one request for `/{a,b}` or `/p[1-2]`), and
+reaches no proxy of the environment's; an answer of another status is refused by the comparison and
+by a start, the final response's status counting (`103` then `503` is refused as `103`, and `103`
+then `200` accepted as `200`); a `diff` that stalls is gone within its own bound once the
+`timeout` around `answers.mjs` has stopped it; the difference, the lengths, the SHA-256s and the kept
 bodies come from one request per answer, and the difference is the system `diff`'s of the masked
 headers; a header that differs only in its whitespace (`X-Test:\t alpha  ` against
 `X-Test: alpha`), a change after the 1,000th header line, and lines B,A,B against A,A,B (`2c2`)

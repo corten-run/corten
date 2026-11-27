@@ -6,10 +6,13 @@
 // included, fails it), hashes the bytes captured and seals them, and reads perf's and wrk's output.
 // An answer is captured by curl, once, the request as the kit has always sent it (curl's own
 // Accept and User-Agent left out unless the plan's lines have one, no configuration file, no
-// proxy, 10 s), its header lines as curl writes them (-D) and its body as received, straight into
-// files this process has just created and holds open; the headers' difference is the system
-// diff's, run once, on the masked headers' files, through those descriptors. Every byte stays a
-// Buffer from capture to file; text is made of it only to say something.
+// proxy, its URL taken literally (no globbing), 10 s), its header lines as curl writes them (-D),
+// an interim 1xx response's included, and its body as received, straight into files this process
+// has just created and holds open; its status is the final response's, as curl reports it and as
+// the last status line it wrote says. The headers' difference is the system diff's, run once, on
+// the masked headers' files, through those descriptors, under timeout of its own (10 s, KILL 2 s
+// later), so neither curl (--max-time 10) nor diff outlives a stop of this process by more than
+// its own bound. Every byte stays a Buffer from capture to file; text is made of it only to say something.
 //
 //   node answers.mjs compare <say> <answers dir> <A port> <B port> <path> <headers.txt> <status> <mask.json> [<expect>]
 //       A's answer twice and B's once, each of the planned status. Writes <name>.raw-headers,
@@ -113,39 +116,47 @@ const brief = (err) => err.toString("latin1").trim().split("\n").at(-1)?.slice(0
  * One answer of 127.0.0.1:port to the workload's request, captured by curl, once, the one request
  * turns.sh's and verify.sh's checks share: Host and the plan's header lines, and curl's own
  * Accept and User-Agent left out unless those lines have one, with --disable (no .curlrc),
- * --noproxy '*' and --max-time 10. curl writes the header lines (-D) and the body into
- * <prefix>.raw-headers and <prefix>.body, which this process creates new first and hands curl as
- * its descriptors 3 and 1, so what it captured is in those very files, whatever is put at their
- * paths since. Resolves to { raw, body }, the bytes as curl wrote them.
+ * --noproxy '*', --globoff (the path is sent as it is: no {a,b} or [1-2] makes it two requests)
+ * and --max-time 10. curl writes the header lines (-D), every response's (an interim 1xx's
+ * included), and the body into <prefix>.raw-headers and <prefix>.body, which this process creates
+ * new first and hands curl as its descriptors 3 and 4, so what it captured is in those very files,
+ * whatever is put at their paths since; its standard output is the final response's status alone
+ * (-w). Resolves to { raw, body, status, line }: the bytes as curl wrote them, the final status
+ * and the last status line of raw, which must state it.
  */
 export async function capture(port, path, lines, prefix, { bound = 15000 } = {}) {
   const has = (name) => lines.some((l) => l.toLowerCase().startsWith(`${name}:`));
-  const args = ["--disable", "--noproxy", "*", "-sS", "--max-time", "10", "-D", "/dev/fd/3",
+  const args = ["--disable", "--noproxy", "*", "--globoff", "-sS", "--max-time", "10", "-D", "/dev/fd/3", "-o", "/dev/fd/4", "-w", "%{http_code}",
     ...(has("accept") ? [] : ["-H", "Accept:"]), ...(has("user-agent") ? [] : ["-H", "User-Agent:"]),
     ...lines.flatMap((l) => ["-H", l]), `http://127.0.0.1:${port}${path}`];
   const head = createFd(`${prefix}.raw-headers`);
   try {
     const body = createFd(`${prefix}.body`);
     try {
-      const r = await run("curl", args, { out: body, fds: [head], bound, env: tools() });
+      const r = await run("curl", args, { fds: [head, body], bound, env: tools() });
       if (r.failed) refuse(`curl could not be run: ${r.failed.message}`);
       if (r.late) refuse(`no whole answer on ${port} within ${bound / 1000} s: curl was stopped`);
       if (r.code !== 0) refuse(`the answer on ${port} could not be taken whole: curl ended with ${r.signal ?? `status ${r.code}`}${r.err.length ? ` (${brief(r.err)})` : ""}`);
-      return { raw: whole(head), body: whole(body) };
+      const raw = whole(head), status = r.out.toString("latin1"), { line, code } = finalLine(raw);
+      if (!/^[1-9]\d{2}$/.test(status)) refuse(`curl reported no final status for the answer on ${port}: ${JSON.stringify(status.slice(0, 40))}`);
+      if (code !== status) refuse(`curl reported the final status ${status} on ${port}, and the last status line it wrote, ${JSON.stringify(line.slice(0, 80))}, does not say so (${prefix}.raw-headers)`);
+      return { raw, body: whole(body), status, line };
     } finally { closeSync(body); }
   } finally { closeSync(head); }
 }
 
-/** The status line of headers as curl wrote them, and its status: { line, status }. */
-function statusOf(raw) {
-  const line = raw.subarray(0, raw.indexOf(0x0a) < 0 ? raw.length : raw.indexOf(0x0a)).toString("latin1").replace(/\r$/, "");
-  return { line, status: /^HTTP\/[0-9.]+ (\d{3})(?: |$)/.exec(line)?.[1] ?? null };
+/** The last status line of headers as curl wrote them (the final response's, after any interim 1xx), and its status: { line, code }. */
+function finalLine(raw) {
+  const lines = raw.toString("latin1").split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => /^HTTP\//.test(l)), line = lines.at(-1) ?? "";
+  return { line, code: /^HTTP\/[0-9.]+ (\d{3})(?: |$)/.exec(line)?.[1] ?? null };
 }
 
 /**
  * An answer's header lines as compared, from the bytes curl wrote: each line's own CR before its
  * LF taken off, every Date line left out, each line of a header the plan masks "<name>: <masked>",
- * and every other byte as it is (no whitespace folded, every line kept, however many).
+ * and every other byte as it is (no whitespace folded, every line kept, however many). An interim
+ * 1xx response's block is part of them, compared like the final one's: an answer sent with early
+ * hints differs from one sent without.
  */
 export function masked(raw, mask) {
   const names = new Set(mask.map((m) => m.header.toLowerCase())), out = [];
@@ -162,14 +173,24 @@ export function masked(raw, mask) {
 }
 
 /**
+ * The system diff of the two files open at a and b, reading them through its descriptors 3 and 4,
+ * under timeout of its own: seconds, and KILL 2 s later. That bound is timeout's, not this
+ * process's, so it holds when this process is stopped first (as its caller's timeout stops it);
+ * this process's own, later, is a last resort. timeout runs in the foreground, in this process's
+ * group, so a signal to the group reaches diff too.
+ */
+const diffRun = (a, b, seconds) => run("timeout", ["--foreground", "-k", "2", String(seconds), "diff", "/dev/fd/3", "/dev/fd/4"], { fds: [a, b], bound: (seconds + 5) * 1000, env: tools() });
+
+/**
  * The system diff's difference of the two files open at a and b, in its normal format, run once,
  * reading those very files through its descriptors 3 and 4: { same, text }. Fails unless diff
  * says 0 or 1 and its output agrees with that and with the bytes compared (x and y).
  */
-async function difference(a, b, x, y) {
-  const r = await run("diff", ["/dev/fd/3", "/dev/fd/4"], { fds: [a, b], bound: 10000, env: tools() });
+async function difference(a, b, x, y, seconds) {
+  const r = await diffRun(a, b, seconds);
   if (r.failed) refuse(`diff could not be run: ${r.failed.message}`);
-  if (r.late || r.code === null || r.code > 1) refuse(`diff could not compare the two answers' headers (${r.late ? "not within 10 s" : r.signal ?? `status ${r.code}`}${r.err.length ? `: ${brief(r.err)}` : ""})`);
+  const late = r.late || r.code === 124 || r.code === 137;
+  if (late || r.code === null || r.code > 1) refuse(`diff could not compare the two answers' headers (${late ? `not within ${seconds} s` : r.signal ?? `status ${r.code}`}${r.err.length ? `: ${brief(r.err)}` : ""})`);
   if ((r.code === 0) !== x.equals(y)) refuse(`diff found the two answers' headers ${r.code === 0 ? "the same" : "different"}, and they are not`);
   if ((r.code === 0) !== (r.out.length === 0)) refuse(r.code === 0 ? "diff reported that the two answers' headers are the same and printed a difference" : "diff reported that the two answers' headers differ and printed no difference: missing evidence");
   return { same: r.code === 0, text: r.out };
@@ -186,20 +207,19 @@ const sealOf = ({ outcome, diff, bodies }) => Buffer.from(`${JSON.stringify({ ou
  * the SHA-256 of handoff.json. dir must hold none of the files it writes. expect: the plan's
  * expected difference, as bytes, and expected, its file (for diff to show a difference from it).
  * say: where it writes a difference that is not expected, and how one differs from the expected
- * one (stderr).
+ * one (stderr). diffSeconds: diff's own bound.
  */
-export async function compare({ dir, ports: [aport, bport], path, lines, status, mask, expect = null, expected = null, say = (t) => process.stderr.write(t) }) {
+export async function compare({ dir, ports: [aport, bport], path, lines, status, mask, expect = null, expected = null, say = (t) => process.stderr.write(t), diffSeconds = 10 }) {
   const why = problems(mask);
   if (why.length) refuse(`the plan's mask is not usable: ${why.join("; ")}`);
   const answers = {}, open = [];
   try {
     for (const [name, port] of [["A", aport], ["A-again", aport], ["B", bport]]) {
-      const at = join(dir, name), { raw, body } = await capture(port, path, lines, at), headers = masked(raw, mask);
+      const at = join(dir, name), { raw, body, status: got, line } = await capture(port, path, lines, at), headers = masked(raw, mask);
       const fd = createFd(`${at}.headers`);
       open.push(fd);
       writeFileSync(fd, headers);
-      const s = statusOf(raw);
-      if (s.status !== String(status)) refuse(`${s.line} from ${name === "B" ? "B" : "A"} on ${port} (${at}.raw-headers), not status ${status}`);
+      if (got !== String(status)) refuse(`${line} from ${name === "B" ? "B" : "A"} on ${port} (${at}.raw-headers), not status ${status}`);
       const out = stated(mask, raw.toString("latin1"));
       if (out.length) refuse(`a masked header is not within the range the plan states: ${name}: ${out.join("; ")}`);
       answers[name] = { headers, body, fd };
@@ -207,7 +227,7 @@ export async function compare({ dir, ports: [aport, bport], path, lines, status,
     const { A, B } = answers, again = answers["A-again"];
     if (!A.headers.equals(again.headers)) refuse(`two answers of A differ in their headers after the mask: ${join(dir, "A*.headers")}`);
     if (!A.body.equals(again.body)) refuse(`two answers of A differ in their bodies: ${join(dir, "A*.body")}`);
-    const headers = await difference(A.fd, B.fd, A.headers, B.headers), same = A.body.equals(B.body);
+    const headers = await difference(A.fd, B.fd, A.headers, B.headers, diffSeconds), same = A.body.equals(B.body);
     const da = sha256(A.body), db = sha256(B.body), na = A.body.length, nb = B.body.length;
     const line = same ? `bodies same: ${na} bytes, sha256 ${da}` : `bodies differ: ${na} and ${nb} bytes, sha256 ${da} and ${db}`;
     // The difference: diff's output and then the bodies line, or nothing when neither differs.
@@ -224,7 +244,7 @@ export async function compare({ dir, ports: [aport, bport], path, lines, status,
         // Shown as diff shows it, the expected difference against this one; only said, never read.
         let shown = null;
         try { shown = openSync(expected, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); } catch { /* nothing to show it from */ }
-        if (shown !== null) try { if (fstatSync(shown).isFile()) say((await run("diff", ["/dev/fd/3", "/dev/fd/4"], { fds: [shown, fd], bound: 10000, env: tools() })).out); } finally { closeSync(shown); }
+        if (shown !== null) try { if (fstatSync(shown).isFile()) say((await diffRun(shown, fd, diffSeconds)).out); } finally { closeSync(shown); }
         refuse("the answers differ other than as the plan's expected difference says");
       }
       outcome = "expected";
@@ -312,8 +332,8 @@ async function main([mode, say, ...a]) {
       const r = await compare({ dir, ports: [port(ap), port(bp)], path, lines: lines(headers), status: status(st), mask: json(mask), expect: want, expected: expect || null });
       process.stdout.write(`${r.outcome} ${r.seal}\n`);
     } else if (mode === "start" && a.length === 5) {
-      const [p, path, headers, st, prefix] = a, wanted = status(st), r = await capture(port(p), path, lines(headers), prefix), s = statusOf(r.raw);
-      if (s.status !== String(wanted)) refuse(`${s.line} on ${p} (${prefix}.raw-headers), not status ${st}: an answer of another status is no evidence for the plan's mask`);
+      const [p, path, headers, st, prefix] = a, wanted = status(st), r = await capture(port(p), path, lines(headers), prefix);
+      if (r.status !== String(wanted)) refuse(`${r.line} on ${p} (${prefix}.raw-headers), not status ${st}: an answer of another status is no evidence for the plan's mask`);
       process.stdout.write(`${sha256(r.raw)}\n`);
     } else if (mode === "starts" && a.length === 5) {
       const [file, one, s1, two, s2] = a, mask = json(file), bad = problems(mask);
