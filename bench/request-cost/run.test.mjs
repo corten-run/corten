@@ -117,11 +117,12 @@ function standInReadings(requests) {
 /**
  * A script of the kit run with the stand-ins and stand-in-status.mjs preloaded, so that idle.mjs
  * reads the stand-in's status; with `{ preload: false }` it is run as on a host.
- * @param {string} script @param {string[]} args @param {Record<string, string>} [asked] @param {{ preload?: boolean }} [how]
+ * @param {string} script @param {string[]} args @param {Record<string, string>} [asked] @param {{ preload?: boolean, capability?: string }} [how]
  */
-async function running(script, args, asked = {}, { preload = true } = {}) {
+async function running(script, args, asked = {}, { preload = true, capability } = {}) {
   const stand = standIns();
   try {
+    if (capability !== undefined) writeFileSync(`${stand.probe}.own-http1`, `${capability}\n`);
     const port = await free();
     const loaded = preload ? ["--import", pathToFileURL(join(kit, "stand-in-status.mjs")).href] : [];
     const run = spawnSync(process.execPath, [...loaded, join(kit, script), stand.probe, "--cpu", "3", "--port", String(port), ...args], { env: { ...stand.env, ...asked }, encoding: "utf8" });
@@ -229,7 +230,8 @@ test("a case with own_http1 on starts the probe with PROBE_OWN_HTTP1=1, and the 
 test("a probe built without the switch runs no case with own_http1 on, which each script says and goes on, exiting 0", { skip }, async () => {
   const word = "NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1";
   const asked = { STAND_IN_NO_OWN: "1" };
-  const text = await running("count.mjs", ["--cases", "get-own,get", "--reps", "1"], asked);
+  const record = { capability: "without" };
+  const text = await running("count.mjs", ["--cases", "get-own,get", "--reps", "1"], asked, record);
   assert.equal(text.status, 0, text.stderr);
   const [, own, get] = text.stdout.trimEnd().split("\n");
   assert.equal(own, `${"get-own".padEnd(14)}not run: ${word}`);
@@ -238,7 +240,7 @@ test("a probe built without the switch runs no case with own_http1 on, which eac
   const plan = Object.fromEntries(compare.readings().map((reading) => [reading.file, reading]));
   for (const file of ["count-get-own.json", "count-16-pipeline-own.json", "allocations-post-own.json", "idle-request-own-1.json", "idle-browser-own-1.json", "idle-silent-own-1.json"]) {
     const { script, options, expect } = /** @type {ReturnType<typeof compare.readings>[number]} */ (plan[file]);
-    const run = await running(script, options, asked);
+    const run = await running(script, options, asked, record);
     assert.equal(run.status, 0, `${file}: ${run.stderr}`);
     assert.match(run.stdout, /^\{.*\}\n$/, file);
     assert.equal(compare.figure(run.stdout, expect), null, file);
@@ -251,13 +253,50 @@ test("a probe built without the switch runs no case with own_http1 on, which eac
   // --answers writes what the probe said in the place of the case's answer, and the other answers.
   const answers = mkdtempSync(join(tmpdir(), "request-cost-answers-"));
   try {
-    const run = await running("count.mjs", ["--cases", "pipeline-own,pipeline", "--answers", answers], asked);
+    const run = await running("count.mjs", ["--cases", "pipeline-own,pipeline", "--answers", answers], asked, record);
     assert.equal(run.status, 0, run.stderr);
     assert.deepEqual(readdirSync(answers).sort(), ["pipeline-own.unsupported", "pipeline.http"]);
     assert.equal(readFileSync(join(answers, "pipeline-own.unsupported"), "utf8"), `${word}\n`);
   } finally {
     rmSync(answers, { recursive: true, force: true });
   }
+});
+
+test("an unexpected refusal line, status, switch request or build record fails the run", { skip }, async () => {
+  const asked = { STAND_IN_NO_OWN: "1" };
+  for (const [name, environment, capability] of /** @type {[string, Record<string, string>, string | undefined][]} */ ([
+    ["get-own", asked, undefined],
+    ["get-own", asked, "with"],
+    ["get-own", { ...asked, STAND_IN_EXIT: "0" }, "without"],
+    ["get-own", { ...asked, STAND_IN_EXIT: "2" }, "without"],
+    ["get-own", { ...asked, STAND_IN_REFUSAL: "NO own_http1: not the refusal" }, "without"],
+    ["get", { ...asked, STAND_IN_REFUSES_OFF: "1" }, "without"],
+  ])) {
+    const run = await running("count.mjs", ["--json", "--cases", name], environment, { capability });
+    assert.equal(run.status, 1, `${name}: ${run.stdout}\n${run.stderr}`);
+    assert.equal(run.stdout, "");
+    assert.match(run.stderr, /the probe stopped before it was ready/);
+  }
+  const ready = await running("count.mjs", ["--json", "--cases", "get-own"], {}, { capability: "without" });
+  assert.equal(ready.status, 1, ready.stdout);
+  assert.match(ready.stderr, /said READY.*build record says without/);
+});
+
+test("a repeated answer capture clears both artifacts of selected cases before any probe starts", { skip }, async (t) => {
+  const answers = mkdtempSync(join(tmpdir(), "request-cost-answers-"));
+  t.after(() => rmSync(answers, { recursive: true, force: true }));
+  const capture = (/** @type {string} */ names, /** @type {Record<string, string>} */ environment = {}, /** @type {string} */ capability = "with") =>
+    running("count.mjs", ["--cases", names, "--answers", answers], environment, { capability });
+  const files = () => readdirSync(answers).sort();
+  assert.equal((await capture("get,pipeline-own,get-own")).status, 0);
+  assert.deepEqual(files(), ["get-own.http", "get.http", "pipeline-own.http"]);
+  assert.equal((await capture("pipeline-own,get-own", { STAND_IN_NO_OWN: "1" }, "without")).status, 0);
+  assert.deepEqual(files(), ["get-own.unsupported", "get.http", "pipeline-own.unsupported"]);
+  assert.equal((await capture("pipeline-own")).status, 0);
+  assert.deepEqual(files(), ["get-own.unsupported", "get.http", "pipeline-own.http"]);
+  // A failure at the first selected case does not leave a later case's old artifact behind.
+  assert.equal((await capture("pipeline-own,get-own", { STAND_IN_NO_OWN: "1" })).status, 1);
+  assert.deepEqual(files(), ["get.http"]);
 });
 
 test("count.mjs widens the case's column for a name longer than it, and keeps it 14 for the rest", { skip }, async () => {

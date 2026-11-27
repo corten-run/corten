@@ -10,7 +10,8 @@
 //          the table and the verdict, in Markdown
 //
 // A build's directory holds what the kit printed with `--json`, a file a run, named as
-// `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; beside a run that was
+// `--readings` names it; `answers/`, as `count.mjs --answers` wrote it; `own-http1`, the build's
+// capability record, when present; beside a run that was
 // refused or did not end, `<file>.refused`, a line each time saying why; and `unbuilt`, what the
 // build said, when the probe did not build: a build with that file, empty or not, has no figure
 // and no answer, whatever else its directory holds. A figure is read only from a run's whole
@@ -25,10 +26,10 @@
 // connection are rounded and decide nothing. A reading with no figure on either build, an idle
 // reading `idleRise` cannot decide (its six runs not of one page size, or 5,000 connections
 // being fewer than a page has bytes), or a case either build gave no answer to, cannot be
-// counted, which sends the change to the measured way as a rise does. But for one: a case with
-// `App::own_http1` on that base's probe could not run, being built against a Corten without it
-// (count.mjs and idle.mjs print `unsupported` in its place), is not compared, and neither passes
-// nor fails; the verdict names it. Head's probe not running one that base's ran is no figure.
+// counted, which sends the change to the measured way as a rise does. But for one: if the base
+// build records the switch absent and refused every switch-on reading and answer, those rows
+// are not compared where head gave a valid figure or answer. A missing head result still fails
+// the rule. One refusal on its own never establishes that the build cannot run the switch.
 //
 // `--description` is the pull request's description, read for the way the change is decided: its
 // one line that is `Request path: counted` or `Request path: measured` with nothing after it
@@ -43,6 +44,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { COUNTED, idleRise, median, sent } from "./figures.mjs";
+import { REFUSAL, builtWithoutOwnHttp1 } from "./own-http1.mjs";
 import { Answers, cases, unexpected } from "./requests.mjs";
 
 /** Idle readings taken on each build, and the counts of a case `count.mjs` takes in a run. */
@@ -96,7 +98,7 @@ export function figure(text, expect) {
   } catch {
     return null;
   }
-  if (found === null || typeof found !== "object" || Object.entries(expect).some(([key, value]) => found[key] !== value)) return null;
+  if (found === null || typeof found !== "object" || Object.hasOwn(found, "unsupported") || Object.entries(expect).some(([key, value]) => found[key] !== value)) return null;
   const whole = (/** @type {unknown} */ n) => Number.isSafeInteger(n) && /** @type {number} */ (n) >= 0;
   if (expect.kind === "allocations") return whole(found.allocations) && whole(found.frees) && found.allocations >= found.requests ? found : null;
   // An idle run's growth is its after less its before, stated as `grown` too, with the page size
@@ -157,7 +159,7 @@ export function unsupported(text, expect) {
   const keys = [...Object.keys(expect), "unsupported"];
   if (Object.keys(found).length !== keys.length || keys.some((key) => !Object.hasOwn(found, key))) return null;
   if (Object.entries(expect).some(([key, value]) => found[key] !== value)) return null;
-  return typeof found.unsupported === "string" && found.unsupported.startsWith("NO own_http1: ") ? found.unsupported : null;
+  return found.unsupported === REFUSAL ? REFUSAL : null;
 }
 
 /**
@@ -175,6 +177,31 @@ function taken(directory, { file, expect }) {
   const without = found === null ? unsupported(text, expect) : null;
   if (without !== null) return { figure: null, why: without, refused, unsupported: without };
   return { figure: found, why: found === null ? (expect.kind === "idle" && unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure" : "the run's output is not the whole of the run asked for") : "", refused };
+}
+
+/**
+ * A case's capture: one whole answer the case must get, or the probe's exact refusal and no
+ * capture at all. A directory with both files has contradictory evidence.
+ * @param {string} directory @param {string} name
+ * @returns {{ bytes: Buffer, why: string | null, unsupported?: string }}
+ */
+function captured(directory, name) {
+  const file = join(directory, "answers", `${name}.http`);
+  const refusal = join(directory, "answers", `${name}.unsupported`);
+  const present = existsSync(file);
+  const bytes = present ? readFileSync(file) : Buffer.alloc(0);
+  if (cases[name]?.own && existsSync(refusal)) {
+    if (present) return { bytes, why: "both a capture and a refusal" };
+    if (readFileSync(refusal, "utf8") === `${REFUSAL}\n`) return { bytes, why: REFUSAL, unsupported: REFUSAL };
+    return { bytes, why: "the refusal is not the probe's own line" };
+  }
+  try {
+    if (bytes.length === 0) return { bytes, why: "no capture" };
+    if (new Answers().push(bytes)[0]?.length !== bytes.length) return { bytes, why: "not one whole answer and no more" };
+    return { bytes, why: unexpected(name, bytes) };
+  } catch (error) {
+    return { bytes, why: /** @type {Error} */ (error).message };
+  }
 }
 
 /** Whether a run's output is an idle run's JSON without a page size or a growth. @param {string} text */
@@ -209,16 +236,29 @@ const table = (/** @type {string[]} */ head, /** @type {string[][]} */ rows) =>
  */
 export function compare(base, head, { description = "", names = { base: "base", head: "head" } } = {}) {
   const at = { base, head };
-  const plan = Object.fromEntries(readings().map((reading) => [reading.file, reading]));
+  const runs = readings();
+  const namesOfCases = Object.keys(cases);
+  const plan = Object.fromEntries(runs.map((reading) => [reading.file, reading]));
   /**
    * What a build that failed said last. The file being there is the failure, empty or not: such a
    * build has no figure and no answer, whatever else its directory holds, which is said of it once.
    */
   const failed = (/** @type {string} */ directory) => (existsSync(join(directory, "unbuilt")) ? (lines(join(directory, "unbuilt")).at(-1) ?? "the build left no word of why") : undefined);
   const unbuilt = { base: failed(base), head: failed(head) };
-  const nothing = { figure: null, why: "", refused: /** @type {string[]} */ ([]) };
   /** What keeps the rule from holding, each a clause of the verdict. @type {string[]} */
   const against = SIDES.filter((side) => unbuilt[side] !== undefined).map((side) => `the probe did not build against ${side} (${code(/** @type {string} */ (unbuilt[side]))})`);
+  const evidence = (/** @type {"base" | "head"} */ side) => {
+    const built = unbuilt[side] === undefined;
+    const figures = new Map(runs.map((reading) => [reading.file, built ? taken(at[side], reading) : { figure: null, why: "", refused: [], unsupported: undefined }]));
+    const answers = new Map(namesOfCases.map((name) => [name, built ? captured(at[side], name) : { bytes: Buffer.alloc(0), why: "no capture", unsupported: undefined }]));
+    const recorded = built && builtWithoutOwnHttp1(join(at[side], "own-http1"));
+    const without = recorded &&
+      runs.every(({ file, expect }) => !cases[expect.case]?.own || figures.get(file)?.unsupported === REFUSAL) &&
+      namesOfCases.every((name) => !cases[name]?.own || answers.get(name)?.unsupported === REFUSAL);
+    if (recorded && !without) against.push(`${side}'s build records own_http1 absent but did not refuse every switch-on reading and answer`);
+    return { figures, answers, without };
+  };
+  const builds = { base: evidence("base"), head: evidence("head") };
   /** @type {string[]} */
   const refusals = [];
   /** Says what the builds that were built lack: `whys` is why, for each build that lacks it. @param {string} what @param {{ base?: string, head?: string }} whys */
@@ -226,28 +266,28 @@ export function compare(base, head, { description = "", names = { base: "base", 
     const none = SIDES.filter((side) => whys[side] !== undefined && unbuilt[side] === undefined);
     if (none.length > 0) against.push(`${what} on ${none.join(" and ")} (${code(/** @type {string} */ (whys[/** @type {"base" | "head"} */ (none[0])]))})`);
   };
-  /**
-   * The cases with `App::own_http1` on that base's probe could not run, being built against a
-   * Corten without it, and what it said: their rows are not compared, and neither pass nor fail.
-   * A head that cannot run one base can is a case that cannot be counted, as any other no figure.
-   * @type {Map<string, string>}
-   */
-  const uncompared = new Map();
+  // The missing capability excuses only base's side. Head still owes every figure and answer.
+  const baseCannotRun = (/** @type {string | number} */ name) => builds.base.without && cases[name]?.own === true;
+  const uncompared = new Set();
+  let missingHead = false;
+  const skipBase = (/** @type {string} */ name, /** @type {boolean} */ headHasResult) => {
+    if (!baseCannotRun(name)) return false;
+    if (headHasResult) uncompared.add(name);
+    else missingHead = true;
+    return headHasResult;
+  };
   /**
    * Both builds' figures of a reading, and whether it is compared.
    * @param {string} file @param {string} what @returns {[any, any, boolean]}
    */
   const both = (file, what) => {
     const reading = /** @type {ReturnType<typeof readings>[number]} */ (plan[file]);
-    const found = { base: unbuilt.base === undefined ? taken(base, reading) : nothing, head: unbuilt.head === undefined ? taken(head, reading) : nothing };
+    const name = String(reading.expect.case);
+    const found = { base: /** @type {ReturnType<typeof taken>} */ (builds.base.figures.get(file)), head: /** @type {ReturnType<typeof taken>} */ (builds.head.figures.get(file)) };
     for (const side of SIDES) for (const reason of found[side].refused) refusals.push(`- ${code(file)} on ${side}: ${code(reason)}${found[side].figure === null ? "" : " (taken again, and counted)"}`);
-    const without = /** @type {{ unsupported?: string }} */ (found.base).unsupported;
-    if (without !== undefined) {
-      uncompared.set(String(reading.expect.case), without);
-      return [null, found.head.figure, false];
-    }
-    lacks(`${what} has no figure`, Object.fromEntries(SIDES.filter((side) => found[side].figure === null).map((side) => [side, found[side].why])));
-    return [found.base.figure, found.head.figure, true];
+    const none = SIDES.filter((side) => found[side].figure === null && (side !== "base" || !baseCannotRun(name)));
+    lacks(`${what} has no figure`, Object.fromEntries(none.map((side) => [side, found[side].why])));
+    return [found.base.figure, found.head.figure, !skipBase(name, found.head.figure !== null)];
   };
 
   const instructions = [...Object.keys(cases).map((name) => ({ file: `count-${name}.json`, label: code(name) })), ...DEEP.map((name) => ({ file: `count-16-${name}.json`, label: `${code(name)}, 16 at a time` }))].map(({ file, label }) => {
@@ -296,7 +336,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
     const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
     const [bases, heads] = [all(/** @type {any[]} */ (b)), all(/** @type {any[]} */ (h))];
     const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.grown));
-    if (runs.some(([, , compared]) => !compared)) return [what, "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "not compared"];
+    if (heads && runs.every(([, , compared]) => !compared)) return [what, "none", whole(median(grown(heads))), "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "not compared"];
     if (!bases || !heads) return [what, bases ? whole(median(grown(bases))) : "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "no figure"];
     const [low, high] = [median(grown(bases)), median(grown(heads))];
     const pages = [...new Set([...bases, ...heads].map((run) => /** @type {number} */ (run.page)))];
@@ -313,30 +353,10 @@ export function compare(base, head, { description = "", names = { base: "base", 
     return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
   });
 
-  // A build's answer to a case is its capture when that is one whole answer and nothing after it,
-  // split as a count splits what a connection reads, and the answer the case must get.
-  const answers = Object.keys(cases).map((name) => {
-    /** @returns {{ bytes: Buffer, why: string | null, unsupported?: string }} */
-    const read = (/** @type {"base" | "head"} */ side) => {
-      const file = join(at[side], "answers", `${name}.http`);
-      const bytes = unbuilt[side] === undefined && existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
-      // What the probe said in the place of an answer to a case it could not run (count.mjs --answers).
-      const said = unbuilt[side] === undefined && bytes.length === 0 && cases[name]?.own === true ? lines(join(at[side], "answers", `${name}.unsupported`))[0] : undefined;
-      if (said?.startsWith("NO own_http1: ")) return { bytes, why: said, unsupported: said };
-      try {
-        if (bytes.length === 0) return { bytes, why: "no capture" };
-        if (new Answers().push(bytes)[0]?.length !== bytes.length) return { bytes, why: "not one whole answer and no more" };
-        return { bytes, why: unexpected(name, bytes) };
-      } catch (error) {
-        return { bytes, why: /** @type {Error} */ (error).message };
-      }
-    };
-    const found = { base: read("base"), head: read("head") };
-    if (found.base.unsupported !== undefined) {
-      uncompared.set(name, found.base.unsupported);
-      return { name, state: "uncompared" };
-    }
-    const none = SIDES.filter((side) => found[side].why !== null);
+  const answers = namesOfCases.map((name) => {
+    const found = { base: /** @type {ReturnType<typeof captured>} */ (builds.base.answers.get(name)), head: /** @type {ReturnType<typeof captured>} */ (builds.head.answers.get(name)) };
+    if (skipBase(name, found.head.why === null)) return { name, state: "uncompared" };
+    const none = SIDES.filter((side) => found[side].why !== null && (side !== "base" || !baseCannotRun(name)));
     lacks(`${code(name)} has no answer`, Object.fromEntries(none.map((side) => [side, /** @type {string} */ (found[side].why).split("\n")[0]])));
     return { name, state: none.length > 0 ? "none" : found.base.bytes.equals(found.head.bytes) ? "same" : "differ" };
   });
@@ -352,7 +372,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
   const notCompared =
     uncompared.size === 0
       ? ""
-      : ` Not compared, so neither passed nor failed: ${[...uncompared.keys()].map(code).join(", ")}, which base's probe could not run (${code(/** @type {string} */ ([...uncompared.values()][0]))}).`;
+      : ` Not compared, so neither passed nor failed: ${[...uncompared].map(code).join(", ")}, which base's probe could not run (${code(REFUSAL)})${missingHead ? ", only for rows and answers head completed" : ""}.`;
 
   const { way, lines: declaring } = declared(description);
   // What was read of the description, so that an author sees why a line did or did not count.

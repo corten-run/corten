@@ -528,6 +528,7 @@ const WITHOUT = "NO own_http1: this probe was built without the own-http1 featur
 const OWNED = names.filter((name) => cases[name]?.own === true);
 /** Writes, in place of each run and answer of a case with own_http1 on, what the kit writes when the build's probe cannot run it. @param {string} at */
 function without(at) {
+  writeFileSync(join(at, "own-http1"), "without\n");
   for (const { file, expect: of } of readings()) if (cases[of.case]?.own === true) writeFileSync(join(at, file), `${JSON.stringify({ ...of, unsupported: WITHOUT })}\n`);
   for (const name of OWNED) {
     rmSync(join(at, "answers", `${name}.http`));
@@ -562,18 +563,19 @@ test("a case with own_http1 on that base's probe could not run is not compared, 
   // Head's probe could not run what base's ran: no figure, which cannot be counted, as any other.
   const lost = builds(t);
   without(lost.head);
-  const fails = compare(lost.base, lost.head, { description: counting });
-  assert.deepEqual([fails.status, fails.holds], [1, false]);
-  assert.ok(verdict(fails.markdown).startsWith(`**Does not pass as counted:** \`get-own\`'s instructions has no figure on head (\`${WITHOUT}\`); `), fails.markdown);
-  assert.ok(verdict(fails.markdown).includes(`\`get-own\` has no answer on head (\`${WITHOUT}\`)`), fails.markdown);
-  assert.doesNotMatch(fails.markdown, /not compared/);
-  // Neither build's probe could: nothing of those cases is compared, and the rest passes.
+  // Neither build can run the switch: base's refusal still cannot supply figures for head.
   const neither = builds(t);
   without(neither.base);
   without(neither.head);
-  const none = compare(neither.base, neither.head, { description: counting });
-  assert.deepEqual([none.status, none.holds], [0, true]);
-  assert.equal(none.markdown.match(/\| not compared \|$/gm)?.length, OWNED.length + 1 + OWNED.length + 3);
+  for (const run of [lost, neither]) {
+    for (const description of [counting, "", measuring]) {
+      const fails = compare(run.base, run.head, { description });
+      assertMiss(fails, description);
+      assert.ok(verdict(fails.markdown).includes(`\`get-own\`'s instructions has no figure on head (\`${WITHOUT}\`)`), fails.markdown);
+      assert.ok(verdict(fails.markdown).includes(`\`get-own\` has no answer on head (\`${WITHOUT}\`)`), fails.markdown);
+      assert.doesNotMatch(fails.markdown, /not compared/);
+    }
+  }
   // Only a case with the switch on is one a build may not run, and only in the probe's own words
   // and as the whole of the run asked for: anything else is no figure, and no answer.
   const other = builds(t);
@@ -590,6 +592,71 @@ test("a case with own_http1 on that base's probe could not run is not compared, 
     assert.ok(verdict(refused.markdown).includes(clause), `${clause}\n${refused.markdown}`);
   }
   assert.doesNotMatch(refused.markdown, /not compared/);
+});
+
+/** @param {ReturnType<typeof compare>} result @param {string} description */
+function assertMiss({ markdown, status, holds }, description) {
+  assert.deepEqual([status, holds], [description === measuring ? 0 : 1, false], `${description}\n${verdict(markdown)}`);
+  assert.match(verdict(markdown), description === measuring ? /As counted they would not pass:/ : /^\*\*Does not pass as counted:/);
+}
+
+test("a base without the switch cannot hide a missing or invalid head reading or answer", (t) => {
+  const { base, head } = builds(t);
+  without(base);
+  // The reviewer's missing count, capture and one idle sample, plus malformed head evidence.
+  for (const file of ["count-get-own.json", "answers/get-own.http", "idle-silent-own-2.json"]) rmSync(join(head, file));
+  writeFileSync(join(head, "allocations-post-own.json"), "{}");
+  writeFileSync(join(head, "answers/post-own.http"), answer("pipeline"));
+  for (const description of [counting, "", measuring]) {
+    const result = compare(base, head, { description });
+    assertMiss(result, description);
+    for (const clause of ["`get-own`'s instructions has no figure on head", "`get-own` has no answer on head", "idle memory before any byte, own_http1 on, run 2, has no figure on head", "`post-own`'s allocations has no figure on head", "`post-own` has no answer on head"]) {
+      assert.ok(verdict(result.markdown).includes(clause), `${clause}\n${verdict(result.markdown)}`);
+    }
+    assert.match(result.markdown, /^\| before any byte, own_http1 on \|.*\| no figure \|$/m);
+  }
+});
+
+test("a refusal among figures and answers is not a capability and cannot hide a head rise", (t) => {
+  const { base, head } = builds(t, (_, build) => {
+    build.count["get-own"] = [30_000, 30_000, 30_000];
+    build.count["post-own"] = [30_000, 30_000, 30_000];
+  });
+  // The reviewer's lone refusal, with the valid answer and all other readings still present.
+  writeFileSync(join(base, "count-get-own.json"), `${JSON.stringify({ ...expect["count-get-own.json"], unsupported: WITHOUT })}\n`);
+  for (const description of [counting, "", measuring]) {
+    const result = compare(base, head, { description });
+    assertMiss(result, description);
+    assert.match(verdict(result.markdown), /`get-own`'s instructions has no figure on base/);
+    assert.match(verdict(result.markdown), /`post-own` runs .* over the budget/);
+    assert.doesNotMatch(result.markdown, /not compared/);
+  }
+});
+
+test("only the build record and every exact refusal together establish the absent capability", (t) => {
+  const { base, head } = builds(t);
+  without(base);
+  const record = join(base, "own-http1");
+  const capture = join(base, "answers", "pipeline-own.http");
+  const refusal = join(base, "answers", "pipeline-own.unsupported");
+  const idle = join(base, "idle-silent-own-2.json");
+  const sample = `${JSON.stringify({ ...expect["idle-silent-own-2.json"], unsupported: WITHOUT })}\n`;
+  for (const [breakEvidence, restore] of /** @type {[() => void, () => void][]} */ ([
+    [() => rmSync(record), () => writeFileSync(record, "without\n")],
+    [() => writeFileSync(record, "with\n"), () => writeFileSync(record, "without\n")],
+    [() => writeFileSync(capture, answer("pipeline-own")), () => rmSync(capture)],
+    [() => writeFileSync(refusal, `${WITHOUT}\nunexpected\n`), () => writeFileSync(refusal, `${WITHOUT}\n`)],
+    [() => rmSync(idle), () => writeFileSync(idle, sample)],
+    [() => writeFileSync(idle, sample.replace(WITHOUT, "NO own_http1: other")), () => writeFileSync(idle, sample)],
+  ])) {
+    breakEvidence();
+    for (const description of [counting, "", measuring]) {
+      const result = compare(base, head, { description });
+      assertMiss(result, description);
+      assert.doesNotMatch(result.markdown, /not compared/);
+    }
+    restore();
+  }
 });
 
 test("compare.mjs prints the table and exits by the verdict, and refuses arguments that are not two directories", (t) => {

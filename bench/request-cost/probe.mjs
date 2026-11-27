@@ -6,6 +6,7 @@ import net from "node:net";
 import { join } from "node:path";
 import { instructions } from "./allocations.mjs";
 import { COUNTED, WARM, alone } from "./figures.mjs";
+import { REFUSAL, builtWithoutOwnHttp1 } from "./own-http1.mjs";
 import { Answers, cases, masked, unexpected } from "./requests.mjs";
 
 /**
@@ -39,6 +40,7 @@ export async function start(binary, configuration, { cpu, port, hosts, own, call
   if (hosts !== undefined) env.HOSTS = hosts;
   delete env.PROBE_OWN_HTTP1;
   if (own) env.PROBE_OWN_HTTP1 = "1";
+  const without = own && builtWithoutOwnHttp1(`${binary}.own-http1`);
   const child = spawn("taskset", ["-c", cpu, ...under, binary, String(port), configuration], {
     env,
     stdio: ["ignore", "ignore", "pipe"],
@@ -49,14 +51,18 @@ export async function start(binary, configuration, { cpu, port, hosts, own, call
     const late = setTimeout(() => reject(new Error(`the probe did not say READY in 120 s:\n${said}`)), 120_000);
     child.stderr.on("data", (text) => {
       said += text;
-      if (/^READY /m.test(said)) resolve(clearTimeout(late));
+      if (/^READY /m.test(said)) {
+        clearTimeout(late);
+        if (without) reject(new Error("the probe said READY with own_http1 on, but its build record says without"));
+        else resolve(undefined);
+      }
     });
     child.on("error", reject);
     // Once its output has closed, so that what it said is all there.
-    child.on("close", () => {
+    child.on("close", (status) => {
       clearTimeout(late);
-      const without = /^NO own_http1: .*$/m.exec(said)?.[0];
-      reject(without ? new WithoutOwnHttp1(without) : new Error(`the probe stopped before it was ready:\n${said}`));
+      const refused = without && status === 1 && said.split("\n").includes(REFUSAL);
+      reject(refused ? new WithoutOwnHttp1(REFUSAL) : new Error(`the probe stopped before it was ready:\n${said}`));
     });
   });
   try {

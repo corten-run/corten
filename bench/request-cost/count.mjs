@@ -131,6 +131,9 @@ async function allocations() {
 async function answers(/** @type {string} */ directory) {
   mkdirSync(directory, { recursive: true });
   for (const name of names) {
+    for (const suffix of ["http", "unsupported"]) rmSync(join(directory, `${name}.${suffix}`), { force: true });
+  }
+  for (const name of names) {
     const { configuration, hosts, own } = /** @type {typeof cases[string]} */ (cases[name]);
     let probe;
     try {

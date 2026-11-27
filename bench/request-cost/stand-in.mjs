@@ -61,9 +61,9 @@ function serve() {
     JSON.stringify({ options, binary: rest.length === 3 ? rest[0] : null, port, configuration, LD_PRELOAD: process.env.LD_PRELOAD, MALLOC_CONF: process.env.MALLOC_CONF, PROBE_ALLOCATOR: process.env.PROBE_ALLOCATOR, HOSTS: process.env.HOSTS ?? null, PROBE_OWN_HTTP1: process.env.PROBE_OWN_HTTP1 ?? null }),
   );
   // As the probe built without its own-http1 feature refuses the switch.
-  if (process.env.STAND_IN_NO_OWN && process.env.PROBE_OWN_HTTP1 !== undefined) {
-    process.stderr.write("NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1\n");
-    process.exit(1);
+  if (process.env.STAND_IN_NO_OWN && (process.env.PROBE_OWN_HTTP1 !== undefined || process.env.STAND_IN_REFUSES_OFF)) {
+    process.stderr.write(`${process.env.STAND_IN_REFUSAL ?? "NO own_http1: this probe was built without the own-http1 feature, as against a Corten that has no App::own_http1"}\n`);
+    process.exit(Number(process.env.STAND_IN_EXIT ?? "1"));
   }
   /** @type {Record<string, Record<string, string>>} */
   const bodies = { api: { "GET /baseline11?a=1&b=2": "3", "GET /unstaged11?a=1&b=2": "3", "GET /pipeline": "ok" }, pages: { "GET /text": "ok" } };

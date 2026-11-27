@@ -11722,9 +11722,9 @@ rules something out.
     connection at the gate's settings, is too small a regression to refuse a change for, which
     no reading has tested; and a change to Corten's own HTTP/1.1 connection that the kit's
     cases with the switch on run, and that is none of the listed kinds, costs a request in
-    cycles about what it costs in instructions, as the budget bets of any counted change, the
-    maintainer's ruling of 2026-11-27 resting on it, though nothing has read that connection's
-    cycles, a browser's request least of all); measured (the kit's
+    cycles about what it costs in instructions. That is the counted way's untested premise, not
+    a finding of the maintainer's ruling; nothing has read that connection's cycles, a browser's
+    request least of all); measured (the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -12458,8 +12458,9 @@ rules something out.
     probe with that one call added; the kit now has cases that ask for it, Stands on, below), a
     connection handed to hyper holds more idle memory than hyper's own (below), and its reason is
     a win in cycles. No cycles or times have been taken for it, so it claims no
-    CPU-cost win, and the plan that would read one across placements
-    ([Choice 72](#choice-placement-runs)) is not yet declared.
+    CPU-cost win. The plan to read cycles across placements ([Choice 72](#choice-placement-runs))
+    was [declared on the pull request](https://github.com/corten-run/corten/pull/2133#issuecomment-7224166803)
+    on 2026-11-27; it sends a `Host` line and nothing else, not a browser's header lines.
 
     **What the connection is** (`crates/corten/src/h1.rs`). One loop for a connection: it reads a
     request's head, calls the connection's service with it, writes the answer into one buffer and
