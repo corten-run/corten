@@ -1412,11 +1412,16 @@ three runs:
    `/bench`). It fails unless systemd confirms, each query succeeding, that the round's unit is
    either unknown to it or was disabled and stopped (both succeeding), that it cannot start at
    boot (`is-enabled` disabled, static or masked, and no wants or requires link to it left), that
-   no job for it is queued (`systemctl list-jobs`, read before its state and again after its
-   control group: a start queued for a disabled unit leaves it inactive with no control group
-   until the job runs), that it is inactive, and that nothing is left anywhere in its control group
-   (cgroup v2 `cgroup.events` reads `populated 0`, which counts child groups too, or the group is
-   absent).
+   it is inactive (or failed) with no job queued for it, both read from one `systemctl show` (its
+   state and its queued job in one reply: a start queued for a disabled unit leaves it inactive
+   with no control group until the job runs, and a state and a job queue read in two queries can
+   tear, a start that completes between them reading as inactive with nothing queued), and that
+   nothing is left anywhere in its control group (cgroup v2 `cgroup.events` reads `populated 0`,
+   which counts child groups too, or the group is absent). A second such snapshot, taken after
+   the control group, the boot's ID and the progress file are read, must be the same as the first
+   (state, queued job, invocation and the time its state last changed), or a start completed
+   meanwhile. A unit not confirmed stopped so is refused, as the clear's refusal is below: the
+   launch downloads nothing and leaves the droplet, even one it created.
    It refuses the launch when the round's progress file shows a count step that started in this
    boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a
    count step that started in this boot, after a reboot. From that check until the round's unit
@@ -1452,9 +1457,14 @@ three runs:
    a queued job, but a start still waiting its turn at the droplet's flock is not yet queued and
    reads as a stopped round, and `--collect` then downloads partial results and destroys the
    droplet. The watch (`--collect`, or a launch that waits) takes a round as ended, and downloads
-   from or destroys its droplet, only when its unit reads inactive or failed with no job queued for
-   it, each query succeeding; a unit still active, or whose state or job queue could not be read,
-   is watched on (`--collect` leaves it, exit 3). The log's `all done` only says whether a round
+   from its droplet, only when two snapshots of its unit, each its state and queued job from one
+   query, one taken before the log is read and one after, agree and read inactive or failed with
+   no job queued; it destroys the droplet only once a snapshot after the download still reads the
+   same (otherwise it leaves it, exit 3). A unit still active, changing, or whose snapshot could not
+   be read is watched on (`--collect` leaves it, exit 3). A launch or `--attach` whose watch gives
+   up (the droplet stopped answering) downloads and destroys under the same rule: when the unit
+   cannot then be confirmed ended, nothing is downloaded and the droplet is left, with how to delete
+   it. The log's `all done` only says whether a round
    that has ended finished or stopped short: it is printed before the unit's process exits, and a
    round going on with `--from` keeps the earlier run's log, so one read while the unit is active
    is not the round's end, whichever run printed it. The

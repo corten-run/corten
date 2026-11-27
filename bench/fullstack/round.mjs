@@ -327,29 +327,89 @@ export function countRestartError(progress, bootId) {
 const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
+ * What is read of a round's unit to tell whether it has ended, in one `systemctl show` (one
+ * GetAll of the unit's properties, which systemd answers in one reply, so its state and its queued
+ * job cannot come from different moments): its state, a job queued for it (Job, empty when none;
+ * a start waiting its turn leaves the unit inactive until the job runs), which run of it this is
+ * (InvocationID, new at each start) and when its state last changed. Two separate queries can
+ * tear: a start that completes between a state read and a job-queue read reads as inactive with
+ * nothing queued while the unit is active.
+ */
+export const unitProperties = ["ActiveState", "SubState", "Job", "InvocationID", "StateChangeTimestampMonotonic"];
+
+/**
+ * A shell function, `snap`, that prints one snapshot of the unit (unitProperties as
+ * "Name=value" words, sorted by name, on one line) and fails when the query failed or its answer
+ * is not each of those properties exactly once.
+ * @param {string} unitName the round's unit, without ".service"
+ */
+export const unitSnapshot = (unitName) => {
+  const keys = `${[...unitProperties].sort().join(" ")} `;
+  return `snap() { snapout=$(systemctl show ${unitProperties.map((p) => `-p ${p}`).join(" ")} ${quote(`${unitName}.service`)}) || return 1; snapout=$(printf '%s\\n' "$snapout" | LC_ALL=C sort); [ "$(printf '%s\\n' "$snapout" | sed 's/=.*//' | tr '\\n' ' ')" = ${quote(keys)} ] || return 1; printf '%s\\n' "$snapout" | tr '\\n' ' ' | sed 's/ $//'; }`;
+};
+
+/**
+ * A snapshot unitSnapshot printed, as its properties, or null when it is not one.
+ * @param {string} line
+ * @returns {Record<string, string> | null}
+ */
+export const parseSnapshot = (line) => {
+  const words = line.trim().split(" ");
+  const names = [...unitProperties].sort();
+  if (words.length !== names.length) return null;
+  /** @type {Record<string, string>} */
+  const fields = {};
+  for (const [i, word] of words.entries()) {
+    const at = word.indexOf("=");
+    if (word.slice(0, at) !== names[i]) return null;
+    fields[names[i]] = word.slice(at + 1);
+  }
+  return fields;
+};
+
+/**
+ * Whether a unit has ended, from two snapshots taken before and after whatever else was read
+ * (the round's log, its results, its control group): both readable, the same (no start, stop or
+ * job between them), inactive or failed, and no job queued. Nothing is collected, cleared or
+ * destroyed on less: a single snapshot, or a state and a queue read apart, may be a moment a start
+ * was completing.
+ * @param {string} before
+ * @param {string} after
+ */
+export const snapshotsEnded = (before, after) => {
+  const first = parseSnapshot(before);
+  return first !== null && parseSnapshot(after) !== null && before.trim() === after.trim()
+    && (first.ActiveState === "inactive" || first.ActiveState === "failed") && first.Job === "";
+};
+
+/**
  * The script droplet.mjs runs on a droplet before it starts a round there, before it removes
  * anything an earlier round of that name left (its progress file, or all of /bench). It disables
  * and stops the round's unit, so a reboot cannot start the old round again while the new one is
- * set up, and fails (exit 1, a reason on stderr, nothing on stdout) unless each of these is
- * confirmed by a query that itself succeeded:
+ * set up, and refuses (exit 4, as a launch refused for its custody exits; a reason on stderr,
+ * nothing on stdout) unless each of these is confirmed by a query that itself succeeded:
  * - the unit is known to systemd and both its disable and its stop succeeded, or systemd confirms
  *   it has no such unit (LoadState not-found), when there is nothing to disable or stop;
  * - it cannot start at boot: `systemctl is-enabled` says disabled, static or masked (a known unit),
  *   and no wants or requires link to it is left in `unitDir` (which a unit file without an
  *   [Install] section would not remove);
- * - no job for it is queued, read before its state and again after its control group: a start
- *   queued for a disabled unit (a manual `systemctl start` waiting its turn) leaves it inactive
- *   with no control group until the job runs, so its state alone does not show it;
- * - it is inactive (or failed);
+ * - it is inactive (or failed) with no job queued for it, from one snapshot (unitSnapshot): a
+ *   start queued for a disabled unit (a manual `systemctl start` waiting its turn) leaves it
+ *   inactive with no control group until the job runs, so its state alone does not show it;
  * - no process is left anywhere in its control group, its descendants included: the group's
  *   cgroup v2 `cgroup.events` reads `populated 0`, or the group's directory is absent from a
  *   readable cgroup v2 hierarchy (`cgroup.procs` lists only the group's own processes, not those
- *   of a child group a process moved itself into).
- * Then it prints this boot's ID and the full-stack round's progress file, base64 ("present
- * <base64>", or "absent"), which relaunchError reads, in one write once both are read.
+ *   of a child group a process moved itself into);
+ * - a second snapshot, taken after the control group, the boot's ID and the progress file are
+ *   read, is the same as the first (snapshotsEnded), so nothing read between them is from a run
+ *   of the unit that started meanwhile.
+ * A unit that cannot be confirmed so may be running, so this refuses rather than fails: the
+ * launch then leaves the droplet as it is. Only a boot ID or progress file that cannot be read
+ * fails (exit 1). Then it prints this boot's ID and the full-stack round's progress file, base64
+ * ("present <base64>", or "absent"), which relaunchError reads, in one write once both are read.
  * With `observe` (clearAfterCustody's second check) it disables and stops nothing: it only reads,
  * so a unit that started again since the first check reads as active, or enabled, or with a job
- * queued, and fails.
+ * queued, or changed between its snapshots, and refuses.
  * @param {string} unitName the round's unit, without ".service"
  * @param {string} progressFile the full-stack round's progress file on the droplet
  * @param {{ unitDir?: string, cgroupRoot?: string, observe?: boolean }} [paths] systemd's unit directory and
@@ -364,48 +424,56 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
   const since = observe ? "since the launch's custody check" : "after its stop";
   return [
     `fail() { echo "unit ${unitName}: $*" >&2; exit 1; }`,
-    // A job the manager lists for the unit (with --no-legend, none prints nothing); a list that
-    // could not be read is no answer either.
-    `nojob() { queue=$(systemctl list-jobs --no-legend --no-pager ${service}) || fail "its job queue could not be read"; [ -z "$queue" ] || fail "a job for it is queued ${since} ($queue), so it may yet start"; }`,
-    `load=$(systemctl show -p LoadState --value ${service}) || fail "its load state could not be read"`,
+    `refuse() { echo "unit ${unitName}: $*" >&2; exit 4; }`,
+    unitSnapshot(unitName),
+    // One property of a snapshot.
+    `field() { printf '%s\\n' "$1" | tr ' ' '\\n' | sed -n "s/^$2=//p"; }`,
+    `load=$(systemctl show -p LoadState --value ${service}) || refuse "its load state could not be read"`,
     `case "$load" in`,
     // Nothing to disable or stop; whether something of it still runs is checked below all the same.
     `  not-found) ;;`,
-    `  "") fail "its load state could not be read" ;;`,
+    `  "") refuse "its load state could not be read" ;;`,
     ...(observe ? ["  *)"] : [
-      `  *) systemctl disable --quiet ${service} >&2 || fail "its disable failed"`,
-      `     systemctl stop ${service} >&2 || fail "its stop failed"`,
+      `  *) systemctl disable --quiet ${service} >&2 || refuse "its disable failed"`,
+      `     systemctl stop ${service} >&2 || refuse "its stop failed"`,
     ]),
     // is-enabled exits 1 for a disabled unit, so its answer is read, not its exit status.
     `     enabled=$(systemctl is-enabled ${service} 2>/dev/null)`,
-    `     case "$enabled" in disabled|static|masked) ;; *) fail "it is \${enabled:-of unknown enablement} ${observe ? "since the launch's custody check" : "after its disable"}, so a boot could start it" ;; esac ;;`,
+    `     case "$enabled" in disabled|static|masked) ;; *) refuse "it is \${enabled:-of unknown enablement} ${observe ? "since the launch's custody check" : "after its disable"}, so a boot could start it" ;; esac ;;`,
     `esac`,
     `for link in ${quote(unitDir)}/*.wants/${service} ${quote(unitDir)}/*.requires/${service}; do`,
-    `  if [ -e "$link" ] || [ -L "$link" ]; then fail "$link is left, so a boot could start it"; fi`,
+    `  if [ -e "$link" ] || [ -L "$link" ]; then refuse "$link is left, so a boot could start it"; fi`,
     `done`,
-    "nojob",
-    `state=$(systemctl show -p ActiveState --value ${service}) || fail "its state could not be read"`,
-    `case "$state" in inactive|failed) ;; *) fail "it is \${state:-of unknown state} ${since}" ;; esac`,
-    `cg=$(systemctl show -p ControlGroup --value ${service}) || fail "its control group could not be read"`,
+    // The unit's state and its queued job from one query, before everything else read here.
+    `before=$(snap) || refuse "its state and job could not be read"`,
+    `job=$(field "$before" Job)`,
+    `[ -z "$job" ] || refuse "a job for it is queued ${since} (job $job), so it may yet start"`,
+    `state=$(field "$before" ActiveState)`,
+    `case "$state" in inactive|failed) ;; *) refuse "it is \${state:-of unknown state} ${since}" ;; esac`,
+    `cg=$(systemctl show -p ControlGroup --value ${service}) || refuse "its control group could not be read"`,
     // With no group of its own known, the one systemd would give it is checked.
     `[ -n "$cg" ] || cg=/system.slice/${service}`,
-    `case "$cg" in /*) ;; *) fail "its control group $cg is not a path" ;; esac`,
-    `[ -r ${cgRoot}/cgroup.controllers ] || fail "no cgroup v2 hierarchy can be read at ${cgroupRoot}, so whether something of it still runs is not known"`,
+    `case "$cg" in /*) ;; *) refuse "its control group $cg is not a path" ;; esac`,
+    `[ -r ${cgRoot}/cgroup.controllers ] || refuse "no cgroup v2 hierarchy can be read at ${cgroupRoot}, so whether something of it still runs is not known"`,
     `dir=${cgRoot}"$cg"`,
     `if [ -e "$dir" ] || [ -L "$dir" ]; then`,
     // A cgroup file's size reads 0, so its content is read.
-    `  events=$(cat "$dir/cgroup.events") || fail "its control group's events could not be read"`,
+    `  events=$(cat "$dir/cgroup.events") || refuse "its control group's events could not be read"`,
     `  populated=$(printf '%s\\n' "$events" | sed -n 's/^populated \\([01]\\)$/\\1/p')`,
-    `  [ "$populated" = 0 ] || fail "it still has processes ${since} (or its control group's events say nothing of them)"`,
+    `  [ "$populated" = 0 ] || refuse "it still has processes ${since} (or its control group's events say nothing of them)"`,
     `fi`,
-    "nojob",
     `boot=$(cat /proc/sys/kernel/random/boot_id) || fail "this boot's ID could not be read"`,
     `if [ -e ${progress} ] || [ -L ${progress} ]; then`,
     `  saved=$(base64 -w0 < ${progress}) || fail "the progress file could not be read"`,
-    `  printf '%s\\npresent %s\\n' "$boot" "$saved"`,
+    `  report="present $saved"`,
     `else`,
-    `  printf '%s\\nabsent\\n' "$boot"`,
+    `  report=absent`,
     `fi`,
+    // The same snapshot after everything else read here, or what was read may be from a run of
+    // the unit that started meanwhile (a start that completed after the first snapshot).
+    `after=$(snap) || refuse "its state and job could not be read again"`,
+    `[ "$after" = "$before" ] || refuse "it changed while its custody was read (from $before to $after), so it may have started"`,
+    `printf '%s\\n%s\\n' "$boot" "$report"`,
   ].join("\n");
 };
 

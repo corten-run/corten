@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit } from "./round.mjs";
+import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, snapshotsEnded, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit, unitSnapshot } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -323,18 +323,33 @@ test("a relaunch on a droplet reads the round's progress file there as run-all.m
 // (a known, disabled, inactive unit with no control group of its own, whose start succeeds and
 // which is then active, unless they say otherwise; FAKE_RELOAD_HOOK, when set, runs at
 // daemon-reload; with FAKE_STARTED, a start makes that file, and while it exists the unit reads
-// FAKE_STARTED_STATE, active unless set; with FAKE_START_DONE, a start appends "all done" to that
-// file, as a round that finished at once would; list-jobs prints the file FAKE_JOBS names while it
-// exists, and nothing otherwise, and fails with FAKE_JOBS_FAIL), each call recorded in
-// FAKE_SYSTEMCTL_LOG.
+// FAKE_STARTED_STATE, active unless set, as another run of it (InvocationID and state change time);
+// with FAKE_START_DONE, a start appends "all done" to that file, as a round that finished at once
+// would; a job is queued for it, its id the first word of the file FAKE_JOBS names, while that file
+// exists; a snapshot (show with several -p, unitSnapshot) leaves out its Job line with
+// FAKE_JOBS_FAIL; with FAKE_FLIP, a file counting the state reads, the unit reads as started (a
+// start that completed meanwhile) from read FAKE_FLIP_AT on, the second unless set), each call
+// recorded in FAKE_SYSTEMCTL_LOG.
 const fakeSystemctl = [
   "#!/bin/sh",
   'printf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"',
+  'started=; if [ -n "$FAKE_STARTED" ] && [ -e "$FAKE_STARTED" ]; then started=1; fi',
+  'flip() { [ -n "$FAKE_FLIP" ] || return 0; n=$(($(cat "$FAKE_FLIP" 2>/dev/null || echo 0) + 1)); echo "$n" > "$FAKE_FLIP"; [ "$n" -lt "${FAKE_FLIP_AT:-2}" ] || { started=1; FAKE_STARTED_STATE=active; }; }',
+  'state() { if [ -n "$started" ]; then echo "${FAKE_STARTED_STATE-active}"; else echo "${FAKE_STATE-inactive}"; fi; }',
   'case "$1" in',
   "  show)",
+  '    if [ "$4" = "-p" ]; then',
+  '      [ -z "$FAKE_STATE_FAIL" ] || exit 1',
+  "      flip",
+  '      s=$(state); job=; if [ -n "$FAKE_JOBS" ] && [ -e "$FAKE_JOBS" ]; then read -r job rest < "$FAKE_JOBS"; fi',
+  '      echo "ActiveState=$s"; case "$s" in active) echo "SubState=running" ;; *) echo "SubState=dead" ;; esac',
+  '      [ -n "$FAKE_JOBS_FAIL" ] || echo "Job=$job"',
+  '      if [ -n "$started" ]; then echo "InvocationID=bbbb"; echo "StateChangeTimestampMonotonic=2000"; else echo "InvocationID=aaaa"; echo "StateChangeTimestampMonotonic=1000"; fi',
+  "      exit 0",
+  "    fi",
   '    case "$3" in',
   '      LoadState) [ -z "$FAKE_LOAD_FAIL" ] || exit 1; echo "${FAKE_LOAD-loaded}" ;;',
-  '      ActiveState) [ -z "$FAKE_STATE_FAIL" ] || exit 1; if [ -n "$FAKE_STARTED" ] && [ -e "$FAKE_STARTED" ]; then echo "${FAKE_STARTED_STATE-active}"; else echo "${FAKE_STATE-inactive}"; fi ;;',
+  '      ActiveState) [ -z "$FAKE_STATE_FAIL" ] || exit 1; flip; state ;;',
   '      ControlGroup) [ -z "$FAKE_CG_FAIL" ] || exit 1; echo "${FAKE_CG-}" ;;',
   "    esac ;;",
   '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
@@ -348,6 +363,26 @@ const fakeSystemctl = [
   "exit 0",
   "",
 ].join("\n");
+
+test("a unit has ended only when two snapshots, each its state and job from one query, agree and read inactive or failed with no job", () => {
+  const snap = (/** @type {string} */ state, job = "", invocation = "aaaa", changed = "1000") => `ActiveState=${state} InvocationID=${invocation} Job=${job} StateChangeTimestampMonotonic=${changed} SubState=${state === "active" ? "running" : "dead"}`;
+  assert.ok(snapshotsEnded(snap("inactive"), snap("inactive")));
+  assert.ok(snapshotsEnded(snap("failed"), `${snap("failed")}\n`));
+  // A start that completed between them, a job queued, a state not ended, or another run of it.
+  assert.ok(!snapshotsEnded(snap("inactive"), snap("active", "", "bbbb", "2000")));
+  assert.ok(!snapshotsEnded(snap("inactive", "4242"), snap("inactive", "4242")));
+  assert.ok(!snapshotsEnded(snap("active"), snap("active")));
+  assert.ok(!snapshotsEnded(snap("inactive"), snap("inactive", "", "bbbb", "2000")));
+  // One snapshot alone, or an answer that is not each property once, is not an answer.
+  assert.ok(!snapshotsEnded(snap("inactive"), "unreadable"));
+  assert.ok(!snapshotsEnded("ActiveState=inactive", "ActiveState=inactive"));
+  const noJob = snap("inactive").replace(" Job=", " ");
+  assert.ok(!snapshotsEnded(noJob, noJob));
+  const twice = snap("inactive").replace("Job=", "ActiveState=inactive Job=");
+  assert.ok(!snapshotsEnded(twice, twice));
+  // The query names every property once, so systemd answers them from one reply.
+  assert.match(unitSnapshot("corten-bench-r1"), /systemctl show -p ActiveState -p SubState -p Job -p InvocationID -p StateChangeTimestampMonotonic 'corten-bench-r1\.service'/);
+});
 
 test("a relaunch reads the round's progress file only once systemd confirms its unit is disabled, stopped and inactive with no process in its control group or below it", { skip: process.platform !== "linux" && "needs Linux's /proc" }, () => {
   const root = mkdtempSync(join(tmpdir(), "relaunch-custody-"));
@@ -371,9 +406,11 @@ test("a relaunch reads the round's progress file only once systemd confirms its 
       const r = spawnSync("bash", ["-c", body], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_SYSTEMCTL_LOG: log, ...fake } });
       return { ...r, calls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [] };
     };
-    const refused = (/** @type {Record<string, string>} */ fake, /** @type {RegExp} */ why, /** @type {string} */ label, body = script) => {
+    // A unit not confirmed stopped is refused (exit 4: the launch leaves the droplet); only a boot
+    // ID or progress file that cannot be read fails (exit 1).
+    const refused = (/** @type {Record<string, string>} */ fake, /** @type {RegExp} */ why, /** @type {string} */ label, body = script, status = 4) => {
       const r = run(fake, body);
-      assert.equal(r.status, 1, `${label}: ${r.stdout}${r.stderr}`);
+      assert.equal(r.status, status, `${label}: ${r.stdout}${r.stderr}`);
       assert.match(r.stderr, why, label);
       assert.equal(r.stdout, "", label);
       return r;
@@ -389,14 +426,25 @@ test("a relaunch reads the round's progress file only once systemd confirms its 
     refused({ FAKE_STOP_RC: "5" }, /unit corten-bench-r1: its stop failed/, "stop failed");
     refused({ FAKE_LOAD_FAIL: "1" }, /its load state could not be read/, "load state failed");
     refused({ FAKE_LOAD: "" }, /its load state could not be read/, "no load state");
-    refused({ FAKE_STATE_FAIL: "1" }, /its state could not be read/, "state failed");
+    refused({ FAKE_STATE_FAIL: "1" }, /its state and job could not be read/, "state failed");
     refused({ FAKE_CG_FAIL: "1" }, /its control group could not be read/, "control group failed");
-    // A job queue that could not be read, or a job queued for the unit after its stop.
+    // A snapshot without its Job (not each property once), or a job queued for the unit after
+    // its stop.
     const jobs = join(root, "jobs");
-    refused({ FAKE_JOBS_FAIL: "1" }, /unit corten-bench-r1: its job queue could not be read/, "job queue failed");
+    refused({ FAKE_JOBS_FAIL: "1" }, /unit corten-bench-r1: its state and job could not be read/, "snapshot without its job");
     writeFileSync(jobs, "4242 corten-bench-r1.service start waiting\n");
-    refused({ FAKE_JOBS: jobs }, /a job for it is queued after its stop \(4242 corten-bench-r1\.service start waiting\), so it may yet start/, "job queued");
+    refused({ FAKE_JOBS: jobs }, /a job for it is queued after its stop \(job 4242\), so it may yet start/, "job queued");
     rmSync(jobs);
+    // A start that completes after the unit's state is read and before its job is (two queries
+    // apart, the old check read inactive with nothing queued while the unit was active): the
+    // unit's state and job come from one snapshot, and a second after the control group, the boot
+    // and the progress file must be the same, so the start refuses, here and in the clear's check.
+    const flips = join(root, "flips");
+    for (const [label, body] of /** @type {const} */ ([["first check", script], ["clear's check", relaunchCustody("corten-bench-r1", progress, { unitDir: units, cgroupRoot: cgroups, observe: true })]])) {
+      rmSync(flips, { force: true });
+      refused({ FAKE_FLIP: flips }, /it changed while its custody was read \(from \S+=inactive .* to \S+=active .*\), so it may have started/, `start completed between reads, ${label}`, body);
+    }
+    rmSync(flips, { force: true });
     // A unit a boot could still start: still enabled, enablement unknown, or a wants link left
     // (a unit file without [Install] has nothing for disable to remove).
     refused({ FAKE_ENABLED: "enabled" }, /it is enabled after its disable, so a boot could start it/, "enabled");
@@ -447,13 +495,15 @@ test("a relaunch reads the round's progress file only once systemd confirms its 
     // unit still reads inactive with an empty group, so only its job shows it. A queue that could
     // not be read refuses too. Neither stops anything.
     writeFileSync(jobs, "4243 corten-bench-r1.service start waiting\n");
-    stopsNothing(refused({ FAKE_JOBS: jobs }, /a job for it is queued since the launch's custody check \(4243 corten-bench-r1\.service start waiting\), so it may yet start/, "observe job queued", observed), "observe job queued");
+    stopsNothing(refused({ FAKE_JOBS: jobs }, /a job for it is queued since the launch's custody check \(job 4243\), so it may yet start/, "observe job queued", observed), "observe job queued");
     rmSync(jobs);
-    stopsNothing(refused({ FAKE_JOBS_FAIL: "1" }, /its job queue could not be read/, "observe job queue failed", observed), "observe job queue failed");
+    stopsNothing(refused({ FAKE_JOBS_FAIL: "1" }, /its state and job could not be read/, "observe snapshot without its job", observed), "observe snapshot without its job");
     const same = ok({}, "observe unchanged", observed);
     stopsNothing(same, "observe unchanged");
     assert.equal(same.stdout, stopped.stdout);
-    assert.equal(same.calls.filter((c) => c === "list-jobs --no-legend --no-pager corten-bench-r1.service").length, 2, same.calls.join("; "));
+    // Two snapshots, one query each, and no separate state or job-queue read.
+    assert.equal(same.calls.filter((c) => c === "show -p ActiveState -p SubState -p Job -p InvocationID -p StateChangeTimestampMonotonic corten-bench-r1.service").length, 2, same.calls.join("; "));
+    assert.ok(!same.calls.some((c) => c.startsWith("list-jobs") || c === "show -p ActiveState --value corten-bench-r1.service"), same.calls.join("; "));
     rmSync(join(cgroups, "system.slice"), { recursive: true, force: true });
     ok({}, "no group");
     for (const enabled of ["static", "masked"]) ok({ FAKE_ENABLED: enabled }, enabled);
@@ -468,7 +518,7 @@ test("a relaunch reads the round's progress file only once systemd confirms its 
     // A progress file that cannot be read prints nothing.
     rmSync(progress);
     mkdirSync(progress);
-    refused({}, /the progress file could not be read/, "progress unreadable");
+    refused({}, /the progress file could not be read/, "progress unreadable", script, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -652,6 +702,9 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       // FAKE_DROP_START: the unit's start runs there, and then the connection drops before its
       // output comes back, as ssh reports a connection lost.
       'case "$last" in *"systemctl start corten-bench-r1"*|*"start settled"*) if [ -n "$FAKE_DROP_START" ]; then bash -c "$script" >/dev/null 2>&1; echo "Connection to 203.0.113.9 closed by remote host." >&2; exit 255; fi ;; esac',
+      // FAKE_DROP_WATCH: the watch's look at the round (its script reads /proc/uptime) gets no
+      // answer, as from a droplet that stopped answering; other calls go through.
+      'case "$last" in */proc/uptime*) if [ -n "$FAKE_DROP_WATCH" ]; then echo "ssh: connect to host 203.0.113.9 port 22: Connection timed out" >&2; exit 255; fi ;; esac',
       // FAKE_DROP: a step whose script holds that text runs there, and then every reply is lost.
       'if [ -n "$FAKE_DROP" ]; then case "$last" in *"$FAKE_DROP"*) bash -c "$script" >/dev/null 2>&1; echo "Connection to 203.0.113.9 closed by remote host." >&2; exit 255 ;; esac; fi',
       'exec bash -c "$script"',
@@ -668,11 +721,13 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     ].join("\n"), { mode: 0o755 });
     // doctl fails unless FAKE_DOCTL_CREATE or FAKE_DOCTL_LIST is set: then it lists no droplet (or
     // FAKE_DOCTL_LIST's line, for a --collect to find), creates one at the droplet's address, and
-    // deletes it when asked.
+    // deletes it when asked. With FAKE_DOCTL_ACCOUNT, DigitalOcean answers (account get) and a
+    // power cycle succeeds, so a droplet that does not answer is taken as stuck.
     writeFileSync(join(bin, "doctl"), [
       "#!/bin/sh",
       'printf "doctl %s\\n=====\\n" "$*" >> "$FAKE_LOG"',
       '[ -n "$FAKE_DOCTL_CREATE$FAKE_DOCTL_LIST" ] || exit 1',
+      'case "$*" in "account get"*|"compute droplet-action power-cycle"*) [ -n "$FAKE_DOCTL_ACCOUNT" ] && exit 0 ;; esac',
       'case "$*" in',
       '  "compute droplet list"*) [ -z "$FAKE_DOCTL_LIST" ] || echo "$FAKE_DOCTL_LIST" ;;',
       '  "compute droplet create"*) echo "4242 203.0.113.9" ;;',
@@ -716,7 +771,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       }
       rmSync(join(root, "hook"), { force: true });
       if (hook) writeFileSync(join(root, "hook"), hook);
-      for (const file of ["log", "systemctl", "started", "jobs"]) rmSync(join(root, file), { force: true });
+      for (const file of ["log", "systemctl", "started", "jobs", "flips"]) rmSync(join(root, file), { force: true });
       rmSync(join(fullstack, "results"), { recursive: true, force: true });
       const argv = [...(fast ? ["--import", fastTimers] : []), join(fullstack, "droplet.mjs"), "r1", ...(collect ? ["--collect"] : [...(create ? ["--ssh-key", "1"] : ["--host", "203.0.113.9"]), ...extra, ...(detach ? ["--detach"] : [])])];
       return { argv, options: { cwd: tree, encoding: /** @type {const} */ ("utf8"), env: { ...env, ...(create ? { FAKE_DOCTL_CREATE: "1" } : {}), ...(collect ? { FAKE_DOCTL_LIST: "4242 corten-bench-r1 203.0.113.9" } : {}), ...fake } } };
@@ -843,7 +898,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     const failed = launch({ progress: unfinished(other), fake: { FAKE_START_RC: "1", FAKE_STATE: "failed" }, fast: true });
     assert.notEqual(failed.status, 0, failed.stdout);
     assert.deepEqual(failed.units.filter((u) => u === "start corten-bench-r1"), ["start corten-bench-r1"], failed.units.join("; "));
-    assert.ok(!failed.units.slice(failed.units.indexOf("start corten-bench-r1") + 1).some((u) => u.startsWith("list-jobs")), failed.units.join("; "));
+    assert.ok(!failed.units.slice(failed.units.indexOf("start corten-bench-r1") + 1).some((u) => u.startsWith("list-jobs") || u.startsWith("show -p ActiveState")), failed.units.join("; "));
     assert.ok(!failed.stdout.includes("start settled"), failed.stdout);
     assert.ok(!failed.stdout.includes("retrying"), failed.stdout);
     assert.match(failed.stdout, /the start of corten-bench-r1 on the droplet at 203\.0\.113\.9 was not acknowledged, so whether round r1 is running is not known and the launch lock \/var\/lib\/corten-bench\/launch-r1\.lock is left there/);
@@ -910,7 +965,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     // on to watch the round as a started one. Interrupted while the watch reads it running, it has
     // downloaded nothing and destroyed nothing.
     const startedFile = join(root, "started");
-    const watched = await interrupted({ progress: unfinished(other), fake: { FAKE_STARTED: startedFile, FAKE_ACTIVE_RC: "3" }, create: true, detach: false }, (calls) => calls.some((c) => c.includes("/proc/uptime") && c.includes("ActiveState --value corten-bench-r1")));
+    const watched = await interrupted({ progress: unfinished(other), fake: { FAKE_STARTED: startedFile, FAKE_ACTIVE_RC: "3" }, create: true, detach: false }, (calls) => calls.some((c) => c.includes("/proc/uptime") && c.includes("-p Job -p InvocationID")));
     assert.ok(watched.seen, `the launch did not reach the watch: ${watched.stdout}${watched.stderr}`);
     assert.equal(watched.status, 130, `${watched.stdout}${watched.stderr}`);
     assert.deepEqual(watched.units.filter((u) => u === "start corten-bench-r1"), ["start corten-bench-r1"], watched.units.join("; "));
@@ -938,7 +993,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     const jobsFile = join(root, "jobs");
     const queuedStart = launch({ progress: unfinished(other), hook: `printf '4242 corten-bench-r1.service start waiting\\n' > '${jobsFile}'\n`, fake: { FAKE_JOBS: jobsFile }, fast: true, create: true });
     assert.notEqual(queuedStart.status, 0, queuedStart.stdout);
-    assert.match(queuedStart.stderr, /a job for it is queued since the launch's custody check \(4242 corten-bench-r1\.service start waiting\)/);
+    assert.match(queuedStart.stderr, /a job for it is queued since the launch's custody check \(job 4242\)/);
     assert.match(queuedStart.stderr, /so nothing is cleared/);
     assert.deepEqual(queuedStart.units.filter((u) => /^(stop|disable) /.test(u)), ["disable --quiet corten-bench-r1.service", "stop corten-bench-r1.service"], queuedStart.units.join("; "));
     assert.equal(queuedStart.progress, unfinished(other));
@@ -1014,7 +1069,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       ["active", { FAKE_STATE: "active" }, /round r1 is still running/],
       ["start queued", { FAKE_JOBS: jobsFile }, /round r1 is still running/],
       ["state unreadable", { FAKE_STATE_FAIL: "1" }, /whether round r1 has ended is not known: the state of corten-bench-r1 or its job queue could not be read, so nothing is downloaded or destroyed/],
-      ["job queue unreadable", { FAKE_JOBS_FAIL: "1" }, /whether round r1 has ended is not known/],
+      ["snapshot without its job", { FAKE_JOBS_FAIL: "1" }, /whether round r1 has ended is not known/],
     ])) {
       const { argv, options } = prepare({ log: done, collect: true, fake });
       if (what === "start queued") writeFileSync(jobsFile, "4242 corten-bench-r1.service start waiting\n");
@@ -1046,6 +1101,63 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.match(ordinary.stdout, /downloading the results/, `${ordinary.stdout}${ordinary.stderr}`);
     assert.ok(!ordinary.stdout.includes("could not be confirmed"), ordinary.stdout);
     assert.ok(ordinary.started && ordinary.downloaded && ordinary.deleted, ordinary.calls.join("\n---\n").slice(0, 2000));
+    const collectWith = (/** @type {Setup} */ setup) => { const { argv, options } = prepare({ log: done, collect: true, ...setup }); return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 })); };
+    // A start that completes between the watch's reads, with the log's "all done" kept from an
+    // earlier run: read as a state and then a job queue, it was inactive with nothing queued while
+    // the unit was active, and the round was collected and its droplet destroyed. Two snapshots
+    // around the log, each its state and job from one query, disagree, so the round is running.
+    const flips = join(root, "flips");
+    const torn = collectWith({ fake: { FAKE_FLIP: flips } });
+    assert.ok(!torn.deleted, "a watch whose reads tore deleted the droplet");
+    assert.ok(!torn.downloaded, "a watch whose reads tore downloaded results");
+    assert.equal(torn.status, 3, `${torn.stdout}${torn.stderr}`);
+    assert.match(torn.stdout, /round r1 is still running/);
+    // The unit starts after the watch saw it ended and before the droplet would be destroyed: the
+    // results come down, but a snapshot after the download no longer reads as the watch saw it, so
+    // the droplet is left (exit 3).
+    const lateStart = collectWith({ fake: { FAKE_FLIP: flips, FAKE_FLIP_AT: "3" } });
+    assert.ok(!lateStart.deleted, "a unit that started after the watch saw it end had its droplet deleted");
+    assert.equal(lateStart.status, 3, `${lateStart.stdout}${lateStart.stderr}`);
+    assert.match(lateStart.stdout, /downloading the results/);
+    assert.ok(lateStart.downloaded, lateStart.calls.join("\n---\n").slice(0, 2000));
+    assert.match(lateStart.stdout, /corten-bench-r1 on the droplet at 203\.0\.113\.9 could not be confirmed ended after the download/);
+    assert.match(lateStart.stdout, /delete it with doctl compute droplet delete 4242 --force/);
+    // The first custody check finds a start queued for the unit (its job waiting): a refusal, as
+    // the clear's is, so the droplet this launch created is not destroyed, nothing is cleared,
+    // started or downloaded, and the operator is told how to delete it.
+    const firstQueued = (() => {
+      const { argv, options } = prepare({ progress: unfinished(other), fake: { FAKE_JOBS: jobsFile }, fast: true, create: true });
+      writeFileSync(jobsFile, "4242 corten-bench-r1.service start waiting\n");
+      return outcome(spawnSync(process.execPath, argv, { ...options, timeout: 120_000 }));
+    })();
+    assert.ok(firstQueued.calls.some((c) => c.startsWith("doctl compute droplet create")), "no droplet was created");
+    assert.ok(!firstQueued.deleted, "a first check that found a queued start deleted the droplet");
+    assert.ok(!firstQueued.downloaded, "a first check that found a queued start downloaded results");
+    assert.notEqual(firstQueued.status, 0, firstQueued.stdout);
+    assert.match(firstQueued.stderr, /a job for it is queued after its stop \(job 4242\), so it may yet start/);
+    assert.equal(firstQueued.progress, unfinished(other));
+    notStarted(firstQueued, "start queued at the first check");
+    assert.match(firstQueued.stdout, refusal);
+    assert.match(firstQueued.stdout, /delete it with doctl compute droplet delete 4242 --force/);
+    assert.equal(target(), null);
+    // A launch that waits loses the droplet (no answer to the watch, though DigitalOcean answers,
+    // so it is power-cycled twice and taken as stuck) while its unit is active: the round may be
+    // running, so nothing is downloaded and the droplet is left, with how to delete it.
+    const lostWatch = launch({ progress: unfinished(other), extra: ["--stall", "0.00001"], fake: { FAKE_STARTED: startedFile, FAKE_DROP_WATCH: "1", FAKE_DOCTL_ACCOUNT: "1" }, create: true, detach: false, fast: true });
+    assert.ok(lostWatch.started, lostWatch.units.join("; "));
+    assert.equal(lostWatch.calls.filter((c) => c.startsWith("doctl compute droplet-action power-cycle")).length, 2, lostWatch.calls.join("\n---\n").slice(0, 2000));
+    assert.ok(!lostWatch.deleted, "a watch that lost the droplet deleted it while its unit was active");
+    assert.ok(!lostWatch.downloaded, "a watch that lost the droplet downloaded results from a running round");
+    assert.notEqual(lostWatch.status, 0, lostWatch.stdout);
+    assert.match(lostWatch.stdout, /the round could not go on \(the droplet at 203\.0\.113\.9 is stuck/);
+    assert.match(lostWatch.stdout, /corten-bench-r1 on the droplet at 203\.0\.113\.9 could not be confirmed ended/);
+    assert.match(lostWatch.stdout, /delete it with doctl compute droplet delete 4242 --force/);
+    // The control: the same, but the unit then reads ended: what the round has is downloaded and
+    // the droplet destroyed, as before.
+    const lostEnded = launch({ progress: unfinished(other), extra: ["--stall", "0.00001"], fake: { FAKE_STARTED: startedFile, FAKE_STARTED_STATE: "inactive", FAKE_DROP_WATCH: "1", FAKE_DOCTL_ACCOUNT: "1" }, create: true, detach: false, fast: true });
+    assert.notEqual(lostEnded.status, 0, lostEnded.stdout);
+    assert.match(lostEnded.stdout, /downloading what it has/, `${lostEnded.stdout}${lostEnded.stderr}`);
+    assert.ok(lostEnded.downloaded && lostEnded.deleted, lostEnded.calls.join("\n---\n").slice(0, 2000));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

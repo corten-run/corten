@@ -12,7 +12,9 @@
 //   --detach: start the round and leave: it runs on the droplet by itself; collect it later.
 //   --collect: look at the round once: download its results and destroy the droplet if it has
 //     ended (exit 0 when it finished, 1 when it stopped short), or show where it is (exit 3). It
-//     has ended only when its unit reads inactive or failed with no job queued for it.
+//     has ended only when its unit reads inactive or failed with no job queued for it, in two
+//     snapshots that agree (round.mjs, snapshotsEnded), one taken before its log is read and one
+//     after; its droplet is destroyed only once a snapshot after the download still reads so.
 //   --attach: wait for a round already started and download it (then destroy its droplet).
 //   --from <step>: start run-all.mjs at that step and keep the droplet's earlier results.
 //   --stall <minutes>: how long a droplet may not answer before it is power-cycled (default 15).
@@ -58,7 +60,7 @@ import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, startSettled, startUnit, steps, takeLaunch, unit } from "./round.mjs";
+import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, parseSnapshot, snapshotsEnded, startSettled, startUnit, steps, takeLaunch, unit, unitSnapshot } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -159,9 +161,10 @@ let startUnknown = false;
 // neither collected from nor destroyed until the watch has seen it end.
 let startUnconfirmed = false;
 // Whether a step of the launch refused because another launch holds the round's lock, took it, or
-// changed what the custody check read (takeLaunch, ownsLaunch, clearAfterCustody), or such a step's
-// answer never came back (custodyUnconfirmed): something else may be acting on the droplet, so this
-// run neither collects from it nor destroys it.
+// changed what the custody check read, or the custody check could not confirm the round's unit
+// stopped (takeLaunch, ownsLaunch, clearAfterCustody, relaunchCustody), or such a step's answer
+// never came back (custodyUnconfirmed): something else may be acting on the droplet, so this run
+// neither collects from it nor destroys it.
 let custodyRefused = false;
 // Why a step of the launch that checks its custody (the custody check, the clear, the builds and
 // the unit's files) failed on its last try without saying whether it refused, or null: no answer
@@ -172,8 +175,9 @@ let custodyRefused = false;
 /** @type {string | null} */
 let custodyUnconfirmed = null;
 // Exit statuses of a launch's steps on the droplet (round.mjs): the lock another launch holds
-// (takeLaunch), and the lock lost or the custody changed since its check (ownsLaunch,
-// clearAfterCustody). Neither is tried again: each would refuse again.
+// (takeLaunch), and the lock lost, the round's unit not confirmed stopped, or the custody changed
+// since its check (ownsLaunch, relaunchCustody, clearAfterCustody). Neither is tried again after
+// the clear: each would refuse again. The custody check is, as its stop may yet take.
 const lockHeldElsewhere = (/** @type {any} */ e) => e?.status === 3;
 const lockLost = (/** @type {any} */ e) => e?.status === 4;
 // A remote call that ended without the droplet's answer (run's status: null for no answer or no
@@ -275,6 +279,24 @@ const download = async (/** @type {string} */ remoteDir, /** @type {string} */ l
 const downloadAll = async (/** @type {string} */ label) => {
   await download(suiteDir, suite === "live" ? "live" : "fullstack", label);
   if (suite === "browser") await download("/bench/bench/browser", "browser", label);
+};
+// The round's unit as it reads now when two snapshots of it agree and show it ended (round.mjs,
+// snapshotsEnded), or null: not ended, changing, or not read (no answer, or a query that failed).
+const endedNow = () => {
+  const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || exit 1\nafter=$(snap) || exit 1\nprintf '%s\\n%s\\n' "$before" "$after"`, { quiet: true, allowFail: true });
+  if (r.status !== 0) return null;
+  const [before = "", after = ""] = String(r.stdout ?? "").replaceAll("\r", "").split("\n");
+  return snapshotsEnded(before, after) ? before.trim() : null;
+};
+// How to delete a droplet this run created and leaves, once its round has ended.
+const deleteHint = () => dropletId && !keep ? ` (droplet ${dropletId}: once round ${round} has ended there, collect it with node bench/fullstack/droplet.mjs ${round} --collect${suite === "fullstack" ? "" : ` --suite ${suite}`}, which deletes it, or delete it with doctl compute droplet delete ${dropletId} --force)` : "";
+// Whether the round's unit still reads as `seen`, the snapshot of it ended, after `what` was read
+// from the droplet: the droplet is destroyed only then. Otherwise it is left, and this says why.
+const stillEnded = (/** @type {string | null} */ seen, /** @type {string} */ what) => {
+  const now = seen === null ? null : endedNow();
+  if (now !== null && now === seen) return true;
+  console.log(`${unitName} on the droplet at ${host} could not be confirmed ended after ${what}, as it read before (inactive or failed with no job queued, in two snapshots that agree, the same as before): ${now === null ? "it is not ended now, or could not be read" : "it changed since"}, so the droplet is left as it is${deleteHint()}`);
+  return false;
 };
 
 // Releases this launch's lock on the droplet (round.mjs, releaseLaunch; another launch's is left),
@@ -502,11 +524,15 @@ const find = () => {
 
 // Waits for the round to end ("finished" or "stopped"), or with `once` (--collect), returns
 // "running" as soon as it knows the round is going on, or "unknown" when its unit's state or job
-// queue could not be read. The round has ended only when its unit reads inactive or failed with no
-// job queued for it, each read succeeding: until then nothing is collected or destroyed, whatever
-// the log says. The log's last line ("all done") only says how a round that has ended ended: a
-// line printed before the unit's process exits, or one a round resumed with --from kept from an
-// earlier run, is read while the unit is still active, and is not taken as the round's end.
+// queue could not be read; with the snapshot of the unit it saw ended (null otherwise). The round
+// has ended only when its unit reads inactive or failed with no job queued for it in two snapshots
+// that agree, each one query (round.mjs, snapshotsEnded), one taken before the log is read and one
+// after: until then nothing is collected or destroyed, whatever the log says. A state and a job
+// queue read in two queries could tear: a start that completed between them read as inactive with
+// nothing queued while the unit was active. The log's last line ("all done") only says how a round
+// that has ended ended: a line printed before the unit's process exits, or one a round resumed
+// with --from kept from an earlier run, is read while the unit is still active, and is not taken
+// as the round's end.
 // A droplet that does not answer for `stall`
 // (and is not cut off from here: DigitalOcean answers) is power-cycled, at most twice; a full-stack
 // round goes on by itself after that. --collect waits that long too, and gives up (leaving the
@@ -520,28 +546,32 @@ const watch = async (/** @type {boolean} */ once) => {
   let unreadableSaid = false;
   for (let poll = 0; ; poll += 1) {
     if (poll) await sleep(minute);
-    // The first line: seconds since boot, the unit's state and whether a job is queued for it
-    // ("unreadable" for a query that failed or said nothing); then the log.
-    const r = ssh(`state=$(systemctl show -p ActiveState --value ${unitName}) && [ -n "$state" ] || state=unreadable; queue=$(systemctl list-jobs --no-legend --no-pager ${unitName}.service) && { [ -z "$queue" ] && queue=none || queue=queued; } || queue=unreadable; echo "$(cut -d. -f1 /proc/uptime) $state $queue"; cat ${log} 2>/dev/null; true`, { quiet: true, allowFail: true });
+    // Seconds since boot, a snapshot of the unit (its state and queued job from one query, or
+    // "unreadable"), the log, and a second snapshot, last: the log is read between the two.
+    const r = ssh(`${unitSnapshot(unitName)}\nbefore=$(snap) || before=unreadable\necho "$(cut -d. -f1 /proc/uptime)"\necho "before $before"\ncat ${log} 2>/dev/null\necho\nafter=$(snap) || after=unreadable\necho "after $after"\ntrue`, { quiet: true, allowFail: true });
     if (r.status === 0) {
       silentSince = null;
       silentPolls = 0;
-      const [first, ...rest] = r.stdout.split("\n");
-      const [uptime, unitState, queue] = first.trim().split(" ");
+      const all = r.stdout.replaceAll("\r", "").split("\n");
+      while (all.length && all.at(-1) === "") all.pop();
+      const [uptime = "", beforeLine = "", ...rest] = all;
+      const afterLine = rest.pop() ?? "";
+      const before = beforeLine.startsWith("before ") ? beforeLine.slice(7) : "unreadable";
+      const after = afterLine.startsWith("after ") ? afterLine.slice(6) : "unreadable";
       const text = rest.join("\n");
       const lines = text.split("\n").filter((l) => /^\d{4}-|step failed|step \S+ skipped|all done|round failed|browser suite|^\|/.test(l));
       for (const l of lines.slice(once ? Math.max(shown, lines.length - 8) : shown)) console.log(l);
       shown = lines.length;
-      const unreadable = unitState === "unreadable" || (queue !== "none" && queue !== "queued");
-      const ended = (unitState === "inactive" || unitState === "failed") && queue === "none";
-      if (ended && doneMarker.test(text)) return "finished";
+      const unreadable = !parseSnapshot(before) || !parseSnapshot(after);
+      const ended = snapshotsEnded(before, after);
+      if (ended && doneMarker.test(text)) return { state: "finished", snapshot: before.trim() };
       // The unit has ended and the round did not finish. A full-stack round's droplet that
       // restarted less than five minutes ago may not have started the unit again yet, and the unit
       // may be between states, so this has to hold for three polls.
       stopped = ended && (suite !== "fullstack" || Number(uptime) > 300) ? stopped + 1 : 0;
-      if (stopped >= 3 || (stopped && /round failed/.test(text))) return "stopped";
-      if (once && !stopped) return unreadable ? "unknown" : "running";
-      if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its job queue could not be read (${first.trim()}): round ${round} is watched until it reads as ended`);
+      if (stopped >= 3 || (stopped && /round failed/.test(text))) return { state: "stopped", snapshot: before.trim() };
+      if (once && !stopped) return { state: unreadable ? "unknown" : "running", snapshot: null };
+      if (unreadable && !unreadableSaid) console.log(`the state of ${unitName} or its queued job could not be read (${before}; ${after}): round ${round} is watched until it reads as ended`);
       unreadableSaid = unreadable;
       continue;
     }
@@ -564,7 +594,7 @@ const watch = async (/** @type {boolean} */ once) => {
     run("doctl", ["compute", "droplet-action", "power-cycle", id, "--wait"], { quiet: true, allowFail: true, timeout: 10 * minute });
     silentSince = null;
     silentPolls = 0;
-    if (once && (await answers(60))) return "running";
+    if (once && (await answers(60))) return { state: "running", snapshot: null };
   }
 };
 
@@ -579,7 +609,7 @@ try {
       process.exit(0);
     }
   }
-  const state = await watch(collect);
+  const { state, snapshot } = await watch(collect);
   // The watch has seen the round end: a start whose unit was not then read as active is settled.
   if (state === "finished" || state === "stopped") startUnconfirmed = false;
   if (state === "running" || state === "unknown") {
@@ -625,31 +655,47 @@ try {
       await downloadAll("partial results (the round did not finish)");
       process.exitCode = 1;
     }
-    mayDestroy = true;
+    // The watch saw the unit ended before its log was read and after; it goes only if it still
+    // reads so once the results are down.
+    if (stillEnded(snapshot, "the download")) mayDestroy = true;
+    else {
+      leftRunning();
+      process.exitCode = 3;
+    }
   }
 } catch (e) {
   // A run that waits for its round (not --collect, which leaves the droplet for the next look) and
-  // cannot go on keeps what the round measured, then destroys the droplet as it would at the end.
-  // If the download fails too, the droplet stays for a --collect. A start not acknowledged may have
+  // cannot go on keeps what the round measured, then destroys the droplet as it would at the end,
+  // but only when its unit reads ended before the download and the same after it (below). If the
+  // download fails too, the droplet stays for a --collect. A start not acknowledged may have
   // started the round, which goes on by itself, and so may a start that succeeded whose round the
   // watch has not seen end: the droplet is left for a --collect. A launch refused for its custody
-  // (another launch holds or took the lock, or the round's unit or progress file changed) collects
-  // nothing, which would land beside another launch's, and leaves the droplet to it; so does one
-  // whose custody step got no answer or no turn at the flock, which may have refused there.
+  // (another launch holds or took the lock, the round's unit could not be confirmed stopped, or its
+  // unit or progress file changed) collects nothing, which would land beside another launch's, and
+  // leaves the droplet to it; so does one whose custody step got no answer or no turn at the flock,
+  // which may have refused there.
   if (custodyRefused) {
     const why = custodyUnconfirmed !== null
       ? `a step that checks its lock ${custodyUnconfirmed}, so whether another launch holds or took its lock, or the round's unit or progress file changed after its custody check, is not known, and it is taken as refused`
-      : "another launch holds or took its lock, or the round's unit or progress file changed after its custody check";
+      : "another launch holds or took its lock, or the round's unit could not be confirmed stopped, or the round's unit or progress file changed after its custody check";
     console.log(`round ${round}'s launch on the droplet at ${host} was refused: ${why}. Nothing is downloaded from that droplet and it is left as it is${dropletId && !keep ? ` (droplet ${dropletId}: once no launch or round of ${round} is using it, delete it with doctl compute droplet delete ${dropletId} --force)` : ""}`);
     throw e;
   }
+  // Only a round whose unit reads ended (inactive or failed with no job queued, in two snapshots
+  // that agree) before the download and the same after it is downloaded from and destroyed: a
+  // watch that lost the droplet for a while says nothing of whether the round is still running.
   if (!collect && !mayDestroy && !startUnknown && !startUnconfirmed) {
-    console.log(`the round could not go on (${String(/** @type {any} */ (e).message).split("\n")[0]}); downloading what it has`);
-    try {
-      await downloadAll("partial results (the round did not finish)");
-      mayDestroy = true;
-    } catch (d) {
-      console.log(`could not download them: ${String(/** @type {any} */ (d).message).split("\n")[0]}`);
+    const why = String(/** @type {any} */ (e).message).split("\n")[0];
+    const seen = endedNow();
+    if (seen === null) console.log(`the round could not go on (${why}), and ${unitName} on the droplet at ${host} could not be confirmed ended (inactive or failed with no job queued, in two snapshots that agree): it is not ended, or could not be read, so nothing is downloaded and the droplet is left as it is${deleteHint()}`);
+    else {
+      console.log(`the round could not go on (${why}); ${unitName} reads ended, so downloading what it has`);
+      try {
+        await downloadAll("partial results (the round did not finish)");
+        if (stillEnded(seen, "the download")) mayDestroy = true;
+      } catch (d) {
+        console.log(`could not download them: ${String(/** @type {any} */ (d).message).split("\n")[0]}`);
+      }
     }
   }
   if (!mayDestroy) leftRunning();
