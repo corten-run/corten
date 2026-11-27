@@ -11543,10 +11543,14 @@ rules something out.
     own, since the kit prints one figure a run and its page records one binary at 2,641 to
     2,645 bytes a connection between runs: three runs a build, and a rise only when the median
     of head's growths of resident memory, in bytes, is above base's by more than the larger of
-    base's three span and one page. Resident memory is reported a page at a time, so base's
-    three can agree exactly and one page is the least step a run can show; one page is the
-    least allowed, the step of the reading, not a measured bound on its accuracy, and only over at
-    least as many connections as a page has bytes, so it is at most a byte a connection; a reading
+    base's three span and four pages. Resident memory is reported a page at a time, so base's
+    three can agree exactly and one page is the least step a run can show. One page was the
+    least allowed, the step of the reading and not a measured bound on its accuracy, from
+    [#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
+    until 2026-11-27, when the maintainer raised it to four (The idle floor, below): four pages
+    of the size the runs print, only over at
+    least as many connections as a page has bytes, so they are at most four bytes a connection,
+    and 16,384 bytes, under 3.3 a connection, at the gate's 5,000 in 4,096-byte pages; a reading
     over fewer decides nothing. The figures a
     connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
@@ -11555,8 +11559,9 @@ rules something out.
     pages by one or two pages: a rise, which the rule of that time, on rounded figures with no
     allowance, failed. The growths in bytes were not recorded
     ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)),
-    so the rule above, which allows one page, cannot decide that run (one page passes, two fail),
-    and the hosted job's growths on its head decide it. No run is taken again for its
+    so the rule that followed, which allowed one page, could not decide that run (one page
+    passed, two failed), and the hosted job's growths on its head decided it. No run is taken
+    again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
@@ -11644,6 +11649,45 @@ rules something out.
     when the condition the ruling met gives way to the next: four weekly rows in the trend's
     table, when the threshold is read again against what those runs resolved and read.
 
+    The idle floor. On 2026-11-27 the maintainer raised the least a rise of idle memory is
+    allowed from one page to four. The question put was what should happen with
+    [#2185 Hand on a request's body that has already ended without wrapping and boxing it](https://github.com/corten-run/corten/pull/2185),
+    which failed the count on one idle reading, head over base by 8,192 bytes in the hosted job
+    and by 12,288 on another host across 5,000 connections, where the rule allowed 4,096, and
+    the answer chosen was to change the rule and the kit: a rise passes up to the larger of
+    base's span and 16,384 bytes over 5,000 connections. That is the maintainer changing the
+    rule, not a check loosened for a result: that pull request is read under the rule on
+    `main` after its own review, and this Choice does not say how it reads. What the floor rests on is three sizes of reading, 4,096, 8,192 and 12,288 bytes of
+    head's median over base's, each over 5,000 connections from one address in 4,096-byte
+    pages, in three pull requests whose descriptions say that nothing they add is held for a
+    connection: 4,096 after one request with base's three equal, in the hosted job and, by its
+    description, on another host
+    ([#2176 Read a route's query in one pass, decoding only what is escaped](https://github.com/corten-run/corten/pull/2176));
+    8,192 after three of a browser's requests with base's three 4,096 apart, in two hosted
+    jobs, and 12,288 on another host by its description, for the second job's two commits
+    (the pull request the question named); and 8,192 after one request where base's own three spanned 8,192, in a
+    hosted job, which passed by that span
+    ([#2194 Tag an answer given its scope's lines in one pass without searching its lines](https://github.com/corten-run/corten/pull/2194)).
+    [The kit's page](../bench/request-cost/README.md#the-idle-floor) has each run's growths.
+    The cause was established in none of them. The description of the pull request the
+    question named takes its reading over 1,000 to 20,000 connections too, and the difference does not grow with the count where it
+    can be seen (one page at 1,000; at 2,500, 10,000 and 20,000 base's own runs are 21 to 513
+    pages apart, which hides it), which fits a page or two the process touches once, by where
+    the allocator puts things, and does not show it: no run says what the pages are, so memory
+    a connection holds is not ruled out. What is given up: at the gate's settings a cost under
+    about 3.3 bytes a connection is no longer seen, where one page saw down to about 0.8, and
+    since a reading is whole pages a cost of 4 bytes a connection can read as four pages or as
+    five. What is kept: one 8-byte field a connection reads 40,000 bytes over 5,000 connections
+    and 32,768 over 4,096, the fewest a reading in 4,096-byte pages is taken over, each more
+    than the floor. It stays one rule for both page sizes, four pages of the size the runs
+    print: in 65,536-byte pages that is 262,144 bytes over at least 65,536 connections, the
+    same four bytes a connection at most, with no reading in such pages behind it, and the
+    hosted job still leaves such a runner's readings not decided. The fewest connections stay
+    the page's bytes, since a floor kept to a byte a connection would take 16,384 of them in
+    4,096-byte pages and refuse the 5,000 the ruling names. By the kit's model, at its assumed
+    spread, two builds that are the same read a rise in about one comparison in 260 with four
+    pages, where one page read one in about nineteen (Revisit when, below).
+
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
     one. The job
@@ -11715,9 +11759,11 @@ rules something out.
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
     run records and nobody reviews, so part of what a run reads there is the answer and not
-    the path to it; and a rise of one page over base's three when they agree, at most a byte a
-    connection at the gate's settings, is too small a regression to refuse a change for, which
-    no reading has tested); measured (the kit's
+    the path to it; and a rise of up to four pages over base's three, 16,384 bytes and under
+    3.3 bytes a connection at the gate's settings, is where the allocator put things or a cost
+    too small to refuse a change for, and not memory a connection holds, which the
+    maintainer's ruling of 2026-11-27 takes on three sizes of reading whose cause no run
+    established); measured (the kit's
     repeats as its page records them, 30 counts of one
     binary in each of 13 rows on one 16-CPU host, for which the page names no commit, five
     builds of `c9666dc96` in five directories, and, by a review of the kit's pull request, 24
@@ -11725,7 +11771,10 @@ rules something out.
     of the hosted job, on 4-CPU runners of three CPU models, with the same crates on both
     builds, where the six counts a job of each of 13 rows spanned at most 1 instruction but
     for one row of one run, `get`'s 3 of a budget of 91, and
-    the six runs a job of each idle reading 0 to 4 bytes a connection; the
+    the six runs a job of each idle reading 0 to 4 bytes a connection; head's median idle
+    growth over base's by 4,096, 8,192 and 12,288 bytes over 5,000 connections in three pull
+    requests, read from four hosted jobs' logs and, for one reading of 4,096 and the one of
+    12,288, given by two descriptions of another host and not read from a log; the
     default band and the estimate of a reading across placements, which are
     [design Choice 72](#choice-placement-runs)'s; and the trend's first run, one run under the
     tag `evidence/trend-2026-11-26`, every workload read and both A/As resolved); reasoned (a bound inside the default band does
@@ -11746,8 +11795,11 @@ rules something out.
     record them, whose count is the baseline, the changes before it not having been counted,
     or cannot be taken because the
     probe does not build against that tag, so nothing bounds what counted costs add up to;
-    a rise of one page at the gate's settings is shown to repeat for a change, so the page let
-    pass hides a real regression;
+    a change shown to hold memory a connection keeps passes the idle rule under the four
+    pages, so the floor hides a real cost; the hosted job fails a change on idle memory alone
+    at four pages, with no memory a connection keeps shown, so four pages are still under
+    what a run reads of where things were put; a run shows what the pages of the readings the
+    floor rests on are, either way;
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
@@ -11775,8 +11827,9 @@ rules something out.
     memory to rise between two builds of the same crates, so it fails a change for what the
     runner did (three runs a build drawn from one distribution read a rise in about one
     comparison in twelve by unrounded figures and base's span alone, in about one in seventeen by
-    growths in 4,096-byte pages and base's span alone, and in about one in nineteen by those
-    growths with the one page allowed, on the same draws, at a spread of 1.5 bytes a
+    growths in 4,096-byte pages and base's span alone, in about one in nineteen by those
+    growths with one page allowed, and in about one in 260 with the four pages now allowed,
+    on the same draws, at a spread of 1.5 bytes a
     connection, each simulated, not a rate seen on runners, which the rule's idle statistic was
     not chosen against); a job comes to tell the kinds a count cannot judge
     from a diff, so the line says nothing the job does not know and can be dropped; or a reading
@@ -11811,7 +11864,18 @@ rules something out.
     `e733f3d88` (the first row and `threshold`, 0.02) and the first run's A/A bounds read again
     from its tag at `d4a002f34` (`evidence/trend-2026-11-26`), in each gated part's
     `results/report.json`: +0.62% and +0.31% on `plain`, +0.47% and +0.61% on `unstaged`,
-    cycles, user and kernel, as recorded and with the labels swapped.
+    cycles, user and kernel, as recorded and with the labels swapped; 2026-11-27, for the idle
+    floor, the hosted job's logs of runs 45925331794 against `0ccda3bc9`, 45924526246 against
+    `cbca34579`, 45931927301 against `e8734f929` and 45951160493 against `e87ad02da` (valgrind
+    3.26.0, rustc 1.100.0), each read for every idle run's growth, base's span and what the
+    rule allowed, with five more runs of the first pull request for how far base's own three
+    are apart (0 to 40,960 bytes in the nine), and the three descriptions read for the two
+    readings of another host and for the readings at other numbers of connections, none of
+    which was read from a log or taken again; 2026-11-27, the model of the idle rule written
+    again from the words of the description that first gave it and run on Node 24.22.1,
+    1,000,000 jobs at each of two seeds, which gave each earlier figure again within a tenth
+    of a point and 0.38% of comparisons and 1.1% of jobs with four pages allowed, with no
+    script kept in the repository.
 
 77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
     A request's deadline needs a timer once its handler waits

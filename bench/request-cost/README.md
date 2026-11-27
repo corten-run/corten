@@ -244,9 +244,11 @@ over 5,000 with 4,096-byte pages (13 with 65,536-byte ones), is the least they c
 its accuracy. The run prints the growth in bytes and the page
 size beside the figure, and CONTRIBUTING's gate compares the growths, not the figures, which are
 rounded: two pages more can round to one byte a connection more. [`idleRise`](figures.mjs) is
-that comparison, and it refuses readings over fewer connections than a page has bytes, where one
-page is more than a byte a connection: over 40, one 4,096-byte page is 102 bytes a connection, a
-step the gate would let pass unseen.
+that comparison. It allows a rise of four pages whatever base's runs span
+([The idle floor](#the-idle-floor) says why four and not the one page of the step), and it
+refuses readings over fewer connections than a page has bytes, where four pages are more than
+four bytes a connection: over 40, four 4,096-byte pages are 410 bytes a connection, a step the
+gate would let pass unseen.
 
 A run prints no figure, and says why, when the probe did not hold every connection: when it
 closed any of them, or when its open files (`/proc/<pid>/fd`) did not grow by their number, as
@@ -372,15 +374,16 @@ allocations up (by the allocator's calls over the same requests, so 16,004 again
 1,000 requests is a rise, though both print as 16.00), and no idle reading that rises by
 [`idleRise`](figures.mjs): the median of head's three growths of resident memory, each run's
 after less its before in bytes, above base's by more than the larger of base's three span and
-one page. The figures a connection are rounded and do not decide it: one page more over base's
-three equal 62,812,160 bytes passes, though the figures read 12,562 and 12,563, and two pages
-more fail, though their figures can also be one byte a connection apart. A figure is read only from the whole JSON of the run asked
+four pages ([The idle floor](#the-idle-floor)). The figures a connection are rounded and do not
+decide it: four pages more over base's three equal 62,812,160 bytes pass, where the figures
+read 12,562 and 12,566, and five pages more fail, though their figures can also be four bytes
+a connection apart (over base's three equal 62,808,064 they read 12,562 and 12,566 too). A figure is read only from the whole JSON of the run asked
 for: its case, depth, requests and 5,000 connections from one address, three counts whose
 median is the one stated, and for an idle run its growth equal to its after less its before
 and a page size, which a run of `idle.mjs` from before they were printed does not give, so its
 growth is not guessed from its figure. The job's connections stay 5,000: on a runner whose page
-has more bytes than that (65,536-byte pages), a page is more than a byte a connection, and
-`idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
+has more bytes than that (65,536-byte pages), four pages are more than four bytes a connection
+(52), and `idleRise` refuses the reading; `compare.mjs` refuses six runs not all of one page size before
 asking `idleRise`. Either way the reading is not decided and cannot be counted. An answer is a capture that is one
 whole answer, by its `Content-Length`, with nothing after it, and the case's. Anything else
 is no figure or no answer, and a reading with no figure on either build, a case either build
@@ -459,21 +462,82 @@ with valgrind 3.26.0 and rustc 1.100.0:
    2,657 to 2,662.
 
 The idle rule can read a rise between two builds that are the same, since it compares two
-medians of three by a span of three, or one page when that is more: base's growths a page
-apart and a head two pages above base's median would be one. A model says how often, not the
-runners. When the rule compared the figures a connection by base's span alone, with every run
-drawn independently from one distribution, it did so in 8.7% of comparisons and 23.8% of jobs,
-a job being three readings, when the draws are normal, and in 5.5% and 15.7% when they are
-normal with a standard deviation of 1.5 bytes a connection and rounded to whole bytes. On the
-growths, with that standard deviation over 5,000 connections (7,500 bytes, 1.8 pages of 4,096),
-each draw rounded to whole pages and the mean placed anywhere in a page, the same draws read
-one by base's span alone in 5.9% of comparisons and 16.7% of jobs, and with the one page
-allowed in 5.4% and 15.3% (each simulated, 1,000,000 jobs): most of the fall from 8.7% is the
-rounding, and the one page allowed takes away about half a point more at that spread. None of
-the five runs read one, whose
-figures were compared, not their growths, which those runs did not print. A job that fails on idle memory alone, by a byte or
-two, is to be read with that in mind; by the rule its runs are still not taken again for
-their result.
+medians of three by a span of three, or four pages when that is more: base's growths within
+four pages of each other and a head five pages above base's median would be one. A model says
+how often, not the runners. When the rule compared the figures a connection by base's span
+alone, with every run drawn independently from one distribution, it did so in 8.7% of
+comparisons and 23.8% of jobs, a job being three readings, when the draws are normal, and in
+5.5% and 15.7% when they are normal with a standard deviation of 1.5 bytes a connection and
+rounded to whole bytes. On the growths, with that standard deviation over 5,000 connections
+(7,500 bytes, 1.8 pages of 4,096), each draw rounded to whole pages and the mean placed
+anywhere in a page, the same draws read one by base's span alone in 5.9% of comparisons and
+16.7% of jobs, with one page allowed, the rule until 2026-11-27, in 5.4% and 15.3%, and with
+the four pages now allowed in 0.38% and 1.1% (each simulated, 1,000,000 jobs): most of the
+fall from 8.7% to 5.4% is the rounding, the one page took away about half a point more, and
+the four pages take away nearly all the rest at that spread. The spread is an assumption, 1.5
+bytes a connection fitted by eye to the spans of the job's first runs, and not a rate seen on
+runners: a wider one gives more. The figures for four pages were made on 2026-11-27 by the
+method the description of
+[#2149 Let the counted gate allow an idle reading's own resolution, and print it beside each figure](https://github.com/corten-run/corten/pull/2149)
+gives for the others, which kept no script, so the model was written again from those words:
+at two seeds it gave each of the earlier figures again within a tenth of a point, and the two
+for four pages the same both times. None of the five runs read one, whose
+figures were compared, not their growths, which those runs did not print. A job that fails on
+idle memory alone is to be read with that in mind; by the rule its runs are still not taken
+again for their result.
+
+## The idle floor
+
+The least a rise of idle memory is allowed, whatever base's runs span, is four pages of the
+size the runs were read in: 16,384 bytes in 4,096-byte pages, under 3.3 bytes a connection over
+the default 5,000, and four bytes a connection over 4,096, the fewest connections `idleRise`
+takes a reading in such pages over. It was one page, the step of the reading, until
+2026-11-27, when the maintainer raised it to four
+([design Choice 76](../../docs/design.md#choice-counted-or-measured) records the ruling). It is
+a ruling on readings, not a measured bound, and the readings are these, each of head's median
+over base's, over 5,000 connections from one address in 4,096-byte pages, in pull requests
+whose descriptions say that nothing they add is held for a connection:
+
+| Pull request | Reading | Where | Base's three growths, bytes | Head's three | Head over base | Base's span |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| [#2176 Read a route's query in one pass, decoding only what is escaped](https://github.com/corten-run/corten/pull/2176) | after one request | hosted run 45925331794, against `0ccda3bc9` | 42,147,840 42,147,840 42,147,840 | 42,151,936 42,156,032 42,151,936 | 4,096 | 0 |
+| the same, the same two commits | after one request | another host, as its description gives it | 98,054,144 98,054,144 98,054,144 | 98,058,240 98,054,144 98,058,240 | 4,096 | 0 |
+| [#2185 Hand on a request's body that has already ended without wrapping and boxing it](https://github.com/corten-run/corten/pull/2185) | after three of a browser's requests | hosted runs 45924526246, against `cbca34579`, and 45931927301, against `e8734f929`: the same growths in both | 62,603,264 62,599,168 62,603,264 | 62,611,456 62,611,456 62,611,456 | 8,192 | 4,096 |
+| the same, the second run's two commits | after three of a browser's requests | another host, as its description gives it | 99,971,072 99,966,976 99,966,976 | 99,979,264 99,975,168 99,979,264 | 12,288 | 4,096 |
+| [#2194 Tag an answer given its scope's lines in one pass without searching its lines](https://github.com/corten-run/corten/pull/2194) | after one request | hosted run 45951160493, against `e87ad02da` | 42,147,840 42,147,840 42,156,032 | 42,156,032 42,164,224 42,156,032 | 8,192 | 8,192 |
+
+The hosted rows were read from those jobs' logs (valgrind 3.26.0, rustc 1.100.0); the two of
+another host are the descriptions' and were not read from a log. Under one page the first two
+rows were at the limit, the third and fourth over it, and the fifth at the limit base's span
+set. In the nine hosted runs of those three pull requests that had run to their end when they
+were read (27 readings), base's own three spanned 0 to 40,960 bytes, and head's median was above base's
+by 4,096 in seven readings, by 8,192 in three and by 16,384 in one, whose base spanned 20,480;
+it was the same in twelve and below in four.
+
+What made the pages was established in none of them. The description of the second pull
+request reads its reading over 1,000, 2,500, 10,000 and 20,000 connections as well: one page
+over at 1,000, where five times the connections read one to three, and at the other three
+counts base's own runs 21 to 513 pages apart, which hides a difference of this size. That fits
+a page or two the process touches once, by where the allocator puts things, and does not show
+it: no run says what the pages are, so memory a connection holds is not ruled out.
+
+What the floor gives up, and keeps:
+
+1. A cost under about 3.3 bytes a connection is not seen at the default: it reads at most
+   16,384 bytes over 5,000 connections, which passes. Under one page that was about 0.8. A
+   reading is whole pages, so a cost of 4 bytes a connection, 20,000 bytes, can read as four
+   pages or as five.
+2. One 8-byte field a connection reads 40,000 bytes over 5,000 connections and 32,768 over
+   4,096, each more than the floor, so it is still a rise wherever base's span is under it.
+   A span of base's over four pages governs as before, and hides more.
+3. It is one rule for both page sizes. In 65,536-byte pages four pages are 262,144 bytes, over
+   at least 65,536 connections, so at most the same four bytes a connection. No reading in
+   such pages stands behind that: every reading above is in 4,096-byte pages, and that a
+   process which touches a few more pages does so whatever their size is reasoned, not read.
+   The hosted job, at 5,000 connections, still leaves such a runner's readings not decided.
+4. The fewest connections stay the page's bytes. Keeping the floor at a byte a connection
+   would take 16,384 connections for 4,096-byte pages and refuse the default 5,000, the
+   setting the ruling names and every reading above was taken at.
 
 ## Tests
 
@@ -489,7 +553,7 @@ for them.
 | `probe.test.mjs` | The client against a stand-in server: every request sent, whole batches at a depth, an answer that is not the case's refused, an answer that never comes |
 | `run.test.mjs` | `count.mjs` and `idle.mjs` run whole against the stand-ins: which dump and which thread a count reads, that its window holds the 1,000 requests on the connection of the 240 and neither its opening nor its closing, the `HOSTS` each case starts the probe with, what is printed, and each refusal |
 | `build.test.mjs` | `build.sh` with a stand-in cargo: the directories it refuses, the versions it refuses, and that a failed build leaves no binary |
-| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one page over base's agreeing three passing, two pages failing, more than base's span failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
+| `compare.test.mjs` | `compare.mjs` against two builds' directories written as the kit prints with `--json`: inside the budget, over it on one case, an allocation rise smaller than a rate shows, idle memory decided by growths in bytes (one to four pages over base's agreeing three passing, five pages failing, a span of base's over four pages governing and more than it failing), a reading over too few connections for its page or of two page sizes not decided, a run without its page size and growth no figure, a run refused on one build, a refusal taken again, output cut short or of another run, a build that failed, answers missing, empty, cut short or with more after them, which lines declare, and what each declaration does with the verdict |
 | `job.test.mjs` | `job.sh` with stand-ins for `build.sh` and the kit's scripts, in a checkout made for it: no merge base, a build against base or against head that fails, a run refused and taken again, no second run of one that gave its output, and a run stopped when the time is spent |
 
 `run.test.mjs` (but its refusals of an option), `build.test.mjs` and `job.test.mjs` need Linux

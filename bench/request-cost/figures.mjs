@@ -81,14 +81,22 @@ export function held({ connections, before, after, closed, accepted }) {
 }
 
 /**
+ * The pages a rise of idle memory is allowed whatever base's runs span: the floor of the rule,
+ * in pages of the size the runs were read in. It was one page, the least a reading can show,
+ * until the maintainer raised it to four on 2026-11-27 (docs/design.md#choice-counted-or-measured).
+ */
+const FLOOR_PAGES = 4;
+
+/**
  * Whether head's idle memory rose past base's, read from each run's growth of resident memory in
  * bytes (its after less its before, which `idle.mjs` prints), never from the figures a connection,
  * which are rounded. Head rises when the median of its three growths is above base's by more than
- * the larger of base's three span and one page: resident memory moves a page at a time, so a
- * difference of one page is the least a reading can show, and the span is what base's own
- * readings moved by. One page is the least allowed, not the most, and it is allowed only over at
- * least as many connections as a page has bytes, so it is at most a byte a connection: over
- * fewer, a page is a coarser step than the gate lets pass, and the readings decide nothing.
+ * the larger of base's three span and four pages (`FLOOR_PAGES`): resident memory moves a page at
+ * a time, and the span is what base's own readings moved by. Four pages are the least allowed,
+ * not the most, and they are allowed only over at least as many connections as a page has bytes,
+ * so they are at most four bytes a connection (16,384 bytes over 5,000 connections in 4,096-byte
+ * pages is under 3.3): over fewer, four pages are a coarser step than the gate lets pass, and the
+ * readings decide nothing.
  * @param {{ base: number[], head: number[], page: number, connections: number }} readings three
  *   growths in bytes each, the page size in bytes (`getconf PAGESIZE`) and the connections all six
  *   runs opened
@@ -96,7 +104,7 @@ export function held({ connections, before, after, closed, accepted }) {
 export function idleRise({ base, head, page, connections }) {
   if (!Number.isSafeInteger(page) || page <= 0) throw new Error(`a page of ${page} bytes is not one`);
   if (!Number.isSafeInteger(connections) || connections <= 0) throw new Error(`${connections} connections are not a count of them`);
-  if (connections < page) throw new Error(`not a gate reading: one ${page}-byte page over ${connections} connections is more than a byte a connection; open at least ${page}`);
+  if (connections < page) throw new Error(`not a gate reading: four ${page}-byte pages over ${connections} connections are more than four bytes a connection; open at least ${page}`);
   for (const [side, growths] of /** @type {const} */ ([["base", base], ["head", head]])) {
     if (growths.length !== 3) throw new Error(`${side} has ${growths.length} idle readings, not three`);
     for (const growth of growths) {
@@ -107,6 +115,6 @@ export function idleRise({ base, head, page, connections }) {
     }
   }
   const rise = median(head) - median(base);
-  const allowed = Math.max(Math.max(...base) - Math.min(...base), page);
+  const allowed = Math.max(Math.max(...base) - Math.min(...base), FLOOR_PAGES * page);
   return { rise, allowed, rose: rise > allowed };
 }

@@ -21,7 +21,7 @@
 // the kit gives; no case's allocations rise, by the calls themselves; and no idle reading rises,
 // by `idleRise` (figures.mjs): the median of head's three growths of resident memory, in bytes
 // (each run's after less its before), is not above base's by more than the larger of base's
-// three span and one page, over at least as many connections as the page has bytes. The figures a
+// three span and four pages, over at least as many connections as the page has bytes. The figures a
 // connection are rounded and decide nothing. A reading with no figure on either build, an idle
 // reading `idleRise` cannot decide (its six runs not of one page size, or 5,000 connections
 // being fewer than a page has bytes), or a case either build gave no answer to, cannot be
@@ -261,7 +261,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
       return [what, whole(low), whole(high), signed(high - low), percent(low, high), "", shown(bases), shown(heads), "not decided"];
     }
     const { rise, allowed, rose } = decided;
-    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and a ${whole(/** @type {number} */ (pages[0]))}-byte page)`);
+    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and four ${whole(/** @type {number} */ (pages[0]))}-byte pages)`);
     return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
   });
 
@@ -334,7 +334,7 @@ export function compare(base, head, { description = "", names = { base: "base", 
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
     "### Memory idle connections hold",
-    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and one page.`,
+    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and four pages.`,
     table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
     "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
     ["```text", ...records, "```"].join("\n"),

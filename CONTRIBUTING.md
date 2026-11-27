@@ -569,11 +569,16 @@ establish a general ranking.
       connections, case, requests and page size (each run prints them) and the same `--addresses`
       (which it does not print, so the description names it), over at least as many connections as
       the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
-      pages, over `--addresses 3`), so one page is at most a byte a connection, since a reading over
+      pages, over `--addresses 3`), so four pages are at most four bytes a connection, since a reading over
       fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
       resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
-      than the larger of base's three span and one page (the size it prints, the step resident
-      memory is reported in); the figures a connection are rounded and do not decide it. The
+      than the larger of base's three span and four pages (of the size it prints, the step
+      resident memory is reported in: 16,384 bytes with 4,096-byte pages, under 3.3 bytes a
+      connection over the default 5,000); the figures a connection are rounded and do not decide
+      it. The floor was one page until 2026-11-27, when the maintainer raised it to four:
+      [design Choice 76](docs/design.md#choice-counted-or-measured) gives the readings it rests
+      on, whose cause was not established, and what it gives up, a cost under about 3.3 bytes a
+      connection at the default, where one 8-byte field a connection still reads 40,000 bytes. The
       hosted job decides each idle reading so, from each run's growth and page size, and at its
       fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
       not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
