@@ -6962,7 +6962,9 @@ rules something out.
     four-mode/GET/await/status test and release wire-guard regressions, and a callgrind
     comparison then, on `b77577301` against `2292cd604`; 2026-11-17, the checked Action,
     `patch_or_with` part token and the callgrind comparison above, on `abbdf9831` against
-    `bbd9d7432`.
+    `bbd9d7432`; 2026-11-27, `html_response`'s callers read again on `754397356`, where each began
+    to give it the answer's `Vary`: the two patch makers still set `corten-patch` through it, and
+    a page is its only other caller.
 
 59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is

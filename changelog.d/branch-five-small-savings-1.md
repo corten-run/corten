@@ -1,0 +1,1 @@
+- A request no longer repeats five small pieces of work, or does one whose result nothing reads; every answer is the same ([#2175 Five small pieces of work a request repeats or does for nothing: the Accept scan, Accept-Language for the built-in error page, Accept-Encoding weights, a page's Vary, the shell key's hex](https://github.com/corten-run/corten/issues/2175)).
