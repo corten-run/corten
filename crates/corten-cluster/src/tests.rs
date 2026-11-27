@@ -1591,6 +1591,82 @@ async fn an_idempotency_key_used_on_one_feed_is_refused_on_another() {
     assert_eq!(seq(&pool, &a).await.unwrap(), Some(1));
 }
 
+/// Until `write`'s transaction ends, a `begin` that inserts the same idempotency key waits on it:
+/// observed in `pg_stat_activity` as an insert into the key table blocked by that backend, and
+/// as a task that has not returned. Ten seconds at most, so a `begin` that never blocks or a
+/// query that never shows fails the test instead of stalling it.
+async fn blocked_on(pool: &PgPool, write: &mut Write, waiter: &tokio::task::JoinHandle<Result<Begin, Error>>) {
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(write.conn()).await.unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(!waiter.is_finished(), "the second begin returned while the first write's transaction was open");
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO corten_idempotency%'",
+        )
+        .bind(holder)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if waiting == 1 {
+            return;
+        }
+        assert!(Instant::now() < end, "the second begin never waited on the first write's key");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_held_by_an_open_write_to_another_feed_is_refused_once_it_commits_and_free_if_it_rolls_back() {
+    let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let (a, b) = (key("holda"), key("holdb"));
+    new_feed(&pool, &a).await;
+    new_feed(&pool, &b).await;
+    let bounded = |waiter| tokio::time::timeout(Duration::from_secs(10), waiter);
+
+    // The first write commits while the second waits: the second is refused, not A's replay.
+    let idem = key("held");
+    let Begin::New(mut write) = begin(&pool, &a, Some(&idem)).await.unwrap() else { panic!("a new key began a write") };
+    let waiter = tokio::spawn({
+        let (pool, b, idem) = (pool.clone(), b.clone(), idem.clone());
+        async move { begin(&pool, &b, Some(&idem)).await }
+    });
+    blocked_on(&pool, &mut write, &waiter).await;
+    sqlx::query("UPDATE test_items SET n = 1 WHERE feed = $1 AND id = 'a'").bind(&a).execute(write.conn()).await.unwrap();
+    let item = Item { id: "a".into(), n: 1 };
+    assert_eq!(write.commit(&[Change::Upsert { id: "a", value: &item }]).await.unwrap().seq, Some(1));
+    match bounded(waiter).await.expect("the second begin returned once the first committed").unwrap() {
+        Err(error) => assert!(error.is::<IdempotencyKeyReused>(), "{error}"),
+        Ok(Begin::Done(written)) => panic!("the write to {b} was answered with {a}'s: {written:?}"),
+        Ok(Begin::New(_)) => panic!("a write to {b} began with a key {a} committed"),
+    }
+    assert_eq!((seq(&pool, &a).await.unwrap(), seq(&pool, &b).await.unwrap()), (Some(1), Some(0)));
+
+    // The first write rolls back while the second waits: the key was never used, so the second
+    // writes under it.
+    let idem = key("dropped");
+    let Begin::New(mut write) = begin(&pool, &a, Some(&idem)).await.unwrap() else { panic!("a new key began a write") };
+    let waiter = tokio::spawn({
+        let (pool, b, idem) = (pool.clone(), b.clone(), idem.clone());
+        async move { begin(&pool, &b, Some(&idem)).await }
+    });
+    blocked_on(&pool, &mut write, &waiter).await;
+    drop(write);
+    let Begin::New(mut write) =
+        bounded(waiter).await.expect("the second begin returned once the first rolled back").unwrap().unwrap()
+    else {
+        panic!("a key whose write rolled back answered as a replay")
+    };
+    sqlx::query("UPDATE test_items SET n = 2 WHERE feed = $1 AND id = 'a'").bind(&b).execute(write.conn()).await.unwrap();
+    let item = Item { id: "a".into(), n: 2 };
+    assert_eq!(write.commit(&[Change::Upsert { id: "a", value: &item }]).await.unwrap().seq, Some(1));
+    let feed: String =
+        sqlx::query_scalar("SELECT feed FROM corten_idempotency WHERE key = $1").bind(&idem).fetch_one(&pool).await.unwrap();
+    assert_eq!(feed, b, "the key now belongs to the write that committed under it");
+    assert_eq!((seq(&pool, &a).await.unwrap(), seq(&pool, &b).await.unwrap()), (Some(1), Some(1)));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cluster_client_with_a_root_ca_requires_tls() {
     let Ok(tls) = std::env::var("CORTEN_TEST_NATS_TLS_URL") else {
