@@ -652,7 +652,9 @@ async fn a_connection_that_never_waits_lets_other_tasks_run() {
 
 /// Answers to requests nobody reads the answers of are not made without end: once what is
 /// written and not sent reaches the connection's bound and the socket takes no more, no further
-/// request of the pipeline is read or handled until the client reads.
+/// request of the pipeline is read or handled until the client reads. (Over a socket, which
+/// takes megabytes first, on both connections. How many handlers the bound lets run beyond what
+/// the IO takes: the test below.)
 #[tokio::test]
 async fn answers_to_a_pipeline_nobody_reads_are_not_made_without_bound() {
     const REQUESTS: usize = 20_000;
@@ -680,6 +682,127 @@ async fn answers_to_a_pipeline_nobody_reads_are_not_made_without_bound() {
         sending.abort();
         drop(sending.await);
         served.stop().await;
+    }
+}
+
+/// How many handlers run for a client that sends requests and reads nothing is bounded by the
+/// bytes of their answers, and by a count of requests only while no handler waits. The
+/// connection asks for no further request once 16 KiB of answers ([`crate::h1::FLUSH_AT`]) are
+/// written and not taken. Its stop at sixteen requests is another task's turn: an answer whose
+/// head is written after the task has waited begins that count again, so it bounds the handlers
+/// only where every request was read already and none of their handlers waited.
+///
+/// Seen with every request of a long pipeline given in the first reads and an IO that takes a
+/// few bytes of answers or none: a handler that answers at once runs 16 times, and one that
+/// waits a millisecond runs once for every answer it takes to have 16 KiB unsent. That is 219
+/// times for an answer of 75 bytes (the shortest there is: no body, and no header of the
+/// app's), 213 for one of 77 and 25 for one of 677.
+///
+/// The bound is kept in two places: behind each answer, and before a piece of a body is
+/// written behind 16 KiB unsent. The answer with no body meets only the first, and without it
+/// its handler runs for every request sent; the others then run one handler more where the
+/// last answer's head still fit.
+#[tokio::test(start_paused = true)]
+async fn handlers_run_for_a_client_that_reads_nothing_until_16_kib_of_answers_wait() {
+    use crate::h1::FLUSH_AT;
+    use std::task::{Context, Poll};
+    const REQUESTS: usize = 2_000;
+    /// Gives a read all it has room for, waits at the end of what its client sent, and takes
+    /// `takes` bytes of what is written and then no more.
+    struct Stuck {
+        sent: Vec<u8>,
+        read: usize,
+        takes: usize,
+        took: Arc<AtomicUsize>,
+    }
+    impl tokio::io::AsyncRead for Stuck {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            if this.read == this.sent.len() {
+                return Poll::Pending;
+            }
+            let give = (this.sent.len() - this.read).min(buf.remaining());
+            buf.put_slice(&this.sent[this.read..this.read + give]);
+            this.read += give;
+            Poll::Ready(Ok(()))
+        }
+    }
+    impl tokio::io::AsyncWrite for Stuck {
+        fn poll_write(self: std::pin::Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            let this = self.get_mut();
+            if this.takes == 0 {
+                return Poll::Pending;
+            }
+            let wrote = this.takes.min(buf.len());
+            this.takes -= wrote;
+            this.took.fetch_add(wrote, SeqCst);
+            Poll::Ready(Ok(wrote))
+        }
+        fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: std::pin::Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+    /// Answers every request with a body of `long` bytes, at once or a millisecond later, and
+    /// counts the requests.
+    struct Slow {
+        ran: Arc<AtomicUsize>,
+        waits: bool,
+        long: usize,
+    }
+    type Made = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, std::convert::Infallible>> + Send>>;
+    impl tower_service::Service<Request<Body>> for Slow {
+        type Response = ::http::Response<crate::watch::Answered>;
+        type Error = std::convert::Infallible;
+        type Future = crate::watch::Answer<Made>;
+
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _: Request<Body>) -> Self::Future {
+            self.ran.fetch_add(1, SeqCst);
+            let (waits, long) = (self.waits, self.long);
+            let inner: Made = Box::pin(async move {
+                if waits {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Ok(Response::new(Body::from("h".repeat(long))))
+            });
+            crate::watch::Answer { inner, watch: None, connect: false }
+        }
+    }
+    /// How many handlers ran and how many bytes the IO took, for `requests` requests given at
+    /// once, by the time the connection waits and nothing more can wake it.
+    async fn count(requests: usize, takes: usize, waits: bool, long: usize) -> (usize, usize) {
+        let (ran, took) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let io = Stuck { sent: GET.repeat(requests).into_bytes(), read: 0, takes, took: took.clone() };
+        let ending = AtomicBool::new(false);
+        let serving = crate::h1::serve(io, Slow { ran: ran.clone(), waits, long }, 32 * 1024, &ending);
+        assert!(tokio::time::timeout(Duration::from_secs(30), serving).await.is_err(), "the connection waits");
+        (ran.load(SeqCst), took.load(SeqCst))
+    }
+    for (long, each, most) in [(0, 75, 219), (2, 77, 213), (600, 677, 25)] {
+        assert_eq!(FLUSH_AT.div_ceil(each), most, "how many answers of {each} bytes make 16 KiB");
+        for waits in [false, true] {
+            // One request, to an IO that takes every byte: how long an answer is.
+            assert_eq!(count(1, usize::MAX, waits, long).await, (1, each), "a body of {long} bytes, waits: {waits}");
+            for takes in [0, 64] {
+                let (ran, took) = count(REQUESTS, takes, waits, long).await;
+                let name = format!("a body of {long} bytes, waits: {waits}, an IO that takes {takes} bytes");
+                assert_eq!(took, takes, "{name}");
+                // Every handler but the last began with less than 16 KiB of answers unsent.
+                let bound = (FLUSH_AT + takes).div_ceil(each);
+                assert!(ran <= bound, "{name}: {ran} handlers ran, and {bound} answers make 16 KiB");
+                assert_eq!(ran, if waits { bound } else { 16 }, "{name}");
+            }
+        }
     }
 }
 
@@ -1578,9 +1701,13 @@ async fn a_head_that_does_not_end_is_read_in_a_buffer_no_larger_than_the_limit()
 /// A head exactly as long as the app's limit, read in reads that each fill what they are
 /// offered, leaves the read buffer full, and all of it is the request's. The look for the
 /// client's end that follows has no room then, and is given a buffer of a read's worth at the
-/// most, not one of twice the head: so the read buffer is never larger than the limit, at the
-/// limit an app has unless it sets one and at one above the most a read is ever offered. A head
-/// a byte shorter leaves the look its byte of room, and no buffer is made for it.
+/// most, not one of twice the head: so while the request is answered the connection holds no
+/// more of what its client sent than the limit and a read, at the limit an app has unless it
+/// sets one, at one above the most a read is ever offered, and at one below a read. The head's
+/// buffer is no larger than the limit and the look's no larger than a read, which at a limit
+/// below a read is more than the limit: 4,096 bytes at a limit of 700, what the read behind
+/// one that filled its 700 is offered. A head a byte shorter leaves the look its byte of room,
+/// and no buffer is made for it.
 #[tokio::test(start_paused = true)]
 async fn the_look_behind_a_head_as_long_as_the_limit_is_given_a_reads_room() {
     use crate::h1::{HELD, KEPT_READ, LOOKED};
@@ -1624,7 +1751,7 @@ async fn the_look_behind_a_head_as_long_as_the_limit_is_given_a_reads_room() {
             Poll::Ready(Ok(()))
         }
     }
-    for limit in [crate::app::REQUEST_HEAD, 512 * 1024] {
+    for limit in [700, crate::app::REQUEST_HEAD, 512 * 1024] {
         for shorter in [0, 1] {
             let rest = format!("GET / HTTP/1.1\r\n{HOST}x-long: \r\n\r\n").len();
             let head = format!("GET / HTTP/1.1\r\n{HOST}x-long: {}\r\n\r\n", "v".repeat(limit - shorter - rest));
@@ -1640,9 +1767,16 @@ async fn the_look_behind_a_head_as_long_as_the_limit_is_given_a_reads_room() {
             let answered = String::from_utf8_lossy(&answered.lock().unwrap()).into_owned();
             let name = format!("a limit of {limit}, a head of {}", limit - shorter);
             assert!(handled.load(SeqCst) == 1 && statuses(&answered) == [200], "{name}: {answered}");
-            assert!(HELD.get() <= limit, "{name}: the read buffer had room for {}", HELD.get());
+            // The larger of the head's buffer and the look's: the limit, or a read where the
+            // limit is below one.
+            assert!(HELD.get() <= limit.max(KEPT_READ), "{name}: the read buffer had room for {}", HELD.get());
             assert!(LOOKED.get() <= KEPT_READ, "{name}: a buffer of {} was made for the look", LOOKED.get());
             assert_eq!(LOOKED.get() > 0, shorter == 0, "{name}: whether a buffer was made for the look");
+            if limit < KEPT_READ {
+                // What a limit below a read holds: the head's 700 bytes, and behind a head that
+                // filled them a look's buffer of 4,096, which is more than the limit.
+                assert_eq!((HELD.get(), LOOKED.get()), if shorter == 0 { (4_096, 4_096) } else { (limit, 0) }, "{name}");
+            }
         }
     }
 }

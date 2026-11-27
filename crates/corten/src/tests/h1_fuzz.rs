@@ -1605,3 +1605,80 @@ async fn the_answers_before_one_given_up_wait_for_their_client_on_both_connectio
         assert_eq!(got[1], got[0], "{paths:?}");
     }
 }
+
+/// How many handlers each connection runs for a client that sends requests and reads nothing,
+/// which is where the two differ most in what an app is asked to do: hyper's flushes each
+/// answer before it reads the next request, so it runs one handler beyond what the socket
+/// takes; Corten's runs handlers until 16 KiB of answers are written and not taken
+/// ([`crate::h1::FLUSH_AT`]). Over a pipe that holds 64 bytes, with 400 requests sent, that is
+/// one handler against 24 for an answer of 697 bytes (an app's `hi`, with the headers an app
+/// sends unless it says otherwise), whether the handler waits or not and whether the requests
+/// come together or one every 10 ms. (`tests::h1` holds the bound for answers with no header
+/// of the app's, where the same 16 KiB is 213 handlers, and 219 for an answer with no body.)
+#[tokio::test(start_paused = true)]
+async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection_and_not_on_hypers() {
+    const PIPE: usize = 64;
+    const SENT: &[u8] = b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    for waits in [false, true] {
+        for together in [true, false] {
+            let mut ahead = Vec::new();
+            for own in [false, true] {
+                let ran = Arc::new(AtomicUsize::new(0));
+                let handler = {
+                    let ran = ran.clone();
+                    move || {
+                        let ran = ran.clone();
+                        async move {
+                            ran.fetch_add(1, SeqCst);
+                            if waits {
+                                tokio::time::sleep(Duration::from_millis(1)).await;
+                            }
+                            "hi"
+                        }
+                    }
+                };
+                let connect = serve_app(App::new(Routes::from(Table::new().route("/", get(handler)))), own, 32 * 1024);
+                // How long one answer is, from a connection of its own.
+                let (mut alone, server) = tokio::io::duplex(1 << 20);
+                connect.send(server).expect("the server is listening");
+                alone.write_all(SENT).await.unwrap();
+                tokio::time::sleep(QUIET).await;
+                let mut answer = vec![0; 8 * 1024];
+                let each = alone.read(&mut answer).await.unwrap();
+                drop(alone);
+                ran.store(0, SeqCst);
+                let (client, server) = tokio::io::duplex(PIPE);
+                connect.send(server).expect("the server is listening");
+                let (reads, mut writes) = tokio::io::split(client);
+                let writer = tokio::spawn(async move {
+                    for _ in 0..400 {
+                        if writes.write_all(SENT).await.is_err() {
+                            break;
+                        }
+                        if !together {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    }
+                    // The client stays: it has not closed its side.
+                    std::future::pending::<()>().await;
+                });
+                tokio::time::sleep(Duration::from_secs(8)).await;
+                let ran = ran.load(SeqCst);
+                let name =
+                    format!("own: {own}, the handler waits: {waits}, requests together: {together}, an answer of {each} bytes");
+                if own {
+                    // Every handler but the last began with less than 16 KiB of answers unsent
+                    // beyond what the pipe took.
+                    let bound = (crate::h1::FLUSH_AT + PIPE).div_ceil(each);
+                    assert_eq!(ran, bound, "{name}");
+                } else {
+                    assert_eq!(ran, 1, "{name}");
+                }
+                ahead.push((each, ran));
+                writer.abort();
+                drop(reads);
+            }
+            assert_eq!(ahead, [(697, 1), (697, 24)], "the handler waits: {waits}, requests together: {together}");
+        }
+    }
+}
