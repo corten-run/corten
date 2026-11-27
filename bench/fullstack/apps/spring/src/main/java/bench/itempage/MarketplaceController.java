@@ -2,6 +2,10 @@ package bench.itempage;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.Locale;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -15,9 +19,43 @@ import org.thymeleaf.spring6.view.ThymeleafViewResolver;
 public class MarketplaceController {
     private final MarketplaceSource source;
     private final ThymeleafViewResolver views;
-    public MarketplaceController(MarketplaceSource source, ThymeleafViewResolver views) {
+    private final String publicOrigin;
+    private final String publicAuthority;
+
+    public MarketplaceController(MarketplaceSource source, ThymeleafViewResolver views,
+            @Value("${MARKETPLACE_PUBLIC_ORIGIN:#{null}}") String publicOrigin) {
         this.source = source;
         this.views = views;
+        this.publicOrigin = publicOrigin;
+        this.publicAuthority = publicOrigin == null ? null : publicAuthority(publicOrigin);
+    }
+
+    private static String publicAuthority(String origin) {
+        try {
+            var uri = new URI(origin).parseServerAuthority();
+            var scheme = uri.getScheme();
+            var host = uri.getHost();
+            int port = uri.getPort();
+            if (("http".equals(scheme) || "https".equals(scheme)) && host != null && host.indexOf('%') < 0
+                    && port != 0 && port <= 65535) {
+                boolean defaultPort = port == ("https".equals(scheme) ? 443 : 80);
+                var authority = host.toLowerCase(Locale.ROOT) + (port == -1 || defaultPort ? "" : ":" + port);
+                if (origin.equals(scheme + "://" + authority)) return authority;
+            }
+        } catch (URISyntaxException ignored) {
+            // Refuse malformed configuration without echoing it.
+        }
+        throw new IllegalArgumentException("MARKETPLACE_PUBLIC_ORIGIN must be one serialized HTTP(S) origin.");
+    }
+
+    private boolean allowsOrigin(HttpServletRequest request) {
+        String host = request.getHeader("Host");
+        if (publicOrigin != null && publicAuthority.equalsIgnoreCase(host)) {
+            var origins = request.getHeaders("Origin");
+            return origins.hasMoreElements() && publicOrigin.equals(origins.nextElement()) && !origins.hasMoreElements();
+        }
+        String origin = request.getHeader("Origin");
+        return origin == null || origin.equals(request.getScheme() + "://" + host);
     }
 
     @RequestMapping(value = "/marketplace/{locale}/{id}", method = {RequestMethod.GET, RequestMethod.POST})
@@ -29,9 +67,7 @@ public class MarketplaceController {
         if (!MarketplaceFormat.supported(locale)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         boolean post = "POST".equals(request.getMethod());
         if (post) {
-            String origin = request.getHeader("Origin");
-            if ("cross-site".equals(request.getHeader("Sec-Fetch-Site")) ||
-                    (origin != null && !origin.equals(request.getScheme() + "://" + request.getHeader("Host"))))
+            if ("cross-site".equals(request.getHeader("Sec-Fetch-Site")) || !allowsOrigin(request))
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN);
             response.setHeader("Cache-Control", "private, no-store");
         }

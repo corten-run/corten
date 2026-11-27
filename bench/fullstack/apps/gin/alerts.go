@@ -6,8 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
-	"os"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
@@ -45,7 +44,8 @@ type alertSession struct {
 
 type alertStore struct {
 	sync.Mutex
-	sessions map[string]*alertSession
+	sessions     map[string]*alertSession
+	publicOrigin *url.URL
 }
 
 func (s *alertStore) append(c *gin.Context, row storedAlert) error {
@@ -74,7 +74,8 @@ func (s *alertStore) append(c *gin.Context, row storedAlert) error {
 		}
 		s.sessions[id] = session
 		// Forwarding headers never decide whether a credential is Secure.
-		secure := c.Request.TLS != nil || strings.HasPrefix(os.Getenv("MARKETPLACE_PUBLIC_ORIGIN"), "https://")
+		secure := c.Request.TLS != nil ||
+			(s.publicOrigin != nil && s.publicOrigin.Scheme == "https" && c.Request.Host == s.publicOrigin.Host)
 		http.SetCookie(c.Writer, &http.Cookie{Name: alertCookie, Value: id, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
 	}
 	if len(session.rows) >= 1024 {

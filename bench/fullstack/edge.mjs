@@ -38,7 +38,8 @@ export const edgeBound = (edgeCpuUsedPct, cores) => (edgeCpuUsedPct == null ? nu
  * keeping up to 1,024 idle connections to it for less than Corten's header timeout (as
  * docs/guide/deploy.md#nginx does, with more connections, since k6 holds 256). No access log, no
  * compression of its own (the apps compress), no cache.
- * @param {[string, { port: number }][]} apps @param {number} [workers]
+ * A deployment with a public authority passes it through instead of using the internal name.
+ * @param {[string, { port: number, publicAuthority?: string }][]} apps @param {number} [workers]
  */
 export const nginxConf = (apps, workers = edgeCores()) => [
   `worker_processes ${workers};`,
@@ -59,11 +60,14 @@ export const nginxConf = (apps, workers = edgeCores()) => [
     "    http2 on;",
     "    ssl_certificate /cert/cert.pem;",
     "    ssl_certificate_key /cert/key.pem;",
+    ...(app.publicAuthority ? [`    if ($http_host != "${app.publicAuthority}") { return 421; }`] : []),
     "    location / {",
     `      proxy_pass http://${name};`,
     "      proxy_http_version 1.1;",
     '      proxy_set_header Connection "";',
-    `      proxy_set_header Host fsw-${name}:8080;`,
+    app.publicAuthority ? "      proxy_set_header Host $http_host;" : `      proxy_set_header Host fsw-${name}:8080;`,
+    ...(app.publicAuthority ? ["Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port"]
+      .map((header) => `      proxy_set_header ${header} "";`) : []),
     "    }",
     "  }",
   ]),

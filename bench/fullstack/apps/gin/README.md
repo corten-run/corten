@@ -73,9 +73,15 @@ append. Only the URL-encoded POST body supplies alert fields, not the query.
 
 The first accepted write issues `marketplace_session`: 32 cryptographically random
 bytes, hex encoded, host-only, `Path=/`, `HttpOnly`, `SameSite=Lax`, with no browser
-expiry. `Secure` is set for native TLS, or when trusted deployment configuration
-`MARKETPLACE_PUBLIC_ORIGIN` starts with `https://`; forwarding headers never choose
-it. The existing origin guard still compares to the native connection's origin.
+expiry. The form guard normally uses the connection's origin. With an exact
+`MARKETPLACE_PUBLIC_ORIGIN` (for example `https://localhost:8080`), a POST whose
+actual Host equals that authority must carry exactly that Origin, even if the
+edge forwards over HTTP. This also marks that host's session cookie `Secure`
+for a configured HTTPS origin. There is no HTTP fallback on that Host.
+Other hosts, including the direct HTTP preflight, still use the connection.
+Host filtering and Fetch Metadata checks are separate; no forwarding header is
+trusted. `TestMarketplacePublicOrigin` covers the matched server's form and
+readback with and without the public authority.
 Sessions and their ordered lists live in this process, expire one hour after
 creation (reads do not refresh them), and disappear on restart. Unknown cookies
 are not adopted: a write mints a new credential. Limits are 4,096 live sessions and

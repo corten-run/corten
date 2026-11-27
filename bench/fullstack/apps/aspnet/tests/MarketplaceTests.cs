@@ -167,6 +167,84 @@ public sealed class MarketplaceTests
             });
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("ftp://localhost:8080")]
+    [InlineData("https://user@localhost:8080")]
+    [InlineData("https://localhost:8080/")]
+    [InlineData("https://localhost:8080?")]
+    [InlineData("https://localhost:8080#fragment")]
+    [InlineData("https://localhost:65536")]
+    [InlineData("https://localhost:443")]
+    public void InvalidPublicOriginIsRejected(string configured) =>
+        Assert.Throws<InvalidOperationException>(() => new MarketplacePublicOrigin(configured));
+
+    [Fact]
+    public async Task PublicOriginRequiresExactEdgeOriginAndKeepsDirectFormsAndAntiforgery()
+    {
+        const string edge = "https://localhost:8080", direct = "http://127.0.0.1:8080";
+        const string path = "/marketplace/en-US/item_1", setting = "MARKETPLACE_PUBLIC_ORIGIN";
+        var previousOrigin = Environment.GetEnvironmentVariable(setting);
+        var previousProfile = Environment.GetEnvironmentVariable("PROFILE");
+        try
+        {
+            Environment.SetEnvironmentVariable(setting, edge);
+            Environment.SetEnvironmentVariable("PROFILE", "matched");
+            using var app = new App(new Upstream());
+            using var edgeClient = app.CreateClient(new() { BaseAddress = new Uri("http://localhost:8080") });
+            using var directClient = app.CreateClient(new() { BaseAddress = new Uri(direct) });
+            async Task<string> Token(HttpClient client)
+            {
+                var page = new HtmlParser().ParseDocument(await client.GetStringAsync(path));
+                return page.QuerySelector("input[name=__RequestVerificationToken]")!.GetAttribute("value")!;
+            }
+            async Task<HttpStatusCode> Post(HttpClient client, string token, string? origin,
+                string site = "same-origin", bool forged = false, string? host = null)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, path)
+                {
+                    Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                    {
+                        ["__RequestVerificationToken"] = token, ["email"] = "edge@example.test", ["target_price"] = "12.50"
+                    })
+                };
+                if (host is not null) request.Headers.Host = host;
+                if (origin is not null) request.Headers.Add("Origin", origin);
+                request.Headers.Add("Sec-Fetch-Site", site);
+                if (forged)
+                {
+                    var claimed = new Uri(origin!);
+                    request.Headers.Add("Forwarded", $"proto={claimed.Scheme};host=\"{claimed.Authority}\"");
+                    request.Headers.Add("X-Forwarded-Host", claimed.Authority);
+                    request.Headers.Add("X-Forwarded-Proto", claimed.Scheme);
+                }
+                using var response = await client.SendAsync(request);
+                return response.StatusCode;
+            }
+            var edgeToken = await Token(edgeClient);
+            var directToken = await Token(directClient);
+            Assert.Equal(HttpStatusCode.OK, await Post(edgeClient, edgeToken, edge));
+            Assert.Equal(HttpStatusCode.OK, await Post(directClient, directToken, direct));
+            foreach (var origin in new[] { "http://localhost:8080", "https://localhost:8081", "https://wrong.test:8080" })
+                Assert.Equal(HttpStatusCode.Forbidden, await Post(edgeClient, edgeToken, origin, forged: true));
+            Assert.Equal(HttpStatusCode.Forbidden, await Post(directClient, directToken, edge, forged: true));
+            Assert.Equal(HttpStatusCode.Forbidden, await Post(edgeClient, edgeToken, edge, site: "cross-site"));
+            Assert.Equal(HttpStatusCode.Forbidden, await Post(edgeClient, edgeToken, null));
+            Assert.Equal(HttpStatusCode.BadRequest, await Post(edgeClient, "", edge));
+            Assert.Equal(HttpStatusCode.BadRequest, await Post(edgeClient, edgeToken, edge, host: "unrecognized.invalid"));
+            foreach (var client in new[] { edgeClient, directClient })
+            {
+                using var rows = JsonDocument.Parse(await client.GetStringAsync("/api/alerts"));
+                Assert.Equal(1, rows.RootElement.GetArrayLength());
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(setting, previousOrigin);
+            Environment.SetEnvironmentVariable("PROFILE", previousProfile);
+        }
+    }
+
     [Fact]
     public async Task AcceptedFormsPersistWithIsolatedReadbackAndConcurrentAppends()
     {
