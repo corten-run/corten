@@ -23,7 +23,8 @@
 //     maps/placements.sha256 lists for it, or a head binary without a passing check that it lays
 //     the functions it shares with base's binary at its index in one order with it
 //     (layout/head-p<n>-alike.txt) that names both ordering files so drawn and both placement maps
-//     so listed; for one it does not, a layout or map check that is;
+//     so listed and gives how many names both sides have it compared and left out, whole numbers
+//     that add up; for one it does not, a layout or map check that is;
 //   - placements not started one after another in the order run.
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
@@ -44,6 +45,7 @@
 //                the models kept and the K the sizing check gives. Its bounds decide nothing.
 //   gated        the A/A read twice and whether it resolves; the change's bound and whether the
 //                workload meets +1%; the benefit side when the plan declares a reduction
+//   shuffled     at each index, how many names both sides have head's check compared and left out
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -148,7 +150,7 @@ export function read(dir) {
   const check = (file, want) => {
     if (!existsSync(join(dir, file))) return false;
     const j = text(file).split("\n").find((l) => l.startsWith("JSON "));
-    try { const o = JSON.parse(j.slice(5)); return o.ok === true && Object.entries(want).every(([k, v]) => o[k] === v); } catch { return false; }
+    try { const o = JSON.parse(j.slice(5)); return o.ok === true && Object.entries(want).every(([k, v]) => o[k] === v) ? o : false; } catch { return false; }
   };
   // A shuffled placement's ordering file, as order.mjs draws it from its side's list of functions,
   // the seed and the placement's index (its place in P or Q); unshuffled, a layout check carries
@@ -171,7 +173,7 @@ export function read(dir) {
     if (!existsSync(join(dir, "maps", "placements.sha256"))) refused.push("a shuffled run without maps/placements.sha256 does not show which placement maps its layout checks read");
     else for (const l of text(join("maps", "placements.sha256")).trim().split("\n")) { const m = /^([0-9a-f]{64})  (\S+)\.map$/.exec(l); if (m) placedMaps.set(m[2], m[1]); }
   }
-  const used = new Set();
+  const used = new Set(), alike = [];
   for (const c of r.comparisons) for (let i = 1; i <= K; i++) for (const b of sides(c, i, P, Q)) used.add(b);
   for (const b of used) {
     const side = b.replace(/-p\d+$/, ""), pad = Number(b.replace(/^.*-p/, ""));
@@ -185,8 +187,16 @@ export function read(dir) {
     if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check (second-pads.txt, layout/${b}-map.txt)`);
     // The check against base's placement at its index names the two ordering files and the two
     // placement maps it read, each the one this run drew or kept for that placement.
-    if (r.shuffle && side === "head" && !check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder: orderSha("base", pad), headOrder: sha, baseMap: placedMaps.get(`base-p${pad}`) ?? null, headMap: placedMaps.get(b) ?? null })) refused.push(`${b}: no passing check that it lays the functions it has with base-p${pad} in one order with it, of the ordering files drawn for both and the placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
+    // It also gives how many of the names both sides have it compared and how many it left out,
+    // which the report states for each index.
+    if (r.shuffle && side === "head") {
+      const a = check(join("layout", `${b}-alike.txt`), { pad, shuffled: true, baseOrder: orderSha("base", pad), headOrder: sha, baseMap: placedMaps.get(`base-p${pad}`) ?? null, headMap: placedMaps.get(b) ?? null });
+      if (!a) refused.push(`${b}: no passing check that it lays the functions it has with base-p${pad} in one order with it, of the ordering files drawn for both and the placement maps kept for both (layout/${b}-alike.txt, maps/placements.sha256)`);
+      else if (![a.shared, a.compared, a.leftOut].every((n) => Number.isInteger(n) && n >= 0) || a.compared + a.leftOut !== a.shared) refused.push(`${b}: its check against base-p${pad} does not say how many of the names both have it compared and left out (layout/${b}-alike.txt)`);
+      else alike.push({ i: P.indexOf(pad) + 1, head: b, base: `base-p${pad}`, shared: a.shared, compared: a.compared, leftOut: a.leftOut });
+    }
   }
+  alike.sort((x, y) => x.i - y.i);
   if (refused.length) return { refused };
 
   const seqOf = new Map(r.schedule.map((s) => [`${s.comparison} ${s.i}`, s.seq]));
@@ -221,7 +231,7 @@ export function read(dir) {
     if (t.ended < t.started) return { refused: [`${t.c} p${t.i}: ended before it started`] };
     if (j && times[j - 1].ended > t.started) return { refused: [`${t.c} p${t.i} (seq ${t.seq}) started before ${times[j - 1].c} p${times[j - 1].i} (seq ${times[j - 1].seq}) ended: the placements did not run one after another`] };
   }
-  return { ...r, plan, planSha, inputs: list, setup: setup(plan, plan.workloads.find((x) => x.name === W)), runId, hostId, records, second, secondPads, results, sized: saved.sized ?? null };
+  return { ...r, plan, planSha, inputs: list, setup: setup(plan, plan.workloads.find((x) => x.name === W)), runId, hostId, records, second, secondPads, results, sized: saved.sized ?? null, alike };
 }
 
 /** A comparison across placements in one measure: as recorded and with the labels swapped; no bound when incomplete. */
@@ -276,11 +286,11 @@ export function report(dir) {
   if (dry) out.push("**DRY RUN: a test of the scripts, read for nothing. No figure below is a measurement of anything.**", "");
   out.push(`Run ${run.runId}, plan sha256 ${run.planSha}, inputs sha256 ${run.inputs.sha256} (the ${run.inputs.files} files the plan names by path: the probe's, the request script and any expected answer, kept with these results); base ${run.base}${part === "gated" ? `, head ${run.head}` : ""}; CPU ${run.hostId.model ?? "?"}, kernel ${run.hostId.kernel ?? "?"}. K = ${K} placements, R = ${R} recorded pairs in each after one that is not, ${run.seconds} s turns of \`wrk -t${plan.load.threads} -c${plan.load.connections}\`, every turn on a freshly started binary, the order drawn from seed ${run.seed}. Figures are per request, B / A - 1 per pair; a placement's statistic is the median of its pairs; the bound is the ${ord(run.rank)} smallest of the ${K} placement medians and the lower bound the ${ord(run.lowerRank)}. Every recorded turn is one in which wrk reported no failed request and every counter ran 100% of the turn.`, "");
   out.push(`The workload as the plan declares it: ${w.declared}`, "");
-  if (run.shuffle) out.push(`Inner layout: shuffled. Each placement i was linked with its pad first and then every function of its side's unpadded build in an order drawn from seed ${run.seed} and i (order.mjs), one order for every binary at i and another at each i, so the placements sample how a build lays its functions against each other as well as where its image lies. That order is partial: input sections the file gives one key lie in any order among themselves. At each index head was checked to lay, in one order with base, every function whose name (less a ThinLTO suffix) each side defines exactly once; names defined more than once on a side were left out of that check and counted (layout/head-p<n>-alike.txt). Each placement is a link no app builds.`, "");
+  if (run.shuffle) out.push(`Inner layout: shuffled. Each placement i was linked with its pad first and then every function of its side's unpadded build in an order drawn from seed ${run.seed} and i (order.mjs), one order for every binary at i and another at each i, so the placements sample how a build lays its functions against each other as well as where its image lies. That order is partial: input sections the file gives one key lie in any order among themselves. At each index head was checked to lay, in one order with base, every function whose name (less a ThinLTO suffix) each side defines exactly once; names defined more than once on a side were left out of that check and counted (layout/head-p<n>-alike.txt)${run.alike.length ? `. Of the names both sides have, compared and left out at each index: ${run.alike.map((x) => `${x.i}: ${x.compared} and ${x.leftOut} of ${x.shared}`).join("; ")}` : ""}. Each placement is a link no app builds.`, "");
   // A K nothing checked is said in every reading: no bare pass for a K nobody checked.
   const unchecked = run.sized ? "" : "; K not checked by the kit";
   if (part === "gated") out.push(dry ? `K = ${K} is the dry run's, not one the plan declares or the sizing check passed.` : run.sized ? `K = ${K} is ${run.declaredK === "pilot" ? "the smallest at which the sizing check passes" : `the plan's number (which it says was sized from: ${run.sizedFrom}), checked at that K itself`} from run ${run.sized.from}: ${run.sized.counts.map((m) => `${m.model} ${m.failing} failing draws of ${DRAWS}`).join(", ")}, against at most ${LIMIT}.` : `K = ${K} is the plan's number, which the plan says was sized from: ${run.sizedFrom}. **The kit did not check it**: plan.mjs was given no results to check it from (--sized-from), so whether this K meets the sizing rule is the author's to show, and each reading below says so.`, "");
-  const json = { exit: 0, name: plan.name, run: run.runId, plan: run.planSha, inputs: run.inputs.sha256, part, workload: W, dry: Boolean(dry), K, sizedFrom: run.sizedFrom, sized: part === "gated" ? run.sized : undefined, R, seed: run.seed, ...(run.shuffle ? { shuffle: true } : {}), host: run.hostId, base: run.base, head: part === "gated" ? run.head : null, complete: {}, problems: {}, records: run.records, secondPads: [...run.secondPads.values()].map((x) => x.line) };
+  const json = { exit: 0, name: plan.name, run: run.runId, plan: run.planSha, inputs: run.inputs.sha256, part, workload: W, dry: Boolean(dry), K, sizedFrom: run.sizedFrom, sized: part === "gated" ? run.sized : undefined, R, seed: run.seed, ...(run.shuffle ? { shuffle: true, alike: run.alike } : {}), host: run.hostId, base: run.base, head: part === "gated" ? run.head : null, complete: {}, problems: {}, records: run.records, secondPads: [...run.secondPads.values()].map((x) => x.line) };
   for (const c of run.comparisons) {
     json.complete[c] = results[c].complete; json.problems[c] = results[c].why;
     if (!results[c].complete) out.push(`**${c} has no bound** (${results[c].placements.length} of ${K} placements read; none is rerun, replaced or dropped): ${results[c].why.join("; ")}.`, "");

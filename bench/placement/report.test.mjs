@@ -16,7 +16,7 @@ import { pads } from "./pads.mjs";
 import { LIMIT } from "./pilot.mjs";
 import { order } from "./order.mjs";
 import { declaration, inputs, problems, resolve, setup as setupOf } from "./plan.mjs";
-import { report, sizing } from "./report.mjs";
+import { read, report, sizing } from "./report.mjs";
 import { schedule, shuffled, sides } from "./schedule.mjs";
 import { reading } from "./trend.mjs";
 
@@ -388,6 +388,25 @@ const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = 
   }
   touch(res, put, r);
 } });
+
+test("a shuffled run's report gives, at each index, how many names head's check compared and left out", () => {
+  const r = report(shuffledRun({ alike: { shared: 3467, compared: 3433, leftOut: 34 } }));
+  assert.equal(r.exit, 0, r.json.refused?.join(" | "));
+  const run = read(shuffledRun());
+  assert.ok(run.alike.length > 1);
+  assert.deepEqual(r.json.alike, run.P.map((pad, k) => ({ i: k + 1, head: `head-p${pad}`, base: `base-p${pad}`, shared: 3467, compared: 3433, leftOut: 34 })));
+  assert.ok(r.md.includes(`Of the names both sides have, compared and left out at each index: ${run.P.map((_, k) => `${k + 1}: 3433 and 34 of 3467`).join("; ")}. Each placement is a link no app builds.`), r.md);
+  // Counts the check does not give, or that do not add up, are refused rather than reported.
+  for (const alike of [{ compared: undefined }, { leftOut: -1, compared: 4 }, { shared: 4 }, { compared: "3" }]) {
+    const x = report(shuffledRun({ alike }));
+    assert.equal(x.exit, 2, JSON.stringify(alike));
+    has(x.json.refused, "does not say how many of the names both have it compared and left out");
+  }
+  // An unshuffled run's report carries none.
+  const plain = report(results());
+  assert.equal(plain.json.alike, undefined);
+  assert.ok(!plain.md.includes("compared and left out at each index"));
+});
 
 test("a shuffled run says so in its header and reads only placements linked in their drawn order", () => {
   const res = shuffledRun();
