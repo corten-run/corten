@@ -215,11 +215,14 @@ body read belong to the request subscription. The dedicated Mixed recipe selects
 with `--build --profile matched --spring-deployment spring-webflux` and keeps
 Django on ASGI. The build, source audit and saved execution distinguish this
 image from MVC/Tomcat. Other recipes still use `Dockerfile` and MVC/Tomcat.
+The Mixed image has its own `HOSTS` allowlist, strict response headers,
+private dynamic responses, native gzip compression, and `/health/live`.
 
 From this directory, build the candidate with `docker build -f Dockerfile.mixed .`.
 Run `node --test mixed-http.test.mjs` with `SPRING_MIXED_IMAGE` set to its full
 `sha256:` image ID. The HTTP tests cover all three locales, with an upstream
 holding either headers or the rest of a partially sent body. A connected client
 must stay pending until release; disconnect must close the one unfinished
-upstream response before release. These are functional checks, not timing or
-whole-group evidence.
+upstream response within the Mixed cleanup window. The same test file runs the
+campaign's bounded production precheck on both sources. These are functional
+checks, not timing or whole-group evidence.

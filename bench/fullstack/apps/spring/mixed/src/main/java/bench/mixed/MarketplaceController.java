@@ -12,6 +12,7 @@ import org.springframework.core.ReactiveAdapterRegistry;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -48,14 +49,16 @@ class MarketplaceController {
         var headers = request.getHeaders();
         boolean post = HttpMethod.POST.equals(request.getMethod());
         var trace = headers.getFirst("traceparent");
-        if (!post) return record(id, false, trace).map(value -> response(render(exchange, locale, value, request.getQueryParams(), "")));
+        exchange.getResponse().getHeaders().set(HttpHeaders.CACHE_CONTROL, "private, no-store");
+        if (!post) return record(id, false, trace)
+                .map(value -> response(render(exchange, locale, value, request.getQueryParams(), "")))
+                .onErrorResume(error -> Mono.just(ResponseEntity.status(errorStatus(error)).contentType(HTML)
+                        .body("<!doctype html><title>Marketplace request failed</title><h1>Marketplace request failed</h1>")));
 
         var origins = headers.get(HttpHeaders.ORIGIN);
         if ("cross-site".equals(headers.getFirst("Sec-Fetch-Site")) || origins != null &&
                 (origins.size() != 1 || !origins.getFirst().equals(request.getURI().getScheme() + "://" + headers.getFirst(HttpHeaders.HOST))))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-        exchange.getResponse().getHeaders().set(HttpHeaders.CACHE_CONTROL, "private, no-store");
-
         return exchange.getFormData().flatMap(form -> record(id, true, trace).flatMap(value -> {
             value.validateForWrite(id);
             var query = request.getQueryParams();
@@ -80,13 +83,23 @@ class MarketplaceController {
 
     @GetMapping("/api/marketplace/{id}")
     Mono<ResponseEntity<?>> json(@PathVariable String id, ServerWebExchange exchange) {
+        exchange.getResponse().getHeaders().set(HttpHeaders.CACHE_CONTROL, "private, no-store");
         return record(id, false, exchange.getRequest().getHeaders().getFirst("traceparent"))
                 .<ResponseEntity<?>>map(value -> ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(value))
                 .onErrorResume(error -> {
-                    var status = error instanceof ResponseStatusException statusError ? statusError.getStatusCode() : HttpStatus.INTERNAL_SERVER_ERROR;
+                    var status = errorStatus(error);
                     return Mono.just(ResponseEntity.status(status).contentType(MediaType.APPLICATION_PROBLEM_JSON)
                             .body(ProblemDetail.forStatus(status)));
                 });
+    }
+
+    @GetMapping("/health/live")
+    Map<String, String> live() {
+        return Map.of("status", "ok");
+    }
+
+    private static HttpStatusCode errorStatus(Throwable error) {
+        return error instanceof ResponseStatusException status ? status.getStatusCode() : HttpStatus.INTERNAL_SERVER_ERROR;
     }
 
     @GetMapping("/api/alerts")
