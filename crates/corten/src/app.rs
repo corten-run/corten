@@ -1283,17 +1283,21 @@ impl<M: Middleware> App<M> {
     /// [`App::max_request_head`], [`App::max_connections`], the [deadline](App::deadline) and
     /// [`App::shutdown_grace`]. What is known to differ (the app guide lists each): the answers
     /// to requests that arrived together (pipelined) leave in one write, where hyper writes each
-    /// as it is made; an answer's trailers are not sent; a head refused at the limit, or before
-    /// its end has come, may be refused with the other of 400 and 431, or sooner or later; an
-    /// answer whose body fails after more than a buffer of it was ready is cut short where hyper
-    /// would have sent none of it; behind a long body its handler left unread, a connection may
-    /// be kept where hyper alone would have closed it, or closed where it would have been kept;
-    /// a body type of the app's own that panics where it is asked its length or whether it has
-    /// ended, or as it is dropped, takes with its connection the answers before it that had
-    /// not been sent; and a client that pipelines requests and reads no answer holds more of
-    /// the server's memory than it does with hyper, which is why this is off unless an app
-    /// asks (`docs/design.md#choice-own-http1`, with what was measured and what would make it
-    /// the default). Behind a proxy that does not pipeline, that last does not arise.
+    /// as it is made, so the handlers of up to 16 such requests run before any of their answers
+    /// has gone, and a handler can run for a request whose answer is never sent, which hyper
+    /// would not have begun; an answer's trailers are not sent; a head refused at the limit, or
+    /// before its end has come, may be refused with the other of 400 and 431, or sooner or
+    /// later; an answer whose body fails after more than a buffer of it was ready is cut short
+    /// where hyper would have sent none of it; behind a long body its handler left unread, a
+    /// connection may be kept where hyper alone would have closed it, or closed where it would
+    /// have been kept; a body type of the app's own that panics where it is asked its length or
+    /// whether it has ended, or as it is dropped, takes with its connection the answers before
+    /// it that had not been sent; an answer cut short because its client closed its side while
+    /// none of it waited is cut after more of it, or less, than hyper sends; and a client that
+    /// pipelines requests and reads no answer holds more of the server's memory than it does
+    /// with hyper, which is why this is off unless an app asks
+    /// (`docs/design.md#choice-own-http1`, with what was measured and what would make it the
+    /// default). Behind a proxy that does not pipeline, that last does not arise.
     pub fn own_http1(mut self, enabled: bool) -> Self {
         self.connections.own = enabled;
         self
