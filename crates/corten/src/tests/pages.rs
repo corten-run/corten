@@ -586,6 +586,25 @@ async fn a_page_in_another_layout_has_another_shell_key() {
     assert_ne!(nope["corten-shell"], page["corten-shell"], "the default error document is another layout");
 }
 
+/// The shell key is written once and carried twice: a whole document's header and its head tag
+/// hold the same 16 lowercase hex digits, a page's and an error page's, Corten's and the app's;
+/// a navigation's header holds the same digits as the document's.
+#[tokio::test]
+async fn the_header_and_the_head_carry_the_shell_key_s_same_16_digits() {
+    let digits = |key: &str| key.len() == 16 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let routes = || Table::new().route("/", get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }));
+    for router in [App::new(Routes::from(routes())).router(), App::new(Routes::from(routes())).error_page(test_error_page, ()).router()] {
+        for uri in ["/", "/nope"] {
+            let (_, headers, body) = call_with(router.clone(), "GET", uri, None, Some("text/html")).await;
+            let key = headers["corten-shell"].to_str().unwrap();
+            assert!(digits(key), "{uri}: {key}");
+            assert_eq!(meta_content(&body, "corten-shell"), key, "{uri}");
+            let (_, nav, _) = call_with(router.clone(), "GET", uri, Some("nav"), None).await;
+            assert_eq!(nav["corten-shell"], key, "{uri}: a navigation");
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_page_that_reads_again_says_so_in_its_head_on_every_surface() {
     use std::time::Duration;

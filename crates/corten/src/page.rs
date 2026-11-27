@@ -538,11 +538,6 @@ pub(crate) fn is_current_for_tests(path: &str, href: &str, section: bool) -> boo
     is_current(path, href, section)
 }
 
-/// The page's key, printed as 16 hex digits.
-pub(crate) fn key_header(key: u64) -> HeaderValue {
-    HeaderValue::from_str(crate::ascii::hex(key, &mut [0; 16])).expect("hex is a valid header")
-}
-
 /// Every way a request can fail, given to the app's error page ([`crate::App::error_page`]) for a
 /// browser. A JSON route's failures, and a data client's, are JSON instead. A page that matches
 /// each variant without `_` does not compile when Corten adds one, so it cannot miss it.
@@ -1852,7 +1847,9 @@ impl Req {
         if self.shared.dev && !swap {
             unruled_vars(&out, &vars)?;
         }
-        let key = self.key(crate::view::SHELL.get());
+        // Its 16 hex digits, written once for the head and the header.
+        let mut digits = [0; 16];
+        let key = crate::ascii::hex(self.key(crate::view::SHELL.get()), &mut digits);
         let mut tags = String::new();
         if swap {
             self.section_links(&mut tags);
@@ -2356,9 +2353,9 @@ impl Req {
     }
 
     /// Adds the shell key, which tells the runtime whether the page around `<main>` is still current.
-    /// `res` already varies as [`Req::vary`] says.
-    fn finish(&self, mut res: Response, key: u64) -> Response {
-        res.headers_mut().insert(SHELL_HEADER, key_header(key));
+    /// `res` already varies as [`Req::vary`] says; `key` is the key's 16 hex digits.
+    fn finish(&self, mut res: Response, key: &str) -> Response {
+        res.headers_mut().insert(SHELL_HEADER, HeaderValue::from_str(key).expect("hex is a valid header"));
         self.content_language(&mut res);
         if let Some(notice) = &self.notice {
             // Shown once: this page is the one it was for, drawn here or by the runtime.
@@ -2422,11 +2419,11 @@ impl Req {
 
     /// The tags Corten needs in `<head>` after the page's own: script settings, the shell key,
     /// the app's configured tags, section stylesheets, the import map, the runtime and modules.
-    fn head_tags(&self, modules: &[&'static str], key: u64, out: &mut String) {
+    fn head_tags(&self, modules: &[&'static str], key: &str, out: &mut String) {
         out.push_str(r#"<meta name="corten-scripts" content=""#);
         out.push_str(&self.shared.scripts_dir);
         out.push_str(r#""><meta name="corten-shell" content=""#);
-        out.push_str(crate::ascii::hex(key, &mut [0; 16]));
+        out.push_str(key);
         out.push_str(r#"">"#);
         // The page's CSP lets scripts load from other hosts: the `default` Trusted Types policy
         // that lets a script set such a URL, made before any script after it runs.
