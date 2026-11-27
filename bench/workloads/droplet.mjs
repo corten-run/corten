@@ -1027,12 +1027,50 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     let trusted = regular(statePath, 1024 * 1024), intentSaved = false;
     try { assert.equal(stateBytes(JSON.parse(trusted)), stateBytes(state)); }
     catch { throw new assert.AssertionError({ message: changedReservation }); }
-    // The custody every write and the DELETE rest on, checked after each await or slow step
-    // and immediately before each write: the lock this operation holds, the saved
-    // reservation byte for byte and, until the intent, a bounded proof's deadline. After the
-    // intent the deadline goes with the DELETE itself, and the absence read that follows it
-    // must not be refused for a deadline its DELETE already met.
+    const path = join(local, retirementFile(kind));
+    // A v2 or v3 setup receipt left without its intent is recovered against the ledger
+    // prefix it names, using its own timestamps, so its bytes must also be the ones whose
+    // digest was saved before it was published. v1, unused and pinned unused receipts are
+    // still recovered only by full verification against the current state.
+    const recorded = kind === "setup-failed" && !!state.control;
+    const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
+    const bytes = `${JSON.stringify(evidence, null, 2)}\n`, written = digest(bytes);
+    // The bytes this process wrote, not the file, are the authority: once published, the
+    // receipt must still be them at every later check until the DELETE is sent.
+    const requirePublished = () => assert.equal(digest(regular(path, limit)), written,
+      "published retirement receipt differs from the bytes written; preserve host");
+    // What the intent's verification pinned: for a v2 or v3 receipt the archived control
+    // custody its proof was built from (including any watcher failure) and, for a setup
+    // retirement, the archive and the extracted tree its replay verifier hashes.
+    const pins = [], custody = recorded ? evidence.observation.control.custody : undefined;
+    const requireEvidence = () => {
+      if (custody) {
+        try {
+          const directory = join(local, state.evidence, "control"); physical(directory);
+          assert.deepEqual(readdirSync(directory).sort(), custody.map((entry) => entry.name).sort());
+          for (const entry of custody) {
+            const bytes = regular(join(directory, entry.name), 8 * 1024 * 1024);
+            assert.ok(bytes.length === entry.bytes && digest(bytes) === entry.sha256);
+          }
+        } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
+      }
+      for (const pin of pins) pin();
+    };
+    let published = false, verified = false, dispatched = false;
+    // The one custody every write and the DELETE rest on, checked after each await or slow
+    // step and immediately before each write, including inside each state save and receipt
+    // or history publication between its synced stage and the rename or link. In order: the
+    // evidence the intent's verification pinned (once verified), which is the slowest part,
+    // then the receipt this process published (once published), the lock this operation
+    // holds, the saved reservation byte for byte and, until the intent, a bounded proof's
+    // deadline, so the fast checks always follow the slow ones and a change made while the
+    // evidence is walked is still seen. After the intent the deadline goes with the DELETE
+    // itself, and once the DELETE has been sent only the lock and the reservation remain:
+    // the absence read and destroyedAt must not be refused for a deadline the DELETE already
+    // met, and the receipt and evidence are verified again by any later collect.
     const requireCustody = () => {
+      if (verified && !dispatched) requireEvidence();
+      if (published && !dispatched) requirePublished();
       held.own();
       assert.ok(regular(statePath, 1024 * 1024).equals(trusted), intentSaved
         ? "saved retirement reservation changed; preserve host" : changedReservation);
@@ -1054,15 +1092,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     await own(); check(); requireCustody();
     if (pinned) requireUnusedBootstrapCustody();
     requireFreshProof();
-    const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
-    assert.ok(Buffer.byteLength(bytes) <= (state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096), "bounded retirement record required");
-    const path = join(local, retirementFile(kind));
-    // A v2 or v3 setup receipt left without its intent is recovered against the ledger
-    // prefix it names, using its own timestamps, so its bytes must also be the ones whose
-    // digest was saved before it was published. v1, unused and pinned unused receipts are
-    // still recovered only by full verification against the current state.
-    const recorded = kind === "setup-failed" && !!state.control;
-    const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
+    assert.ok(Buffer.byteLength(bytes) <= limit, "bounded retirement record required");
+    // A staged publication (durableNew) runs the same custody check between its synced stage
+    // and the link that publishes it; a refusal there removes that stage, so nothing is
+    // published over a change made while it was written.
+    const publish = recorded ? (target, content) => durableNew(target, content, requireCustody) : durable;
     // Such a receipt and its history copy are published whole (durableNew), so a write
     // interrupted before publication leaves only an untrusted stage, removed here unread.
     if (recorded) { requireCustody(); discardPublicationStage(path); }
@@ -1082,7 +1116,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
       if (recorded) { requireCustody(); discardPublicationStage(retained); }
       if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
-      else { requireCustody(); (recorded ? durableNew : durable)(retained, prior); }
+      else { requireCustody(); publish(retained, prior); }
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
       requireCustody(); unlinkSync(path); syncDirectory(local);
     }
@@ -1090,56 +1124,37 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // saved before the receipt is published, so a published receipt always has one. Like
     // publishCreateErrored, it goes through its own fresh exclusive stage, so a save torn
     // here leaves an unread stage rather than a state.json.tmp that blocks the next collect.
-    const written = digest(bytes);
     if (recorded) {
       check(); requireCustody(); state.pendingRetirement = { kind, evidenceSha256: written }; saveState("pending-retirement");
       trusted = Buffer.from(stateBytes(state));
     }
-    requireCustody(); (recorded ? durableNew : durable)(path, bytes);
-    // The bytes this process wrote, not the file, are the authority: the published receipt
-    // must still be them before the intent and again just before the DELETE is sent.
-    const requirePublished = () => assert.equal(digest(regular(path, limit)), written,
-      "published retirement receipt differs from the bytes written; preserve host");
-    requireCustody(); requirePublished();
-    // For a setup retirement, this verification also pins the archive and its extraction.
-    const pins = [];
+    requireCustody(); publish(path, bytes);
+    published = true; requireCustody();
     const publishIntent = () => {
       // A drain proof's intent follows the DELETE's account preflight, which awaits, so
-      // custody is checked first; the intent save would otherwise overwrite a change made
-      // during that read and then guard against itself.
-      requirePublished(); requireCustody();
+      // custody (including the receipt) is checked first; the intent save would otherwise
+      // overwrite a change made during that read and then guard against itself.
+      requireCustody();
       // The retirement is verified, and its archive and extraction pinned, before the intent
       // is saved, so evidence that changed leaves the receipt and its digest with no intent,
-      // which the next collect recovers on a fresh proof. That verification hashes the
-      // archive and the extracted tree, so the receipt, the lock, the reservation and a
-      // bounded proof's deadline are all checked again after it, immediately before the save.
+      // which the next collect recovers on a fresh proof. From then on custody includes the
+      // pinned evidence, so the check after this verification and the one between the intent
+      // stage's sync and its rename cover the evidence, the receipt, the lock, the
+      // reservation and a bounded proof's deadline.
       const prior = state, intended = { ...prior, status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() };
       delete intended.pendingRetirement;
       state = intended;
-      try { verifyRetirement(pins); requirePublished(); requireCustody(); } catch (error) { state = prior; throw error; }
+      try { verifyRetirement(pins); verified = true; requireCustody(); }
+      catch (error) { state = prior; verified = false; pins.length = 0; throw error; }
       saveState();
       trusted = Buffer.from(stateBytes(state)); intentSaved = true;
     };
-    // Everything the DELETE relies on, as this process left it: the receipt, the saved
-    // reservation that names its digest, the archived control custody the proof was built
-    // from (including any watcher failure), for a setup retirement the archive and the
-    // extracted tree its replay verifier hashes, and the lock this operation holds.
-    // The transport calls this again after its last local await before the request.
-    const custody = recorded ? evidence.observation.control.custody : undefined;
+    // Everything the DELETE relies on, as this process left it, through the same custody
+    // check: the pinned evidence first, then the receipt, the lock and the saved reservation
+    // that names its digest, so the last step before dispatch follows the slow ones. The
+    // transport calls this again after its last local await before the request.
     const requireRetirementCustody = () => {
-      requirePublished();
       assert.ok(intentSaved, "deletion intent required before the DELETE; preserve host");
-      if (custody) {
-        try {
-          const directory = join(local, state.evidence, "control"); physical(directory);
-          assert.deepEqual(readdirSync(directory).sort(), custody.map((entry) => entry.name).sort());
-          for (const entry of custody) {
-            const bytes = regular(join(directory, entry.name), 8 * 1024 * 1024);
-            assert.ok(bytes.length === entry.bytes && digest(bytes) === entry.sha256);
-          }
-        } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
-      }
-      for (const pin of pins) pin();
       requireCustody();
     };
     const deletion = ["compute", "droplet", "delete", state.id, "--force"];
@@ -1155,6 +1170,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       requireRetirementCustody();
       await execute("doctl", deletion, 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);
     }
+    dispatched = true;
     await confirmDeleted();
     // The absence read awaits too: destroyedAt is published only while this operation still
     // holds its lock and the saved reservation is still the intent it wrote.

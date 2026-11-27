@@ -114,17 +114,20 @@ export function durable(path, bytes) {
 // A file published whole or not at all: written and synced under its own stage name in
 // the same directory, then hard-linked to its final name, which fails rather than
 // replacing an existing file. A stage is never read; a stage left by an interrupted
-// write is this function's own name, so the next write removes it first.
+// write is this function's own name, so the next write removes it first. A caller's
+// `beforePublish` runs after the stage is written and synced, immediately before the link;
+// if it throws, the stage this call wrote is removed and nothing is published.
 export const publicationStage = (path) => `${path}.stage`;
 export function discardPublicationStage(path) {
   const stage = publicationStage(path);
   if (!lstatSync(stage, { throwIfNoEntry: false })) return;
   unlinkSync(stage); syncDirectory(dirname(path));
 }
-export function durableNew(path, bytes) {
+export function durableNew(path, bytes, beforePublish = () => {}) {
   physical(dirname(path)); discardPublicationStage(path);
   const stage = publicationStage(path);
   durable(stage, bytes);
+  try { beforePublish(); } catch (error) { discardPublicationStage(path); throw error; }
   linkSync(stage, path); unlinkSync(stage); syncDirectory(dirname(path));
 }
 export function durableCopy(source, destination, expected) {

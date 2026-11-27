@@ -498,7 +498,8 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-dispatch", "custody-edited-at-dispatch", "lock-replaced-at-dispatch", "archive-edited-at-dispatch", "evidence-edited-at-dispatch",
   "receipt-edited-at-engine", "engine-unchanged", "lock-replaced-at-read",
   "state-edited-at-preflight", "archive-edited-at-preflight", "lock-replaced-at-absence",
-  "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage"]) test({
+  "state-edited-at-read", "state-edited-at-verification", "proof-expired-at-verification", "state-edited-at-intent-stage",
+  "receipt-edited-at-dispatch-evidence", "receipt-edited-at-intent-stage", "state-edited-at-receipt-stage", "proof-expired-at-receipt-stage"]) test({
   drained: "a failed pre-registration watcher retires once on a fresh drain proof, and a restart repeats nothing",
   "lost-acknowledgement": "a drain query whose result is lost stays uncertain and keeps the host and lock",
   "pending-monitor": "a monitor registration beside a failed watcher refuses before any query",
@@ -535,6 +536,10 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
   "state-edited-at-verification": "a reservation changed while the evidence is verified for the intent refuses with no intent or DELETE and keeps the change",
   "proof-expired-at-verification": "a drain proof that expires while the evidence is verified for the intent saves no intent and sends no DELETE, and a restart deletes once on a fresh proof",
   "state-edited-at-intent-stage": "a reservation changed while the intent's own stage is written refuses before its rename, removes that stage and sends no DELETE",
+  "receipt-edited-at-dispatch-evidence": "a receipt edited while the final dispatch guard checks the archive's identity refuses after that check and sends no DELETE",
+  "receipt-edited-at-intent-stage": "a receipt edited while the intent's own stage is written refuses before its rename, removes that stage and saves no intent",
+  "state-edited-at-receipt-stage": "a saved digest edited while the receipt's stage is written refuses before its link, removes that stage and publishes no receipt",
+  "proof-expired-at-receipt-stage": "a drain proof that expires while the receipt's stage is written publishes no receipt, and a restart deletes once on a fresh proof",
 }[mode], async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
@@ -892,6 +897,97 @@ for (const mode of ["drained", "lost-acknowledgement", "pending-monitor", "refus
     assert.equal(await h.task({ run }).collect(), 1);
     const s = h.saved();
     assert.ok(s.destroyedAt); assert.equal(queries, 1); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1);
+    assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
+    return;
+  }
+  if (mode === "receipt-edited-at-dispatch-evidence") {
+    // After the intent's rename, the first identity read of results.tgz is the final dispatch
+    // guard's archive pin, which follows its control custody walk and precedes the rest.
+    let intentRenamed = false;
+    hookFs(t, {
+      renameSync: (original) => (from, to) => {
+        original(from, to);
+        if (preflightSeen && basename(String(from)) === "state.json.tmp" && basename(String(to)) === "state.json") intentRenamed = true;
+      },
+      lstatSync: (original) => (path, ...rest) => {
+        if (intentRenamed && !edited && basename(String(path)) === "results.tgz") editReceipt();
+        return original(path, ...rest);
+      },
+    });
+    await assert.rejects(h.task({ run }).collect(), /published retirement receipt differs from the bytes written; preserve host/);
+    const saved = h.saved();
+    assert.ok(intentRenamed && edited); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    assert.ok(saved.deletionIntentAt); assert.equal(saved.destroyedAt, undefined);
+    assert.equal(saved.retirement.evidenceSha256, digest(edited)); assert.notEqual(digest(readFileSync(receipt)), digest(edited));
+    restoreFs(t);
+    await assert.rejects(h.task({ run }).collect(), /retirement evidence changed/);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (mode === "receipt-edited-at-intent-stage") {
+    // After the DELETE's account preflight, the first exclusive open of state.json.tmp is the
+    // intent save's own stage; the receipt is edited while that stage is written.
+    let stage;
+    hookFs(t, {
+      openSync: (original) => (path, flags, ...rest) => {
+        const fd = original(path, flags, ...rest);
+        if (preflightSeen && !stage && flags === "wx" && basename(String(path)) === "state.json.tmp") { stage = String(path); editReceipt(); }
+        return fd;
+      },
+    });
+    await assert.rejects(h.task({ run }).collect(), /published retirement receipt differs from the bytes written; preserve host/);
+    const saved = h.saved();
+    assert.ok(stage && edited); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // No intent: the refused stage is gone and the recorded digest is still the one written.
+    assert.equal(existsSync(stage), false);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    assert.deepEqual(saved.pendingRetirement, { kind: "setup-failed", evidenceSha256: digest(edited) });
+    restoreFs(t);
+    await assert.rejects(h.task({ run }).collect(), /interrupted retirement receipt differs from its recorded digest; preserve host/);
+    assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    return;
+  }
+  if (mode === "state-edited-at-receipt-stage" || mode === "proof-expired-at-receipt-stage") {
+    // The receipt's own publication stage is opened after its digest is saved and the custody
+    // check before the write; the change lands while that stage is written and synced.
+    const real = Date.now; t.mock.method(Date, "now", () => real() + offset);
+    const statePath = join(h.local, "state.json");
+    let stage, changed;
+    hookFs(t, {
+      openSync: (original) => (path, flags, ...rest) => {
+        const fd = original(path, flags, ...rest);
+        if (!stage && flags === "wx" && basename(String(path)) === "failed-setup-host.json.stage") {
+          stage = String(path);
+          if (mode === "proof-expired-at-receipt-stage") offset += 61000;
+          else {
+            const s = JSON.parse(readFileSync(statePath)); s.pendingRetirement.evidenceSha256 = "0".repeat(64);
+            writeFileSync(statePath, `${JSON.stringify(s, null, 2)}\n`); changed = readFileSync(statePath);
+          }
+        }
+        return fd;
+      },
+    });
+    await assert.rejects(h.task({ run }).collect(), mode === "proof-expired-at-receipt-stage"
+      ? /retirement proof expired before deletion/ : /saved reservation changed before the deletion intent; preserve host/);
+    const saved = h.saved();
+    assert.ok(stage); assert.equal(queries, 1); assert.equal(h.deletes, 0); assert.equal(deletesSent(), 0);
+    // Nothing published: no receipt and no stage, and no intent.
+    assert.equal(existsSync(stage), false); assert.equal(existsSync(receipt), false);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.retirement, undefined); assert.equal(saved.status, "starting");
+    if (mode === "state-edited-at-receipt-stage") {
+      // The change is kept as made.
+      assert.ok(readFileSync(statePath).equals(changed));
+      return;
+    }
+    assert.ok(saved.pendingRetirement); assert.equal(existsSync(lock), false);
+    restoreFs(t);
+    // A restart finds the digest and no receipt and deletes once on its own fresh proof.
+    assert.equal(await h.task({ run }).collect(), 1);
+    const s = h.saved(), record = JSON.parse(readFileSync(receipt));
+    assert.equal(queries, 2); assert.equal(h.deletes, 1); assert.equal(deletesSent(), 1); assert.ok(s.destroyedAt);
+    assert.ok(!readdirSync(h.local).some((name) => name.startsWith("failed-setup-host.interrupted-")));
+    assert.equal(s.retirement.evidenceSha256, digest(readFileSync(receipt))); assert.equal(s.pendingRetirement, undefined);
+    assert.equal(deleteExpiry, record.startedAtMs + 60000);
     assert.doesNotThrow(() => verifyFailedSetupRetirement(h.local, s));
     return;
   }

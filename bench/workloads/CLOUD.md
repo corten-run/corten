@@ -1461,6 +1461,10 @@ power loss there can still lose a link the collect reported). Publication
 requires hard links in the state root; on a filesystem without them the link
 fails, the collect refuses with the stage left in place and no receipt, and
 nothing falls back to a direct write.
+Between writing and syncing the stage and the link, each runs the retirement's
+custody check below; a refusal there removes that stage and publishes nothing, so
+a saved digest changed or a drain proof expired while the stage was written leaves
+no receipt or history copy.
 A write interrupted before publication therefore leaves only that stage, never a
 partial receipt or history copy. A stage is never read: the next collect removes
 a stage with exactly that name before it reads the receipt or the history copy,
@@ -1468,13 +1472,18 @@ including one left beside a published file whose stage link was not yet removed.
 The v1, unused and pinned unused receipts keep their exclusive direct writes.
 
 The bytes this process wrote, not the file, are the authority for the DELETE.
-After publication the receipt is read back and must match that digest before
-the intent is saved, and again just before the intent save.
+From publication until the DELETE is sent, the receipt is part of the custody
+check below and must match that digest each time it runs.
 
-Every write a retirement makes rests on one custody check: the lock this
-operation holds (the file this process created, by identity and bytes), the saved
+Every write a retirement makes, and its DELETE, rests on one custody check. In
+order: once the intent's verification has run, the evidence it pinned (below), the
+slowest part; once published, the receipt this process wrote; the lock this
+operation holds (the file this process created, by identity and bytes); the saved
 reservation (`state.json`, byte for byte) as this process last loaded or saved
-it and, until the intent, a pinned unused or drain proof's deadline. That lock is
+it; and, until the intent, a pinned unused or drain proof's deadline. The fast
+checks always follow the slow ones, so a change made while the evidence is walked
+is still seen. Once the DELETE has been sent, only the lock and the reservation
+remain. That lock is
 `operation.lock` for an ordinary collect and `stream-recovery.lock` for an
 invalid-monitor recovery collect, which never takes the original
 `operation.lock` it finds; a retirement under any other lock refuses. The
@@ -1491,9 +1500,12 @@ proof, after the DELETE's account preflight), again after the intent's own
 verification immediately before it is saved, and after the absence read before
 `destroyedAt`. Each state save (the digest, the intent and `destroyedAt`)
 checks it once more after writing and syncing its stage, immediately before the
-rename that replaces `state.json`; a refusal there removes that complete stage,
-which this save created, so it blocks no later save (a torn write's stage still
-stays, as above). Before the intent a mismatch refuses with `saved reservation
+rename that replaces `state.json`, and so does each receipt and history
+publication before its link (above); a refusal there removes that complete stage,
+which this write created, so it blocks no later save (a torn write's stage still
+stays, as above). For the intent save that check includes the receipt and the
+pinned evidence, so a receipt edited while the intent's stage is written refuses
+with no intent and leaves the receipt and its recorded digest. Before the intent a mismatch refuses with `saved reservation
 changed before the deletion intent; preserve host`, `retirement proof expired
 before deletion`, `operation.lock changed; preserve custody` or
 `stream-recovery.lock changed; preserve custody`, writes nothing after it and
@@ -1510,12 +1522,16 @@ this check, so the absence read that follows a DELETE sent in time is not refuse
 for it.
 
 After the intent, every retirement kind
-(unused, pinned unused and failed-setup v1, v2 and v3) checks, as this process left them, the
+(unused, pinned unused and failed-setup v1, v2 and v3) checks through that same
+custody check, as this process left them, the
 receipt, the saved reservation (`state.json`, byte for byte, so including its
 retirement digest), for a v2 or v3 receipt the archived control custody its proof
 was built from (the inventory and bytes of the evidence's `control/` folder,
 including every watcher failure), for every failed-setup receipt the other inputs
-its replay verifier hashes, and the lock this operation holds. Those other inputs are `results.tgz` and the
+its replay verifier hashes, and the lock this operation holds. The control custody
+and those other inputs are checked first, then the receipt, the lock and the
+reservation, so the last step before dispatch follows the slower evidence checks
+and a receipt edited while the archive's identity is read is still refused. Those other inputs are `results.tgz` and the
 whole extracted evidence tree (`run.log`, `host.txt`, `exit-code`, any `campaign/`
 and `control/`). They are pinned without rereading them: the verification just
 before the intent hashes each, recording `results.tgz`'s file identity (device,
