@@ -183,7 +183,8 @@ fn keeps(name: &[u8], value: &[u8]) -> bool {
 /// browser sends with a request that has no body, written in all lower case or with the
 /// capitals browsers write, are taken as they are, which spares `http` lowering each byte and,
 /// for the names it has no constant for, an allocation of their own; every other name and
-/// spelling is `http`'s to read, and to refuse (Choice 78 says why each name is here).
+/// spelling is `http`'s to read, and to refuse (`docs/design.md#choice-own-http1` says why each
+/// name is here).
 fn field_name(name: &[u8]) -> Result<HeaderName, Refusal> {
     Ok(match name {
         b"host" | b"Host" => header::HOST,
