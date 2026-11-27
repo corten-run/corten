@@ -278,11 +278,15 @@ when Playwright's pinned WebKit includes the upstream fix.
 A watchlist case that marks a request for its own route to read names the header `smoke-*`
 (`smoke-note`, `smoke-start` and the rest). Marks are test-only request headers. They may reach
 the watchlist server, which ignores them: `the_smokes_request_marks_change_no_answer` in
-`examples/watchlist/src/smoke.rs` sends each kind of request the cases mark (the alerts page read
-whole at a receipt as a load, a navigation and in action mode, an alert written in action mode, the
-smoke's write and its page, a screen's data and its revalidation, and a stylesheet under
-`/assets/`) with and without every mark and one the smoke does not use (`smoke-canary`), and
-requires the same status, headers (`Vary` and `Cache-Control` among them) and body. So a case ties
+`examples/watchlist/src/smoke.rs` sends each kind of request the cases mark (the watchlist loaded,
+an alert written in action mode, the alerts page read whole at a receipt as a load, a navigation
+and in action mode, the writes to `/smoke/written` and `/smoke/written/again` in action mode with
+`Prefer: corten-draws=whole`, `/smoke/written` read by a navigation, `/smoke/written/again` and
+`/smoke/quoted` each read whole and by a navigation, a screen's data and its revalidation, and a
+stylesheet under `/assets/`) with and without every mark (`smoke-note`, `smoke-start`,
+`smoke-styled`) and one the smoke does not use (`smoke-canary`), and requires the same status,
+headers (`Vary` and `Cache-Control` among them) and body. The test client sends a runtime's whole
+read (`corten: page`) as a document read, the nearest request it has. So a case ties
 its claim to its own route's answer to its own request, not to a mark not reaching the server. The
 diagnostic replay of the requests still loading sends no `smoke-*` header, since a replay need not
 carry them.

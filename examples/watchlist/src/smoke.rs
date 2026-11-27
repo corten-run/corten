@@ -636,21 +636,15 @@ mod tests {
     }
 
     /// The browser smoke marks requests with `smoke-*` headers for its own routes to read
-    /// (`smoke-note`, `smoke-control`, `smoke-start`, `smoke-styled`), and a mark may reach the
-    /// app, which ignores them: every kind of request the smoke marks is answered the same, its
-    /// status, each of its headers (`Vary` and `Cache-Control` among them) and its body, with those
-    /// marks and one the smoke does not use (`smoke-canary`) as without. So a mark that gets past a
-    /// case's route cannot change what the case sees.
+    /// (`smoke-note`, `smoke-start`, `smoke-styled`), and a mark may reach the app, which ignores
+    /// them: every kind of request the smoke marks is answered the same, its status, each of its
+    /// headers (`Vary` and `Cache-Control` among them) and its body, with those marks and one the
+    /// smoke does not use (`smoke-canary`) as without. So a mark that gets past a case's route
+    /// cannot change what the case sees.
     #[tokio::test]
     async fn the_smokes_request_marks_change_no_answer() {
         let plain = answers(&[]).await;
-        let marks = [
-            ("smoke-note", "3"),
-            ("smoke-control", "bare"),
-            ("smoke-start", "12.5"),
-            ("smoke-styled", "1"),
-            ("smoke-canary", "1"),
-        ];
+        let marks = [("smoke-note", "3"), ("smoke-start", "12.5"), ("smoke-styled", "1"), ("smoke-canary", "1")];
         let marked = answers(&marks).await;
         assert_eq!(plain.len(), marked.len());
         for (plain, marked) in plain.iter().zip(&marked) {
@@ -714,11 +708,15 @@ mod tests {
     /// The requests the smoke's cases mark, in order, on an app of their own, each sent with
     /// `marks`: the watchlist loaded; an alert written as the runtime sends it; the alerts page read
     /// whole at its receipt, as a load and as a navigation, which the page-refresh cases mark
-    /// (`smoke-note`); the status line and list read in action mode; the smoke's write and its page
-    /// by a navigation, which the write cases mark (`smoke-start`, `smoke-styled`); a screen's data
+    /// (`smoke-note`); the status line and list read in action mode; and what the write cases mark
+    /// (`smoke-start`, `smoke-styled`, on every fetch of their pages): the write to `/smoke/written`
+    /// and to `/smoke/written/again`, each as the runtime sends it (`Prefer: corten-draws=whole`,
+    /// so its answer is the whole page), `/smoke/written` read by a navigation, and
+    /// `/smoke/written/again` and `/smoke/quoted` read whole and by a navigation; a screen's data
     /// and its revalidation (`If-None-Match`); and the layout's stylesheet under `/assets/`.
-    /// The ones a case's route answers are fetched as it fetches them ([`ROUTED`]), the others as a
-    /// browser asks ([`BROWSER`]).
+    /// A runtime's whole read (`corten: page`) is sent as a document read, the nearest request the
+    /// test client sends. The ones a case's route answers are fetched as it fetches them
+    /// ([`ROUTED`]), the others as a browser asks ([`BROWSER`]).
     async fn answers(marks: &[(&'static str, &str)]) -> Vec<Seen> {
         // Writes that take an hour to land, so every read here comes before the write lands.
         let app = crate::app::app_with(Market::new(), AlertStore::new(Duration::from_secs(3600)))
@@ -742,14 +740,30 @@ mod tests {
         ] {
             seen.push(Seen::of(what, &marked(app.get(&receipt), marks, ROUTED).mode(mode).await));
         }
-        seen.push(Seen::of(
-            "POST /smoke/written (action)",
-            &marked(app.post(&url::Written), marks, ROUTED).mode(Mode::Action).await,
-        ));
+        for (what, write) in [
+            ("POST /smoke/written (action)", marked(app.post(&url::Written), marks, ROUTED).mode(Mode::Action).await),
+            ("POST /smoke/written/again (action)", marked(app.post(&url::WrittenAgain), marks, ROUTED).mode(Mode::Action).await),
+        ] {
+            assert!(
+                write.text().contains("</header>"),
+                "{what}: the whole page, as drawn for Prefer: corten-draws=whole: {}",
+                write.text()
+            );
+            seen.push(Seen::of(what, &write));
+        }
         seen.push(Seen::of(
             "GET /smoke/written (navigation)",
             &marked(app.get(&url::Written), marks, ROUTED).mode(Mode::Navigation).await,
         ));
+        for (what, mode) in
+            [("GET /smoke/written/again (whole)", Mode::Document), ("GET /smoke/written/again (navigation)", Mode::Navigation)]
+        {
+            seen.push(Seen::of(what, &marked(app.get(&url::WrittenAgain), marks, ROUTED).mode(mode).await));
+        }
+        for (what, mode) in [("GET /smoke/quoted (whole)", Mode::Document), ("GET /smoke/quoted (navigation)", Mode::Navigation)]
+        {
+            seen.push(Seen::of(what, &marked(app.get(&url::Quoted), marks, ROUTED).mode(mode).await));
+        }
         let reading = url::Reading { missing: None, moved: None };
         let data = marked(app.get(&reading), marks, BROWSER).mode(Mode::Data).await;
         let tag = data.headers()[header::ETAG].to_str().unwrap().to_string();
