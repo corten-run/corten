@@ -167,12 +167,12 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       });
       const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
-      // A catalog rename is retryable as name churn only after proving the
+      // A pinned census rename is retryable as name churn only after proving the
       // image is unchanged. A PID/start mismatch still fails before that read.
-      const catalogRename = previousProcesses && recheckOperation === "process-name-recheck" && rechecked.comm !== identity.comm;
-      if (!catalogRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+      const censusRename = previousProcesses && recheckOperation === "process-name-recheck" && rechecked.comm !== identity.comm;
+      if (!censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       if (pending) {
-        try { observing(catalogRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
+        try { observing(censusRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
         catch (error) {
           // Anchor both images to accepted evidence; never promote this failed census.
           if (allowSuccessor && previousProcesses && observationOperations.get(error) === "executable-recheck-inode"
@@ -188,7 +188,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
           throw error;
         }
       } else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
-      if (catalogRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
+      if (censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
   }
@@ -294,7 +294,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
     // Bind identity before the executable transaction commits: a rejected
     // capture must pin no executable.
     const capture = () => {
-      const record = readBrowserParticipant(id, executables, pending);
+      const record = readBrowserParticipant(id, executables, pending, bound ? undefined : began);
       if (bound) startupRecheck(record, bound, attempts);
       return record;
     };
@@ -303,6 +303,7 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
       if (bound) startupRechecks.set(record, { ...bound.diagnostic, attempts });
       return record;
     } catch (error) {
+      if (error instanceof ClosingDockerExit) return error.record;
       const churn = error && typeof error === "object" ? startupChurn.get(error) : undefined;
       if (bound && error && typeof error === "object") startupAttempts.set(error, attempts);
       if (!churn || performance.now() - began >= startupRetryMs) throw error;
@@ -315,20 +316,69 @@ export function captureBrowserParticipant(id, executables = new Map(), pending) 
   }
 }
 const startupRetryMs = 250, startupWindowMs = maximumSampleGapMs;
+const exitRecheckTargetMs = 70, exitRecheckDeadlineMs = 75;
+const dockerZeroTime = "0001-01-01T00:00:00.000000000Z";
 const startupChurn = new WeakMap(), startupAttempts = new WeakMap(), startupRechecks = new WeakMap();
+// Unwind the executable transaction before returning a Docker-only sample.
+class ClosingDockerExit extends Error {
+  constructor(record) { super(); this.record = record; }
+}
 // A changed name inside the census is already retried by the census itself
 // (`snapshot`, for every participant), so only an executable inode change reaches here.
 const startupCensusOperations = new Set(["executable-recheck-inode"]);
-function justStarted(startedAt) {
-  // Docker's RFC 3339 UTC start time, truncated to milliseconds. Anything else is not corroboration.
-  const match = typeof startedAt === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(startedAt);
-  if (!match) return false;
-  const at = Date.parse(`${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}Z`);
+function dockerUtcTime(value) {
+  const match = typeof value === "string" && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (!match) return null;
+  const time = `${match[1]}.${(match[2] ?? "").padEnd(9, "0")}Z`, at = Date.parse(time);
   // Date.parse normalizes an impossible calendar date (February 29 of a common
   // year becomes March 1); only a date that round-trips is evidence.
-  if (!Number.isFinite(at) || new Date(at).toISOString().slice(0, 19) !== match[1]) return false;
-  const age = Date.now() - at;
+  return Number.isFinite(at) && new Date(at).toISOString().slice(0, 19) === match[1] ? time : null;
+}
+function justStarted(startedAt) {
+  const time = dockerUtcTime(startedAt);
+  if (!time) return false;
+  const age = Date.now() - Date.parse(time);
   return age >= 0 && age <= startupWindowMs;
+}
+function stoppedDockerState(state, endedAt, earliest) {
+  if ((state.Status !== "exited" && state.Status !== "removing") || state.Pid !== 0
+    || ["Running", "Paused", "Restarting", "Dead"].some((key) => state[key] !== false)
+    || typeof state.OOMKilled !== "boolean" || !Number.isSafeInteger(state.ExitCode) || state.ExitCode < 0) return false;
+  const start = dockerUtcTime(state.StartedAt), finish = dockerUtcTime(state.FinishedAt);
+  if (!start || !finish || start <= dockerZeroTime || finish < start) return false;
+  // Docker's timestamps have nanoseconds, but the observation bounds have
+  // milliseconds. A finish in the bound's last millisecond is still in it.
+  const at = Date.parse(finish);
+  return at >= earliest && at <= endedAt;
+}
+function canConfirmDockerExit({ state, restartCount }) {
+  return state.Running === true && state.Status === "running" && state.Paused === false && state.Restarting === false
+    && state.Dead === false && Number.isSafeInteger(restartCount) && restartCount >= 0;
+}
+function sameDockerExit(running, observed, startedAt, endedAt) {
+  return observed.id === running.id && observed.imageId === running.imageId && observed.restartCount === running.restartCount
+    && observed.state.StartedAt === running.state.StartedAt && stoppedDockerState(observed.state, endedAt, startedAt);
+}
+function confirmDockerExit(inspect, running, startedAt, began) {
+  const { state } = running;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let observed;
+    try { observed = inspect(true); } catch { return; } // Keep the original proc gap.
+    const endedAt = Date.now();
+    if (sameDockerExit(running, observed, startedAt, endedAt))
+      return { startedAt, endedAt, container: observed, kernel: null };
+    if (attempt || !isDeepStrictEqual(observed, running)) return;
+    const start = dockerUtcTime(state.StartedAt);
+    if (!start || start <= dockerZeroTime || Date.parse(start) > endedAt || dockerUtcTime(state.FinishedAt) !== dockerZeroTime
+      || state.OOMKilled !== false || state.ExitCode !== 0) return;
+    // Allow one pause for Docker to publish the exit. Charge the first two
+    // inspects against it and never start the last inspect after an oversleep.
+    const elapsed = performance.now() - began;
+    if (elapsed >= exitRecheckDeadlineMs) return;
+    if (elapsed < exitRecheckTargetMs) Atomics.wait(retryPause, 0, 0, exitRecheckTargetMs - elapsed);
+    const woke = performance.now() - began;
+    if (woke < exitRecheckTargetMs || woke >= exitRecheckDeadlineMs) return;
+  }
 }
 function startupRecheck(record, bound, attempts) {
   try {
@@ -342,11 +392,13 @@ function startupRecheck(record, bound, attempts) {
     throw error;
   }
 }
-function readBrowserParticipant(id, executables, pending) {
+function readBrowserParticipant(id, executables, pending, exitRecheckBegan) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
-  const inspect = () => {
-    const infos = JSON.parse(docker(["container", "inspect", id])); assert.equal(infos.length, 1);
+  const inspect = (confirmingExit = false) => {
+    const infos = JSON.parse(docker(["container", "inspect", id]));
+    if (confirmingExit) assert.ok(Array.isArray(infos));
+    assert.equal(infos.length, 1);
     assert.equal(infos[0].Id, id); return containerState(infos[0]);
   };
   let stage = "inspect-open", container, stat, identity;
@@ -358,7 +410,17 @@ function readBrowserParticipant(id, executables, pending) {
     assert.ok(Number.isSafeInteger(pid) && pid > 0);
     stage = "process-identity-open";
     const at = `/proc/${pid}`;
-    stat = readFileSync(`${at}/stat`, "utf8"); identity = processIdentity(stat);
+    try { stat = readFileSync(`${at}/stat`, "utf8"); }
+    catch (error) {
+      // An exiting PID can vanish before Docker updates its running state.
+      // Only the opening stat read can take this path, before any kernel evidence.
+      if (exitRecheckBegan !== undefined && error?.code === "ENOENT" && canConfirmDockerExit(container)) {
+        const stopped = confirmDockerExit(inspect, container, startedAt, exitRecheckBegan);
+        if (stopped) return stopped;
+      }
+      throw error;
+    }
+    identity = processIdentity(stat);
     assert.equal(identity.pid, pid);
     stage = "process-cgroup-open";
     const cgroup = readFileSync(`${at}/cgroup`, "utf8"), path = groupPath(cgroup);
@@ -374,7 +436,13 @@ function readBrowserParticipant(id, executables, pending) {
     stage = "process-cgroup-close";
     assert.equal(readFileSync(`${at}/cgroup`, "utf8"), cgroup);
     stage = "inspect-close";
-    assert.deepEqual(inspect(), container, "Docker participant changed during kernel observation");
+    const closingContainer = inspect(true);
+    if (exitRecheckBegan !== undefined && closingContainer.state.Running === false && canConfirmDockerExit(container)) {
+      const endedAt = Date.now();
+      if (sameDockerExit(container, closingContainer, startedAt, endedAt))
+        throw new ClosingDockerExit({ startedAt, endedAt, container: closingContainer, kernel: null });
+    }
+    assert.deepEqual(closingContainer, container, "Docker participant changed during kernel observation");
     stage = "boot-id";
     return { startedAt, endedAt: Date.now(), container,
       kernel: { bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), stat, cgroup, ancestors, ...observed } };
@@ -436,6 +504,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const controllers = readFileSync(join(root, parent, "cgroup.subtree_control"), "utf8").trim().split(/\s+/);
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
+  const catalog = binding.request.group === "catalog-page";
+  const executableCensus = catalog || terminalClockPolicy(binding, invocation, round, "prepare") === "preparation";
   const commandCpus = boundCommandCpuSet(binding);
   const liveCpus = commandCpus && liveGroup(binding.request.group) ? nativeControlPartition(binding).cpus : null;
   const captureDocker = browser || liveCpus !== null;
@@ -477,9 +547,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     throw error;
   }
   const executables = new Map();
-  // Catalog build commands introduce large CLI/plugin executables during live
-  // sampling. Pin them now and seal their bytes after the final sample.
-  pending = captureDocker || commandCpus || binding.request.group === "catalog-page" ? participantExecutables() : null;
+  // Build commands introduce CLI/plugin executables during live sampling.
+  // Pin their images now and seal their bytes after the final sample.
+  pending = captureDocker || commandCpus || executableCensus ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   let firstDockerGap;
   function noteDockerGap(error) { firstDockerGap ??= dockerGapDiagnostic(error); }
@@ -488,7 +558,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     dockerStartupRechecks ??= { count: 0, first: diagnostic }; dockerStartupRechecks.count++;
   }
   const observerFailures = { count: 0, first: null, last: null };
-  let sampleOperation, lastSampleAt = null, previousCatalogProcesses = binding.request.group === "catalog-page" ? [] : null;
+  let sampleOperation, lastSampleAt = null, previousCensusProcesses = executableCensus ? [] : null;
   function notifyFault() {
     if (faultNotified) return;
     faultNotified = true;
@@ -503,7 +573,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
     const entry = { phase, operation: proofFailure?.operation ?? observationOperations.get(error) ?? sampleOperation, code,
       ...(proofFailure?.executableRef ? { executableRef: proofFailure.executableRef } : {}),
-      at: Date.now(), samples, lastSampleAt, ...(timing?.attempts ? { catalogCensus: timing } : {}) };
+      at: Date.now(), samples, lastSampleAt, ...(catalog && timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
   function sample(timing) {
@@ -518,7 +588,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function collectSample(timing) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
-    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCatalogProcesses), initial = [], keys = new Set();
+    const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCensusProcesses), initial = [], keys = new Set();
     if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
       && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
     const processes = observed.processes;
@@ -540,7 +610,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     }
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
-    if (binding.request.group === "catalog-page") previousCatalogProcesses = processes;
+    if (executableCensus) previousCensusProcesses = processes;
     samples++; lastSampleAt = observed.at;
     return observed;
   }
@@ -564,7 +634,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
         timer = setInterval(() => {
-          const timing = binding.request.group === "catalog-page" ? { entryGapMs: Date.now() - lastSampleAt } : null;
+          const timing = executableCensus ? { entryGapMs: Date.now() - lastSampleAt } : null;
           try {
             sample(timing);
           } catch (error) {
@@ -756,7 +826,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
 
 export function inspectBrowserParticipants(subject, observation, cpus) {
   assert.equal(subject.schema, "native-browser-host-subject/v2");
-  return inspectContainerParticipants(subject, observation, cpus, browserContainers);
+  return inspectContainerParticipants(subject, observation, cpus, browserContainers, { terminalClockAfterInspect: true });
 }
 
 export function inspectLiveActors(binding, observation, tools, participants, windows) {
@@ -806,7 +876,7 @@ export function inspectLiveActors(binding, observation, tools, participants, win
   return byApp.size === observed.size;
 }
 
-function inspectContainerParticipants(subject, observation, cpus, containerBudgets) {
+function inspectContainerParticipants(subject, observation, cpus, containerBudgets, { terminalClockAfterInspect = false } = {}) {
   assert.ok(Array.isArray(subject.participants));
   const ids = new Set(), { samples } = observation;
   const baseline = new Set(observation.context.dockerBaseline);
@@ -881,16 +951,11 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       || s.at >= endedAt && samples[i - 1]?.at <= endedAt);
     if (covering.length < 2 || covering.some((s) => !s.docker || s.docker.gaps.includes(p.id))) return false;
     const records = samples.flatMap((s) => s.docker.participants.filter((r) => r.container.id === p.id));
-    const live = records.filter((r) => r.kernel !== null);
-    if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
-      || live[0].startedAt > startedAt + maximumSampleGapMs
-      || live.at(-1).endedAt < endedAt - maximumSampleGapMs) return false;
-    for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
-      && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
     for (const s of samples.filter((s) => s.at >= startedAt && s.at <= endedAt))
       if (!s.docker.participants.some((r) => r.container.id === p.id)) return false;
     let identity, previousEnd = -1, phase = 0;
-    const accounting = new Map(), ancestorControls = new Map();
+    let stopped = p.terminal.state.Running ? undefined : p.terminal.state;
+    const live = [], accounting = new Map(), ancestorControls = new Map();
     for (const r of records) {
       assert.ok(Number.isSafeInteger(r.startedAt) && Number.isSafeInteger(r.endedAt) && r.endedAt >= r.startedAt
         && r.startedAt >= previousEnd); previousEnd = r.endedAt;
@@ -898,7 +963,7 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       const c = r.container;
       assert.equal(c.imageId, p.imageId); assert.equal(c.restartCount, 0);
       for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(c.state[key], false);
-      if (!r.kernel && c.state.Status === "created") {
+      if (r.kernel === null && c.state.Status === "created") {
         if (phase !== 0) return false;
         assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0); assert.equal(c.state.OOMKilled, false);
         assert.equal(c.state.ExitCode, 0);
@@ -907,15 +972,17 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
         continue;
       }
       assert.equal(c.state.StartedAt, p.terminal.state.StartedAt);
-      if (!r.kernel) {
-        assert.equal(c.state.Status, "exited"); assert.equal(c.state.Running, false); assert.equal(c.state.Pid, 0);
+      if (r.kernel === null) {
         if (phase === 0 || p.terminal.state.Running && r.startedAt <= endedAt) return false;
+        assert.ok(stoppedDockerState(c.state, r.endedAt, live.at(-1).endedAt), "invalid stopped Docker observation");
         phase = 2;
         if (r.endedAt < endedAt - maximumSampleGapMs) return false;
-        if (!p.terminal.state.Running) for (const key of ["ExitCode", "OOMKilled", "FinishedAt"])
-          assert.equal(c.state[key], p.terminal.state[key]);
+        stopped ??= c.state;
+        assert.ok(["ExitCode", "OOMKilled", "FinishedAt"].every((key) => c.state[key] === stopped[key]),
+          "stopped Docker observations disagree");
         continue;
       }
+      assert.ok(r.kernel && typeof r.kernel === "object" && !Array.isArray(r.kernel), "invalid Docker kernel observation");
       if (phase === 2) return false;
       phase = 1;
       assert.equal(c.state.Status, "running"); assert.equal(c.state.Running, true);
@@ -972,7 +1039,19 @@ function inspectContainerParticipants(subject, observation, cpus, containerBudge
       assert.equal(controls["memory.max"].trim(), String(limits.Memory));
       if (limits.CpusetCpus) assert.equal(controls["cpuset.cpus.effective"].trim(), limits.CpusetCpus);
       if (cpus && !participantCpuSetsWithin(k, path, cpus[p.role])) return false;
+      live.push(r);
     }
+    const lastLive = live.at(-1);
+    if (!live.length || !live.some((r) => r.kernel.at >= startedAt && r.kernel.at <= endedAt)
+      || live[0].startedAt > startedAt + maximumSampleGapMs
+      || lastLive.endedAt < endedAt - maximumSampleGapMs) return false;
+    // Browser ends its window at the recorded terminal receipt. Live
+    // Delivery sets this boundary before it inspects the container.
+    if (!p.terminal.state.Running)
+      assert.ok(stoppedDockerState(p.terminal.state, terminalClockAfterInspect ? endedAt : Infinity, lastLive.endedAt),
+        terminalClockAfterInspect ? "invalid Browser Docker terminal receipt" : "invalid Live Docker terminal receipt");
+    for (let i = 1; i < live.length; i++) if (live[i].kernel.at > startedAt && live[i - 1].kernel.at < endedAt
+      && live[i].kernel.at - live[i - 1].kernel.at > maximumSampleGapMs) return false;
   }
   return true;
 }

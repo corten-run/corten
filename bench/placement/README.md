@@ -132,8 +132,9 @@ and ignores `--sized-from`, so it sizes nothing and checks no K, and nothing of 
 gated part binds to its pilot, that the K passes, or that `build.sh`, `run.sh` and `report.mjs`
 take a part of that size. Resolving the gated part without `DRYRUN` shows the first two and
 builds nothing. Only a run shows the third, and a part that is read is run once, so a fault met
-there is not mended by running it again. The kit has gone down that path once, in a test read
-for nothing ([Tests](#tests) says what that run was and what no run has shown).
+there is not mended by running it again. The kit has gone down that path twice: in a test read
+for nothing, and then in the trend's first run, the first of the kit's runs that was read
+([Tests](#tests) says what each was and what no kept run has shown).
 
 `sh selftest/selftest.sh <work dir>`, after `build.sh`, shows on that host that a wrong answer
 (and, under the difference it made as the expected one, a third body of its length, and the
@@ -244,8 +245,10 @@ one of the commands above with its output under `<run dir>/log`:
    it is stopped. That stop reaches `answers.mjs` alone, so each command it runs has a bound of its
    own that outlives it: `curl`'s `--max-time`, and a `timeout` of 10 s, KILL 2 s after, around
    `diff`. `serve.mjs` publishes its
-   server's process number through a file it creates new, so anything already at that path, a FIFO
-   included, stops the server and fails the start instead of holding `serve.mjs`. So a server that takes a
+   server's process number by writing it to a staging file it creates new (`.pid.tmp`) and renaming
+   that over the published path, so anything already at the staging path, a FIFO included, stops
+   the server and fails the start instead of holding `serve.mjs`, and whatever was at the published
+   path is replaced. So a server that takes a
    connection and never answers holds neither script, nor a signal it has held off until that
    request ends, any longer. A release
    and `main` may answer differently (today they do on `plain`: the page names the runtime's
@@ -352,7 +355,7 @@ while it ran.
 | The map check | `map.mjs check` | With aligned code, the placement's map against the unpadded link's by LLD's layout rule, in place of "moved by the pad". |
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
-| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. Both read each answer's final response's header block, never an interim `1xx` one's header lines or a trailer `curl` writes after it. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
+| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every compared answer (the two starts are checked for presence and difference only). Both read each answer's final response's header block, never an interim `1xx` one's header lines or a trailer `curl` writes after it. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
 | Answers | `plan.mjs`, `verify.sh`, `turns.sh`, `answers.mjs` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. Each answer is captured once by `curl`, with the plan's status, and every fact about it is taken from those bytes, the headers' difference by the system `diff`; the difference and the bodies line are compared and written as `diff.txt` once, created new, and never read back, with `bodies.txt` and a `handoff.json` that names the outcome and both files' SHA-256s. Anything already at a file it writes (a file, or a link, to `/dev/null` or the expected difference say), an answer of another status, cut short or not sent in 10 s, fails the placement. `verify.sh` records a placement only as `answers.mjs verified` reads it from that handoff. |
 | Turns | `turns.sh`, `answers.mjs` | Every turn on a fresh start on the server's CPU, its `perf` and `wrk` output written to files created new for that turn and kept byte for byte; a failed request, output that is not exactly one complete `RESULT` line of decimal counts and each counter once in a row that ends with a newline, or a counter that is zero or whose percentage is not `100.00` (or `100`) as written, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
@@ -555,19 +558,30 @@ probe, and nothing else.
    results held the list of files the plan names by path. The `report.mjs` of that commit reads
    its results, and this one refuses them, as it refuses any results without that list.
 
-What no kept run shows, and the first plan that is read will meet for the first time:
+One run of the kit has been read, apart from those tests: the trend's first run
+([the trend](#the-trend)), kept under the tag `evidence/trend-2026-11-26`, by the trend's plan
+as `main` had it at `056aba61c`, the release `v0.2.0` against that commit. For each of `plain`
+and `unstaged` it ran a pilot of 100 placements, the size the rule asks, and then a gated part
+at the K that pilot sized, 60 and 28, with base and head different commits; every part ended
+complete and both A/As resolved. So the sizing check has run on a pilot of more than 30
+placements, and gated parts at a sized K whose sides differ were built, turned and reported.
+That it ran once, after one dry run, on a host the kit's `setup.sh` prepared and that was left
+alone from start to end, the tag cannot show: whoever made the run records it there.
 
-1. A pilot of the size the rule asks, and a K sized from it. The A/A that K = 93 came from had
-   30 placements, the fewest the kit takes, and the sizing check has not run on a host on more.
-2. A gated part at a sized K whose base and head differ, or in which a side has code aligned
-   beyond 16 bytes, so that each placement's second pad is chosen. The part that was turned had
-   one commit on both sides and no such code; the first dry run linked 18 placements with a
-   second pad and turned none.
-3. A run on a host that `setup.sh` prepared for it. `setup.sh` prepared the first dry run's
-   host and has not changed since; the other two runs borrowed a host that other work had
-   prepared, which had no git.
-4. A workload of Corten's own with a masked header that has a range (item 12 of
-   [what it does not do](#what-it-does-not-do)).
-5. A run that nobody looked in on. In the two later runs a login was made on the host while
-   turns ran, in the third only to ask whether the run's process was alive; a run that is read
-   does not allow it.
+What no kept run shows:
+
+1. A gated part in which a side has code aligned beyond 16 bytes, so that each placement's
+   second pad is chosen. Neither side of the trend's run has such code (its records list no
+   aligned section and no part had a second pad), the part the tests turned had one commit on
+   both sides and none, and the first dry run linked 18 placements with a second pad and turned
+   none.
+2. A workload of Corten's own with a masked header that has a range (item 12 of
+   [what it does not do](#what-it-does-not-do)). The trend's plan masks no header.
+3. A run on a host that `setup.sh` prepared for it, in what the run keeps. `setup.sh` prepared
+   the first dry run's host and has not changed since; the other two tests borrowed a host that
+   other work had prepared, which had no git; and the trend's run is said to have been on a host
+   it prepared by whoever made the run, whose output the tag leaves out.
+4. A run that nobody looked in on, in what the run keeps. In the two later tests a login was
+   made on the host while turns ran, in the third only to ask whether the run's process was
+   alive; a run that is read does not allow it. Whoever made the trend's run records that
+   nobody logged in while it ran.

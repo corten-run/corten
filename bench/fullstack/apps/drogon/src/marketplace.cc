@@ -169,6 +169,20 @@ void get(const drogon::HttpRequestPtr &caller, const std::string &id, const trac
 }
 void routes() {
  const bool matched = env("PROFILE", "") == "matched";
+ const auto publicOrigin = env("MARKETPLACE_PUBLIC_ORIGIN", "");
+ const bool publicHTTPS = publicOrigin.compare(0, 8, "https://") == 0;
+ std::string publicAuthority;
+ if (!publicOrigin.empty()) {
+  const std::string_view origin(publicOrigin);
+  const auto schemeLength = publicHTTPS ? 8 : (origin.substr(0, 7) == "http://" ? 7 : 0);
+  const auto host = origin.substr(schemeLength);
+  const auto parsed = authority(host);
+  if (schemeLength == 0 || !parsed || host.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") != host.npos ||
+      parsed->port == (publicHTTPS ? 443 : 80) ||
+      (parsed->port != 0 && host[host.rfind(':') + 1] == '0'))
+   throw std::runtime_error("MARKETPLACE_PUBLIC_ORIGIN must be an exact HTTP(S) origin");
+  publicAuthority = host;
+ }
  std::vector<drogon::internal::HttpConstraint> page{drogon::Get, drogon::Post},
   json{drogon::HttpOptionsMiddleware::classTypeName()}, read{drogon::Get};
  if (matched) {
@@ -218,19 +232,24 @@ void routes() {
     }, trace_context::Context::capture(request));
   }, json);
  drogon::app().registerHandler("/marketplace/{locale}/{id}",
-  [matched](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &locale, const std::string &id) {
+  [matched, publicOrigin, publicAuthority, publicHTTPS](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &locale, const std::string &id) {
    if (locale != "en-US" && locale != "fr-FR" && locale != "de-DE") return error(callback, drogon::k400BadRequest);
+   bool publicTLS = false;
    if (request->method() == drogon::Post) {
+    const auto &host = request->getHeader("host");
     const auto &origin = request->getHeader("origin");
-    const std::string scheme = request->isOnSecureConnection() ? "https://" : "http://";
+    const bool atPublicHost = !publicAuthority.empty() && host == publicAuthority;
     const auto &site = request->getHeader("sec-fetch-site");
-    if ((!site.empty() && site != "same-origin" && site != "none") || (!origin.empty() && origin != scheme + request->getHeader("host")))
+    if ((!site.empty() && site != "same-origin" && site != "none") ||
+        (atPublicHost ? origin != publicOrigin
+                      : !origin.empty() && origin != (request->isOnSecureConnection() ? "https://" : "http://") + host))
      return error(callback, drogon::k403Forbidden);
+    publicTLS = atPublicHost && publicHTTPS;
     if (request->getHeader("content-type").find("application/x-www-form-urlencoded") != 0)
      return error(callback, drogon::k415UnsupportedMediaType);
    }
    const auto trace = trace_context::Context::capture(request);
-   get(request, id, trace, [matched, request, locale, id, callback = std::move(callback)](RecordPtr record, record_http::Result result) mutable {
+   get(request, id, trace, [matched, publicTLS, request, locale, id, callback = std::move(callback)](RecordPtr record, record_http::Result result) mutable {
     if (result == record_http::Result::Aborted || !request->connected()) return;
     if (result != record_http::Result::Ok || (record && request->method() == drogon::Post && (*record)["id"].asString() != id)) {
      const auto status = result == record_http::Result::Timeout ? drogon::k504GatewayTimeout : drogon::k502BadGateway;
@@ -257,7 +276,7 @@ void routes() {
     if (minor) {
      Json::Value row(Json::objectValue);
      row["item_id"] = (*record)["id"]; row["email"] = email; row["target_minor"] = Json::Int64(*minor);
-     if (!alerts.append(request, response, std::move(row))) return error(callback, drogon::k503ServiceUnavailable);
+     if (!alerts.append(request, response, std::move(row), publicTLS)) return error(callback, drogon::k503ServiceUnavailable);
     }
     response->addHeader("Cache-Control", "no-store"); callback(response);
    }, request->method() == drogon::Post);

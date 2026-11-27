@@ -18,10 +18,14 @@
 // else is no figure.
 //
 // The rule: no case's instructions a request rise by more than +0.5% of base's, by the medians
-// the kit gives; no case's allocations rise, by the calls themselves; and no idle reading's
-// median of three runs on head is above base's by more than base's three span. A reading with no
-// figure on either build, or a case either build gave no answer to, cannot be counted, which
-// sends the change to the measured way as a rise does.
+// the kit gives; no case's allocations rise, by the calls themselves; and no idle reading rises,
+// by `idleRise` (figures.mjs): the median of head's three growths of resident memory, in bytes
+// (each run's after less its before), is not above base's by more than the larger of base's
+// three span and one page, over at least as many connections as the page has bytes. The figures a
+// connection are rounded and decide nothing. A reading with no figure on either build, an idle
+// reading `idleRise` cannot decide (its six runs not of one page size, or 5,000 connections
+// being fewer than a page has bytes), or a case either build gave no answer to, cannot be
+// counted, which sends the change to the measured way as a rise does.
 //
 // `--description` is the pull request's description, read for the way the change is decided: its
 // one line that is `Request path: counted` or `Request path: measured` with nothing after it
@@ -35,7 +39,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { COUNTED, median, sent } from "./figures.mjs";
+import { COUNTED, idleRise, median, sent } from "./figures.mjs";
 import { Answers, cases, unexpected } from "./requests.mjs";
 
 /** Idle readings taken on each build, and the counts of a case `count.mjs` takes in a run. */
@@ -86,7 +90,15 @@ export function figure(text, expect) {
   if (found === null || typeof found !== "object" || Object.entries(expect).some(([key, value]) => found[key] !== value)) return null;
   const whole = (/** @type {unknown} */ n) => Number.isSafeInteger(n) && /** @type {number} */ (n) >= 0;
   if (expect.kind === "allocations") return whole(found.allocations) && whole(found.frees) && found.allocations >= found.requests ? found : null;
-  if (expect.kind === "idle") return Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.bytes === Math.round((found.after - found.before) / found.connections) ? found : null;
+  // An idle run's growth is its after less its before, stated as `grown` too, with the page size
+  // it was read in: a run printed before they were has no figure, its growth not guessed from its
+  // rounded `bytes`.
+  if (expect.kind === "idle") {
+    // Resident memory is whole pages, so each reading of it is too, not only their difference.
+    const paged = Number.isSafeInteger(found.page) && found.page > 0 && found.before % found.page === 0 && found.after % found.page === 0;
+    const sound = Number.isSafeInteger(found.bytes) && whole(found.before) && whole(found.after) && found.grown === found.after - found.before && paged;
+    return sound && found.bytes === Math.round(found.grown / found.connections) ? found : null;
+  }
   const { counts, windows } = found;
   if (!Array.isArray(counts) || !Array.isArray(windows) || counts.length !== RUNS || windows.length !== RUNS || found.median !== median(counts)) return null;
   const sound = windows.every(
@@ -116,12 +128,6 @@ export function declared(description) {
 /** Whether a case's instructions rose by more than the budget, 0.5% of base's. @param {number} base @param {number} head */
 export const over = (base, head) => (head - base) * 200 > base;
 
-/**
- * Whether an idle reading rose: head's median above base's by more than base's runs span.
- * @param {number[]} base @param {number[]} head
- */
-export const rose = (base, head) => median(head) - median(base) > Math.max(...base) - Math.min(...base);
-
 /** A file's lines that say something, each cut to what a table can hold. @param {string} at */
 const lines = (at) => (existsSync(at) ? readFileSync(at, "utf8").split("\n").map((line) => line.trim().replace(/^Error: /, "").slice(0, 300)).filter(Boolean) : []);
 
@@ -134,8 +140,19 @@ function taken(directory, { file, expect }) {
   const at = join(directory, file);
   const refused = lines(`${at}.refused`);
   if (!existsSync(at)) return { figure: null, why: refused.at(-1) ?? "the run left no output", refused };
-  const found = figure(readFileSync(at, "utf8"), expect);
-  return { figure: found, why: found === null ? "the run's output is not the whole of the run asked for" : "", refused };
+  const text = readFileSync(at, "utf8");
+  const found = figure(text, expect);
+  return { figure: found, why: found === null ? (expect.kind === "idle" && unpaged(text) ? "the run gives no page size or growth, as idle.mjs printed before them, and its growth is not guessed from its figure" : "the run's output is not the whole of the run asked for") : "", refused };
+}
+
+/** Whether a run's output is an idle run's JSON without a page size or a growth. @param {string} text */
+function unpaged(text) {
+  try {
+    const found = JSON.parse(text);
+    return found !== null && typeof found === "object" && found.kind === "idle" && (!("page" in found) || !("grown" in found));
+  } catch {
+    return false;
+  }
 }
 
 const whole = (/** @type {number} */ n) => n.toLocaleString("en-US");
@@ -212,20 +229,40 @@ export function compare(base, head, { description = "", names = { base: "base", 
     return [code(name), each(b), each(h), `${signed(more)} in ${whole(h.requests)}`, percent(b.allocations, h.allocations), calls(b), calls(h), more > 0 ? "rose" : ""];
   });
 
+  // An idle reading is decided by its growths in bytes, not by the figures a connection, which
+  // are rounded: `idleRise` is the rule, and a reading it cannot decide is not counted.
+  const connections = /** @type {number} */ (/** @type {ReturnType<typeof readings>[number]} */ (plan["idle-request-1.json"]).expect.connections);
+  /** Each idle run's record, as `idle.mjs` prints it on a host, with what decides: its before, after, growth and page size. */
+  const records = /** @type {string[]} */ ([]);
   const idle = IDLE.map(({ name, what }) => {
     const runs = [];
     for (let run = 1; run <= RUNS; run += 1) runs.push(both(`idle-${name}-${run}.json`, `idle memory ${what}, run ${run},`));
-    const [b, h] = [0, 1].map((side) => runs.map((found) => /** @type {number | null} */ (found[side]?.bytes ?? null)));
-    /** A build's figures of the reading, when every run gave one: a median of fewer is not the rule's. */
-    const all = (/** @type {(number | null)[]} */ figures) => (figures.every((bytes) => bytes !== null) ? /** @type {number[]} */ (figures) : null);
-    const shown = (/** @type {(number | null)[]} */ figures) => figures.map((bytes) => (bytes === null ? "none" : whole(bytes))).join(" ");
-    const [bases, heads] = [all(/** @type {(number | null)[]} */ (b)), all(/** @type {(number | null)[]} */ (h))];
-    if (!bases || !heads) return [what, bases ? whole(median(bases)) : "none", heads ? whole(median(heads)) : "none", "", "", "", shown(/** @type {(number | null)[]} */ (b)), shown(/** @type {(number | null)[]} */ (h)), "no figure"];
-    const span = Math.max(...bases) - Math.min(...bases);
-    const [low, high] = [median(bases), median(heads)];
-    const up = rose(bases, heads);
-    if (up) against.push(`idle memory ${what} rises: head's median, ${whole(high)} bytes a connection, is above base's ${whole(low)} by more than base's span of ${whole(span)}`);
-    return [what, whole(low), whole(high), signed(high - low), percent(low, high), whole(span), shown(bases), shown(heads), up ? "rose" : ""];
+    const [b, h] = [0, 1].map((side) => runs.map((found) => /** @type {any} */ (found[side] ?? null)));
+    for (const [side, found] of /** @type {const} */ ([["base", b], ["head", h]]))
+      found.forEach((run, at) => {
+        if (run === null) return;
+        const did = run.requests === 0 ? `sent nothing to the probe for ${run.case}` : `answered ${run.requests} ${run.case}`;
+        records.push(`${side}, ${what}, run ${at + 1}: ${run.bytes} bytes a connection (${run.connections} that ${did}, from ${run.addresses} address; ${run.before} before, ${run.after} after, ${run.grown} grown, in ${run.page}-byte pages)`);
+      });
+    /** A build's runs of the reading, when every run gave a figure: a median of fewer is not the rule's. */
+    const all = (/** @type {any[]} */ found) => (found.every((run) => run !== null) ? found : null);
+    const shown = (/** @type {any[]} */ found) => found.map((run) => (run === null ? "none" : `${whole(run.grown)} (${whole(run.bytes)})`)).join(" ");
+    const [bases, heads] = [all(/** @type {any[]} */ (b)), all(/** @type {any[]} */ (h))];
+    const grown = (/** @type {any[]} */ found) => found.map((run) => /** @type {number} */ (run.grown));
+    if (!bases || !heads) return [what, bases ? whole(median(grown(bases))) : "none", heads ? whole(median(grown(heads))) : "none", "", "", "", shown(/** @type {any[]} */ (b)), shown(/** @type {any[]} */ (h)), "no figure"];
+    const [low, high] = [median(grown(bases)), median(grown(heads))];
+    const pages = [...new Set([...bases, ...heads].map((run) => /** @type {number} */ (run.page)))];
+    let decided;
+    try {
+      if (pages.length !== 1) throw new Error(`its runs read pages of ${pages.map(whole).join(" and ")} bytes, and the rule compares runs of one page size`);
+      decided = idleRise({ base: grown(bases), head: grown(heads), page: /** @type {number} */ (pages[0]), connections });
+    } catch (error) {
+      against.push(`idle memory ${what} is not decided (${code(/** @type {Error} */ (error).message)})`);
+      return [what, whole(low), whole(high), signed(high - low), percent(low, high), "", shown(bases), shown(heads), "not decided"];
+    }
+    const { rise, allowed, rose } = decided;
+    if (rose) against.push(`idle memory ${what} rises: the median of head's growths, ${whole(high)} bytes over ${whole(connections)} connections, is above base's ${whole(low)} by ${whole(rise)}, more than the ${whole(allowed)} allowed (the larger of base's span and a ${whole(/** @type {number} */ (pages[0]))}-byte page)`);
+    return [what, whole(low), whole(high), signed(rise), percent(low, high), whole(allowed), shown(bases), shown(heads), rose ? "rose" : ""];
   });
 
   // A build's answer to a case is its capture when that is one whole answer and nothing after it,
@@ -296,8 +333,11 @@ export function compare(base, head, { description = "", names = { base: "base", 
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's counts", "Head's counts", "Rule"], instructions),
     "### Allocations a request",
     table(["Case", "Base", "Head", "Difference", "Percent", "Base's calls", "Head's calls", "Rule"], allocations),
-    "### Memory an idle connection holds, in bytes",
-    table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Base's span", "Base's runs", "Head's runs", "Rule"], idle),
+    "### Memory idle connections hold",
+    `Each run's growth of resident memory in bytes over its ${whole(connections)} connections, with its rounded figure a connection after it, which decides nothing; a rise is allowed up to the larger of base's three span and one page.`,
+    table(["Reading", "Base's median", "Head's median", "Difference", "Percent", "Allowed", "Base's runs", "Head's runs", "Rule"], idle),
+    "Each run, with what decides it (as `idle.mjs` prints a run on a host, and in its place in a description):",
+    ["```text", ...records, "```"].join("\n"),
     ...(refusals.length > 0 ? ["### Runs that gave no figure", refusals.join("\n")] : []),
   ].join("\n\n");
   return { markdown: `${markdown}\n`, status, holds };

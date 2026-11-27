@@ -34,7 +34,7 @@ async function serving(env, body) {
   const port = probe.address().port;
   await new Promise((resolve) => probe.close(resolve));
   const child = spawn(process.execPath, ["server.mjs"], { cwd: fileURLToPath(new URL(".", import.meta.url)),
-    env: { ...process.env, MARKETPLACE_SOURCE: "", ...env, PORT: String(port) }, stdio: ["ignore", "pipe", "inherit"] });
+    env: { ...process.env, MARKETPLACE_SOURCE: "", MARKETPLACE_PUBLIC_ORIGIN: "", ...env, PORT: String(port) }, stdio: ["ignore", "pipe", "inherit"] });
   try {
     const [line] = await Promise.race([once(child.stdout, "data"), once(child, "exit").then(([code]) => { throw new Error(`the app exited with ${code}`); })]);
     assert.match(String(line), /listening/);
@@ -67,19 +67,20 @@ test("the lean catalog adds document headers to HTML, not the record API", async
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("matched HOSTS and liveness are native, bounded and independent of the record source", async () => {
-  // Node's fetch replaces Host. Use an actual HTTP request for authority/forwarding probes.
-  const native = (url, options = {}, body) => new Promise((resolve, reject) => {
-    const req = request(url, { ...options, signal: AbortSignal.timeout(2000) }, (res) => {
-      let text = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => text += chunk);
-      res.on("error", reject);
-      res.on("end", () => resolve(new Response(text, { status: res.statusCode, headers: res.headers })));
-    });
-    req.on("error", reject);
-    req.end(body);
+// Node's fetch replaces Host. Use an actual HTTP request for authority/forwarding probes.
+const native = (url, options = {}, body) => new Promise((resolve, reject) => {
+  const req = request(url, { ...options, signal: AbortSignal.timeout(2000) }, (res) => {
+    let text = "";
+    res.setEncoding("utf8");
+    res.on("data", (chunk) => text += chunk);
+    res.on("error", reject);
+    res.on("end", () => resolve(new Response(text, { status: res.statusCode, headers: res.headers })));
   });
+  req.on("error", reject);
+  req.end(body);
+});
+
+test("matched HOSTS and liveness are native, bounded and independent of the record source", async () => {
   await serving({ PROFILE: "matched", HOSTS: "app.example.test,.shop.example.test,fsw-target", API_BASE: "http://127.0.0.1:1" }, async (base) => {
     const get = (path, host, extra = {}) => native(base + path, { headers: { host, ...extra } });
     assert.equal((await get("/", "unknown.invalid")).status, 400);
@@ -107,6 +108,33 @@ test("matched HOSTS and liveness are native, bounded and independent of the reco
     assert.equal((await native(base, { headers: { host: "unknown.invalid" } })).status, 200);
     assert.equal((await fetch(base + "/health/live")).status, 404);
   });
+});
+
+test("a configured TLS origin applies only at its public authority", async () => {
+  const root = await mkdtemp(join(tmpdir(), "express-public-origin-"));
+  const fixture = join(root, "marketplace.json"), host = "localhost:8080", origin = `https://${host}`;
+  try {
+    await writeFile(fixture, JSON.stringify({ item_1: record }));
+    await serving({ PROFILE: "matched", MARKETPLACE_SOURCE: "fixture", MARKETPLACE_FIXTURE_PATH: fixture, MARKETPLACE_PUBLIC_ORIGIN: origin }, async (base) => {
+      const body = new URLSearchParams({ email: "a@example.test", target_price: "1.00" }).toString();
+      const submit = (authority, from, extra = {}) => native(base + "/marketplace/en-US/item_1", { method: "POST",
+        headers: { host: authority, ...(from === undefined ? {} : { origin: from }), "content-type": "application/x-www-form-urlencoded",
+          "content-length": Buffer.byteLength(body), "sec-fetch-site": "same-origin", ...extra } }, body);
+      const edge = await submit(host, origin);
+      assert.equal(edge.status, 200);
+      assert.match(edge.headers.get("set-cookie"), /; Secure(?:;|$)/);
+      const direct = await submit(new URL(base).host, base);
+      assert.equal(direct.status, 200);
+      assert.doesNotMatch(direct.headers.get("set-cookie"), /; Secure(?:;|$)/);
+      for (const from of ["https://other.invalid", `http://${host}`, "https://localhost:8081"]) {
+        assert.equal((await submit(host, from, { "x-forwarded-host": new URL(from).host, "x-forwarded-proto": new URL(from).protocol.slice(0, -1) })).status, 403);
+      }
+      assert.equal((await submit(host)).status, 403);
+      assert.equal((await submit(host, [origin, origin])).status, 403);
+      assert.equal((await submit(host, origin, { "sec-fetch-site": "cross-site" })).status, 403);
+      assert.equal((await submit(new URL(base).host, origin, { "x-forwarded-host": host, "x-forwarded-proto": "https" })).status, 403);
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("Intl formats signed money, half-up ratings, grouped counts and the listing plural", async () => {

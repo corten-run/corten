@@ -563,9 +563,19 @@ establish a general ranking.
       directory, one checkout of the kit, the answers compared first. The change passes when no
       case's instructions a request rise by more than +0.5% of base's (the budget, by the
       medians the kit prints), no case's allocations a request rise, and idle memory does not
-      rise: each idle reading is taken three times on each build, and head's median is not
-      above base's by more than base's three span. The description gives every figure of every
-      run for both builds, and says why the change is none of the kinds above, which the review
+      rise: each idle reading is taken three times on each build, all six with the same
+      connections, case, requests and page size (each run prints them) and the same `--addresses`
+      (which it does not print, so the description names it), over at least as many connections as
+      the page has bytes (the default 5,000 with 4,096-byte pages; 65,536 or more with 65,536-byte
+      pages, over `--addresses 3`), so one page is at most a byte a connection, since a reading over
+      fewer decides nothing ([`idleRise`](bench/request-cost/figures.mjs) refuses it), and the median of head's three growths of
+      resident memory, in bytes (`idle.mjs` prints each run's), is not above base's by more
+      than the larger of base's three span and one page (the size it prints, the step resident
+      memory is reported in); the figures a connection are rounded and do not decide it. The
+      hosted job decides each idle reading so, from each run's growth and page size, and at its
+      fixed 5,000 connections a runner whose page has more bytes than that leaves the reading
+      not decided, a case that cannot be counted. The description gives every figure of every run for both builds, each idle run's whole line as
+      `idle.mjs` printed it (its growth and settings, which decide; the hosted job's summary gives each run's before, after, growth and page size, which stands in for it), and says why the change is none of the kinds above, which the review
       accepts. No run is taken again for its result. A run the kit refuses gave no figure, so
       it may be taken again, and the description gives the refusal and the kit's reason for
       it; a case that still cannot be counted sends the change to measured. A cost inside the
@@ -590,9 +600,10 @@ establish a general ranking.
       command then drafts an issue for whoever made the run, naming the pull requests merged
       since the row before when the run's head descends from that row's commit, and since the
       release otherwise, and opens nothing. A run that is not past it has not shown the cost
-      to be under +2%. No run has been made, so no reading sees what counted changes add up to
-      in cycles, and a release takes the kit's counts of its candidate against the last release
-      whenever no row reads that candidate
+      to be under +2%. A row reads the one commit of `main` it names against the release it
+      names (the first, of 2026-11-26, `056aba61c` against `v0.2.0`) and no change merged after
+      that commit, and a release takes the kit's counts of its candidate
+      against the last release whenever no row reads that candidate
       ([RELEASING.md](RELEASING.md#readiness-checkpoints) says which row does).
 
       A reading published under the rule as it stood before this paragraph was on `main` stays
@@ -605,12 +616,27 @@ establish a general ranking.
       The rest of this point is the measured way's.
 
       For changes exercised by the catalog item page or item JSON, use
-      [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
-      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`); how
-      the two targets are read under a plan that reads the change across placements on a probe
-      is said with the default band, below. Use a fresh round name each time and tag each build
-      in turn with the image name the script expects. Otherwise, measure the affected route with
-      an equivalent under-load test; an unaffected route does not count. Alternate the two
+      [`bench/fullstack/count-pairs.mjs`](bench/fullstack/count-pairs.mjs). It runs
+      [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json`, one
+      repeat per invocation and a fresh round name each time, tags each build in turn with the
+      image name that script expects, and runs, beside the change's pairs and in the same run, an
+      A/A of the count's own: the base's image against itself under the same two names. Until a
+      run's own A/A resolves, the count neither holds nor clears. The A/A resolves when both of
+      its bounds, as recorded and with its labels swapped, less +1%, are inside the default band
+      (below). Where the A/A is complete, with both bounds, and does not resolve, the change's
+      reading on that target is "not decided", read as one inside the band is, whatever the
+      change's own bound. This changes what passes: a miss whose run's A/A does not resolve no
+      longer holds the pull request by itself, and is reported as not decided. Where the A/A has
+      no bound (an invocation that failed, pair 0's included, too few pairs), the count failed, as one whose change
+      has no bound has: it returns to the maintainer and does not pass until the maintainer
+      decides. A plan declared before this rule was on `main` is read by the rule as it then
+      stood. The A/A doubles a run's time. Its page
+      ([The catalog count and its A/A](bench/fullstack/README.md#the-catalog-count-and-its-aa))
+      says why: the count read `json` a miss for an image against itself
+      ([#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)).
+      How the two targets are read under a plan that reads the change across placements on a
+      probe is said with the default band, below. Otherwise, measure the affected route with an
+      equivalent under-load test; an unaffected route does not count. Alternate the two
       release builds, verify the response bytes and headers before measuring, and report any
       failed requests.
 
@@ -737,7 +763,7 @@ establish a general ranking.
       **default band**: from the lowest low end to the highest high end among the spreads the
       Choice records, as the Choice prints the band on `main` when the plan is declared (-2.98%
       to +3.33% today), whatever a later run records and whatever reads the workload,
-      `bench/fullstack/count.mjs` as much as a probe. The test is one: a single-build bound's
+      the catalog count (`bench/fullstack/count-pairs.mjs`) as much as a probe. The test is one: a single-build bound's
       distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
       worthwhile reduction for a CPU-cost win) is **inside** the spread that applies, or the
       default band where none does, when it is at
@@ -770,18 +796,25 @@ establish a general ranking.
       otherwise held as any other workload is, under the case only if its A/A resolves and its
       bound is under +1%.
       `page` and `json`, whichever the change exercises, are still counted, once
-      for that plan, with `count.mjs`: one build of each side, declared in the plan with its
+      for that plan, with `count-pairs.mjs`: one build of each side, declared in the plan with its
       pairs and its checks before the plan's first turn and before the count is taken, and each
       bound reported with where its distance from +1% lands against the default band as `main`
-      prints it when the plan is declared; a count an earlier plan of the pull request declared
-      and took is this plan's too and is not taken again. Outside the band binds for the margin,
-      as above: a distance above it is a miss, and one below it meets the margin. Inside is
-      reported as "inside the default band: not decided" and, for these two workloads under such
-      a plan, does not keep the pull request from passing. No win is claimed from either count.
-      A count is not taken again for its result, and one that fails (a failed request, a counter
-      under 100%, too few pairs) returns to the maintainer and does not pass until the
-      maintainer decides; the author runs nothing again. A plan declared before this case was on
-      `main` is read by the rule as it then stood (the Choice names four exceptions).
+      prints it when the plan is declared, beside its own A/A's two bounds; a count an earlier
+      plan of the pull request declared and took is this plan's too and is not taken again.
+      Where the count's own A/A resolves, outside the band binds for the margin, as above: a
+      distance above it is a miss, and one below it meets the margin. Where the A/A has both
+      bounds and does not resolve, the count is not decided: it holds and clears nothing, and is
+      read as one inside the band is, so a miss there does not by itself keep the pull request
+      from passing. Where the A/A has no bound, the count failed, as below. Inside is reported as
+      "inside the default band: not decided" and, for these two workloads under such a plan, does
+      not keep the pull request from passing. No win is claimed from either count. A count is not
+      taken again for its result, and one that fails (a failed request or invocation, pair 0's
+      as much as a recorded pair's, a counter under 100%, too few pairs, in the change's pairs or
+      its A/A's, so that either has no bound)
+      returns to the maintainer and does not pass until the maintainer decides; the author runs
+      nothing again. A plan declared before this case was on
+      `main` is read by the rule as it then stood (the Choice names four exceptions), and one
+      declared before the count had its own A/A by the rule as it stood then, without one.
       A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements

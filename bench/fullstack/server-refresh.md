@@ -46,6 +46,8 @@ below do not substitute for replaying every upstream exploit.
 Drogon's framework commit, Trantor, flags, app sources and tests are unchanged by
 its base refresh. The runtime reports Debian 13.7, OpenSSL package 3.5.7-1~deb13u3,
 JsonCpp 1.9.6-3 and ICU 76.1-4. No complete OS vulnerability scan is claimed.
+Drogon's bases later moved to `trixie-20261123`, by digest
+([Debian 13.8 refresh](../workloads/version-refresh-rust.md#debian-138-refresh-2026-11-26)).
 
 The selected FastAPI patch was corrected after review: PyPI publishes non-yanked
 0.162.6 at 2026-11-13T13:36:38Z and 0.162.7 at 2026-11-13T17:47:16Z, both before

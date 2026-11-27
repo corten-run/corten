@@ -10,7 +10,7 @@ not remove that requirement.
 | Concern | Default | Override |
 |---|---|---|
 | Address | `HOST` (both loopback addresses, `127.0.0.1` and `[::1]`, so `localhost` answers at once however it resolves), `PORT` (`3000`) | environment; `corten::serve_on(listeners, app)` for listeners of your own (a Unix socket) with the same shutdown, `corten::serve_wrapped(listeners, move \|tcp\| acceptor.accept(tcp), app)` for HTTPS ([below](#your-own-listeners)) |
-| Names it answers to | `localhost`, IP addresses; any other `Host` gets `421`, and a missing, repeated or malformed one `400` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
+| Names it answers to | `localhost`, names under it and IP addresses; any other requested name gets `421`; a missing HTTP/1.1 `Host`, or a repeated or malformed `Host`, gets `400` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
@@ -254,7 +254,17 @@ come on top.
 
 ## Host names
 
-An app answers a request only when its `Host` is `localhost` (or a name under it, such as
+A request for a path takes its host and port from `Host`. When the request-target names its
+own authority (host and optional port), that authority takes precedence over `Host`.
+[RFC 9112 section 3.2.2](https://www.rfc-editor.org/rfc/rfc9112#section-3.2.2) requires this
+for absolute-form targets; Corten also uses the authority of an authority-form target. A different
+but valid `Host` does not change the requested host or by itself cause a refusal. The header
+still has to pass the checks below. Without `Sec-Fetch-Site`, the write check compares
+`Origin` with the requested authority. If a proxy puts an internal address there, the
+check trusts that internal origin rather than the public one, and can refuse the app's own
+browsers. Forward a path with the public `Host`, or an absolute URL with the public authority.
+
+An app answers a request only when the requested host is `localhost` (or a name under it, such as
 `app.localhost`), an IP address, missing (HTTP/1.0, a test's `app().test()`), or a name the app lists.
 Any other name gets `421 Misdirected Request` before routing: no handler, middleware, caller
 lookup or error page runs (at a route that says `unstaged` too;
@@ -327,15 +337,16 @@ A deployed app lists the names it is served under, where the deploy sets `HOST` 
 HOSTS=shop.example,.shop.example   # the domain, and (leading dot) every subdomain
 ```
 
-or in code, `App::policy(Policy::new().host("shop.example"))`. Behind a proxy that rewrites
-`Host`, it is the name the proxy sends. A health check that calls the app by an IP address, or
+or in code, `App::policy(Policy::new().host("shop.example"))`. When a proxy sends a path to
+the app and rewrites `Host`, list the name it sends. A health check that calls the app by an IP address, or
 by `localhost`, is answered as before, when it sends a `Host` line or speaks HTTP/1.0: a check
 written by hand as `GET /health/live HTTP/1.1` with no `Host` is the `400` above. The first refused name is logged, so a deploy that forgot
 its name says why it answers 421. An app served under names it cannot list in advance (each
 customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself; its `Host`
 is still read, for the `400` above. The check reads one header and compares it with a short
 list; what it does not find there as written (a subdomain's own part, another host's name, any
-name when the app answers to any) is also read byte by byte.
+name when the app answers to any) is also checked, and is taken only when every byte of it
+passes; a name with a byte that does not is refused.
 
 ## The client's address
 
@@ -1143,6 +1154,10 @@ They read the incoming request's mode, credentials and cache validators before m
 an API they do not read the mode: nothing there depends on it). Those
 decisions and the error page's saved request are not changed by middleware edits. A `Req` taken
 by middleware or the handler reads the headers there, including edits by an earlier extractor.
+The WebSocket origin check and the choice of notice cookie also use the URI at extraction.
+If middleware replaces a whole URL with a path, those two use `Host`, not the authority the
+stages used for admission. As before, an `Origin` matching that `Host` can pass the handshake
+check or match for the notice cookie even though admission never judged that name. Preserve the authority when rewriting the path if these must agree.
 For an API or data request there is no HTML error snapshot: a session cookie can settle the cache
 decision without reading `Authorization`.
 
@@ -1406,7 +1421,17 @@ it last of eight
 (counted over a socket at `5c7b006dc`, each build in turn, each figure the
 difference of the two builds' medians of three runs, with main built a
 second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
-55; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+55; [design Choice 28](../design.md#choice-fixed-stages)). Since its name is read sixteen bytes at a
+look, an unstaged request to it costs 84.5 more than before the refusals with `Host` first
+(0.75%), 226.9 with it second and 285.6 with it last of eight, most of that for a later line the
+two searches for it, and a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with
+it last of eight; an app that names its hosts pays 2 to 9 fewer than with the first reader
+(`b52f57475` against `fca4ccd58` and main, measured the same way).
+[`bench/request-cost`](../../bench/request-cost/README.md) counted an earlier tree of the change,
+`ea3983d0b` against `3d84f7de4`, as 17 to 28 fewer a request in an app that answers to any
+host and 1 to 9 fewer in one that names its hosts; its hosted job's table counts the change's
+last head against its merge base, with names of 6, 40 and 4,096 bytes as well, and a name under
+`localhost` in one that names its hosts. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
@@ -1833,10 +1858,12 @@ the page cost before the app kept pages and the copy into the store. Only a writ
 reach the app's middleware is not counted: one another site sent, one for a host the app does
 not answer, or one a layer in front (`App::layer`) answered itself. A write
 that went through also drops the page at the place on the site its answer
-names (`Location` or `Content-Location`, as a path from the root or a whole URL with the
-request's `Host`;
-[RFC 9111 section 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4)), and a page
-whose handler was reading while a write went through is sent and not kept. So the process that
+names (`Location`, `Content-Location` or the runtime's `corten-location`). A path from the root
+counts. An `http://`, `https://` or `//` URL counts only when its authority matches the write's
+[requested host and port](#host-names), compared as written without regard to case
+([RFC 9111 section 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4)). This applies
+to a write with an absolute-form target even though a `GET` in that form bypasses the store.
+A page whose handler was reading while a write went through is sent and not kept. So the process that
 answered a form posted to its own page, or one that redirects to the list, shows what was saved
 on the next load. A write that fails before it names the list (it passes its deadline, or its
 client leaves) drops its own path alone.
@@ -2474,7 +2501,8 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
    `Api::allow_origin` sites too, without cookies), or a client that is not a browser. Another
    site's page gets a 403. A browser sends `Sec-Fetch-Site` only to a secure origin, Chromium
    and Firefox not on a handshake at all, and browsers too old for it not on a write; then the
-   `Origin` must be an `http` or `https` origin on the request's `Host`: the same name and port,
+   `Origin` must be an `http` or `https` origin on the [requested host](#host-names): the same
+   name and port as the target's authority, or as `Host` when the target names none,
    a port left out being its scheme's default (80 for `http`, 443 for `https`, so
    `https://app.example` is `Host: app.example:443`). Another scheme (an app's own,
    `capacitor://localhost`) is refused. Under `Policy::hsts` the `Origin` must also be `https`,
@@ -3127,7 +3155,8 @@ origin and `Policy::form_action` (the error page's detail in every debug build, 
    `multipart/form-data` or `text/plain`), plain or `data-patch` (the same form without
    JavaScript is stopped),
 2. from one of the app's pages: `Sec-Fetch-Site: same-origin` with an `Origin`, an `Origin` on
-   the request's host, or neither header, as a test or a client that is not a browser sends,
+   the [requested host](#host-names) when `Sec-Fetch-Site` is absent, or neither header, as a
+   test or a client that is not a browser sends,
 3. whose redirect (any a handler answers: `req.redirect`, a `Location` set by hand, a sign-in
    redirect, or a `data-patch` answer's `corten-location`) goes to an origin that is not the
    page's own (its `Origin`, else its host; for a request that names neither, the app's

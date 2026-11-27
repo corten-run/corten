@@ -23,6 +23,8 @@ refresh as it was done; its Bookworm digest and results are not rewritten.
 `docker buildx imagetools inspect` on 2026-11-24 listed linux/amd64 and linux/arm64
 images in both indexes. The Debian digest is the one the live Gin app and the Rust bench
 apps already run on ([version-refresh-rust.md](../workloads/version-refresh-rust.md)).
+On 2026-11-26 Gin and the cold-start probe moved on with them to `trixie-20261123-slim`
+([Debian 13.8 refresh](../workloads/version-refresh-rust.md#debian-138-refresh-2026-11-26)).
 
 What moved:
 
