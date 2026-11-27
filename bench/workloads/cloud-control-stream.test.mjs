@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileS
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { registration, binding } from "./test-fixtures/control-stream-fixture.mjs";
@@ -14,7 +15,7 @@ import { shellTransport } from "./cloud-transport.mjs";
 import { auditProtocol } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest, fileHash } from "./cloud-local.mjs";
-import { streamLimits } from "./isolated/control-stream.mjs";
+import { leaseState, streamLimits } from "./isolated/control-stream.mjs";
 
 function manifest(entries = [{ path: "", type: "directory" }, { path: "blobs", type: "directory" }]) {
   const body = { files: [], snapshot: { entries, sha256: deploymentSha256(entries) } };
@@ -42,6 +43,16 @@ function fixture(t, { autoClose = true, sealExec, peerLease, initialActive = tru
   return { local, child, input, calls, ready, frame, close, run };
 }
 
+async function waitForCells(local, started) {
+  const deadline = performance.now() + 2000;
+  do {
+    const status = localStreamStatus(local);
+    if (status.nativeCellProgress?.started === started) return status;
+    await delay(10);
+  } while (performance.now() < deadline);
+  assert.fail("optional cell progress did not publish");
+}
+
 test("production transport uses one fixed guardian exec, bounded journal, typed heartbeat and terminal close without remote-empty claims", async (t) => {
   const f = fixture(t), result = await f.ready;
   assert.equal(f.calls.length, 1); const { binary, argv, options } = f.calls[0]; assert.equal(binary, "ssh");
@@ -52,7 +63,7 @@ test("production transport uses one fixed guardian exec, bounded journal, typed 
   f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) }); assert.equal(f.input.at(-1).kind, "renew");
   const nativeCellProgress = { started: 19, total: 108 };
   f.frame("progress", { round: binding.round, state: "active", nextGroup: "hardening", nativeCellProgress });
-  const progress = localStreamStatus(f.local);
+  const progress = await waitForCells(f.local, nativeCellProgress.started);
   assert.equal(progress.kind, "progress");
   assert.deepEqual(progress.nativeCellProgress, nativeCellProgress);
   assert.equal(existsSync(join(f.local, "monitor-terminal.json")), false);
@@ -62,7 +73,63 @@ test("production transport uses one fixed guardian exec, bounded journal, typed 
   const journal = readFileSync(join(f.local, "monitor-journal.jsonl"), "utf8"); assert.ok(journal.length < 8192); assert.ok(!journal.includes('"remoteDrained":true'));
 });
 
-test("a torn workstation cell update leaves renewal, journal custody and terminal publication intact", async (t) => {
+test("hung optional cell storage cannot consume the peer lease or delay terminal", async (t) => {
+  const f = fixture(t, { initialActive: false, peerLease: true }), { monitor } = await f.ready;
+  const stage = join(f.local, "monitor-native-cells.json.pending");
+  const stalled = Promise.withResolvers(), open = fs.openSync, asyncOpen = fs.promises.open;
+  let peerNow = 0n, attempts = 0;
+  const peer = leaseState({ now: peerNow }), challenge = peer.challenge(peerNow);
+  const sync = t.mock.method(fs, "openSync", (path, ...args) => {
+    // Simulate the independent peer clock advancing while a synchronous open blocks.
+    if (path === stage) peerNow += BigInt(streamLimits.leaseMs) * 1000000n;
+    return open(path, ...args);
+  });
+  t.mock.method(fs.promises, "open", async (path, ...args) => {
+    if (path !== stage) return asyncOpen(path, ...args);
+    attempts++;
+    await stalled.promise;
+    throw new Error("optional storage did not open");
+  });
+  syncBuiltinESMExports();
+  try {
+    const status = { round: binding.round, state: "active", nextGroup: "hardening" };
+    for (const started of [1, 2, 3])
+      f.frame("progress", { ...status, nativeCellProgress: { started, total: 108 } });
+    f.frame("challenge", challenge);
+    assert.deepEqual(f.input.at(-1), { id: registration.id, kind: "renew", payload: challenge });
+    peer.renew(f.input.at(-1).payload, peerNow);
+    assert.equal(attempts, 1, "only one optional write can be in flight");
+    f.frame("terminal", { id: registration.id, nativeTerminal: true, sealSha256: "f".repeat(64) });
+    assert.equal((await monitor.done).terminal, true);
+    assert.equal(localStreamStatus(f.local).kind, "terminal");
+    assert.equal(existsSync(join(f.local, "monitor-invalid.json")), false);
+  } finally {
+    stalled.resolve();
+    sync.mock.restore(); syncBuiltinESMExports();
+  }
+  await new Promise(setImmediate);
+  assert.equal(attempts, 1, "terminal drops waiting optional writes");
+});
+
+test("an invalid 109/108 cell count still establishes the first active peer lease", async (t) => {
+  const f = fixture(t, { initialActive: false, peerLease: true }), { monitor } = await f.ready;
+  const state = { ...binding, name: registration.host.hostname, control: { helperSha256: binding.helperSha256,
+    monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)) } } };
+  const status = { round: binding.round, state: "active", nextGroup: "hardening" };
+  f.frame("progress", { ...status, nativeCellProgress: { started: 109, total: 108 } });
+  const active = localStreamStatus(f.local);
+  assert.equal(active.frame.kind, "progress");
+  assert.deepEqual(active.frame.payload, status);
+  assert.equal(active.nativeCellProgress, undefined);
+  f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) });
+  assert.equal(f.input.at(-1).kind, "renew");
+  assert.equal(livePeerLease(f.local, state), true);
+  requireUnfinishedJournal(join(f.local, "monitor-journal.jsonl"), registration.id);
+  f.frame("terminal", { id: registration.id, nativeTerminal: true, sealSha256: "f".repeat(64) });
+  assert.equal((await monitor.done).terminal, true);
+});
+
+test("a torn workstation cell update leaves custody intact and only the newest waiting count publishes", async (t) => {
   const f = fixture(t, { peerLease: true }), { monitor } = await f.ready;
   const state = { ...binding, name: registration.host.hostname, control: { helperSha256: binding.helperSha256,
     monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)) } } };
@@ -70,36 +137,41 @@ test("a torn workstation cell update leaves renewal, journal custody and termina
   const initial = readFileSync(journal);
   const progress = (started) => f.frame("progress", { round: binding.round, state: "active", nextGroup: "hardening",
     nativeCellProgress: { started, total: 108 } });
-  const open = fs.openSync, write = fs.writeSync;
-  let stageFd, hit = 0, failedFd;
-  const opened = t.mock.method(fs, "openSync", (path, ...args) => {
-    const fd = open(path, ...args);
-    if (path === join(f.local, "monitor-native-cells.json.pending")) stageFd = fd;
-    return fd;
+  const stage = join(f.local, "monitor-native-cells.json.pending"), open = fs.promises.open;
+  const torn = Promise.withResolvers(), resume = Promise.withResolvers(), writes = [];
+  t.mock.method(fs.promises, "open", async (path, ...args) => {
+    const file = await open(path, ...args);
+    if (path !== stage) return file;
+    return {
+      close: () => file.close(),
+      async writeFile(data) {
+        const { started } = JSON.parse(data);
+        writes.push(started);
+        if (started !== 1) return file.writeFile(data);
+        await file.write(data.slice(0, 3));
+        torn.resolve();
+        await resume.promise;
+        throw Object.assign(new Error("synthetic telemetry disk failure"), { code: "ENOSPC" });
+      }
+    };
   });
-  const written = t.mock.method(fs, "writeSync", (fd, bytes, offset = 0, ...rest) => {
-    if (failedFd === fd) {
-      hit++; throw Object.assign(new Error("synthetic telemetry disk failure"), { code: "ENOSPC" });
-    }
-    if (fd === stageFd || Buffer.isBuffer(bytes) && bytes.includes('"nativeCellProgress"')) {
-      failedFd = fd;
-      return write(fd, bytes, offset, 3);
-    }
-    return write(fd, bytes, offset, ...rest);
-  });
-  syncBuiltinESMExports();
-  try { progress(1); } finally { opened.mock.restore(); written.mock.restore(); syncBuiltinESMExports(); }
-  assert.equal(hit, 1);
-  assert.deepEqual(readFileSync(journal), initial);
-  requireUnfinishedJournal(journal, registration.id);
-  assert.equal(existsSync(join(f.local, "monitor-native-cells.json.pending")), false);
-
-  progress(2);
+  try {
+    progress(1);
+    await torn.promise;
+    progress(2); progress(3);
+    assert.deepEqual(writes, [1]);
+    assert.equal(localStreamStatus(f.local).nativeCellProgress, undefined);
+    assert.deepEqual(readFileSync(journal), initial);
+    requireUnfinishedJournal(journal, registration.id);
+  } finally { resume.resolve(); }
   f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) });
   assert.equal(f.input.at(-1).kind, "renew");
   assert.equal(livePeerLease(f.local, state), true);
-  assert.equal(localStreamStatus(f.local).frame.kind, "peer-lease");
-  assert.deepEqual(localStreamStatus(f.local).nativeCellProgress, { started: 2, total: 108 });
+  const latest = await waitForCells(f.local, 3);
+  assert.deepEqual(writes, [1, 3]);
+  assert.equal(existsSync(stage), false);
+  assert.equal(latest.frame.kind, "peer-lease");
+  assert.deepEqual(latest.nativeCellProgress, { started: 3, total: 108 });
   assert.ok(!readFileSync(journal, "utf8").includes("nativeCellProgress"));
   requireUnfinishedJournal(journal, registration.id);
   f.frame("terminal", { id: registration.id, nativeTerminal: true, sealSha256: "f".repeat(64) });
@@ -115,8 +187,9 @@ test("when the first active frame includes a cell count, only its original state
   f.frame("progress", { ...status, nativeCellProgress: { started: 1, total: 108 } });
   f.frame("progress", { ...status, nativeCellProgress: { started: 3, total: 109 } });
   f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) });
-  assert.equal(localStreamStatus(f.local).frame.kind, "peer-lease");
-  assert.deepEqual(localStreamStatus(f.local).nativeCellProgress, { started: 2, total: 108 });
+  const latest = await waitForCells(f.local, 2);
+  assert.equal(latest.frame.kind, "peer-lease");
+  assert.deepEqual(latest.nativeCellProgress, { started: 2, total: 108 });
   requireUnfinishedJournal(join(f.local, "monitor-journal.jsonl"), registration.id);
   f.close(255);
   assert.equal((await monitor.done).terminal, false);

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, promises as fs, readSync, renameSync, writeSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
 import { durable, digest, fileHash, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
@@ -114,18 +114,15 @@ function readCellProgress(local, id) {
   } catch { /* A missing, busy or damaged optional status file is not a custody error. */ }
 }
 
-function saveCellProgress(local, status) {
+async function saveCellProgress(local, status) {
   const path = join(local, cellFile), stage = path + ".pending";
   let created = false;
   try {
-    const fd = openSync(stage, "wx", 0o600); created = true;
-    try {
-      const data = Buffer.from(JSON.stringify(status));
-      let offset = 0; while (offset < data.length) { const n = writeSync(fd, data, offset); assert.ok(n > 0); offset += n; }
-    } finally { closeSync(fd); }
-    renameSync(stage, path);
+    const file = await fs.open(stage, "wx", 0o600); created = true;
+    try { await file.writeFile(JSON.stringify(status)); } finally { await file.close(); }
+    await fs.rename(stage, path);
   } catch {
-    if (created) try { unlinkSync(stage); } catch { /* Required control writes are independent. */ }
+    if (created) try { await fs.unlink(stage); } catch { /* Required control writes are independent. */ }
   }
 }
 
@@ -293,6 +290,7 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
   const fd = openSync(join(local, "monitor-journal.jsonl"), "wx", 0o600);
   let bytes = 0, sequence = 0, buffer = Buffer.alloc(0), registration, terminal, child, timer, file, audit, auditBytes = 0;
   let nativeEntered = false, lastPeerLease = 0, nativeCells;
+  let pendingCells, writingCells = false;
   let readyResolve, readyReject, doneResolve, doneReject, settled = false, closing = false, last = Date.now(), deadline = last + streamLimits.maximumMs;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const done = new Promise((resolve, reject) => { doneResolve = resolve; doneReject = reject; });
@@ -324,6 +322,16 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
     readyReject(uncertain());
     timer = setTimeout(() => { if (!settled) { closeSync(fd); settled = true; doneReject(uncertain()); } }, streamLimits.leaseMs);
   }
+  async function flushCells() {
+    writingCells = true;
+    // Keep one write in flight and replace only the waiting count. Control
+    // and terminal publication never wait for either.
+    while (pendingCells && !terminal && !closing && !settled) {
+      const status = pendingCells; pendingCells = undefined;
+      await saveCellProgress(local, status);
+    }
+    pendingCells = undefined; writingCells = false;
+  }
   function accept(frame) {
     assert.deepEqual(Object.keys(frame).sort(), ["id", "kind", "payload", "schema", "sequence"]);
     assert.equal(frame.schema, "benchmark-control-frame/v1"); assert.equal(frame.id, expected.id);
@@ -348,14 +356,15 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
       } else if (kind === "progress") {
         const { nativeCellProgress, ...status } = payload;
         if (Object.hasOwn(payload, "nativeCellProgress")) {
-          const counts = cellCounts(nativeCellProgress);
-          if (!counts || status.round !== expected.binding.round || status.state !== "active" || status.nextGroup !== "hardening") return;
+          if (status.round !== expected.binding.round || status.state !== "active" || status.nextGroup !== "hardening") return;
           // The remote slot can coalesce the first active state with the first
-          // count. Preserve exactly that required state, not the telemetry.
+          // count. Preserve that required state regardless of the count.
           if (!nativeEntered) { append({ ...frame, payload: status }); nativeEntered = true; }
-          if (!nativeCells || counts.total === nativeCells.total && counts.started > nativeCells.started) {
+          const counts = cellCounts(nativeCellProgress);
+          if (counts && (!nativeCells || counts.total === nativeCells.total && counts.started > nativeCells.started)) {
             nativeCells = counts;
-            saveCellProgress(local, { id: expected.id, round: status.round, ...counts });
+            pendingCells = { id: expected.id, round: status.round, ...counts };
+            if (!writingCells) void flushCells();
           }
         } else {
           if (status.state === "active") nativeEntered = true;

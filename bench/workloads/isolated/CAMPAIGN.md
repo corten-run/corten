@@ -32,7 +32,10 @@ has not received a complete first marker has no count. A missed marker or
 failed telemetry write can leave the last reported count stale. Telemetry
 failure does not cancel the command or change the required control checks.
 The workstation keeps the latest count in an optional status file, not in
-the journal that authorizes lease or custody decisions.
+the journal that authorizes lease or custody decisions. It writes counts
+asynchronously, with at most one write in flight and one waiting count.
+Renewal and terminal publication never wait for those writes. An invalid
+count does not suppress the required active state that arrives with it.
 
 ## Parent interface
 
