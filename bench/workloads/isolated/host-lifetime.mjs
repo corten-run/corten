@@ -136,7 +136,7 @@ function openInlineExecutable(at, inline, fresh = false) {
   try {
     const identity = observing("executable-inline-coherence", () => executableIdentity(fd)), ref = executableReference(identity);
     const cached = fresh ? undefined : inline.attempt.get(ref) ?? inline.admitted.get(ref);
-    const hash = cached ?? observing("executable-hash", () => hashExecutableDescriptor(fd, identity));
+    const hash = cached ?? observing("executable-hash", () => hashExecutableDescriptor(fd, identity, inline.checkDeadline));
     const current = observing("executable-stat", () => statSync(path, { bigint: true }));
     observing("executable-inline-coherence", () => {
       assert.ok(current.isFile() && Object.keys(identity).every((key) => String(current[key]) === identity[key]),
@@ -152,7 +152,7 @@ function openInlineExecutable(at, inline, fresh = false) {
       checkHash() {
         if (cached === undefined) return; // This descriptor was already hashed at open.
         observing("executable-inline-coherence", () => {
-          assert.ok(hashExecutableDescriptor(fd, identity) === hash, "opened executable digest changed");
+          assert.ok(hashExecutableDescriptor(fd, identity, inline.checkDeadline) === hash, "opened executable digest changed");
         });
       },
       close() { closeSync(fd); },
@@ -293,12 +293,14 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
   const started = performance.now(), deadline = started + Math.max(0, Math.min(maximumSampleGapMs, remaining));
   let race, successor, attempts = 0;
   for (;;) {
-    if (inline && successor && performance.now() >= deadline) throw race;
+    const inlineRetry = inline && successor;
+    if (inlineRetry && performance.now() >= deadline) throw race;
     inline?.attempt.clear(); // Nothing from a refused census can seed its successor's lookup.
     attempts++;
     try {
       const attempt = () => {
-        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor, inline);
+        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor,
+          inlineRetry ? { ...inline, checkDeadline() { if (performance.now() >= deadline) throw race; } } : inline);
         if (successor) observing("executable-recheck-successor", () => {
           assert.ok(observed.processes.some((p) => censusImage(p) === successor.ref && sameProcess(p, successor.identity, successor.cgroup)));
           if (successor.parent) assert.ok(observed.processes.some((p) =>
@@ -317,6 +319,7 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
       const missing = ["ENOENT", "ESRCH"].includes(error.code) && processReads.has(operation);
       const ended = performance.now(), left = deadline - ended;
       const next = executableSuccessors.get(error);
+      if (inlineRetry && left <= 0) throw race;
       if (successor || (!changed && !missing && !next) || left <= 0) {
         if (timing) Object.assign(timing, { censusMs: Math.round(ended - started), attempts });
         throw error;

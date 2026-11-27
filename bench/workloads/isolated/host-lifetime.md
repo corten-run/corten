@@ -207,8 +207,10 @@ Only an interval with a changed inode **and** digest, unchanged process name
 between those bookends, and an immediately preceding admitted image or parent
 can try the same single fresh census. Both candidate images are hashed from their
 own descriptors, and the fresh census independently opens and hashes the exact
-successor and any parent anchor. Both process and directory membership are read
-afresh. No digest or accounting row from the rejected census is published. The
+successor and any parent anchor. When the retry deadline expires, no new
+descriptor read starts; an in-flight read cannot qualify a late sample. Both
+process and directory membership are read afresh. No digest or accounting row
+from the rejected census is published. The
 temporary descriptors close before the sample is written. Fixture generation
 and other unpinned invocations keep their existing observer.
 

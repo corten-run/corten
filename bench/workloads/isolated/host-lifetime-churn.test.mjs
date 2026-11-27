@@ -407,11 +407,20 @@ for (const [mode, outcome] of [["prepare", "anchored"], ["prepare", "unanchored"
 }
 
 for (const outcome of ["unchanged", "admitted", "parent", "unanchored", "wrong-prior-image", "wrong-next-image",
-  "gone", "pid-changed", "start-changed", "cgroup-changed", "no-budget", "overslept", "late", "next-image-unreadable",
+  "gone", "pid-changed", "start-changed", "cgroup-changed", "no-budget", "overslept", "late", "hash-overrun", "next-image-unreadable",
   "parent-gone", "reparented", "mixed-open", "same-bytes", "old-mutated", "also-renamed"]) {
   test(`JSON timing inline executable successor: ${outcome}`, async (t) => {
     let faults = 0, attempts = 0, switched = false;
     const f = await fixture(t, [], false, () => faults++, 0, false, "timing");
+    let retryReads = 0;
+    if (["late", "hash-overrun"].includes(outcome)) {
+      const read = fs.readSync;
+      t.mock.method(fs, "readSync", (fd, ...args) => {
+        if (attempts === 2 && f.held.has(fd) && ++retryReads === 1 && outcome === "hash-overrun") f.clock += 1000;
+        return read(fd, ...args);
+      });
+      syncBuiltinESMExports();
+    }
     const leader = 4242, forked = ["parent", "parent-gone", "reparented", "unanchored"].includes(outcome);
     const pid = forked ? 5000 : leader, at = `/proc/${pid}`, scope = `/sys/fs/cgroup${f.scope}`;
     if (forked) f.members.push(pid);
@@ -451,6 +460,8 @@ for (const outcome of ["unchanged", "admitted", "parent", "unanchored", "wrong-p
     assert.equal(faults, accepted ? 0 : 1);
     assert.equal(attempts, ["unchanged", "unanchored", "wrong-prior-image", "no-budget", "overslept", "mixed-open",
       "same-bytes", "old-mutated", "also-renamed"].includes(outcome) ? 1 : 2);
+    if (outcome === "late") assert.equal(retryReads, 0, "do not start hashing after the retry deadline");
+    if (outcome === "hash-overrun") assert.equal(retryReads, 1, "do not start another read after one overruns");
     assert.equal(f.samples().length, accepted ? 3 : 2);
     if (outcome === "mixed-open") {
       f.override = () => {}; f.members = [leader]; await f.tick();
