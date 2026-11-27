@@ -204,7 +204,9 @@ const instance = (/** @type {string} */ items, /** @type {boolean} */ held, /** 
     release: (/** @type {number} */ id) => send({ op: "release", id }, `releasing timer ${id}`),
     end: async () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      // A process the server started may hold the IPC channel after this one exits; let it go.
+      // A process the server started may hold the IPC channel after this one exits, even part way
+      // through a message disconnect() would wait for; unref it so it cannot keep the test running.
+      child.channel?.unref();
       if (child.connected) child.disconnect();
       try {
         await within(exited, "the item API's process did not exit after SIGKILL", undefined);
@@ -244,7 +246,8 @@ const get = (/** @type {number} */ port, /** @type {string} */ id, /** @type {Ab
 // the request whose handling set it, and each send of an answer is recorded with the held timer
 // whose callback made it, so which answer waits, and on what, is read from the server, and what has
 // arrived is read from the client. The test asserts order, not latency: no answer is held to a time,
-// and the only times are the 5 s bounds on each wait. Only setTimeout is held, so a wait made another
+// and the only times are harness deadlines (5 s on each wait, 30 s on the whole test). Only setTimeout
+// is held, so a wait made another
 // way (node:timers/promises, setImmediate) is not seen: "at once" means received whole while the late
 // item's timer is still held, and the late answer is sent from within its timer's callback, which may
 // itself wait some other way first. Every case has its own instance.
