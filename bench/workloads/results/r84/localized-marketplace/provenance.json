@@ -12,6 +12,7 @@
   "archiveSummarySuffix": "/00-localized-marketplace-timing/native/summary.json",
   "summarySha256": "20fe8f13dfec90d2a46587c2d65bd13264d8494ccc6326ef496351944bc19c8d",
   "nativeReportSha256": "73d8ff4175b2962273d4c644b4a312ab36ac25e592b45e5d0eefacee341ad5cf",
+  "publishedReportSha256": "f053c9d93b975d709e0212a1a547f4193e683c6495431927c4a4c00ba203b787",
   "result": "Verified complete attempt with recorded contender failures",
   "connectionFloodResistance": "not measured",
   "archiveLocator": null

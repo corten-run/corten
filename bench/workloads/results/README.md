@@ -4,6 +4,8 @@ Each group compares contenders doing the same work. Its report names the measure
 date, configuration, and outcomes. The groups can be measured on different dates and
 commits. Compare contenders within a group, not numbers from different workloads.
 The [group definitions](../README.md) describe the features each comparison requires.
+Each provenance record binds the published Markdown as `publishedReportSha256`,
+separately from the collected archive and native report or result.
 
 | Group | Measured commit | Date (UTC) | Result |
 |---|---|---|---|
