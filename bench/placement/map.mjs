@@ -242,7 +242,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   } else if (mode === "check" && b && Number.isInteger(Number(padArg)) && Number.isInteger(Number(secondArg))) {
     const r = check(load(a), load(b), Number(padArg), Number(secondArg), shuffled);
     console.log(shuffled
-      ? `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link, in the order of the placement's ordering file, between a first pad of ${r.pad} bytes and a second of ${r.second}; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`
+      ? `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link, in any order (layout.mjs --order checks it against the ordering file), between a first pad of ${r.pad} bytes and a second of ${r.second}; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`
       : `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link between a first pad of ${r.pad} bytes and a second of ${r.second}; ${r.sectionsBeforeAlignedMovedByPad} of the ${r.sectionsBeforeAligned} sections before the first aligned beyond ${STEP} bytes moved by exactly the pad, with ${r.symbolsBeforeAlignedMovedByPad} symbols; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`);
     console.log("JSON " + JSON.stringify(r));
     if (!r.ok) fail(r.why);

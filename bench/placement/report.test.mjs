@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { readMap, record } from "./map.mjs";
 import { finalBlock, problems as maskProblems, sed, starts, stated, values } from "./mask.mjs";
 import { gauss, rng } from "./model.mjs";
@@ -463,6 +463,37 @@ test("build.sh and run.sh keep the plan's SHUFFLE when the cargo env file they s
   assert.equal(run(0, "export SHUFFLE=1\n"), "0 0", "run.sh takes the cargo env file's SHUFFLE over an unshuffled plan's");
   assert.equal(run(1, "export SHUFFLE=0\n"), "1 0", "run.sh takes the cargo env file's SHUFFLE over a shuffled plan's");
   assert.equal(run(1, ""), "1 0");
+});
+
+test("run.sh stops before any turn when it cannot keep a shuffled run's list of functions", { skip: process.platform !== "linux" && "runs run.sh's line under sh" }, () => {
+  // Its line that keeps each side's list, run as run.sh runs it (set -u, finish ends the run), then a
+  // line run.sh would reach only after it.
+  const line = readFileSync(join(here, "run.sh"), "utf8").split("\n").filter((l) => l.includes("functions-$s.txt.gz") && !l.startsWith("#"));
+  assert.equal(line.length, 1, "run.sh does not keep the lists on one line");
+  const work = mkdtempSync(join(tmp, "shuffle-keep-")), bin = join(work, "bin"), res = join(work, "results");
+  mkdirSync(bin); mkdirSync(res);
+  const run = (shuffle) => spawnSync("sh", ["-c", `set -u; finish() { echo "FINISH $1 $2"; exit "$1"; }; B='${bin}'; RES='${res}'; SIDES='base head'; SHUFFLE=${shuffle}\n${line[0]}\necho CONTINUED`], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  // A side's list missing, or empty: the run ends there, refused, and goes on to nothing.
+  writeFileSync(join(bin, "functions-base.txt"), "a\nb\n");
+  for (const head of [null, ""]) {
+    rmSync(join(bin, "functions-head.txt"), { force: true });
+    if (head !== null) writeFileSync(join(bin, "functions-head.txt"), head);
+    const r = run(1);
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /^FINISH 1 refused: a shuffled run's list of head's functions, bin\/functions-head\.txt, from which report\.mjs draws every ordering file again, could not be kept in the results$/m);
+    assert.doesNotMatch(r.stdout, /CONTINUED/);
+  }
+  // Both lists there: kept, gzipped, and the run goes on.
+  writeFileSync(join(bin, "functions-head.txt"), "a\nc\n");
+  const ok = run(1);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /^CONTINUED$/m);
+  assert.equal(gunzipSync(readFileSync(join(res, "functions-head.txt.gz"))).toString(), "a\nc\n");
+  // An unshuffled run keeps none and needs none.
+  rmSync(join(bin, "functions-head.txt")); rmSync(join(res, "functions-head.txt.gz"));
+  const plain = run(0);
+  assert.equal(plain.status, 0, plain.stdout + plain.stderr);
+  assert.equal(existsSync(join(res, "functions-head.txt.gz")), false);
 });
 
 test("a run without the field reads as before and refuses a shuffled placement's check", () => {

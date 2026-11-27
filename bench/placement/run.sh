@@ -98,7 +98,7 @@ for s in $SIDES; do
 done
 [ ! -f "$B/second-pads.txt" ] || cp "$B/second-pads.txt" "$RES/"
 [ ! -f "$WORK/maps/placements.sha256" ] || cp "$WORK/maps/placements.sha256" "$RES/maps/"
-[ "$SHUFFLE" = 0 ] || for s in $SIDES; do gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; done
+[ "$SHUFFLE" = 0 ] || for s in $SIDES; do { [ -s "$B/functions-$s.txt" ] && gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; } || finish 1 "refused: a shuffled run's list of $s's functions, bin/functions-$s.txt, from which report.mjs draws every ordering file again, could not be kept in the results"; done
 # The probe's source as build.sh built it, beside the request script and the expected answer in
 # plan/: the files the plan names by path, still what plan.mjs listed.
 sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$PL/inputs.sha256" | while IFS= read -r f; do mkdir -p "$RES/$(dirname "$f")"; cp "$WORK/$f" "$RES/$f"; done

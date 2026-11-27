@@ -42,14 +42,16 @@
 # pads/order.txt: the pad's function and then those functions in the order order.mjs draws from
 # the workload's seed and i. Such a link fails when LLD warns that a name in the file is no symbol
 # (relink.mjs --every-name), every placement is linked with its map (maps/<side>-p<n>.map, gzipped
-# and its SHA-256 in maps/placements.sha256, as 5's kept links are), and 4 and 5's checks of the
+# and its SHA-256 in maps/placements.sha256, as 5's kept links are), every map of the run, the
+# unpadded ones too, is written with LLD's --no-demangle, so it names each symbol as the ELF symbol
+# table does, which layout.mjs and order.mjs read functions from, and 4 and 5's checks of the
 # functions are layout.mjs --order with the unpadded map and the placement's, which asks for the
 # placement's map's input sections in the file's order, each function in its section, in place of
 # each moved by the pad with its neighbours (5's map check takes --shuffled, its sections in any
 # order). Each head placement is then checked against base's at its index (layout.mjs --alike,
 # bin/layout/head-p<n>-alike.txt, from both sides' unpadded binaries, maps, placement maps and
 # ordering files): the functions both have lie in one order in both, a name defined more than once
-# by each definition's input section, or head is refused (7).
+# matched definition by definition by its object or input section, or head is refused (7).
 # A refusal (3, 5 or 7) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
 # 5 and 7 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
@@ -70,7 +72,11 @@ export RUSTUP_TOOLCHAIN="$TOOLCHAIN"
 rustc -V
 for d in bin maps pads orders capture work probe wrap target-base target-head; do rm -rf "${WORK:?}/$d"; done
 mkdir -p "$B/layout" "$M" "$WORK/pads" "$WORK/capture" "$WORK/wrap"
-[ "$SHUFFLE" = 0 ] || { echo "shuffled: every placement's functions in an order drawn from seed $SEED and its index"; mkdir -p "$WORK/orders"; }
+# A shuffled run's maps write each symbol as the ELF symbol table does (LLD's --no-demangle), so
+# layout.mjs can match a map's symbols with the table's byte for byte; an unshuffled run's maps are
+# as they were.
+MANGLED=
+[ "$SHUFFLE" = 0 ] || { echo "shuffled: every placement's functions in an order drawn from seed $SEED and its index"; mkdir -p "$WORK/orders"; MANGLED=--no-demangle; }
 cp -R "$PROBE" "$WORK/probe"
 # What the plan names by path is what plan.mjs listed when it resolved the plan, and nothing more:
 # cp -R keeps a symbolic link a link, so everything under the copy that is not a directory (a file,
@@ -118,7 +124,8 @@ build() { # <side> <commit>
     [ -z "$new" ] || fail "$side resolved versions its commit's Cargo.lock does not have: $new"
     cp "$T/$BINARY" "$B/$side"
     readelf -p .comment "$B/$side" | grep -q 'Linker: LLD' || fail "$side was not linked by LLD"
-    node "$KIT/relink.mjs" "$WORK/capture/$side" "$B/$side-relink" --map "$M/$side.map"
+    # shellcheck disable=SC2086
+    node "$KIT/relink.mjs" "$WORK/capture/$side" "$B/$side-relink" --map "$M/$side.map" $MANGLED
     cmp -s "$B/$side" "$B/$side-relink" || fail "$side: the captured link run again without a pad differs from the build's own binary"
     rm "$B/$side-relink"
     echo "$side: the captured link run again without a pad, with its map, is byte-identical to the build's own binary"
@@ -141,7 +148,7 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
             node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" || fail "relink failed: $pl"
             node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions moved by its pad"
         else
-            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --map "$M/$pl.map" --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name || fail "relink failed: $pl"
+            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --map "$M/$pl.map" --no-demangle --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name || fail "relink failed: $pl"
             node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --order "$pl_order" --map "$M/$1.map" --placed-map "$M/$pl.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and its pad in the order of orders/$pl.txt"
             echo "$(sha256sum "$M/$pl.map" | cut -d' ' -f1)  $pl.map" >>"$M/placements.sha256"
             gzip -9 "$M/$pl.map"
@@ -152,7 +159,7 @@ place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its 
             if [ "$SHUFFLE" = 0 ]; then
                 node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl-l$pl_n" --map "$M/$pl-l$pl_n.map" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" --second "$WORK/pads/pad2-$pl_n.o" || fail "relink failed: $pl with a second pad of $pl_n"
             else
-                node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl-l$pl_n" --map "$M/$pl-l$pl_n.map" --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name --second "$WORK/pads/pad2-$pl_n.o" || fail "relink failed: $pl with a second pad of $pl_n"
+                node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl-l$pl_n" --map "$M/$pl-l$pl_n.map" --no-demangle --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name --second "$WORK/pads/pad2-$pl_n.o" || fail "relink failed: $pl with a second pad of $pl_n"
             fi
             pl_d=$(node "$KIT/map.mjs" data "$M/$1.map" "$M/$pl-l$pl_n.map" "$2") && pl_fits=1 || pl_fits=0
             pl_tried="$pl_tried $pl_n:$(echo "$pl_d" | cut -d' ' -f4)"

@@ -1,8 +1,11 @@
 // order.mjs: the ordering file a shuffled placement is linked with (README.md, workloads[].shuffle;
 // docs/design.md#choice-placement-runs, "Inner layout"):
-//   node order.mjs functions <unpadded binary>        the names, as nm writes them, of the
-//                                                     binary's functions in .text, each once and
-//                                                     sorted, one a line (layout.mjs reads them)
+//   node order.mjs functions <unpadded binary>        the names, as the ELF symbol table writes
+//                                                     them, of the binary's functions of .text
+//                                                     (layout.mjs inText(): type FUNC, the
+//                                                     symbol's section index .text's), each once
+//                                                     and sorted, one a line (layout.mjs checks
+//                                                     a placement by the same rule)
 //   node order.mjs order <functions file> <seed> <i>  placement i's ordering file (i from 1 to
 //                                                     K): the first pad's function, then those
 //                                                     names in the order of their keys
@@ -16,7 +19,7 @@ import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { entries, PADS, textFunctions, textRange } from "./layout.mjs";
+import { elfSymbols, PADS, textFunctions, textRange } from "./layout.mjs";
 import { mapText } from "./map.mjs";
 
 /** A name's key at placement i of a workload with this seed. */
@@ -47,8 +50,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const [mode, file, seed, i] = process.argv.slice(2);
   try {
     if (mode === "functions" && file && seed === undefined) {
-      const nm = execFileSync("nm", ["--defined-only", file], { encoding: "utf8", maxBuffer: 1 << 28 });
-      const list = textFunctions(entries(nm), textRange(execFileSync("readelf", ["-SW", file], { encoding: "utf8" })));
+      const syms = elfSymbols(execFileSync("readelf", ["-sW", file], { encoding: "utf8", maxBuffer: 1 << 28 }));
+      const list = textFunctions(syms, textRange(execFileSync("readelf", ["-SW", file], { encoding: "utf8" })));
       const odd = namesProblem(list);
       if (odd) throw new Error(`${file}: its .text ${odd}`);
       process.stdout.write(list.map((n) => `${n}\n`).join(""));
