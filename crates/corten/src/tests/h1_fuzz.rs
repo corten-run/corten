@@ -13,12 +13,19 @@
 //! twelve. Three streams in ten go over a pipe that holds little (64 bytes to 20 KB each way), so
 //! the server's writes are taken in parts and wait for the client, one route's handler waits
 //! before it answers, so requests arrive while one is being answered, and one route's body waits
-//! between its pieces, so a piece can be ready as more of the stream, or its end, arrives. No
-//! request of a stream sent
-//! over such a pipe has a body ([`stream`] says why: hyper 1.12.0 itself goes wrong there, on
-//! both servers). The streams before those
+//! between its pieces, so a piece can be ready as more of the stream, or its end, arrives. A
+//! stream sent over such a pipe has a body only in requests whose handler reads all of it, and is
+//! not changed at random if it has one ([`stream`] says why: with a body left unread there,
+//! hyper 1.12.0 itself goes wrong). The streams before those
 //! are fixed: each of a few requests cut in two writes at every byte, and ended at every byte.
 //! The same number makes the same stream on every run.
+//!
+//! A request's body is read by the connection that read its head, so the two are compared in how
+//! they read one: bodies of a known length and chunked ones, with extensions and trailers, of a
+//! few bytes and of a few thousand, framed as the grammar has them and in every way the list of
+//! wrong ones has ([`CHUNKED`], [`framing`]), to a handler that reads all of the body, one that
+//! reads none, one that takes its first piece, one that gives it back as its answer and the
+//! router's own answers, which read none.
 //!
 //! After a stream, if the server has not closed, one more request is sent that every server
 //! answers: where a server took the stream's last message to end shows in whether, and how, that
@@ -47,6 +54,14 @@
 //!    where the first request neither server answered begins are as many as the limit
 //!    ([`unanswered_from`]), whatever was sent and answered before them, and no head ends in
 //!    the first that many of them ([`head_ends`]), whatever was sent behind it.
+//! 2. A chunked body with an LF that has no CR before it among its trailers is refused by
+//!    Corten's connection, which fails the body there and closes behind that request's answer,
+//!    and taken by hyper's, which reads the LF for a byte of a trailer and goes on reading
+//!    trailers through whatever the client sends next, to the next empty line (`crate::h1::body`
+//!    says why Corten's does not follow it). The class is of a stream in which Corten's
+//!    connection refused a body for that, by its own count of them, closed the connection, and
+//!    answered every request before the last it answered as hyper's did; it is never one in
+//!    which Corten's connection is the laxer.
 //!
 //! The servers of a run are on one thread, the run's own, over pipes in memory, with tokio's time
 //! paused: a client that waits for the server to go quiet waits until every task is idle, not for
@@ -72,14 +87,14 @@ const IN_SUITE: usize = 3_000;
 /// How long a client waits before it takes the server to be waiting, in tokio's paused time,
 /// which passes only when every task waits: well under the header timeout, which would close the
 /// connection.
-const QUIET: Duration = Duration::from_secs(2);
+pub(super) const QUIET: Duration = Duration::from_secs(2);
 
 /// How long a run may go without finishing a stream, in real time, before it is taken to hang.
 /// A stream takes milliseconds.
 const STALLED: Duration = Duration::from_secs(120);
 
 /// Listens on a channel: a connection is one end of a pipe the test made.
-struct Piped(tokio::sync::mpsc::UnboundedReceiver<DuplexStream>);
+pub(super) struct Piped(pub(super) tokio::sync::mpsc::UnboundedReceiver<DuplexStream>);
 
 impl crate::Listener for Piped {
     type Io = DuplexStream;
@@ -166,8 +181,38 @@ fn app() -> App {
         .route("/wait", get(wait))
         .route("/unread", crate::router::any(|| async { "unread" }))
         .route("/read", crate::router::any(|body: Bytes| async move { format!("read {}", body.len()) }))
+        .route("/first", crate::router::any(first))
+        .route("/echo", crate::router::any(echo))
         .route("/seen", crate::router::any(seen));
     App::new(Routes::from(table))
+}
+
+/// Whether the body's first frame came, and nothing of its length (the two connections cut a
+/// body into pieces where their own reads end): the rest of the body is left unread.
+async fn first(req: Request<Body>) -> &'static str {
+    match req.into_body().frame().await {
+        Some(Ok(_)) => "first",
+        Some(Err(_)) => "first failed",
+        None => "first none",
+    }
+}
+
+/// The request's body for the answer's, read as the answer is written and given whole at its
+/// end, so the answer is the same however the body was cut into pieces; one that fails ends the
+/// answer there.
+async fn echo(req: Request<Body>) -> Body {
+    let mut body = req.into_body();
+    let whole = async move {
+        let mut all = Vec::new();
+        while let Some(frame) = body.frame().await {
+            match frame {
+                Ok(frame) => all.extend_from_slice(frame.data_ref().map_or(&[][..], |data| &data[..])),
+                Err(_) => return Err(std::io::Error::other("the request's body failed")),
+            }
+        }
+        Ok(Bytes::from(all))
+    };
+    Body::from_stream(futures_util::stream::once(whole))
 }
 
 /// A server for [`app`] with the connection `own` says and this limit on a head, and where to
@@ -177,7 +222,7 @@ fn serve(own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSender<DuplexStr
 }
 
 /// [`serve`], for an app of a test's own.
-fn serve_app(app: App, own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSender<DuplexStream> {
+pub(super) fn serve_app(app: App, own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSender<DuplexStream> {
     let (connect, accepted) = tokio::sync::mpsc::unbounded_channel();
     let app = app.own_http1(own).max_request_head(head);
     tokio::spawn(crate::app::run(vec![Piped(accepted)], crate::app::plain, app, std::future::pending()));
@@ -187,7 +232,7 @@ fn serve_app(app: App, own: bool, head: usize) -> tokio::sync::mpsc::UnboundedSe
 /// Bytes a server sent, as it sent them but for the value of each answer's `Date` ([`undated`]).
 /// Shown as text; compared as bytes.
 #[derive(PartialEq, Eq, Clone, Default)]
-struct Sent(Vec<u8>);
+pub(super) struct Sent(pub(super) Vec<u8>);
 
 impl std::fmt::Debug for Sent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -203,14 +248,14 @@ impl From<&str> for Sent {
 
 /// What a server did with a stream.
 #[derive(Debug, PartialEq, Eq)]
-struct Outcome {
+pub(super) struct Outcome {
     /// What it sent before the last request.
-    before: Sent,
+    pub(super) before: Sent,
     /// It closed the connection before the last request was sent.
-    closed: bool,
+    pub(super) closed: bool,
     /// What it sent to the last request.
-    after: Sent,
-    closed_after: bool,
+    pub(super) after: Sent,
+    pub(super) closed_after: bool,
 }
 
 /// What a client has received, and whether the server has closed the connection: filled by a
@@ -237,7 +282,7 @@ fn last_request(index: usize) -> String {
 
 /// Sends a stream to a server, each write once the server has done all it will with the one
 /// before, then the last request if the connection is still open and the client's side of it is.
-async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, stream: &Stream) -> Outcome {
+pub(super) async fn exchange(connect: &tokio::sync::mpsc::UnboundedSender<DuplexStream>, stream: &Stream) -> Outcome {
     let (client, server) = tokio::io::duplex(stream.pipe);
     connect.send(server).expect("the server is listening");
     let (mut reading, mut client) = tokio::io::split(client);
@@ -291,13 +336,13 @@ fn behind(first: &[u8], all: &[u8]) -> Vec<u8> {
 /// One answer in what a server sent: its status, and whether the app made it (the server's own
 /// refusals have none of the app's headers).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct Answer {
-    status: u16,
-    apps: bool,
+pub(super) struct Answer {
+    pub(super) status: u16,
+    pub(super) apps: bool,
 }
 
 /// The answers in `sent`. No body of [`app`]'s has a status line in it.
-fn answers(sent: &[u8]) -> Vec<Answer> {
+pub(super) fn answers(sent: &[u8]) -> Vec<Answer> {
     let sent = &*String::from_utf8_lossy(sent);
     let starts: Vec<usize> = sent.match_indices("HTTP/1.").map(|(at, _)| at).collect();
     let mut found = Vec::new();
@@ -326,7 +371,7 @@ enum Verdict {
     Unlisted(&'static str),
 }
 
-/// The one class of difference on the list.
+/// The first class of difference on the list.
 const LIMIT_OR_GRAMMAR: &str = "a head that reaches the limit and is malformed further on: 400 from one, 431 from the other";
 
 /// `outcome` with the status line of its last answer made the same whichever of the two it is,
@@ -419,20 +464,45 @@ fn refused_head_reaches(sent: &[u8], hyper: &Outcome, limit: usize) -> bool {
     unanswered_from(sent, answered).is_some_and(|from| sent.len() - from >= limit && !head_ends(&sent[from..from + limit]))
 }
 
+/// The other: Corten's connection refused a body for an LF with no CR before it among its
+/// trailers, which hyper's takes for a byte of a trailer and reads on behind.
+const BARE_LF: &str = "a body with a bare LF among its trailers: refused by own, read on by hyper";
+
+/// Every answer a server sent, to the stream and to the last request.
+fn all(outcome: &Outcome) -> Vec<Answer> {
+    let mut all = answers(&outcome.before.0);
+    all.extend(answers(&outcome.after.0));
+    all
+}
+
 /// `reaches_limit`: the head the servers refused is as long as the app's limit on a head, or
-/// longer ([`refused_head_reaches`]).
-fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
+/// longer ([`refused_head_reaches`]). `bare_lf`: Corten's connection refused a body of the stream
+/// for an LF with no CR before it among its trailers.
+fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool, bare_lf: bool) -> Verdict {
+    match differs(hyper, own, reaches_limit) {
+        // The second class: never where Corten's connection is the laxer one, and only where it
+        // closed the connection (at the request whose body it refused, which is so the last it
+        // answered) and answered the requests before that one as hyper's did.
+        Verdict::Unlisted(_) if bare_lf && own.closed && {
+            let (theirs, ours) = (all(hyper), all(own));
+            let before = ours.len().saturating_sub(1);
+            theirs.len() >= before && theirs[..before] == ours[..before]
+        } =>
+        {
+            Verdict::Listed(BARE_LF)
+        }
+        verdict => verdict,
+    }
+}
+
+/// [`judge`], but for the second listed class.
+fn differs(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
     if hyper == own {
         return Verdict::Same;
     }
     if reaches_limit && refusal_alike(hyper).is_some_and(|hyper| Some(hyper) == refusal_alike(own)) {
         return Verdict::Listed(LIMIT_OR_GRAMMAR);
     }
-    let all = |outcome: &Outcome| {
-        let mut all = answers(&outcome.before.0);
-        all.extend(answers(&outcome.after.0));
-        all
-    };
     let (theirs, ours) = (all(hyper), all(own));
     if ours.len() > theirs.len() {
         return Verdict::Laxer("own answers more requests than hyper");
@@ -456,19 +526,19 @@ fn judge(hyper: &Outcome, own: &Outcome, reaches_limit: bool) -> Verdict {
 }
 
 /// One stream of the run.
-struct Stream {
-    index: usize,
+pub(super) struct Stream {
+    pub(super) index: usize,
     /// What the client sends, in the writes it sends it in.
-    writes: Vec<Vec<u8>>,
+    pub(super) writes: Vec<Vec<u8>>,
     /// The client closes its side behind the last write.
-    closes: bool,
+    pub(super) closes: bool,
     /// How many bytes the pipe holds each way: what the server writes beyond that waits for the
     /// client to read, and is taken in parts.
-    pipe: usize,
+    pub(super) pipe: usize,
 }
 
 /// A pipe that holds everything a stream sends and everything it is answered.
-const WIDE: usize = 1 << 20;
+pub(super) const WIDE: usize = 1 << 20;
 
 impl Stream {
     fn bytes(&self) -> Vec<u8> {
@@ -479,7 +549,9 @@ impl Stream {
 /// The requests each cut in two writes at every byte, and ended at every byte: a whole request of
 /// each kind the two connections treat differently, alone and behind another.
 fn bases() -> Vec<Vec<u8>> {
+    const CODED: &str = "transfer-encoding: chunked\r\n";
     let get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    let post = |path: &str, lines: &str| format!("POST {path} HTTP/1.1\r\nhost: localhost\r\n{lines}\r\n");
     let texts = [
         get.to_owned(),
         format!("{get}GET /json HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"),
@@ -494,6 +566,18 @@ fn bases() -> Vec<Vec<u8>> {
         "GET / HTTP/1.0\r\nconnection: keep-alive\r\n\r\nGET / HTTP/1.1\r\nhost : a\r\n\r\n".to_owned(),
         "\r\n\r\nGET /none HTTP/1.1\nhost: localhost\n\nGET /close HTTP/1.1\r\nhost: localhost\r\n\r\n".to_owned(),
         format!("GET /unread HTTP/1.1\r\nhost: localhost\r\ncontent-length: 3\r\n\r\nabc{get}"),
+        // Bodies of both framings, read by Corten's connection: with extensions and trailers,
+        // one behind another, expected, left unread, half read, framed twice, framed wrong, on
+        // HTTP/1.0, and given back.
+        format!("{}5;x=1\r\nhello\r\n6\r\n world\r\n0;last\r\nx-t: 1\r\n\r\n{get}", post("/seen", CODED)),
+        format!("{}hello{}3\r\nabc\r\n0\r\n\r\n{get}", post("/read", "content-length: 5\r\n"), post("/seen", CODED)),
+        format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/seen", "transfer-encoding: chunked\r\nexpect: 100-continue\r\n")),
+        format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/unread", CODED)),
+        format!("{}5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n{get}", post("/first", CODED)),
+        format!("{}5\r\nhello\r\n0\r\n\r\n{get}", post("/seen", "content-length: 5\r\ntransfer-encoding: chunked\r\n")),
+        format!("{}5\r\nhello\r\nz\r\n{get}", post("/seen", CODED)),
+        "POST /seen HTTP/1.0\r\ncontent-length: 5\r\n\r\nhello".to_owned(),
+        format!("{}hello world{get}", post("/echo", "content-length: 11\r\n")),
     ];
     texts.into_iter().map(String::into_bytes).collect()
 }
@@ -524,6 +608,8 @@ const TARGETS: &[&str] = &[
     "/close",
     "/read",
     "/unread",
+    "/first",
+    "/echo",
     "/seen",
     "/seen?a=1&b=2",
     "/nowhere",
@@ -639,7 +725,7 @@ const LINES: &[&str] = &[
     "origin: http://other.example",
     "sec-fetch-site: cross-site",
 ];
-/// A chunked body, as the grammar has it and as it does not.
+/// A chunked body, as the grammar has it (the first [`CHUNKED_PLAIN`]) and as it does not.
 const CHUNKED: &[&str] = &[
     "5\r\nhello\r\n0\r\n\r\n",
     "5\r\nhello\r\n0\r\n\r\n",
@@ -649,9 +735,27 @@ const CHUNKED: &[&str] = &[
     "A\r\n0123456789\r\n0\r\n\r\n",
     "a\r\n0123456789\r\n0\r\n\r\n",
     "5;ext=1\r\nhello\r\n0\r\n\r\n",
-    "5;ext=\"a b\"\r\nhello\r\n0\r\n\r\n",
+    "5;ext=\"a b\"\r\nhello\r\n0;last\r\n\r\n",
     "5\r\nhello\r\n0\r\nx-t: 1\r\n\r\n",
+    "1\r\na\r\n1\r\nb\r\n1\r\nc\r\n0\r\nx-t: 1\r\nx-u: 2\r\n\r\n",
+    // Trailers named as the lines that frame a request: they frame nothing.
+    "5\r\nhello\r\n0\r\ncontent-length: 9\r\ntransfer-encoding: gzip\r\nhost: other.example\r\n\r\n",
     "5\r\nhello\r\n0\r\nx-t : 1\r\n\r\n",
+    "5\r\nhello\r\n0\r\nx-t: 1\r\n more\r\n\r\n",
+    "5\r\nhello\r\n0\r\nx-t\r\n\r\n",
+    "5\r\nhello\r\n0\r\nx-t: 1\rx-u: 2\r\n\r\n",
+    // An LF with no CR before it among the trailers: the one thing in a body that Corten's
+    // connection refuses and hyper's takes.
+    "5\r\nhello\r\n0\r\nx-t: 1\n\r\n",
+    "5\r\nhello\r\n0\r\n\n",
+    "5;a\nhello\r\n0\r\n\r\n",
+    "5;a\rb\r\nhello\r\n0\r\n\r\n",
+    "5\t;x\r\nhello\r\n0\r\n\r\n",
+    "5 5\r\nhello\r\n0\r\n\r\n",
+    "5\rhello\r\n0\r\n\r\n",
+    "5\r\nhello\n0\r\n\r\n",
+    "5\r\nhello\r\n0\n\r\n",
+    "5\r\nhello\r\n0\r\n\rX",
     "5\nhello\n0\n\n",
     "5\r\nhello\r\n0\r\n",
     "5\r\nhello\r\n",
@@ -749,6 +853,34 @@ const CODING_NAMES: &[&str] = &[
     "transfer-encoding\0",
 ];
 
+/// How many of [`CHUNKED`]'s bodies the grammar has.
+const CHUNKED_PLAIN: usize = 12;
+
+/// A body of `length` bytes that says where each of them is, so one read short, or twice, is not
+/// the same to a handler.
+fn payload(length: usize) -> String {
+    (0..length).map(|at| char::from(b"0123456789abcdefghijklmnopqrstuvwxyz"[(at / 7 + at) % 36])).collect()
+}
+
+/// A chunked body the grammar has, made at random: up to six chunks of up to `most` bytes, some
+/// with an extension, the last line with one sometimes, and up to three trailers.
+fn chunks(dice: &mut Dice, most: usize) -> String {
+    use std::fmt::Write;
+    let mut body = String::new();
+    for _ in 0..dice.below(7) {
+        let data = payload(1 + dice.below(most));
+        let size = if chance(dice, 50) { format!("{:x}", data.len()) } else { format!("{:X}", data.len()) };
+        let extension = pick(dice, &["", "", "", ";e", ";e=1", ";e=\"a;b\"", " ;e", ";a;b=c"]);
+        let _ = write!(body, "{size}{extension}\r\n{data}\r\n");
+    }
+    body.push_str(pick(dice, &["0", "0", "0", "00", "0;last"]));
+    body.push_str("\r\n");
+    for at in 0..dice.below(10).saturating_sub(6) {
+        let _ = write!(body, "x-t{at}: {}\r\n", payload(dice.below(12)));
+    }
+    body + "\r\n"
+}
+
 /// A request's framing lines and its body. `wild`: from the whole grammar, and otherwise as a
 /// client that follows HTTP frames a body. `bodied`: it may have one.
 fn framing(dice: &mut Dice, wild: bool, bodied: bool) -> (Vec<String>, String) {
@@ -756,10 +888,17 @@ fn framing(dice: &mut Dice, wild: bool, bodied: bool) -> (Vec<String>, String) {
         return (Vec::new(), String::new());
     }
     if !wild {
-        return match dice.below(10) {
+        // One body in ten is longer than a read of Corten's connection, or than several.
+        let most = if chance(dice, 10) { [700, 3_000, 6_000][dice.below(3)] } else { 12 };
+        return match dice.below(12) {
             0..=5 => (Vec::new(), String::new()),
-            6 | 7 => (vec!["content-length: 5".to_owned()], "hello".to_owned()),
-            _ => (vec!["transfer-encoding: chunked".to_owned()], pick(dice, &CHUNKED[..5]).to_owned()),
+            6 | 7 => {
+                let body = payload(dice.below(most));
+                (vec![format!("content-length: {}", body.len())], body)
+            }
+            8 => (vec!["content-length: 5".to_owned()], "hello".to_owned()),
+            9 => (vec!["transfer-encoding: chunked".to_owned()], pick(dice, &CHUNKED[..CHUNKED_PLAIN]).to_owned()),
+            _ => (vec!["transfer-encoding: chunked".to_owned()], chunks(dice, most)),
         };
     }
     let length = |dice: &mut Dice| format!("{}: {}", pick(dice, LENGTH_NAMES), pick(dice, LENGTHS));
@@ -782,7 +921,7 @@ fn framing(dice: &mut Dice, wild: bool, bodied: bool) -> (Vec<String>, String) {
 /// follows HTTP sends, made of the first entries of each list. `bodied`: it may have a body.
 fn request(dice: &mut Dice, wild: bool, bodied: bool) -> Vec<u8> {
     let of = |dice: &mut Dice, all: &[&'static str], plain: usize| pick(dice, if wild { all } else { &all[..plain] });
-    let mut lines = vec![format!("{} {} {}", of(dice, METHODS, 11), of(dice, TARGETS, 13), of(dice, VERSIONS, 8))];
+    let mut lines = vec![format!("{} {} {}", of(dice, METHODS, 11), of(dice, TARGETS, 15), of(dice, VERSIONS, 8))];
     let (frames, body) = framing(dice, wild, bodied);
     let mut headers: Vec<String> = Vec::new();
     let asks = [of(dice, HOSTS, 8), of(dice, CONNECTIONS, 6), of(dice, ASKS, ASKS.len())];
@@ -825,6 +964,18 @@ fn request(dice: &mut Dice, wild: bool, bodied: bool) -> Vec<u8> {
     bytes
 }
 
+/// A request with a body, framed as the grammar has it, to a route that reads all of it.
+fn read_request(dice: &mut Dice) -> Vec<u8> {
+    let framed = loop {
+        let (lines, body) = framing(dice, false, true);
+        if let Some(line) = lines.into_iter().next() {
+            break format!("{line}\r\n\r\n{body}");
+        }
+    };
+    let (method, target) = (pick(dice, &["POST", "PUT"]), pick(dice, &["/read", "/seen", "/echo"]));
+    format!("{method} {target} HTTP/1.1\r\nhost: localhost\r\n{framed}").into_bytes()
+}
+
 /// `bytes` changed in one way a broken or hostile client changes a stream.
 fn mutate(dice: &mut Dice, mut bytes: Vec<u8>) -> Vec<u8> {
     const ODD: &[u8] = b"\r\n \t:\0\x80,;=/";
@@ -853,17 +1004,17 @@ fn mutate(dice: &mut Dice, mut bytes: Vec<u8>) -> Vec<u8> {
 
 /// The stream numbered `index` of the run with this seed: the fixed ones first.
 ///
-/// A stream that goes over a pipe that holds little has no request with a body. With one, hyper
-/// 1.12.0 goes wrong by itself, and a request with a body is hyper's on both servers, so the gate
-/// would compare hyper with hyper. Where a handler leaves a chunked body unread and its answer
-/// waits for the client in hyper's queue of buffers (it writes with `writev`), hyper finishes
-/// reading the body after the answer is whole and before it is sent, and takes the connection for
-/// idle then. It reads the next request with the answer before still queued, and from there: it
-/// does not write that request's answer until something else wakes the connection (it waits on
-/// nothing of its own: the last request this gate sends found one server stalled and the other,
-/// which had asked its pipe for more behind what it handed over, woken by it), and a next request
-/// it refuses has its `400` written ahead of the queued rest of the answer before (a debug build
-/// stops at hyper's own assertion there instead). `docs/design.md#choice-own-http1` has it.
+/// A stream that goes over a pipe that holds little has a body only in requests whose handler
+/// reads all of it ([`read_request`]), and is not changed at random if it has one. With a body
+/// left unread there, hyper 1.12.0 goes wrong by itself, so the gate would hold Corten's
+/// connection to a fault. Where a handler leaves a chunked body unread and its answer waits for
+/// the client in hyper's queue of buffers (it writes with `writev`), hyper finishes reading the
+/// body after the answer is whole and before it is sent, and takes the connection for idle then.
+/// It reads the next request with the answer before still queued, and from there: it does not
+/// write that request's answer until something else wakes the connection (it waits on nothing of
+/// its own), and a next request it refuses has its `400` written ahead of the queued rest of the
+/// answer before (a debug build stops at hyper's own assertion there instead).
+/// `docs/design.md#choice-own-http1` has it.
 fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     let mut fixed = index;
     for base in bases {
@@ -881,11 +1032,17 @@ fn stream(seed: u64, index: usize, bases: &[Vec<u8>]) -> Stream {
     // answer them; in the others each request is as likely to be made from the whole grammar.
     let plain = chance(&mut dice, 50);
     let pipe = if chance(&mut dice, 30) { [64, 512, 4096, 20_000][dice.below(4)] } else { WIDE };
+    let mut read = false;
     for _ in 0..1 + dice.below(4) {
         let wild = !plain && chance(&mut dice, 50);
-        bytes.extend(request(&mut dice, wild, pipe == WIDE));
+        if pipe != WIDE && !wild && chance(&mut dice, 30) {
+            bytes.extend(read_request(&mut dice));
+            read = true;
+        } else {
+            bytes.extend(request(&mut dice, wild, pipe == WIDE));
+        }
     }
-    if chance(&mut dice, 30) {
+    if chance(&mut dice, 30) && !read {
         bytes = mutate(&mut dice, bytes);
     }
     let mut writes = Vec::new();
@@ -937,9 +1094,12 @@ struct Found {
     answered: usize,
     /// Streams the last request was sent on, and those where it found the connection closed.
     asked: usize,
-    /// Streams whose outcomes differ by a class on the list, and the first of them.
+    /// Streams whose outcomes differ by a class on the list, those of them by the second class,
+    /// and the first of each.
     listed: usize,
+    bare_lfs: usize,
     first_listed: Option<String>,
+    first_bare_lf: Option<String>,
     failures: Vec<String>,
 }
 
@@ -956,14 +1116,17 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) 
     for index in which {
         let stream = stream(seed, index, &bases);
         let (hyper, own) = &servers[index % 2];
+        // Both servers are on this thread, and only Corten's connection counts here.
+        let bare_lfs = crate::h1::body::BARE_LFS.get();
         let (theirs, ours) = (exchange(hyper, &stream).await, exchange(own, &stream).await);
+        let bare_lf = crate::h1::body::BARE_LFS.get() != bare_lfs;
         found.streams += 1;
         found.asked += usize::from(!ours.after.0.is_empty());
         let mut sent = stream.bytes();
         if !(theirs.after.0.is_empty() && ours.after.0.is_empty()) {
             sent.extend_from_slice(last_request(index).as_bytes());
         }
-        let verdict = judge(&theirs, &ours, refused_head_reaches(&sent, &theirs, limits[index % 2]));
+        let verdict = judge(&theirs, &ours, refused_head_reaches(&sent, &theirs, limits[index % 2]), bare_lf);
         let describe = |what: &str| {
             let sent = String::from_utf8_lossy(&stream.bytes()).into_owned();
             let writes: Vec<usize> = stream.writes.iter().map(Vec::len).collect();
@@ -978,6 +1141,11 @@ async fn run(seed: u64, which: impl Iterator<Item = usize>, done: &AtomicUsize) 
             Verdict::Same => {
                 found.same += 1;
                 found.answered += usize::from(answers(&ours.before.0).iter().any(|answer| answer.apps));
+            }
+            Verdict::Listed(class) if class == BARE_LF => {
+                found.listed += 1;
+                found.bare_lfs += 1;
+                found.first_bare_lf.get_or_insert_with(|| describe(class));
             }
             Verdict::Listed(class) => {
                 found.listed += 1;
@@ -1032,20 +1200,22 @@ where
         all.answered += found.answered;
         all.asked += found.asked;
         all.listed += found.listed;
+        all.bare_lfs += found.bare_lfs;
         all.first_listed = all.first_listed.or(found.first_listed);
+        all.first_bare_lf = all.first_bare_lf.or(found.first_bare_lf);
         all.failures.extend(found.failures);
     }
     all
 }
 
 fn report(seed: u64, found: &Found) {
-    let Found { streams, same, answered, asked, listed, first_listed, failures } = found;
+    let Found { streams, same, answered, asked, listed, bare_lfs, first_listed, first_bare_lf, failures } = found;
     eprintln!(
-        "H1 FUZZ seed={seed} streams={streams} same={same} (the app answered in {answered}) listed={listed} failed={} last_request_sent={asked}",
+        "H1 FUZZ seed={seed} streams={streams} same={same} (the app answered in {answered}) listed={listed} (a bare LF among trailers in {bare_lfs}) failed={} last_request_sent={asked}",
         failures.len()
     );
-    if let Some(first) = first_listed {
-        eprintln!("the first listed difference: {first}");
+    for first in [first_listed, first_bare_lf].into_iter().flatten() {
+        eprintln!("the first listed difference of its class: {first}");
     }
     for failure in failures.iter().take(20) {
         eprintln!("{failure}");
@@ -1114,7 +1284,7 @@ fn the_judge_names_each_kind_of_difference() {
         closed_after: true,
     };
     let (one, two) = (app(200, "hi"), app(200, "hi") + &app(200, "hi"));
-    let short = judge;
+    let (short, bare_lf) = (|hyper: &Outcome, own: &Outcome, reaches: bool| judge(hyper, own, reaches, false), judge);
     let judge = |hyper: &Outcome, own: &Outcome| short(hyper, own, true);
     assert_eq!(judge(&outcome(&one, false, &one), &outcome(&one, false, &one)), Verdict::Same);
     let laxer = [
@@ -1156,6 +1326,29 @@ fn the_judge_names_each_kind_of_difference() {
     // Not an answer of the app's with either status.
     let (bad, large) = (app(400, ""), app(431, ""));
     assert!(matches!(judge(&outcome(&bad, true, ""), &outcome(&large, true, "")), Verdict::Unlisted(_)));
+    // The other class: Corten's connection refused a body for a bare LF among its trailers, said
+    // so in that request's answer or sent none, and closed, where hyper's read on behind the
+    // body and answered the request when the last one had come, or the one behind it too.
+    let failed = app(200, "failed");
+    let listed = [
+        (outcome("", false, &one), outcome(&failed, true, "")),
+        (outcome(&one, false, &two), outcome(&(one.clone() + &failed), true, "")),
+        (outcome(&one, false, &one), outcome(&one, true, "")),
+        (outcome(&one, false, &one), outcome(&(one.clone() + &app(400, "")), true, "")),
+    ];
+    for (hyper, own) in &listed {
+        assert_eq!(bare_lf(hyper, own, false, true), Verdict::Listed(BARE_LF), "{hyper:?} against {own:?}");
+        // Not of a stream in which no body was refused for one.
+        assert!(matches!(bare_lf(hyper, own, false, false), Verdict::Unlisted(_)), "{hyper:?} against {own:?}");
+    }
+    // Not where Corten's connection is the laxer, kept its connection, or answered a request
+    // before that one otherwise than hyper's; and the same is the same.
+    assert!(matches!(bare_lf(&outcome(&one, true, ""), &outcome(&two, true, ""), false, true), Verdict::Laxer(_)));
+    assert!(matches!(bare_lf(&outcome(&refusal, true, ""), &outcome(&one, true, ""), false, true), Verdict::Laxer(_)));
+    assert!(matches!(bare_lf(&outcome(&one, false, &one), &outcome(&failed, false, ""), false, true), Verdict::Unlisted(_)));
+    let other = outcome(&(app(404, "") + &failed), true, "");
+    assert!(matches!(bare_lf(&outcome(&one, false, &two), &other, false, true), Verdict::Unlisted(_)));
+    assert_eq!(bare_lf(&outcome(&one, true, ""), &outcome(&one, true, ""), false, true), Verdict::Same);
     // Not bytes that only read alike as text: what was sent is compared as it was sent.
     let odd = |byte: &[u8]| Outcome {
         before: Sent([one.as_bytes(), byte].concat()),
@@ -1259,20 +1452,22 @@ fn what_is_sent_behind_loses_its_dates_wherever_it_begins() {
 
 /// A connection whose handler left a body unread is kept by hyper only if one more read finishes
 /// the body, so in a stream longer than hyper's reads, where the body ends decides whether the
-/// request behind it is answered or the connection closed. hyper reads 8,192 bytes, then 16,384.
-/// Its own connection counts them from the stream's start; one Corten's connection handed over
-/// counts them from the request with the body, since the requests before it were answered without
-/// hyper ([`crate::h1::Rewound`] gives hyper's first read what one read of its own would hold from
-/// there). So where the body ends past hyper's second read, by no more than the requests before
-/// it are long, the request behind it is answered with the switch on and not with it off; and
-/// where the requests before it are longer than hyper's first read, hyper's own connection has
-/// read further by the time it meets the body (each read that fills doubles the next), and keeps
-/// a connection the handed one closes. That is the one difference in what a connection with an
-/// unread body does next, fixed here at its edges for the first and well inside it for the
-/// second: nothing is answered twice or out of order, and the bytes before the cut are the same.
+/// request behind it is answered or the connection closed. hyper reads 8,192 bytes, then 16,384,
+/// counted from the stream's start. Corten's connection reads a body its handler dropped as far
+/// as 24,576 bytes (as many as those two reads) past what it had read when the body was dropped:
+/// here the read that brought the request's head, its first, of 2,560 bytes. So where the body
+/// ends past hyper's second read, by no more than Corten's first read is long, the request
+/// behind it is answered with the switch on and not with it off; and where the requests before
+/// it are longer than hyper's first read, hyper's connection has read further by the time it
+/// meets the body (each read that fills doubles the next), and keeps a connection Corten's
+/// closes. That is the one difference in what a connection with an unread body of one piece does
+/// next, fixed here at its edges for the first and well inside it for the second: nothing is
+/// answered twice or out of order, and the bytes before the cut are the same.
 #[tokio::test(start_paused = true)]
 async fn a_long_unread_body_is_cut_where_hypers_reads_end() {
     const READS: usize = 8_192 + 16_384;
+    // Where Corten's connection gives up: as far past its first read.
+    const PASSED: usize = crate::h1::FIRST + READS;
     let get = "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
     let behind = "GET /json HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n";
     // A stream of `gets` requests, then one whose body ends `ends` bytes from where it begins,
@@ -1291,11 +1486,12 @@ async fn a_long_unread_body_is_cut_where_hypers_reads_end() {
     let cases = [
         (10, READS - before, true, true),
         (10, READS - before + 1, false, true),
-        (10, READS, false, true),
-        (10, READS + 1, false, false),
+        (10, PASSED - before, false, true),
+        (10, PASSED - before + 1, false, false),
         // The head of the request with the body is cut by hyper's first read, so its own
         // connection has made a second by then and its third is of 32 KiB.
-        (8_192 / get.len(), 30_000, true, false),
+        (8_192 / get.len(), 30_000, true, true),
+        (8_192 / get.len(), 40_000, true, false),
     ];
     for (gets, ends, hypers, owns) in cases {
         let stream = stream(gets, ends);
@@ -1616,21 +1812,25 @@ async fn the_answers_before_one_given_up_wait_for_their_client_on_both_connectio
 /// whether the requests come together or one every 10 ms: 24 for the answer of 697 bytes a
 /// build with the crate's default features writes, and 23 for the 720 bytes of a build with
 /// every feature. (`tests::h1` holds the bound for answers with no header of the app's, where
-/// the same 16 KiB is 213 handlers, and 219 for an answer with no body.)
+/// the same 16 KiB is 213 handlers, and 219 for an answer with no body.) A request with a body
+/// is no different: Corten's connection reads its body and runs its handler as it does for
+/// one without, so as many `POST`s are handled for such a client as `GET`s.
 #[tokio::test(start_paused = true)]
 async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection_and_not_on_hypers() {
     const PIPE: usize = 64;
-    const SENT: &[u8] = b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
-    for waits in [false, true] {
+    const GET: &[u8] = b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    const POST: &[u8] = b"POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: 5\r\n\r\nhello";
+    for (waits, sent) in [(false, GET), (true, GET), (false, POST), (true, POST)] {
         for together in [true, false] {
             let mut ahead = Vec::new();
             for own in [false, true] {
                 let ran = Arc::new(AtomicUsize::new(0));
                 let handler = {
                     let ran = ran.clone();
-                    move || {
+                    move |body: Bytes| {
                         let ran = ran.clone();
                         async move {
+                            assert_eq!(body.is_empty(), sent == GET, "the handler has its request's body");
                             ran.fetch_add(1, SeqCst);
                             if waits {
                                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -1639,11 +1839,12 @@ async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection
                         }
                     }
                 };
-                let connect = serve_app(App::new(Routes::from(Table::new().route("/", get(handler)))), own, 32 * 1024);
+                let table = Table::new().route("/", crate::router::any(handler));
+                let connect = serve_app(App::new(Routes::from(table)), own, 32 * 1024);
                 // How long one answer is, from a connection of its own.
                 let (mut alone, server) = tokio::io::duplex(1 << 20);
                 connect.send(server).expect("the server is listening");
-                alone.write_all(SENT).await.unwrap();
+                alone.write_all(sent).await.unwrap();
                 tokio::time::sleep(QUIET).await;
                 let mut answer = vec![0; 8 * 1024];
                 let each = alone.read(&mut answer).await.unwrap();
@@ -1654,7 +1855,7 @@ async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection
                 let (reads, mut writes) = tokio::io::split(client);
                 let writer = tokio::spawn(async move {
                     for _ in 0..400 {
-                        if writes.write_all(SENT).await.is_err() {
+                        if writes.write_all(sent).await.is_err() {
                             break;
                         }
                         if !together {
@@ -1666,8 +1867,10 @@ async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection
                 });
                 tokio::time::sleep(Duration::from_secs(8)).await;
                 let ran = ran.load(SeqCst);
-                let name =
-                    format!("own: {own}, the handler waits: {waits}, requests together: {together}, an answer of {each} bytes");
+                let name = format!(
+                    "own: {own}, a body: {}, the handler waits: {waits}, requests together: {together}, an answer of {each} bytes",
+                    sent == POST
+                );
                 if own {
                     // Every handler but the last began with less than 16 KiB of answers unsent
                     // beyond what the pipe took.
@@ -1682,7 +1885,7 @@ async fn handlers_run_ahead_of_a_client_that_reads_nothing_on_cortens_connection
             }
             // The same answer from both, of a length that is the build's: its features say which
             // headers an app sends.
-            let name = format!("the handler waits: {waits}, requests together: {together}");
+            let name = format!("a body: {}, the handler waits: {waits}, requests together: {together}", sent == POST);
             assert!(ahead[0].0 == ahead[1].0 && (600..=800).contains(&ahead[0].0), "{name}: {ahead:?}");
             assert!((21..=28).contains(&ahead[1].1), "{name}: {ahead:?}");
             println!(
