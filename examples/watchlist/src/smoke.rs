@@ -601,10 +601,12 @@ mod tests {
     use std::time::Duration;
 
     use corten::{
-        Local, Mode,
-        http::{HeaderName, header},
-        testing::{Answer, Call},
+        Local, Mode, Router,
+        http::{Body, Method, Request, header},
+        route::link,
     };
+    use futures_util::StreamExt;
+    use tower_service::Service;
 
     use super::url;
     use crate::{
@@ -648,7 +650,8 @@ mod tests {
         let marked = answers(&marks).await;
         assert_eq!(plain.len(), marked.len());
         for (plain, marked) in plain.iter().zip(&marked) {
-            let what = plain.what;
+            let what = &plain.what;
+            assert_eq!(what, &marked.what);
             assert_eq!(
                 (plain.status, &plain.headers),
                 (marked.status, &marked.headers),
@@ -670,24 +673,15 @@ mod tests {
     /// One answer as the test compares it: the request, the status, the headers in the order sent
     /// and the body.
     struct Seen {
-        what: &'static str,
+        what: String,
         status: u16,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     }
 
     impl Seen {
-        fn of(what: &'static str, answer: &Answer) -> Seen {
-            Seen {
-                what,
-                status: answer.status().as_u16(),
-                headers: answer
-                    .headers()
-                    .iter()
-                    .map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_string()))
-                    .collect(),
-                body: answer.bytes().to_vec(),
-            }
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.body).into_owned()
         }
     }
 
@@ -695,100 +689,163 @@ mod tests {
     /// test reads the body as it is.
     const ROUTED: &str = "identity";
     /// What a browser accepts on a request it sends itself (Firefox's), which the app tags and
-    /// compresses.
+    /// compresses: what reaches the app with a request a case's route lets through, marks and all.
     const BROWSER: &str = "gzip, deflate, br, zstd";
+    /// What a browser's `Accept` asks for on a page load (the test client's).
+    const LOAD: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+    /// What `fetch` sends as `Accept` when the runtime names none.
+    const FETCHED: &str = "*/*";
 
-    /// `call` with each of `marks` as a header, `coding` as its `Accept-Encoding`, and the visitor's
-    /// cookie, so no answer names a new browser.
-    fn marked<'c, K>(call: Call<'c, K>, marks: &[(&'static str, &str)], coding: &str) -> Call<'c, K> {
-        let call = call.cookie("visitor", VISITOR).header(header::ACCEPT_ENCODING, coding);
-        marks.iter().fold(call, |call, (name, value)| call.header(HeaderName::from_static(name), value))
+    /// The ways a browser and the runtime (`crates/corten/js/corten.js`) read a page the smoke's
+    /// marked cases open, each with the headers it sends, as the request is sent on the wire: a
+    /// browser's load (no `corten`, which no fetch wrapper sees), a navigation (`corten: nav`), a
+    /// hover prefetch (`corten: nav`, `purpose: prefetch`), the whole read of a page read again or
+    /// fetched after a write (`corten: page`) and a part's read again (`corten: action`, a `GET`).
+    /// The test client's `Mode` has no whole read, and its `.header(..)` refuses `corten`, so these
+    /// go to the app's router as they are.
+    const READS: [(&str, &[(&str, &str)]); 5] = [
+        ("load", &[("accept", LOAD)]),
+        ("navigation", &[("corten", "nav"), ("accept", FETCHED)]),
+        ("prefetch", &[("corten", "nav"), ("purpose", "prefetch"), ("accept", FETCHED)]),
+        ("whole read, corten: page", &[("corten", "page"), ("accept", FETCHED)]),
+        ("part read, corten: action", &[("corten", "action"), ("accept", FETCHED)]),
+    ];
+
+    /// The ways the runtime sends a `data-patch` form's write: as this runtime does (`Prefer:
+    /// corten-draws=whole`, so its answer is the whole page), and without it, as the write cases
+    /// send one from a runtime from before it.
+    const WRITES: [(&str, &[(&str, &str)]); 2] = [
+        ("write, corten: action", &[("corten", "action"), ("prefer", "corten-draws=whole"), ("accept", FETCHED)]),
+        ("write without Prefer, corten: action", &[("corten", "action"), ("accept", FETCHED)]),
+    ];
+
+    /// Sends `method` of `path` to `router` with `headers`, each of `marks`, `coding` as its
+    /// `Accept-Encoding` and the visitor's cookie, so no answer names a new browser, and `form` as
+    /// a form's body; reads the answer to its end.
+    async fn send(
+        router: &Router,
+        what: String,
+        (method, path): (Method, &str),
+        headers: &[(&str, &str)],
+        form: Option<&str>,
+        (marks, coding): (&[(&'static str, &str)], &str),
+    ) -> Seen {
+        let mut req = Request::builder().method(method).uri(path);
+        for (name, value) in headers.iter().chain(marks) {
+            req = req.header(*name, *value);
+        }
+        req = req.header(header::ACCEPT_ENCODING, coding).header(header::COOKIE, format!("visitor={VISITOR}"));
+        let body = match form {
+            Some(form) => {
+                req = req.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+                Body::from(form.to_owned())
+            }
+            None => Body::empty(),
+        };
+        let mut router = router.clone();
+        let Ok(res) = router.call(req.body(body).expect("a request")).await;
+        let status = res.status().as_u16();
+        let headers = res.headers().iter().map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_string())).collect();
+        let mut chunks = res.into_body().into_data_stream();
+        let mut body = Vec::new();
+        while let Some(chunk) = chunks.next().await {
+            body.extend_from_slice(&chunk.expect("the app's answer is read to its end"));
+        }
+        Seen { what, status, headers, body }
     }
 
     /// The requests the smoke's cases mark, in order, on an app of their own, each sent with
-    /// `marks`: the watchlist loaded; an alert written as the runtime sends it; the alerts page read
-    /// whole at its receipt, as a load and as a navigation, which the page-refresh cases mark
-    /// (`smoke-note`); the status line and list read in action mode; the page read whole at the
-    /// receipt's replaced address (`/alerts?saved=1&shown=1`), which the replaced-address case's
-    /// fetch wrapper marks (`smoke-note`); and what the write cases mark
-    /// (`smoke-start`, `smoke-styled`, on every fetch of their pages): the write to `/smoke/written`
-    /// and to `/smoke/written/again`, each as the runtime sends it (`Prefer: corten-draws=whole`,
-    /// so its answer is the whole page), `/smoke/written` read by a navigation, and
-    /// `/smoke/written/again` and `/smoke/quoted` read whole and by a navigation; a screen's data
-    /// and its revalidation (`If-None-Match`); and the layout's stylesheet under `/assets/`.
-    /// A runtime's whole read (`corten: page`) is sent as a document read, the nearest request the
-    /// test client sends. The ones a case's route answers are fetched as it fetches them
-    /// ([`ROUTED`]), the others as a browser asks ([`BROWSER`]).
+    /// `marks` and, where a case's route can fetch it or let it through, both as that route fetches
+    /// one ([`ROUTED`]) and as the browser sent it ([`BROWSER`]): the watchlist loaded; an alert
+    /// written; then each page a marked case reads, in every way of [`READS`]: the alerts page at
+    /// its receipt and at the receipt's replaced address (`/alerts?saved=1&shown=1`), whose fetches
+    /// to `/alerts` the page-refresh cases' wrapper marks (`smoke-note`), and `/smoke/written`,
+    /// `/smoke/written/again` and `/smoke/quoted`, every fetch of whose pages the write cases'
+    /// wrapper marks (`smoke-start`, `smoke-styled`); the writes to `/smoke/written` and
+    /// `/smoke/written/again` in every way of [`WRITES`]; a screen's data and its revalidation
+    /// (`If-None-Match`); and the layout's stylesheet under `/assets/`, the last two as a browser
+    /// asks.
     async fn answers(marks: &[(&'static str, &str)]) -> Vec<Seen> {
         // Writes that take an hour to land, so every read here comes before the write lands.
-        let app = crate::app::app_with(Market::new(), AlertStore::new(Duration::from_secs(3600)))
+        let router = crate::app::app_with(Market::new(), AlertStore::new(Duration::from_secs(3600)))
             .area(|area| url::area(area).components(super::COMPONENTS))
-            .test();
+            .router();
         let mut seen = Vec::new();
-        let home = marked(app.get(&Home::default()), marks, ROUTED).await;
-        seen.push(Seen::of("GET /", &home));
-        let write = marked(app.post(&Alerts { saved: None }), marks, ROUTED)
-            .field(AlertInput::FIELDS.id, "ACME")
-            .field(AlertInput::FIELDS.above, "150")
-            .mode(Mode::Action)
-            .await;
+        let home = link(&Home::default());
+        let home = send(&router, "GET / (load)".into(), (Method::GET, &home), READS[0].1, None, (marks, ROUTED)).await;
+        let alert = format!("{}=ACME&{}=150", AlertInput::FIELDS.id, AlertInput::FIELDS.above);
+        let alerts = link(&Alerts { saved: None });
+        let write =
+            send(&router, "POST /alerts (write)".into(), (Method::POST, &alerts), WRITES[0].1, Some(&alert), (marks, ROUTED))
+                .await;
         assert!(write.text().contains(r#"data-from="/alerts?saved=1""#), "{}", write.text());
-        seen.push(Seen::of("POST /alerts (action)", &write));
-        let receipt = Alerts { saved: Some(1) };
-        for (what, mode) in [
-            ("GET /alerts?saved=1 (load)", Mode::Document),
-            ("GET /alerts?saved=1 (navigation)", Mode::Navigation),
-            ("GET /alerts?saved=1 (action)", Mode::Action),
-        ] {
-            seen.push(Seen::of(what, &marked(app.get(&receipt), marks, ROUTED).mode(mode).await));
-        }
-        // The receipt's address with `shown` set, as the replaced-address case puts it in place and
-        // its fetch wrapper marks the page's whole read of it (`smoke-note`).
-        let replaced = Local::parse("/alerts?saved=1&shown=1").unwrap();
-        let read = marked(app.get(&replaced), marks, ROUTED).mode(Mode::Document).await;
-        assert_eq!(read.status(), 200, "{}", read.text());
-        seen.push(Seen::of("GET /alerts?saved=1&shown=1 (whole)", &read));
-        for (what, write) in [
-            ("POST /smoke/written (action)", marked(app.post(&url::Written), marks, ROUTED).mode(Mode::Action).await),
-            ("POST /smoke/written/again (action)", marked(app.post(&url::WrittenAgain), marks, ROUTED).mode(Mode::Action).await),
-        ] {
-            assert!(
-                write.text().contains("</header>"),
-                "{what}: the whole page, as drawn for Prefer: corten-draws=whole: {}",
-                write.text()
-            );
-            seen.push(Seen::of(what, &write));
-        }
-        seen.push(Seen::of(
-            "GET /smoke/written (navigation)",
-            &marked(app.get(&url::Written), marks, ROUTED).mode(Mode::Navigation).await,
-        ));
-        for (what, mode) in
-            [("GET /smoke/written/again (whole)", Mode::Document), ("GET /smoke/written/again (navigation)", Mode::Navigation)]
-        {
-            seen.push(Seen::of(what, &marked(app.get(&url::WrittenAgain), marks, ROUTED).mode(mode).await));
-        }
-        for (what, mode) in [("GET /smoke/quoted (whole)", Mode::Document), ("GET /smoke/quoted (navigation)", Mode::Navigation)]
-        {
-            seen.push(Seen::of(what, &marked(app.get(&url::Quoted), marks, ROUTED).mode(mode).await));
-        }
-        let reading = url::Reading { missing: None, moved: None };
-        let data = marked(app.get(&reading), marks, BROWSER).mode(Mode::Data).await;
-        let tag = data.headers()[header::ETAG].to_str().unwrap().to_string();
-        seen.push(Seen::of("GET /smoke/reading (data)", &data));
-        let kept = marked(app.get(&reading), marks, BROWSER).mode(Mode::Data).header(header::IF_NONE_MATCH, &tag).await;
-        assert_eq!(kept.status(), 304);
-        seen.push(Seen::of("GET /smoke/reading (data, If-None-Match)", &kept));
-        let style = home
+        let stylesheet = home
             .text()
             .split(r#"href="/assets/"#)
             .nth(1)
             .and_then(|rest| rest.split('"').next())
+            .map(|name| format!("/assets/{name}"))
             .expect("the layout links a stylesheet");
-        let style = Local::parse(&format!("/assets/{style}")).unwrap();
-        let asset = marked(app.get(&style), marks, BROWSER).await;
-        assert_eq!(asset.status(), 200);
-        seen.push(Seen::of("GET /assets/ (stylesheet)", &asset));
+        seen.extend([home, write]);
+        let receipt = link(&Alerts { saved: Some(1) });
+        // The receipt's address with `shown` set, as the replaced-address case puts it in place.
+        let replaced = link(&Local::parse("/alerts?saved=1&shown=1").unwrap());
+        let pages = [receipt, replaced, link(&url::Written), link(&url::WrittenAgain), link(&url::Quoted)];
+        for coding in [ROUTED, BROWSER] {
+            for page in &pages {
+                for (way, headers) in READS {
+                    let what = format!("GET {page} ({way}; accept-encoding: {coding})");
+                    let read = send(&router, what, (Method::GET, page), headers, None, (marks, coding)).await;
+                    // A read the runtime sent is answered in its mode: a navigation's `<main>` to swap in
+                    // (`corten-page`), a whole read's page as a load's (none).
+                    let swapped = read.headers.iter().any(|(name, _)| name == "corten-page");
+                    match way {
+                        "navigation" | "prefetch" => assert!(read.status == 200 && swapped, "{}: {:?}", read.what, read.headers),
+                        "whole read, corten: page" => {
+                            assert!(read.status == 200 && !swapped, "{}: {:?}", read.what, read.headers)
+                        }
+                        _ => {}
+                    }
+                    seen.push(read);
+                }
+            }
+            for page in [link(&url::Written), link(&url::WrittenAgain)] {
+                for (way, headers) in WRITES {
+                    let what = format!("POST {page} ({way}; accept-encoding: {coding})");
+                    let write = send(&router, what, (Method::POST, &page), headers, Some(""), (marks, coding)).await;
+                    assert_eq!(write.status, 200, "{}: {}", write.what, write.text());
+                    // The whole page for `Prefer: corten-draws=whole`, `<main>` alone without it, read
+                    // where the body is not compressed.
+                    let whole = headers.iter().any(|(name, _)| *name == "prefer");
+                    if coding == ROUTED {
+                        assert_eq!(write.text().contains("</header>"), whole, "{}: {}", write.what, write.text());
+                    }
+                    seen.push(write);
+                }
+            }
+        }
+        let reading = link(&url::Reading { missing: None, moved: None });
+        let json = [("accept", "application/json")];
+        let data =
+            send(&router, "GET /smoke/reading (data)".into(), (Method::GET, &reading), &json, None, (marks, BROWSER)).await;
+        let tag = data.headers.iter().find(|(name, _)| name == "etag").expect("the screen's data is tagged").1.clone();
+        let revalidate = [json[0], ("if-none-match", tag.as_str())];
+        let kept = send(
+            &router,
+            "GET /smoke/reading (data, If-None-Match)".into(),
+            (Method::GET, &reading),
+            &revalidate,
+            None,
+            (marks, BROWSER),
+        )
+        .await;
+        assert_eq!(kept.status, 304);
+        seen.extend([data, kept]);
+        let style = [("accept", "text/css,*/*;q=0.1")];
+        let asset =
+            send(&router, "GET /assets/ (stylesheet)".into(), (Method::GET, &stylesheet), &style, None, (marks, BROWSER)).await;
+        assert_eq!(asset.status, 200);
+        seen.push(asset);
         seen
     }
 }

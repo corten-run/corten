@@ -278,16 +278,20 @@ when Playwright's pinned WebKit includes the upstream fix.
 A watchlist case that marks a request for its own route to read names the header `smoke-*`
 (`smoke-note`, `smoke-start` and the rest). Marks are test-only request headers. They may reach
 the watchlist server, which ignores them: `the_smokes_request_marks_change_no_answer` in
-`examples/watchlist/src/smoke.rs` sends each kind of request the cases mark (the watchlist loaded,
-an alert written in action mode, the alerts page read whole at a receipt as a load, a navigation
-and in action mode, the alerts page read whole at the receipt's replaced address
-(`/alerts?saved=1&shown=1`), the writes to `/smoke/written` and `/smoke/written/again` in action mode with
-`Prefer: corten-draws=whole`, `/smoke/written` read by a navigation, `/smoke/written/again` and
-`/smoke/quoted` each read whole and by a navigation, a screen's data and its revalidation, and a
-stylesheet under `/assets/`) with and without every mark (`smoke-note`, `smoke-start`,
-`smoke-styled`) and one the smoke does not use (`smoke-canary`), and requires the same status,
-headers (`Vary` and `Cache-Control` among them) and body. The test client sends a runtime's whole
-read (`corten: page`) as a document read, the nearest request it has. So a case ties
+`examples/watchlist/src/smoke.rs` sends each kind of request the cases mark to the app's router as
+it goes on the wire (the test client has no `corten: page` read and does not let a test set
+`corten`): the watchlist loaded; an alert written in action mode; each page a marked case reads
+(the alerts page at a receipt and at the receipt's replaced address, `/alerts?saved=1&shown=1`,
+whose fetches the page-refresh cases' wrapper marks, and `/smoke/written`, `/smoke/written/again`
+and `/smoke/quoted`, every fetch of whose pages the write cases' wrapper marks) loaded, and read by
+a navigation (`corten: nav`), a hover prefetch, a whole read (`corten: page`) and a part's read
+(`corten: action`); the writes to `/smoke/written` and `/smoke/written/again` in action mode, with
+and without `Prefer: corten-draws=whole`; each of these both uncompressed, as a case's route fetches
+it, and with the browser's `Accept-Encoding`, as a request a route lets through reaches the server;
+a screen's data and its revalidation; and a stylesheet under `/assets/`. It sends each with and
+without every mark (`smoke-note`, `smoke-start`, `smoke-styled`) and one the smoke does not use
+(`smoke-canary`), and requires the same status, headers (`Vary` and `Cache-Control` among them)
+and body, and each navigation answered as one (`corten-page`) and each whole read as a page. So a case ties
 its claim to its own route's answer to its own request, not to a mark not reaching the server. The
 diagnostic replay of the requests still loading sends no `smoke-*` header, since a replay need not
 carry them.
@@ -609,7 +613,10 @@ noted the moment it is drawn, is one that does not ask again, read once the firs
 prefetch aside) in the log after the one whose answer drew it, as the log stands when the check
 looks, once 2.2 s have passed by the smoke's monotonic clock since the check read that note, so at
 least 2.2 s since the draw; no wall clock of the page's or the smoke's is compared. A read sent
-after the 2.2 s that is in the log by then counts too. Its route is
+after the 2.2 s that is in the log by then counts too. The check that reading the part keeps the
+document, its history entry and the form counts only once one of the case's answers to a part read
+was drawn, by its mark as the page noted it drawing it (the first answer that asked again, or else
+the first `Saved.`): a page that drew no part answer kept them by doing nothing, and fails it. Its route is
 set and removed each within five seconds, and its route, request listener and init script on the
 shared page are removed, and its observer in the page disconnected, however it ends, adding and
 removing the init script each bounded to five seconds; the init script then does nothing in the
@@ -737,7 +744,20 @@ form's alert id and heard by a listener armed before the press and removed as th
 arming the page runs only after that removal doing nothing, not the time it was armed nor a click
 elsewhere), however late the arming or the click returns, with the
 list after the removal the list before it without that alert, in order, and the held slow part's busy, done and
-failed marks, read once each wait has come or run out. The check that a read the server
+failed marks, read once each wait has come or run out. The check that navigating away stops a
+patch's reads holds the first part read after the write's press, taken within five seconds of the
+press by the time the route heard it, and fetches and holds its answer until the page has left for
+News. That answer must ask again, since a terminal one (`Saved.`, no tag) ends the reads whether or
+not the page left: it is the server's own while that says `Saving...`, or, once the write has
+landed, the stand-in's answer as the server's while it lands (`Saving...` and a tag asking again
+from the read's own address after one second), and the route parses it in the page as the runtime
+parses a patch before it lets it go, within 15 seconds of the read; one that does not ask again is
+never sent, and fails the check. Once News is drawn, an observer in the page notes any element of the
+held answer (its status line, marked) entering it, and the answer is let go: the browser must finish
+loading that exact request with it (its `requestfinished`, with the answer's own `smoke-held`
+header) within five seconds of the release, by the time the check heard it, and then no part read
+may follow the held one in the log, as it stands 2.2 s later, nor the held answer ever enter the
+News page. The check that a read the server
 fails stops the reads takes as the press's read the first part read the check hears after the
 alert's own POST, itself heard from just before the check asks for the key press on, so a part read
 sent while the check fills or focuses the form is not taken for it. That read must be of the receipt

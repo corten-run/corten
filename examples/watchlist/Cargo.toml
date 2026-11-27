@@ -17,3 +17,6 @@ tokio-tungstenite = { version = "0.30", default-features = false }
 # No new crate: tokio's paused clock for the socket's idle test. Without it the test builds only
 # in the workspace, where corten's dev-dependencies turn the feature on, and not with -p watchlist.
 tokio = { version = "1", features = ["test-util"] }
+# No new crate either: the service trait `corten::Router` implements, for a test that sends a
+# request the test client cannot (the runtime's `corten: page` read).
+tower-service = "0.3"
