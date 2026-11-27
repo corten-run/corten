@@ -12,7 +12,6 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { campaignRounds, jsonTimingInvocation } from "../registry.mjs";
 import { beginLifetime, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
 import { executableIdentity } from "./participant-executables.mjs";
 import { supervise } from "./process.mjs";
@@ -112,6 +111,7 @@ for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog execut
 for (const replace of [false, true]) test(`JSON API timing unpinned bookends: ${replace ? "same-name exec" : "unchanged"}`, {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {
+  const { campaignRounds, jsonTimingInvocation } = await import("../registry.mjs");
   const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-json-exec-")), directory = join(temporary, "command-host");
   const old = join(temporary, "same"), next = join(temporary, "next", "same");
   const campaign = `${unit[1]}-000000000000000a`, round = campaignRounds(unit[1])["json-api"], command = 8;
