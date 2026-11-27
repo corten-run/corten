@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { bindExecution, captureSources, recipes, reviewSubject, validateArtifactPaths, validateBinding } from "./contract.mjs";
+import { bindExecution, captureSources, nativeExecution, recipes, reviewSubject, validateArtifactPaths, validateBinding } from "./contract.mjs";
 import { contractSha256, definition, groupNames, selectedApps } from "../registry.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { invocation } from "../run.mjs";
@@ -90,6 +90,9 @@ test("Hardening binds the native app source closure without widening other group
     if (remove) bad.sources.files.splice(index, 1);
     else bad.sources.files[index].sha256 = "0".repeat(64);
     bad.sources.sha256 = bad.sourceSha256 = deploymentSha256(bad.sources.files);
+    const { schema, selection, sourceSha256, latestStable, campaignMode, host } = bad;
+    bad.subjectSha256 = deploymentSha256({ schema, request, selection, sourceSha256, latestStable, campaignMode, host });
+    bad.execution = nativeExecution(request.group, request.round, request.recipe, bad.subjectSha256);
     assert.throws(() => validateBinding(reseal(bad)), /binding differs/);
   }
 });
