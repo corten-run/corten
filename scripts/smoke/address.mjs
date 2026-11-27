@@ -679,14 +679,23 @@ export async function dataAddress(browser) {
   // the runtime's, and the entry Week was pressed on keeps its own. One that clears the entry's
   // state inside the replace (`clear`), and one that puts a state in the entry before the replace
   // commits (`precommit`), have put a state in it since the runtime read it: the runtime puts the
-  // older one back over neither, and the entry the replace makes keeps the precommit one.
-  for (const how of /** @type {const} */ (["push", "clear", "precommit"])) {
+  // older one back over neither, and the entry the replace makes keeps the precommit one. A
+  // `currententrychange` listener put on before the runtime's that puts a state in the entry the
+  // replace made (`early`) has too, though the runtime hears the replace after that write. A page's
+  // own `getState` that pushes an entry as the runtime reads the precommit state from the entry the
+  // replace took the place of (`pushread`) leaves the pushed entry the screen's: the runtime puts
+  // that state in neither entry.
+  for (const how of /** @type {const} */ (["push", "clear", "precommit", "early", "pushread"])) {
     const name =
       how === "push"
         ? "a marked patch whose replacement a navigate listener cancels for a push to the same address puts the entry's state on neither entry, and the entry it was pressed on keeps it"
         : how === "clear"
           ? "a marked patch whose replace a currententrychange listener clears the entry's state in keeps that cleared state"
-          : "a marked patch whose replacement a navigate listener puts a state in the entry for, before it commits, keeps that state in the entry it makes";
+          : how === "precommit"
+            ? "a marked patch whose replacement a navigate listener puts a state in the entry for, before it commits, keeps that state in the entry it makes"
+            : how === "early"
+              ? "a marked patch whose replace a currententrychange listener put on before the runtime's puts a state in keeps that state"
+              : "a marked patch whose read of a navigate listener's precommit state pushes another entry puts that state in neither entry, and the pushed entry keeps its own";
     const wrote = await stateWrites(browser, how, errors);
     if (!wrote) skip(name, "no Navigation API");
     else if (typeof wrote.wrote === "string") skip(name, `updateCurrentEntry refuses an undefined state (${wrote.wrote})`);
@@ -698,7 +707,9 @@ export async function dataAddress(browser) {
             ? wrote.added === 1 && wrote.navState === "null" && wrote.before === '{"draft":"unsaved"}'
             : how === "clear"
               ? wrote.added === 0 && wrote.navState === "null"
-              : wrote.added === 0 && wrote.navState === '"listener"'),
+              : how === "pushread"
+                ? wrote.pushed === true && wrote.added === 1 && wrote.navState === '"pushed"' && wrote.made === "null"
+                : wrote.added === 0 && wrote.navState === '"listener"'),
         JSON.stringify(wrote),
       );
   }
@@ -3400,14 +3411,28 @@ async function pressOnSameBack(page) {
  * page that, as the runtime puts Week's address in, does as `how` says: "push" cancels the
  * runtime's replace (`navigate`) and pushes an entry to the same address in its place; "clear"
  * clears the state of the entry the replace made (`currententrychange`, `updateCurrentEntry`);
- * "precommit" puts a state in the entry before the replace commits (`navigate`). Says whether the
- * listener ran, whether Week's answer drew, where the page is, the entries added, and the states
- * of the screen's entry and of the entry Week was pressed on. Null without the Navigation API.
- * @param {import("@playwright/test").Browser} browser @param {"push" | "clear" | "precommit"} how @param {string[]} errors
+ * "precommit" puts a state in the entry before the replace commits (`navigate`); "early" puts a
+ * state in the entry the replace made from a `currententrychange` listener put on before the
+ * runtime's (by a script in the page before it); "pushread" is "precommit" with the entries'
+ * `getState` wrapped so that a read of the replaced entry, once the screen's is another, pushes an
+ * entry at the same address with a state of its own. Says whether the listener ran (and the entry
+ * was pushed), whether Week's answer drew, where the page is, the entries added, and the states of
+ * the screen's entry, of the entry before it and of the entry Week was pressed on. Null without the
+ * Navigation API.
+ * @param {import("@playwright/test").Browser} browser @param {"push" | "clear" | "precommit" | "early" | "pushread"} how @param {string[]} errors
  */
 async function stateWrites(browser, how, errors) {
   const page = await browser.newPage();
   page.on("pageerror", (e) => errors.push(`state writes ${how}: ${e.message}`));
+  if (how === "early")
+    await page.addInitScript(() => {
+      const w = /** @type {any} */ (window);
+      w.navigation?.addEventListener("currententrychange", (/** @type {any} */ event) => {
+        if (w.__wrote !== false || event.navigationType !== "replace" || new URL(location.href).search !== "?scope=week") return;
+        w.__wrote = true;
+        w.navigation.updateCurrentEntry({ state: "listener" });
+      });
+    });
   await page.goto(`${base}/smoke/address`);
   const first = await page.evaluate((how) => {
     const w = /** @type {any} */ (window);
@@ -3416,6 +3441,19 @@ async function stateWrites(browser, how, errors) {
     nav.updateCurrentEntry({ state: { draft: "unsaved" } });
     Object.assign(window, { __wrote: false, __pressedOn: nav.currentEntry });
     const week = (/** @type {string} */ url) => new URL(url).search === "?scope=week";
+    if (how === "pushread") {
+      const proto = Object.getPrototypeOf(nav.currentEntry);
+      const getState = proto.getState;
+      proto.getState = function () {
+        if (w.__wrote === true && w.__pushed === undefined && this === w.__pressedOn && nav.currentEntry !== this) {
+          history.pushState(null, "", location.href);
+          nav.updateCurrentEntry({ state: "pushed" });
+          w.__pushed = nav.currentEntry !== this;
+        }
+        return getState.call(this);
+      };
+    }
+    if (how === "early") return { length: history.length };
     if (how === "clear")
       nav.addEventListener("currententrychange", (/** @type {any} */ event) => {
         if (w.__wrote || event.navigationType !== "replace" || !week(location.href)) return;
@@ -3431,7 +3469,7 @@ async function stateWrites(browser, how, errors) {
       nav.addEventListener("navigate", (/** @type {any} */ event) => {
         if (w.__wrote || event.navigationType !== "replace" || !week(event.destination.url)) return;
         w.__wrote = true;
-        if (how === "precommit") return void nav.updateCurrentEntry({ state: "listener" });
+        if (how !== "push") return void nav.updateCurrentEntry({ state: "listener" });
         event.preventDefault();
         history.pushState(null, "", event.destination.url);
       });
@@ -3456,7 +3494,9 @@ async function stateWrites(browser, how, errors) {
       wrote: w.__wrote,
       at: location.search,
       added: history.length - first.length,
+      pushed: w.__pushed,
       navState: JSON.stringify(w.navigation.currentEntry.getState() ?? null),
+      made: JSON.stringify(w.navigation.entries()[w.navigation.currentEntry.index - 1]?.getState() ?? null),
       before: JSON.stringify(w.__pressedOn.getState() ?? null),
     };
   }, first);

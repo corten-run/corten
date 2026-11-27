@@ -11653,10 +11653,16 @@ rules something out.
     entry before the replace committed is newer than the one the runtime read, and the runtime
     puts that one in instead, read from the entry the replace took the place of (whose
     `getState()` still answers it in all three engines). Each is a `currententrychange` with a
-    null `navigationType`, which the runtime counts, and how many came since the entry last
-    changed tells the two apart. It reads the state before it checks the entry, the page and
-    the navigation on its way (below), so whatever a page's own `getState` does as it is read (a
-    push of another entry, a replace) is checked as anything else is. The limit is a
+    null `navigationType`, which the runtime counts on the entry on screen as it fires (the
+    `navigate` listener's on the entry the replace took the place of, a write in the entry the
+    replace made on that one), so a listener the browser tells before the runtime's, which hears
+    the replace only after that listener's write, is told apart as well as one told after it. It
+    reads the state before it checks the entry, the page and the navigation on its way (below), so
+    whatever a page's own `getState` does as it is read (a push of another entry, a replace) is
+    checked as anything else is. Reading the `navigate` listener's state back from the replaced
+    entry runs a page's own `getState` again, after those checks: the runtime puts it in only if
+    the entry the replace made is still the screen's and still holds no state of the page's after
+    that read, so a push, a replace or a write there leaves both entries as the page left them. The limit is a
     redirect (a 3xx that is not Corten's own): the runtime puts in the URL the redirect reached
     with no `#fragment`. The browser's own GET reaches the fragment the redirect's `Location`
     names, else the action's, and `fetch` shows neither (`Response.url` never carries one), so
@@ -12048,13 +12054,13 @@ rules something out.
       runtime makes that replace itself, in the task the press was made in, so it is the one
       replace it can tell is its own without tracking navigations.
 
-    What it costs: the runtime every page loads is 2,587 bytes larger raw (46,502 to 49,089), 1,062
-    with gzip (16,718 to 17,780) and 938 with brotli (15,106 to 16,044), paid once a release by
-    every user (185, 67 and 61 larger than the build before this one, which, without the Navigation
-    API, took a press a page's `popstate` listener heard before the runtime's made as Back went
-    between two entries of one address as one made before that Back; left no state in the entry
-    a replace made when a `navigate` listener had put one in before it committed; and sent a
-    press of a form without the mark that a navigation's aborted submit would have taken). A
+    What it costs: the runtime every page loads is 2,685 bytes larger raw (46,502 to 49,187), 1,088
+    with gzip (16,718 to 17,806) and 967 with brotli (15,106 to 16,073), paid once a release by
+    every user (98, 26 and 29 larger than the build before this one, which counted the entry's
+    state writes by the order the runtime heard them, so a state a `currententrychange` listener
+    told before the runtime's put in the entry a replace made was overwritten by the older one,
+    and read a `navigate` listener's state back after its checks, so a page's own `getState`
+    that pushed an entry as it was read had that state put in the pushed entry). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12068,15 +12074,16 @@ rules something out.
     it holds one, sets it again after, and reads the address back. A patch tracks whether it placed every element as it walks them, without a separate scan;
     each `currententrychange` compares the key with the last seen and adds one to a count of
     changes, keeping its `navigationType`, or, for a change of the state alone, to a count of
-    state writes and of those since the last change; without the Navigation API each trusted
+    state writes kept by the entry on screen in a weak map; without the Navigation API each trusted
     `popstate` compares the address with the last seen and adds one to the count of moves, once (a
     flag a timer clears says a press in the same task counted it first), and where the address did
     not change looks through the kept presses (one a form id) for one made since the event's time,
     which a marked press keeps; and a visit the runtime begins adds one to a counter. A patch or
     page drawn for a marked answer notes it as it draws, a press made then keeps that note, and
     the answer's replace compares the count of changes, the last change's type and the entry's
-    key across its call, and the counts of state writes since it read the state and since the
-    entry changed, keeps the entry it replaced to read a newer state from, and keeps the
+    key across its call, the count of state writes in the entry it replaced since it read the
+    state and in the entry it made, keeps the entry it replaced to read a newer state from and
+    compares the entry on screen with the one it made after that read, and keeps the
     entry before and after it, in a plain object that a weak map
     holds by the answer and the press keeps, so a press of its draw compares those two readings as
     well as its own and keeps no answer or earlier press once they settle; that object is made only
@@ -12099,7 +12106,11 @@ rules something out.
     `updateCurrentEntry` sets it on the same entry, keeping its key and `id`, firing
     `currententrychange` with a null `navigationType` and no `navigate`, in the smoke's checks in
     each engine, from a `navigate` listener before the replace commits too, and refusing an
-    undefined state with a `TypeError`, in the smoke's checks in each engine; a `navigate`
+    undefined state with a `TypeError`, in the smoke's checks in each engine; that event's
+    `navigation.currentEntry` is the entry the state was put in, the same object as every other
+    read of that entry, and a `currententrychange` listener put on before the runtime's that puts
+    a state in the entry a replace made has the runtime hear that write before the replace, in the
+    smoke's checks in each engine; a `navigate`
     listener that cancels a `replaceState` can push an entry to the same address in its place,
     whose `currententrychange` is a push with another key, in the smoke's checks in each engine;
     without the Navigation API, Back between two entries of one address and a null state fires
@@ -12175,6 +12186,11 @@ rules something out.
     which the build before this one fails in all three), and a press's time against the
     `popstate` event's `timeStamp` and the order of a window's capturing and bubbling listeners in
     the same three, 40 and 20 times each;
+    2026-11-26, a state a `currententrychange` listener put on before the runtime's puts in the
+    entry a marked answer's replace made, and a page's own `getState` that pushes an entry as the
+    runtime reads a `navigate` listener's state back from the replaced entry, in Playwright
+    1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, which the build before
+    this one fails in all three);
     2026-11-26, a `navigate` listener's push to the same address in place of a marked answer's
     replace, a state a `navigate` listener puts in the entry before that replace commits, Back
     between two entries of one address without the Navigation API, a whole page that waits for a

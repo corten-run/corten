@@ -2679,17 +2679,24 @@ const look = () => {
  * {@link changed}.
  */
 let changes = 0;
-/** How many times the Navigation API said only the entry's state changed ({@link changes}). */
-let writes = 0;
 /**
- * How many of those came since the entry last changed: none means each was put in the entry before
- * it, as a `navigate` listener puts a state in the entry a replace is about to take the place of.
+ * How many times the Navigation API said only an entry's state changed ({@link changes}), by the
+ * entry it was put in: the one on screen as the browser says so, which a `navigate` listener's
+ * write before a replace commits leaves the replaced entry's, and a `currententrychange` listener's
+ * as the replace runs puts on the entry it made, whichever listener the browser told first.
+ * @type {WeakMap<NavigationHistoryEntry, number>}
  */
-let late = 0;
+const writes = new WeakMap();
+/** How many states were put in `at` ({@link writes}). @param {NavigationHistoryEntry | null | undefined} at */
+const written = (at) => (at && writes.get(at)) || 0;
 /** The `navigationType` of the last change {@link changes} counted. @type {NavigationType | undefined} */
 let changed;
 navigation
-  ? navigation.addEventListener("currententrychange", (event) => (event.navigationType === null ? ((writes += 1), (late += 1)) : ((changes += 1), (changed = event.navigationType), (late = 0)), look()))
+  ? navigation.addEventListener("currententrychange", (event) => {
+      const at = navigation.currentEntry;
+      event.navigationType === null ? at && writes.set(at, written(at) + 1) : ((changes += 1), (changed = event.navigationType));
+      look();
+    })
   : // Every `popstate` the browser fires is a move, its address changed or not (Back between two
     // entries of one address, each with a null state), counted once: not again where its change of
     // address was counted in this task, as a press in a listener heard before the runtime's counts it.
@@ -3691,22 +3698,22 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // drops, put back once the address is in. One the runtime cannot read leaves the address.
           // It is read before everything above is checked, so what runs as it is read (a page's
           // own `getState`, which can move or replace the entry) is checked too. Each state put in
-          // the entry from then on is counted ({@link writes}, {@link late}), and is the page's, newer,
+          // an entry from then on is counted on that entry ({@link writes}), and is the page's, newer,
           // which is the one kept.
           /** @type {unknown} */
           let state;
+          const old = navigation?.currentEntry;
           try {
-            state = navigation?.currentEntry?.getState();
+            state = old?.getState();
           } catch {
             return;
           }
-          const wrote = writes;
+          const wrote = written(old);
           const transition = navigation?.transition;
           if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
           const before = exact();
           const seen = changes;
           const key = where();
-          const old = navigation?.currentEntry;
           try {
             history.replaceState(history.state, "", to);
           } catch {
@@ -3734,10 +3741,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // listener has put a state in the entry this replace made (one cleared included), which is
           // newer. One a listener put in the entry before this replace took its place (a `navigate`
           // listener's, as it commits) is newer than the one the runtime read, and goes in instead.
-          if (alone && !late)
+          // Reading it runs a page's own `getState`: only if the entry this replace made is still
+          // the screen's and still holds no state of the page's after that does it go in.
+          const made = navigation?.currentEntry;
+          if (alone && !written(made))
             try {
-              const put = writes === wrote ? state : old?.getState();
-              if (put !== undefined) navigation?.updateCurrentEntry({ state: put });
+              const put = written(old) === wrote ? state : old?.getState();
+              if (put !== undefined && navigation?.currentEntry === made && !written(made)) navigation?.updateCurrentEntry({ state: put });
             } catch {
               // A document no longer fully active, or a state the runtime cannot read: it is left.
             }

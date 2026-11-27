@@ -2245,7 +2245,9 @@ not to the scope before this one, as after `history.replaceState`. The entry kee
 puts back on the entry once the address is in. A state a script puts in the entry as the address
 goes in is newer, and is the one kept: one a `navigate` listener puts in before the replace commits
 is put in the entry the replace makes, and one a `currententrychange` listener puts in that entry,
-or a state it clears there, stays. The runtime puts none on an entry a script's `navigate` listener
+or a state it clears there, stays, whether that listener was added before the runtime's or after.
+A page's own `getState` that moves or writes the entry as the runtime reads the `navigate`
+listener's state back leaves the entries as it left them. The runtime puts none on an entry a script's `navigate` listener
 pushed in place of its replace. It trusts the page's own `getState` and history methods to report
 what they did, and does not guard against a script that deliberately cancels or rewrites its own
 history call. A reload, a bookmark and a shared link then
