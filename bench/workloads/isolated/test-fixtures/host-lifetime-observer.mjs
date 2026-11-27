@@ -56,8 +56,17 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
     t.mock.method(performance, "now", () => f.clock);
     t.mock.method(Atomics, "wait", (_array, _index, _value, ms) => { f.clock += ms; return "timed-out"; });
   }
-  t.mock.method(globalThis, "setInterval", (callback) => { f.tick = callback; return 1; });
+  t.mock.method(globalThis, "setInterval", (callback) => { f.capture = callback; return 1; });
   t.mock.method(globalThis, "clearInterval", () => {});
+  if (browser) {
+    const set = globalThis.setTimeout, clear = globalThis.clearTimeout, captureHandle = {};
+    t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => {
+      if (ms > 100) return set(callback, ms, ...args);
+      f.capture = callback;
+      return captureHandle;
+    });
+    t.mock.method(globalThis, "clearTimeout", (handle) => { if (handle !== captureHandle) clear(handle); });
+  }
   if (deferred) {
     t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
       if (argv[1] !== "--hash-open-executables") {
@@ -169,7 +178,7 @@ export async function fixture(t, nativePids = [], browser = false, onFault, atta
   syncBuiltinESMExports();
   observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault });
   f.clock += attachGapMs; await observer.attach(pid);
-  f.capture = f.tick; f.drain = () => observer.drain();
+  f.drain = () => observer.drain();
   f.tick = async () => { f.capture(); await f.drain(); };
   f.samples = () => original.readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   f.records = () => original.readdirSync(join(directory, "processes")).map((name) => JSON.parse(original.readFileSync(join(directory, "processes", name))));
