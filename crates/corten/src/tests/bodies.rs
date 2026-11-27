@@ -334,7 +334,7 @@ async fn a_request_without_a_body_has_ended_when_its_handler_has_it_and_a_chunke
         use http_body_util::BodyExt as _;
         let switches = request.extensions().get::<hyper::upgrade::OnUpgrade>().is_some();
         let mut body = request.into_body();
-        let (ended, length, whole) = (body.is_end_stream(), body.size_hint().exact(), body.is_whole());
+        let (ended, length, whole) = (body.is_end_stream(), body.size_hint().exact(), body.held().is_some());
         // A box of a value with no size is not allocated.
         let keeps = if body.boxed_size() == 0 { "nothing" } else { "a stream" };
         let said = format!("ended {ended}, length {length:?}, whole {whole}, {body:?}, keeps {keeps}, switches {switches}");

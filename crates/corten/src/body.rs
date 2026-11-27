@@ -30,9 +30,9 @@ trait Piece: http_body::Body<Data = Bytes, Error = BoxError> + Send + 'static {
         None
     }
 
-    /// Whether it is held whole: read, it gives what it holds and cannot fail.
-    fn held(&self) -> bool {
-        false
+    /// The remaining bytes, if they are held whole.
+    fn held(&self) -> Option<&Bytes> {
+        None
     }
 }
 
@@ -65,8 +65,8 @@ impl Piece for Whole {
         Some(std::mem::take(&mut self.get_mut().0))
     }
 
-    fn held(&self) -> bool {
-        true
+    fn held(&self) -> Option<&Bytes> {
+        Some(&self.0)
     }
 }
 
@@ -90,10 +90,13 @@ impl Body {
         Body(None)
     }
 
-    /// Whether it is held whole (or empty), so reading it cannot fail or wait: under `corten dev`,
-    /// what a release build's read of an answer to keep finds (`crate::kept::tell_read`).
-    pub(crate) fn is_whole(&self) -> bool {
-        self.0.as_ref().is_none_or(|body| body.held())
+    /// Borrow the remaining bytes of a whole or empty body without polling it.
+    pub(crate) fn held(&self) -> Option<&Bytes> {
+        static EMPTY: Bytes = Bytes::new();
+        match &self.0 {
+            None => Some(&EMPTY),
+            Some(body) => body.held(),
+        }
     }
 
     /// The size in bytes of what its box holds, none for an empty body. A box of a value with no

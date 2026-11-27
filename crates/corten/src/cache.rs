@@ -776,13 +776,18 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&Besid
         return res;
     }
     let (mut parts, body) = res.into_parts();
-    // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
-    // value's stored form, which it finds by this pointer).
-    let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
-        return unread(parts);
-    };
     // A kept answer's body is read once, for its first tag.
-    let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers, ready);
+    let hash = |extensions: &http::Extensions, bytes: &bytes::Bytes| crate::kept::Kept::hashed(extensions, bytes, &*TAG_KEY);
+    // An exact size is not necessarily one frame. Only a body held whole can be hashed in place.
+    let (hashed, body, collected) = if let Some(bytes) = body.held() {
+        (hash(&parts.extensions, bytes), if bytes.is_empty() { Body::empty() } else { body }, None)
+    } else {
+        let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
+            return unread(parts);
+        };
+        (hash(&parts.extensions, &bytes), Body::empty(), Some(bytes))
+    };
+    let tag = tagged(hashed, &parts.headers, ready);
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
@@ -800,7 +805,7 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&Besid
         return Response::from_parts(parts, Body::new(Unsized));
     }
     parts.headers.insert(header::ETAG, HeaderValue::from_bytes(&tag).expect("hex is a header value"));
-    Response::from_parts(parts, Body::from(bytes))
+    Response::from_parts(parts, collected.map_or(body, Body::from))
 }
 
 /// A `304`'s empty body, of no stated size: a `304`'s `Content-Length` may only be the `200`'s
