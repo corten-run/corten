@@ -640,8 +640,8 @@ const LINES: &[&str] = &[
     "sec-fetch-site: cross-site",
 ];
 /// Lines a browser sends, each name in the two spellings Corten's connection takes it in by its
-/// bytes (all lower case, and a browser's capitals), and some in spellings it leaves to `http`.
-/// (`host` and `connection` are in both in their own lists.)
+/// bytes (all lower case, and each word's first letter a capital), and some in spellings it
+/// leaves to `http`. (`host` and `connection` are in both in their own lists.)
 const BROWSER_LINES: &[&str] = &[
     "user-agent: Mozilla/5.0",
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
@@ -668,11 +668,11 @@ const BROWSER_LINES: &[&str] = &[
     "sec-fetch-user: ?1",
     "Sec-Fetch-User: ?1",
     "sec-ch-ua: \"Chromium\";v=\"142\"",
-    "Sec-CH-UA: \"Chromium\";v=\"142\"",
+    "Sec-Ch-Ua: \"Chromium\";v=\"142\"",
     "sec-ch-ua-mobile: ?0",
-    "Sec-CH-UA-Mobile: ?0",
+    "Sec-Ch-Ua-Mobile: ?0",
     "sec-ch-ua-platform: \"Linux\"",
-    "Sec-CH-UA-Platform: \"Linux\"",
+    "Sec-Ch-Ua-Platform: \"Linux\"",
     "priority: u=0, i",
     "Priority: u=0, i",
     "corten: nav",
@@ -680,6 +680,7 @@ const BROWSER_LINES: &[&str] = &[
     "ACCEPT: */*",
     "Sec-fetch-site: none",
     "SEC-CH-UA-MOBILE: ?1",
+    "Sec-CH-UA: \"Chromium\";v=\"142\"",
     "cOrTeN: nav",
 ];
 /// A chunked body, as the grammar has it and as it does not.

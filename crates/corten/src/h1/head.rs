@@ -180,13 +180,14 @@ fn keeps(name: &[u8], value: &[u8]) -> bool {
 }
 
 /// The `HeaderName` of a header line's name, as `HeaderName::from_bytes` makes it. The names a
-/// browser sends with a request that has no body, written in all lower case or with the
-/// capitals browsers write, are taken as they are, which spares `http` lowering each byte and,
-/// for the names it has no constant for, an allocation of their own; every other name and
-/// spelling is `http`'s to read, and to refuse (`docs/design.md#choice-own-http1` says why each
-/// name is here).
+/// browser sends with a request that has no body are taken by their bytes in two spellings each:
+/// all in lower case, as a browser writes some and a front end that lowers every name passes on
+/// all, and with each word's first letter a capital, as a browser writes the others and a Go
+/// front end writes all. That spares `http` lowering each byte and, for the names it has no
+/// constant for, an allocation of their own; every other name and spelling is `http`'s to read,
+/// and to refuse (`docs/design.md#choice-own-http1` names who sends each spelling).
 fn field_name(name: &[u8]) -> Result<HeaderName, Refusal> {
-    Ok(match name {
+    let taken = match name {
         b"host" | b"Host" => header::HOST,
         b"user-agent" | b"User-Agent" => header::USER_AGENT,
         b"accept" | b"Accept" => header::ACCEPT,
@@ -201,13 +202,16 @@ fn field_name(name: &[u8]) -> Result<HeaderName, Refusal> {
         b"sec-fetch-mode" | b"Sec-Fetch-Mode" => const { HeaderName::from_static("sec-fetch-mode") },
         b"sec-fetch-dest" | b"Sec-Fetch-Dest" => const { HeaderName::from_static("sec-fetch-dest") },
         b"sec-fetch-user" | b"Sec-Fetch-User" => const { HeaderName::from_static("sec-fetch-user") },
-        b"sec-ch-ua" | b"Sec-CH-UA" => const { HeaderName::from_static("sec-ch-ua") },
-        b"sec-ch-ua-mobile" | b"Sec-CH-UA-Mobile" => const { HeaderName::from_static("sec-ch-ua-mobile") },
-        b"sec-ch-ua-platform" | b"Sec-CH-UA-Platform" => const { HeaderName::from_static("sec-ch-ua-platform") },
+        b"sec-ch-ua" | b"Sec-Ch-Ua" => const { HeaderName::from_static("sec-ch-ua") },
+        b"sec-ch-ua-mobile" | b"Sec-Ch-Ua-Mobile" => const { HeaderName::from_static("sec-ch-ua-mobile") },
+        b"sec-ch-ua-platform" | b"Sec-Ch-Ua-Platform" => const { HeaderName::from_static("sec-ch-ua-platform") },
         b"priority" | b"Priority" => const { HeaderName::from_static("priority") },
-        b"corten" | b"Corten" => crate::page::MODE_HEADER,
-        _ => HeaderName::from_bytes(name).map_err(|_| Refusal::Bad)?,
-    })
+        b"corten" | b"Corten" => const { HeaderName::from_static("corten") },
+        _ => return HeaderName::from_bytes(name).map_err(|_| Refusal::Bad),
+    };
+    // Every arm is the name `http` makes of the same bytes, which each debug test holds.
+    debug_assert_eq!(HeaderName::from_bytes(name).ok().as_ref(), Some(&taken), "{name:?}");
+    Ok(taken)
 }
 
 /// The request whose head is `bytes` (all of it, and no more), scanned by [`scan`], which found

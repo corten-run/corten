@@ -2511,7 +2511,7 @@ async fn a_header_name_longer_than_http_takes_is_refused_as_hyper_refuses_it() {
 }
 
 /// The names `h1::head` takes by their bytes, each in the two spellings it takes them in: all
-/// lower case, and the capitals a browser writes.
+/// lower case, and each word's first letter a capital.
 const USUAL_NAMES: &[(&str, &str)] = &[
     ("host", "Host"),
     ("user-agent", "User-Agent"),
@@ -2527,9 +2527,9 @@ const USUAL_NAMES: &[(&str, &str)] = &[
     ("sec-fetch-mode", "Sec-Fetch-Mode"),
     ("sec-fetch-dest", "Sec-Fetch-Dest"),
     ("sec-fetch-user", "Sec-Fetch-User"),
-    ("sec-ch-ua", "Sec-CH-UA"),
-    ("sec-ch-ua-mobile", "Sec-CH-UA-Mobile"),
-    ("sec-ch-ua-platform", "Sec-CH-UA-Platform"),
+    ("sec-ch-ua", "Sec-Ch-Ua"),
+    ("sec-ch-ua-mobile", "Sec-Ch-Ua-Mobile"),
+    ("sec-ch-ua-platform", "Sec-Ch-Ua-Platform"),
     ("priority", "Priority"),
     ("corten", "Corten"),
 ];
@@ -2579,8 +2579,11 @@ fn a_header_name_is_the_one_http_makes_of_it_however_it_is_spelled() {
         "Content-Type",
         "Sec-Fetch-Sit",
         "sec-fetch-sites",
-        "Sec-Ch-Ua",
+        "Sec-CH-UA",
+        "Sec-CH-UA-Platform",
         "sec-ch-ua-model",
+        "purpose",
+        "Purpose",
         "hosts",
         "Hos",
         "corten-page",
@@ -2631,61 +2634,83 @@ fn a_header_name_http_refuses_is_refused() {
     }
 }
 
-/// The heads three browsers sent over HTTP/1.1 (Playwright 1.65.1's Chromium, Firefox and WebKit:
-/// a navigation, and the fetch Corten's runtime makes for one), with a line of each sent twice,
-/// once in each spelling the connection takes, are made into the request `http`'s own
-/// constructors make of their lines: every line in its order, with its value, and the connection
-/// kept.
+/// Four heads as browsers sent them over HTTP/1.1, byte for byte but the line ends, from
+/// `node scripts/request-heads.mjs --heads` (Playwright 1.65.1: Chromium 159.0.8154.6, Firefox
+/// 159.0, WebKit 27.2): Chromium's navigation by a link and the fetch Corten's runtime makes for a
+/// visit, Firefox's fetch for a visit and WebKit's navigation by a link. Each line is sent again in
+/// the other spelling the connection takes, where it takes the name, and in upper case, which it
+/// leaves to `http`; the request made of it is the one `http`'s own constructors make of its lines:
+/// every line in its order, with its value, and the connection kept.
 #[test]
 fn a_browsers_head_is_made_into_the_request_it_was_before() {
-    let chromium = [
-        "Host: localhost",
+    let chromium_navigation = [
+        "Host: 127.0.0.1:44455",
         "Connection: keep-alive",
-        "sec-ch-ua: \"Chromium\";v=\"142\", \"Not_A Brand\";v=\"99\"",
+        "sec-ch-ua: \"HeadlessChrome\";v=\"159\", \"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"159\"",
         "sec-ch-ua-mobile: ?0",
         "sec-ch-ua-platform: \"Linux\"",
         "Upgrade-Insecure-Requests: 1",
-        "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/159.0.8154.6 Safari/537.36",
+        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Sec-Fetch-Site: same-origin",
         "Sec-Fetch-Mode: navigate",
         "Sec-Fetch-User: ?1",
         "Sec-Fetch-Dest: document",
-        "Referer: http://localhost/",
+        "Referer: http://127.0.0.1:44455/",
         "Accept-Encoding: gzip, deflate, br, zstd",
-        "Accept-Language: en-US,en;q=0.9",
-        "Cookie: a=1",
-        "If-None-Match: \"v1\"",
+        "Cookie: s=1",
     ];
-    let firefox_fetch = [
-        "Host: localhost",
-        "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    let chromium_visit = [
+        "Host: 127.0.0.1:44455",
+        "Connection: keep-alive",
+        "sec-ch-ua-platform: \"Linux\"",
+        "corten: nav",
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/159.0.8154.6 Safari/537.36",
+        "sec-ch-ua: \"HeadlessChrome\";v=\"159\", \"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"159\"",
+        "sec-ch-ua-mobile: ?0",
         "Accept: */*",
-        "Accept-Language: en-US,en;q=0.5",
+        "Sec-Fetch-Site: same-origin",
+        "Sec-Fetch-Mode: cors",
+        "Sec-Fetch-Dest: empty",
+        "Referer: http://127.0.0.1:44455/next",
         "Accept-Encoding: gzip, deflate, br, zstd",
-        "Referer: http://localhost/",
+        "Cookie: s=1",
+        "If-None-Match: \"v1\"",
+        "If-Modified-Since: Thu, 26 Nov 2026 00:00:00 GMT",
+    ];
+    let firefox_visit = [
+        "Host: 127.0.0.1:44455",
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:159.0) Gecko/20100101 Firefox/159.0",
+        "Accept: */*",
+        "Accept-Language: en-US,en;q=0.9",
+        "Accept-Encoding: gzip, deflate, br, zstd",
+        "Referer: http://127.0.0.1:44455/next",
         "corten: nav",
         "Connection: keep-alive",
-        "Cookie: a=1",
+        "Cookie: s=1",
         "Sec-Fetch-Dest: empty",
         "Sec-Fetch-Mode: cors",
         "Sec-Fetch-Site: same-origin",
+        "If-Modified-Since: Thu, 26 Nov 2026 00:00:00 GMT",
+        "If-None-Match: \"v1\"",
         "Priority: u=4",
     ];
-    let webkit = [
+    let webkit_navigation = [
+        "Referer: http://127.0.0.1:44455/",
         "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Upgrade-Insecure-Requests: 1",
-        "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
         "Accept-Encoding: gzip, deflate",
-        "Accept-Language: en-US,en;q=0.9",
-        "Connection: keep-alive",
-        "Host: localhost",
+        "Accept-Language: en-US",
+        "Connection: Keep-Alive",
+        "Host: 127.0.0.1:44455",
+        "Cookie: s=1",
         "Sec-Fetch-Dest: document",
         "Sec-Fetch-Mode: navigate",
-        "Sec-Fetch-Site: none",
+        "Sec-Fetch-Site: same-origin",
     ];
-    // Each line again, last, in the other spelling the connection takes, and once more as `http`
-    // alone reads it, in upper case.
+    // Each line again, last, in the other spelling the connection takes where it takes the name,
+    // and once more as `http` alone reads it, in upper case.
     let twice = |sent: &[&str]| -> Vec<String> {
         let mut all: Vec<String> = sent.iter().map(|line| line.to_string()).collect();
         for line in sent {
@@ -2695,12 +2720,15 @@ fn a_browsers_head_is_made_into_the_request_it_was_before() {
                 _ if name == *capitals => Some(*lower),
                 _ => None,
             });
-            all.push(format!("{}:{value}", other.expect(name)));
+            if let Some(other) = other {
+                all.push(format!("{other}:{value}"));
+            }
             all.push(format!("{}:{value}", name.to_ascii_uppercase()));
         }
         all
     };
-    for head in [twice(&chromium[..]), twice(&firefox_fetch[..]), twice(&webkit[..])] {
+    let heads = [&chromium_navigation[..], &chromium_visit[..], &firefox_visit[..], &webkit_navigation[..]];
+    for head in heads.map(twice) {
         let mut made = ::http::HeaderMap::new();
         for line in &head {
             let (name, value) = line.split_once(':').unwrap();
