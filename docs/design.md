@@ -12386,7 +12386,9 @@ rules something out.
     JavaScript loads the page at its address, so the two paths disagreed (README Value 3)
     ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
     The mark says what the form already is: its answer is the page at the address it asked for.
-    Once the patch has drawn its last element, in the same task, before an observer of what it
+    Once the patch has drawn its last element and its CSS variables (`data-vars`) are set, as a
+    page answer's are before its replace, so a `navigate` listener that hears the replace sees it
+    whole, in the same task, before an observer of what it
     drew, a timer or another submit's answer can run, the runtime calls `history.replaceState` with
     the response's URL and the `#fragment` of the form's `action` or `formaction`,
     as the browser's own GET writes it (a submit that sends no field keeps the query's `?`,
@@ -12599,7 +12601,10 @@ rules something out.
     to the same address in place of the runtime's replace, which gives the entry another key,
     leave the press refused as before. A listener that puts a state in the entry there
     (`updateCurrentEntry`, whose `currententrychange` has a null `navigationType`) changes no
-    entry, and is not counted: the runtime counts only an event with a `navigationType`. A page's `navigate` listener that cancels the runtime's replace and
+    entry, and is not counted: the runtime counts only an event with a `navigationType`, and only
+    one the browser fires (`isTrusted`): a `currententrychange` a page dispatches on `navigation`
+    itself is counted neither way, so it neither leaves the press refused nor keeps the entry's
+    state from going back. A page's `navigate` listener that cancels the runtime's replace and
     replaces the entry itself, to the same address, inside it, is taken for the runtime's replace;
     the address is then the one the runtime meant to put in, and the press's answer puts its own
     in over it. So is page code that replaces the entry to the same address inside the runtime's
@@ -12638,7 +12643,18 @@ rules something out.
     the runtime has. An
     answer whose entry was left draws nothing and says nothing (`corten:error` is not fired), as
     for a submit a navigation cuts off, which the runtime aborts as it takes the navigation: the
-    user has left the page it was for, and the form it would be said on with it. So does every
+    user has left the page it was for, and the form it would be said on with it. A marked answer
+    that draws another page is a turn, as a visit to that page is: a page answer (`corten-page`,
+    another route's `<main>` included) as it is drawn, and a patch once its address on another path
+    is in. The runtime then does what it does as a visit begins, with the same code: it ends every
+    submit of another form on its way as the draw began (not one the draw itself made, which is
+    the new page's), numbering a write it cut off before its answer came, so the next navigation
+    reads the page whole, and counts the turn by which a failed write is said only on a form drawn
+    with no navigation to another address since its press. So a Save on its way draws nothing on
+    the other page once its 200 patch comes, though that page has an element of the id it patches,
+    and its 503 fires `corten:error` on no form there, though one has its id, `action` and
+    `method`. A patch that changes only the query draws on the same page, and is no turn: a write
+    on its way draws as before. So does every
     answer to a marked press that no longer holds, an error included: a 409 or a 5xx the runtime
     does not draw, and a network failure, fire no `corten:error` either. A whole page (a
     `corten-shell` answer) is checked against its press once its modules and stylesheets have
@@ -12903,9 +12919,15 @@ rules something out.
       (two actions whose own queries the GET drops would become one request), which that form must
       keep as before the mark. The mark decides the URL, so it is the part of the key that differs.
 
-    What it costs: the runtime every page loads is 3,361 bytes larger raw (46,502 to 49,863), 1,356
-    with gzip (16,718 to 18,074) and 1,213 with brotli (15,106 to 16,319), paid once a release by
-    every user (43, 14 and 14 larger than the build before this one, which looked through every nav
+    What it costs: the runtime every page loads is 3,518 bytes larger raw (46,502 to 50,020), 1,433
+    with gzip (16,718 to 18,151) and 1,278 with brotli (15,106 to 16,384), paid once a release by
+    every user (157, 77 and 65 larger than the build before this one, which let a write on its way
+    as a marked answer drew another page, `<main>` or a patch whose address is on another path,
+    draw its 200 patch there or say its 503 on that page's form of the same id; counted a
+    `currententrychange` a page dispatched itself as a change of the entry, so the entry's
+    Navigation API state did not go back; and set a patch's CSS variables only after its address
+    went in, so a `navigate` listener saw its elements without them; that build was 43, 14 and 14
+    larger than the one before it, which looked through every nav
     link on the page again after each marked answer it drew, one that changed only the query too,
     though a link is current by the path alone; that build was 87, 23 and 21 larger than the one
     before it, which ended a held replace's
@@ -13082,7 +13104,15 @@ rules something out.
     or the platform gains a call that aborts a navigation on its way without beginning another,
     when a replace a page's listener holds could be ended rather than waited out.
 
-    Last checked: 2026-11-27, a marked GET answered with the whole page whose stylesheet is still
+    Last checked: 2026-11-27, a write of another form held while a marked answer draws another
+    route's `<main>` or a marked patch puts in an address on another path, a `currententrychange`
+    the page dispatches itself as the runtime's replace runs, and a `navigate` listener that reads a
+    marked patch's CSS variables as its address goes in, in Playwright 1.65.1's Chromium 159,
+    Firefox 159 and WebKit 27.2 on Linux (the smoke's checks, of which the build before this one
+    fails each in all three: drawing the write's 200 patch on the other page, saying its 503 on that
+    page's form of the same id, leaving the entry's Navigation API state out, and showing the
+    listener no variable);
+    2026-11-27, a marked GET answered with the whole page whose stylesheet is still
     loading when the user presses the form again, which draws nothing and says nothing while the
     newer answer draws, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 on Linux
     (the smoke's check, which a build that counts that draw begun before the wait fails in Chromium,

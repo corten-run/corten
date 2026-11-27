@@ -1148,6 +1148,9 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
         placed = true;
       }
     }
+    // Its values are in before a marked answer puts its address in, as a page's are: a `navigate`
+    // listener there sees the patch whole.
+    for (const el of put) setVars(el);
     const complete = done && placed && !skipped;
     const path = location.pathname;
     if (complete) done();
@@ -1156,7 +1159,6 @@ async function apply(html, signal, sent, took, own, asked, within, here, done) {
     // path, which is all a nav link is current by: a patch without one (a ticker's, a marked answer
     // that changed only the query) only looks through what it put.
     if ((complete && location.pathname !== path) || navs || put.some(holdsNav)) markCurrent();
-    for (const el of put) setVars(el);
   } finally {
     // A ref read would normally already have swept. End those lives before the observer wires
     // later replacements, but only now that the whole chain of replacement roots is available.
@@ -2696,7 +2698,8 @@ let changed;
 navigation
   ? navigation.addEventListener("currententrychange", (event) => {
       const at = navigation.currentEntry;
-      event.navigationType === null ? at && writes.set(at, written(at) + 1) : ((changes += 1), (changed = event.navigationType));
+      // One the page dispatches changed nothing.
+      if (event.isTrusted) event.navigationType === null ? at && writes.set(at, written(at) + 1) : ((changes += 1), (changed = event.navigationType));
       look();
       // The navigation that held a marked answer's replace ({@link held}) commits its address: the
       // nav link to it is current from now, as the address is, not from when the answer was drawn.
@@ -2954,16 +2957,8 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // record already (a patch not in yet is undrawn), numbered before the page is asked for.
   // The writes answered before the page is asked for, which its layout draws.
   const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
-  let cut = false;
-  if (!again && submits.size) {
-    for (const pending of submits.values()) {
-      if (!pending.write || pending.answered) continue;
-      cut = true;
-      if (pending.went) undrawn.add(++writesIn);
-    }
-    // Replies would patch the wrong page. Record every cut-off before aborting any of them.
-    for (const pending of submits.values()) pending.controller.abort();
-  }
+  // Replies would patch the wrong page.
+  const cut = !again && submits.size > 0 && leaveSubmits();
   // A whole draw can replace the layout's failure UI. Leave it to another page, even if another
   // write is undrawn or the last whole page asked to be read again while its write lands.
   const written = !!event.info?.[WRITTEN] ||
@@ -3370,6 +3365,24 @@ addEventListener("pagehide", () => (left += 1));
  * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, nextPress?: Press | null, here?: Press, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
+/**
+ * Ends the submits on their way, all but those `spared`, as a navigation to another page does:
+ * their answers would patch, or say `corten:error` on a form of, a page they were not sent from. A
+ * write cut off before its answer came may have been applied, so it is numbered undrawn, and the
+ * next navigation reads the page whole. Every cut-off is recorded before any is aborted. Says
+ * whether there was one.
+ * @param {(pending: NonNullable<ReturnType<typeof submits.get>>) => boolean} [spared]
+ */
+function leaveSubmits(spared = () => false) {
+  let cut = false;
+  for (const pending of submits.values()) {
+    if (spared(pending) || !pending.write || pending.answered) continue;
+    cut = true;
+    if (pending.went) undrawn.add(++writesIn);
+  }
+  for (const pending of submits.values()) if (!spared(pending)) pending.controller.abort();
+  return cut;
+}
 /** The forms that have sent a submit ({@link sayFailed}). @type {WeakSet<HTMLFormElement>} */
 const sentFrom = new WeakSet();
 
@@ -3630,7 +3643,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
   // carry the user's text into) failed, and says so, whatever came while it drew.
   let passed = false;
   let drewIt = false;
-  const drawIn = () => (passed = here());
+  // The submits on their way as its draw began: those a marked answer that draws another page ends,
+  // as a visit does ({@link leaveSubmits}), but its own and any its draw made.
+  /** @type {unknown[]} */
+  let earlier = [];
+  const drawIn = () => ((earlier = [...submits.values()]), (passed = here()));
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3751,7 +3768,17 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       if (pending.here?.at != null && !whole && hasAttr(form, "data-address") && res.status < 500) {
         /** @type {Draw} */
         const draw = {};
+        // Another page, a page answer (`<main>`) or an address on another path, is a turn, as a visit
+        // to it is: the writes sent from the page before it draw nothing and say nothing ({@link
+        // sayFailed}), and after one cut off the next navigation reads the page whole.
+        const leave = () => {
+          turns += 1;
+          leaveSubmits((other) => other === pending || !earlier.includes(other));
+        };
         done = function replace() {
+          // As the page is drawn, before anything of it runs again (the checks below): an answer of
+          // theirs draws in a task of its own.
+          if (!patch) leave();
           const to = res.url + (res.redirected ? "" : url.href.replace(/^[^#]*/, ""));
           const path = location.pathname;
           // Not if what it drew began a visit or moved to another entry (a script that navigates
@@ -3850,8 +3877,12 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
               } catch {
                 // A document no longer fully active, or a state the runtime cannot read: it is left.
               }
-            // Read again at the new address, which without the Navigation API goes by the path.
-            if (location.pathname !== path) readAgainLater();
+            // Read again at the new address, which without the Navigation API goes by the path; a
+            // patch's address on another path is another page.
+            if (location.pathname !== path) {
+              if (patch) leave();
+              readAgainLater();
+            }
           } finally {
             // A listener that holds it (`precommitHandler`), or began a navigation in its place,
             // after it went in or as its state went back (its address the same or not), leaves a

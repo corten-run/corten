@@ -705,7 +705,7 @@ export async function dataAddress(browser) {
   // own `getState` that pushes an entry as the runtime reads the precommit state from the entry the
   // replace took the place of (`pushread`) leaves the pushed entry the screen's: the runtime puts
   // that state in neither entry.
-  for (const how of /** @type {const} */ (["push", "clear", "precommit", "early", "pushread"])) {
+  for (const how of /** @type {const} */ (["push", "clear", "precommit", "early", "pushread", "untrusted"])) {
     const name =
       how === "push"
         ? "a marked patch whose replacement a navigate listener cancels for a push to the same address puts the entry's state on neither entry, and the entry it was pressed on keeps it"
@@ -715,7 +715,9 @@ export async function dataAddress(browser) {
             ? "a marked patch whose replacement a navigate listener puts a state in the entry for, before it commits, keeps that state in the entry it makes"
             : how === "early"
               ? "a marked patch whose replace a currententrychange listener put on before the runtime's puts a state in keeps that state"
-              : "a marked patch whose read of a navigate listener's precommit state pushes another entry puts that state in neither entry, and the pushed entry keeps its own";
+              : how === "pushread"
+                ? "a marked patch whose read of a navigate listener's precommit state pushes another entry puts that state in neither entry, and the pushed entry keeps its own"
+                : "a marked patch whose replace a listener dispatches currententrychange events of its own as puts the entry's state back";
     const wrote = await stateWrites(browser, how, errors);
     if (!wrote) skip(name, "no Navigation API");
     else if (typeof wrote.wrote === "string") skip(name, `updateCurrentEntry refuses an undefined state (${wrote.wrote})`);
@@ -729,10 +731,13 @@ export async function dataAddress(browser) {
               ? wrote.added === 0 && wrote.navState === "null"
               : how === "pushread"
                 ? wrote.pushed === true && wrote.added === 1 && wrote.navState === '"pushed"' && wrote.made === "null"
-                : wrote.added === 0 && wrote.navState === '"listener"'),
+                : how === "untrusted"
+                  ? wrote.added === 0 && wrote.navState === '{"draft":"unsaved"}'
+                  : wrote.added === 0 && wrote.navState === '"listener"'),
         JSON.stringify(wrote),
       );
   }
+  await markedBoundaries(browser, errors);
   const kept = await pressesKept(browser);
   if (!kept) skip("a form's press is let go once it settles", "no DevTools heap query (Chromium only)");
   else
@@ -5051,11 +5056,14 @@ async function pressOnSameBack(page) {
  * state in the entry the replace made from a `currententrychange` listener put on before the
  * runtime's (by a script in the page before it); "pushread" is "precommit" with the entries'
  * `getState` wrapped so that a read of the replaced entry, once the screen's is another, pushes an
- * entry at the same address with a state of its own. Says whether the listener ran (and the entry
+ * entry at the same address with a state of its own; "untrusted" dispatches two `currententrychange`
+ * events of the page's own on `navigation` as the replace runs (`currententrychange`), one with no
+ * `navigationType` and one whose `navigationType` is null, as a state's change has, neither of
+ * which changed an entry. Says whether the listener ran (and the entry
  * was pushed), whether Week's answer drew, where the page is, the entries added, and the states of
  * the screen's entry, of the entry before it and of the entry Week was pressed on. Null without the
  * Navigation API.
- * @param {import("@playwright/test").Browser} browser @param {"push" | "clear" | "precommit" | "early" | "pushread"} how @param {string[]} errors
+ * @param {import("@playwright/test").Browser} browser @param {"push" | "clear" | "precommit" | "early" | "pushread" | "untrusted"} how @param {string[]} errors
  */
 async function stateWrites(browser, how, errors) {
   const page = await browser.newPage();
@@ -5090,6 +5098,17 @@ async function stateWrites(browser, how, errors) {
       };
     }
     if (how === "early") return { length: history.length };
+    if (how === "untrusted") {
+      nav.addEventListener("currententrychange", (/** @type {Event & { navigationType?: string | null }} */ event) => {
+        if (w.__wrote || !event.isTrusted || event.navigationType !== "replace" || !week(location.href)) return;
+        w.__wrote = true;
+        nav.dispatchEvent(new Event("currententrychange"));
+        const stateOnly = new Event("currententrychange");
+        Object.defineProperty(stateOnly, "navigationType", { value: null });
+        nav.dispatchEvent(stateOnly);
+      });
+      return { length: history.length };
+    }
     if (how === "clear")
       nav.addEventListener("currententrychange", (/** @type {any} */ event) => {
         if (w.__wrote || event.navigationType !== "replace" || !week(location.href)) return;
@@ -5138,4 +5157,131 @@ async function stateWrites(browser, how, errors) {
   }, first);
   await page.close();
   return { drawn, ...end };
+}
+
+/**
+ * A marked answer that draws another page, `<main>` from another route or a patch whose address is
+ * on another path, is a turn, as a visit to that page is: a write sent before it from the page it
+ * left, its answer held until the marked one is drawn, then draws nothing (its 200 patch of the
+ * panel the other page has too) and says nothing (its 503, on the other page's form of the same id,
+ * action and method). And a marked patch's CSS variables are in before its address goes in: a
+ * `navigate` listener as the runtime puts the address in reads them on the element it drew.
+ * @param {import("@playwright/test").Browser} browser @param {string[]} errors
+ */
+async function markedBoundaries(browser, errors) {
+  const home = `${base}/smoke/address`;
+  const save = `${base}/smoke/address-boundary-save`;
+  const destination = `${base}/smoke/address-boundary`;
+  // The server's own page answer headers (`corten-page`, and `corten-shell` that matches the screen's).
+  const answer = await fetch(home, { headers: { corten: "nav" } });
+  await answer.arrayBuffer();
+  const pageHeaders = Object.fromEntries(["corten-page", "corten-shell", "content-type"].flatMap((name) => (answer.headers.has(name) ? [[name, answer.headers.get(name) ?? ""]] : [])));
+  for (const [kind, status] of /** @type {const} */ ([["page", 200], ["page", 503], ["patch", 200]])) {
+    const name =
+      kind === "page"
+        ? `a write held while a marked form's page answer draws another route's page ${status === 200 ? "draws nothing on it once its 200 patch comes" : "says no corten:error on its form of the same id once its 503 comes"}`
+        : "a write held while a marked patch moves the address to another path draws nothing once its 200 patch comes";
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(`boundary ${kind} ${status}: ${e.message}`));
+    await page.goto(home);
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    await page.route(save, async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await held;
+      await route
+        .fulfill(status === 200 ? { headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<p id="smoke-boundary-panel">written</p>' } : { status })
+        .catch(() => {});
+    });
+    await page.route(`${destination}?scope=week`, (route) =>
+      route.request().headers()["corten"] !== "action"
+        ? route.continue()
+        : route.fulfill(
+            kind === "page"
+              ? {
+                  headers: pageHeaders,
+                  body: '<form id="smoke-boundary-save" data-patch method="post" action="/smoke/address-boundary-save"><button>Boundary save</button></form><p id="smoke-boundary-panel">destination</p>',
+                }
+              : { headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<p id="smoke-boundary-panel">destination</p>' },
+          ),
+    );
+    const posted = page.waitForRequest((r) => r.url() === save && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
+    await page.evaluate(() => {
+      const main = /** @type {Element} */ (document.querySelector("main"));
+      const write = document.createElement("form");
+      write.id = "smoke-boundary-save";
+      write.dataset.patch = "";
+      write.method = "post";
+      write.action = "/smoke/address-boundary-save";
+      const button = document.createElement("button");
+      button.textContent = "Boundary save";
+      write.append(button);
+      const panel = document.createElement("p");
+      panel.id = "smoke-boundary-panel";
+      panel.textContent = "home";
+      const go = document.createElement("form");
+      go.id = "smoke-boundary-go";
+      go.dataset.patch = "";
+      go.dataset.address = "";
+      go.action = "/smoke/address-boundary";
+      const field = document.createElement("input");
+      field.type = "hidden";
+      field.name = "scope";
+      field.value = "week";
+      go.append(field);
+      main.append(write, panel, go);
+      /** @type {string[]} */
+      const said = [];
+      document.addEventListener("corten:error", (event) => said.push(event.target instanceof Element ? event.target.id : "document"), true);
+      Object.assign(window, { __said: said, __go: go });
+      write.requestSubmit();
+    });
+    const saveSent = await posted;
+    await page.evaluate(() => /** @type {any} */ (window).__go.requestSubmit());
+    const drawn = await page
+      .waitForFunction(() => location.pathname === "/smoke/address-boundary" && document.getElementById("smoke-boundary-panel")?.textContent === "destination", undefined, { timeout: 5000 })
+      .then(() => true, () => false);
+    release();
+    // Long enough for the write's answer to come and, were it to, draw or be said.
+    await page.waitForTimeout(500);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+    const end = await page.evaluate(() => ({
+      at: location.pathname + location.search,
+      panel: document.getElementById("smoke-boundary-panel")?.textContent,
+      said: /** @type {string[]} */ (/** @type {any} */ (window).__said),
+    }));
+    await page.close();
+    check(name, saveSent && drawn && end.at === "/smoke/address-boundary?scope=week" && end.panel === "destination" && end.said.length === 0, JSON.stringify({ saveSent, drawn, ...end }));
+  }
+
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => errors.push(`boundary vars: ${e.message}`));
+  await page.goto(home);
+  const varsName = "a marked patch's CSS variables are on the element it drew when a navigate listener hears its address go in";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(varsName, "no Navigation API");
+  else {
+    const week = `${home}?scope=week`;
+    await page.route(week, (route) =>
+      route.request().headers()["corten"] !== "action"
+        ? route.continue()
+        : route.fulfill({ headers: { "corten-patch": "1", "content-type": "text/html" }, body: '<section id="smoke-address" data-vars="--smoke-boundary:7"><output>week</output></section>' }),
+    );
+    await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__heard = null;
+      w.navigation.addEventListener("navigate", (/** @type {any} */ event) => {
+        if (w.__heard !== null || event.navigationType !== "replace" || new URL(event.destination.url).search !== "?scope=week") return;
+        const panel = document.getElementById("smoke-address");
+        w.__heard = { drawn: panel?.textContent === "week", value: panel?.style.getPropertyValue("--smoke-boundary") ?? null };
+      });
+    });
+    await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+    const done = await page
+      .waitForFunction(() => location.search === "?scope=week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+      .then(() => true, () => false);
+    const heard = await page.evaluate(() => /** @type {any} */ (window).__heard);
+    check(varsName, done && heard?.drawn === true && heard?.value === "7", JSON.stringify({ done, heard }));
+  }
+  await page.close();
 }

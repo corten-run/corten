@@ -2248,6 +2248,8 @@ puts back on the entry once the address is in. A state a script puts in the entr
 goes in is newer, and is the one kept: one a `navigate` listener puts in before the replace commits
 is put in the entry the replace makes, and one a `currententrychange` listener puts in that entry,
 or a state it clears there, stays, whether that listener was added before the runtime's or after.
+A `currententrychange` event a script dispatches on `navigation` itself changed no entry: the
+runtime does not count it, and puts the state back all the same.
 A page's own `getState` that moves or writes the entry as the runtime reads the `navigate`
 listener's state back leaves the entries as it left them. The runtime puts none on an entry a script's `navigate` listener
 pushed in place of its replace. It trusts the page's own `getState` and history methods to report
@@ -2259,7 +2261,14 @@ finds no place and a 5xx (which may still draw) leave it, while removing an elem
 longer has counts as done (by its `id`: a removal without one names nothing, and leaves the
 address even beside elements that draw). A 4xx patch that
 draws (a 422) moves it, and so does a page answer
-(`<main>`) drawn in place. An answer that comes once the user has left the page it was sent
+(`<main>`) drawn in place. A patch's CSS variables (`data-vars`) are in before its address goes
+in, as a page answer's are, so a `navigate` listener that hears the replace sees the patch whole.
+A marked answer that draws another page, a page answer (`<main>`, another route's too) or a patch
+whose address is on another path, is a turn as a visit to that page is: a submit of another form
+sent from the page before it and still on its way (a Save) draws nothing and fires no
+`corten:error` when its answer comes, and a write it cut off before its answer came makes the next
+navigation read the page whole, as one a link cuts off. A marked answer that changes only the
+query, a patch, is no turn. An answer that comes once the user has left the page it was sent
 from (a link, Back or Forward, Back to an `#id` of the page, even if Forward has come back)
 draws nothing and fires no `corten:error`, as for any submit a navigation cuts off, and one
 pressed while a visit of the runtime's is on its way (a link or Back the runtime fetches, one a
