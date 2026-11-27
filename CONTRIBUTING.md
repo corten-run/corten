@@ -842,6 +842,13 @@ establish a general ranking.
          `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
          masked for that comparison only if it can differ between starts, and is then checked
          separately against the value or range the plan states, not accepted as any number.
+         A plan may instead declare a workload's placements shuffled
+         ([design Choice 72](docs/design.md#choice-placement-runs), Inner layout): placement i
+         of each side then orders every function of that side's unpadded `.text` after the pad
+         by a key of the workload's seed, i and the function's name, one order for every binary
+         at i and another at each i, and the run records that each placement has exactly that
+         binary's functions and the pad, the pad first, in that order, in place of the move by
+         the pad and the neighbours.
          The run also records, from the unpadded link's map, what the fifth point asks of every
          run, with code aligned beyond 16 bytes or without.
       2. Pairs: R recorded pairs per placement after one that is not, every turn on a freshly

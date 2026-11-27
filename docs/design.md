@@ -10259,6 +10259,27 @@ rules something out.
     diagnostic of where the build that ships sits among them; the fourth run, below, read four
     unpadded builds that way.
 
+    Inner layout. A pad moves `.text` and all after it as one block, so a plan's placements
+    sample where the image lies and never how one function lies against another. On
+    [#2143 The one-pass scope lines merged in #2067 read a page about 0.9% slower in cycles across placements, a miss of its +1% margin](https://github.com/corten-run/corten/issues/2143)
+    ([the diagnosis](https://github.com/corten-run/corten/issues/2143#issuecomment-7200507332),
+    base `c6e9be955`, head `9a79ad877`) the same two commits read +249, +282 and -125 user
+    cycles a page request in three link orders, four placements each, and at one placement +23
+    of +549 cycles lay in the functions the change touched: counts at one to four placements,
+    which leave relative layout as a hypothesis. So a workload's plan may declare `shuffle`:
+    placement i of each side is linked with the pad first and then every function of that
+    side's unpadded `.text` in the order of a keyed hash of the workload's seed, i and each
+    name, the same order for every binary at i, so base and head lay the functions they share
+    alike and differ by the change's own, and another order at each i, so the placements sample
+    inner layouts as well as offsets. The run checks each placement holds the unpadded
+    functions and the pad, the pad first, in that order, in place of the shift and the
+    neighbours. That is not the pinned layout turned away below, which gates one layout; it
+    samples many. Its cost is that each placement is a link no app builds, which may cost every
+    placement cycles a default order does not, both sides alike, as the first version's shuffle
+    could; unlike that one it gives base and head one order. Whether shuffled placements spread
+    wider or narrower than unshuffled ones has not been measured, so a shuffled plan is sized
+    from a shuffled A/A alone.
+
     The kit for the first run, with its `margin.md`, scripts, sources and results, is tag
     `evidence/ee7b0b41`. Before any turn its `build.sh` stops unless each side's captured link run
     again without a pad is byte-identical to cargo's binary, every placement has the same set of
@@ -10808,8 +10829,8 @@ rules something out.
     receipt's crate versions, which a build with another dependency does not match, and a
     same-run control's pads are in the source, where a change is.
 
-    Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
-    first version), since in that plan's container dry run seed 1 on main moved all 3,404
+    Not chosen: a seeded shuffle of the function order as every plan's placements (LLD's
+    `--shuffle-sections`, this Choice's first version), since in that plan's container dry run seed 1 on main moved all 3,404
     functions to a new order and kept 5 of 3,335 pairs of neighbours next to each other (as the
     tag's `margin.md` records): it replaces the default order no real build changes, could make
     every placement slower than a real build in a way an A/A cannot see (both sides pay it), and
@@ -10958,10 +10979,15 @@ rules something out.
     code inside functions of one file of `libdeflate-sys` 1.26.1 to 64 bytes, and their
     sections with it, which none of the alignment flags tried on it changed; said of that
     compiler and that file, and of no other; LLD lays a function the ordering file does not
-    name, given last on the link line, last in `.text`, seen in every link made with one);
+    name, given last on the link line, last in `.text`, seen in every link made with one; LLD
+    only warns of a name in an ordering file that no symbol of the link has (`symbol ordering
+    file: no such symbol`), which the kit makes a shuffled link's failure, seen with Debian LLD
+    19.1.7 and, as the same message under `--fatal-warnings`, with rustc 1.99.1's LLD 23.1.1);
     reasoned (a release binary's placement moves with every later change, so a change's cost is
     read across placements, not at one; relinking the same objects with a pad changes placement
-    alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside
+    alone, as the answers, the unchanged symbol set and the kept neighbours check; a key of the
+    seed, the index and a function's name orders the functions two sides share alike at one
+    index, so a shuffled placement's two sides differ by the change's own functions; a bound inside
     the spread is one the build's own placement could account for, by the spread one run measured;
     with no spread of the setup's own, a bound inside the widest recorded is one placement has
     been seen to account for elsewhere, which is reason to read it across placements and no
@@ -11005,7 +11031,9 @@ rules something out.
     (moving the whole of the code by declared offsets varies placement about as much as real
     changes do, though a real change moves only the code after it and by sizes no plan chose, so
     two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
-    pads may understate a spread that comes from that; whatever a pad itself takes from a
+    pads may understate a spread that comes from that (the diagnosis under Inner layout above is
+    a sign it can, and a shuffled plan reads across it); a shuffled placement's own cost beside a default
+    order's, which no run has measured, falls on both sides alike; whatever a pad itself takes from a
     build's cycles, it takes from both sides of a comparison alike (the first two runs read padded
     builds under their unpadded one in 15 of 16, against two unpadded builds, each one side alone;
     the fourth read one exact base and two near-base unpadded builds among their padded
@@ -11068,7 +11096,10 @@ rules something out.
     not resolve and on the bet above that more placements resolve it); a placement run's
     change and a single-build run
     on the same commits disagree past their bounds often enough to show the pads' placements are not
-    those real builds land in, or that two functions' distance apart matters; a pad is found to
+    those real builds land in, or that two functions' distance apart matters; a shuffled run's
+    A/A records a spread outside an unshuffled one's on the same setup, either way, or a change
+    reads past its bound across one kind of placement and inside it across the other, so one of
+    the two should be every plan's; a pad is found to
     take more from one side of a comparison than from the other, a base against its head or one
     list of pads against the other, so the difference of two padded builds is not the change's
     (this entry first named the unpadded build sitting clearly above or below its padded ones,
@@ -11215,7 +11246,12 @@ rules something out.
     2026-11-27 (UTC), the trend's first run, read from its tag at `d4a002f34`
     (`evidence/trend-2026-11-26`) for each pilot's K and sizing counts, each gated part's K,
     and its A/A's bounds as recorded and with the labels swapped, from each part's
-    `results/report.json`.
+    `results/report.json`; 2026-11-27 (UTC), the counts under Inner layout read from that
+    diagnosis, and the kit at `bef2d1e19` with the shuffle added, its ordering files, relink,
+    layout and map checks run in a Debian 13 container on a small C program linked by Debian
+    LLD 19.1.7 with a pad, three shuffled orders and a second pad, and rustc 1.99.1's LLD
+    23.1.1 given an ordering file with a name no symbol has, with no probe built and nothing
+    turned.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at

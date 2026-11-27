@@ -14,7 +14,8 @@ import { finalBlock, problems as maskProblems, sed, starts, stated, values } fro
 import { gauss, rng } from "./model.mjs";
 import { pads } from "./pads.mjs";
 import { LIMIT } from "./pilot.mjs";
-import { declaration, inputs, problems, resolve } from "./plan.mjs";
+import { order } from "./order.mjs";
+import { declaration, inputs, problems, resolve, setup as setupOf } from "./plan.mjs";
 import { report, sizing } from "./report.mjs";
 import { schedule, shuffled, sides } from "./schedule.mjs";
 import { reading } from "./trend.mjs";
@@ -72,6 +73,9 @@ test("the example plan is usable, and each field that is not is named", () => {
   bad((p) => { p.workloads[0].expects = "expect.txt"; }, 'workload plain: "expects" is not a field of a plan');
   bad((p) => { p.workloads[0].request.method = "POST"; }, 'workload plain: request: "method" is not a field of a plan');
   bad((p) => { p.workloads[0].mask = [{ header: "age", value: "3" }]; }, "age has a field other than header and range");
+  // shuffle is true or left out: no other value says whether the placements shuffle.
+  for (const v of [false, 1, "yes", "true", null, {}]) bad((p) => { p.workloads[0].shuffle = v; }, "shuffle, true when every placement relinks the workload's functions");
+  assert.deepEqual(problems(plan((p) => { p.workloads[0].shuffle = true; })), []);
 });
 
 test("a part's numbers come from the plan: K, the rank, the pad lists, the order", () => {
@@ -97,6 +101,24 @@ test("a part's numbers come from the plan: K, the rank, the pad lists, the order
   // Lists that miss the fourth point's rule are refused, whatever made them.
   const twice = (K) => { const { P, Q } = pads(K); return { P, Q: [P[1], ...Q.slice(1)] }; };
   assert.throws(() => resolve(EXAMPLE, "pilot", "plain", { lists: twice }), /the pad lists for K = 100 miss the fourth point's rule: a size repeats/);
+});
+
+test("a shuffled workload is declared before the run, and one without the field is as before", () => {
+  const shuffledPlan = plan((p) => { p.workloads[0].shuffle = true; });
+  // Without the field nothing plan.mjs gives has a trace of it.
+  const plain = resolve(EXAMPLE, "gated", "plain", { K: 69 });
+  assert.equal("shuffle" in plain, false);
+  assert.ok(!declaration(plain).some((l) => l.includes("inner layout")));
+  assert.equal("shuffle" in setupOf(EXAMPLE, EXAMPLE.workloads[0]), false);
+  // With it, the run, its declaration and its setup say so; nothing else changes.
+  const r = resolve(shuffledPlan, "gated", "plain", { K: 69 });
+  assert.equal(r.shuffle, true);
+  const { shuffle, ...rest } = r;
+  assert.deepEqual(rest, plain);
+  const line = declaration(r).find((l) => l.startsWith("inner layout: shuffled."));
+  assert.ok(line && line.includes(`an order drawn from seed ${r.seed} and i (order.mjs), the same order for every binary at i, base and head and the A/A's two sides, and another at each i`), line);
+  assert.deepEqual(declaration(r).filter((l) => !l.startsWith("inner layout")), declaration(plain));
+  assert.equal(setupOf(shuffledPlan, shuffledPlan.workloads[0]).shuffle, true);
 });
 
 test("the mask: only named headers, each differing between two starts, one with a range held to it as well", () => {
@@ -335,6 +357,58 @@ test("code aligned beyond 16 bytes: each side's sections and list, and every pla
   has(report(results({ align: 32, touch: (res) => rmSync(join(res, "layout", "base-p320-map.txt")) })).json.refused, "base-p320: no second pad's line with a passing map check");
 });
 
+// A shuffled run's results: each side's list of functions, and every layout check (and map
+// check, with a second pad) a shuffled one naming the SHA-256 of the ordering file order.mjs
+// draws from that list, the seed and the binary's index.
+const FUNCTIONS = "_start\ncrc\n_ZN5probe4main17h0123456789abcdefE.llvm.123\n";
+const shuffledRun = ({ touch = () => {}, align = 16, index = (i) => i, layout = {}, ...o } = {}) => results({ ...o, align, edit: (p) => { p.workloads[0].shuffle = true; }, touch: (res, put, r) => {
+  const second = align > 16;
+  for (const side of r.sides) put(`functions-${side}.txt.gz`, gzipSync(FUNCTIONS));
+  const used = new Set();
+  for (const c of r.comparisons) for (let i = 1; i <= r.K; i++) for (const b of sides(c, i, r.P, r.Q)) used.add(b);
+  for (const b of used) {
+    const pad = Number(b.replace(/^.*-p/, "")), i = r.P.includes(pad) ? r.P.indexOf(pad) + 1 : r.Q.indexOf(pad) + 1;
+    const sha = createHash("sha256").update(order(FUNCTIONS.trim().split("\n"), r.seed, index(i))).digest("hex");
+    put(join("layout", `${b}.txt`), `functions in both: 3\nJSON ${JSON.stringify({ ok: true, pad, second, shuffled: true, order: sha, ...layout })}\n`);
+    if (second) put(join("layout", `${b}-map.txt`), `.text: 3 input sections\nJSON ${JSON.stringify({ ok: true, pad, second: 48, shuffled: true })}\n`);
+  }
+  touch(res, put, r);
+} });
+
+test("a shuffled run says so in its header and reads only placements linked in their drawn order", () => {
+  const res = shuffledRun();
+  assert.ok(readFileSync(join(res, "plan", "resolved.sh"), "utf8").includes("SHUFFLE='1'\n"));
+  const r = report(res);
+  assert.equal(r.exit, 0, r.json.refused?.join(" | "));
+  assert.equal(r.json.shuffle, true);
+  for (const word of ["Inner layout: shuffled. Each placement i was linked with its pad first", "Each placement is a link no app builds.", "in the order of its ordering file"]) assert.ok(r.md.includes(word), word);
+  assert.ok(!r.md.includes("every function moved by exactly its pad"));
+  assert.equal(report(shuffledRun({ align: 32 })).exit, 0);
+  const refused = (opts, word) => { const x = report(shuffledRun(opts)); assert.equal(x.exit, 2, word); has(x.json.refused, word); };
+  refused({ touch: (res_) => rmSync(join(res_, "functions-head.txt.gz")) }, "head: no list of its functions (functions-head.txt.gz)");
+  refused({ touch: (res_, put) => put("functions-base.txt.gz", gzipSync("crc\ncrc\n")) }, "its side's list of functions makes no ordering file");
+  // Linked in another index's order, or the list kept is not the one the files were drawn from.
+  refused({ index: (i) => i + 1 }, "no passing shuffled layout check for a pad of");
+  refused({ touch: (res_, put) => put("functions-base.txt.gz", gzipSync("_start\ncrc\n")) }, "no passing shuffled layout check");
+  // A layout check that is not a shuffled one, and a map check that is not.
+  refused({ layout: { shuffled: undefined } }, "no passing shuffled layout check");
+  refused({ align: 32, touch: (res_, put) => put(join("layout", "base-p320-map.txt"), `JSON ${JSON.stringify({ ok: true, pad: 320, second: 48 })}\n`) }, "base-p320: no second pad's line with a passing map check");
+  // resolved.json that drops the declaration.
+  refused({ touch: (res_, put) => { const f = join("plan", "resolved.json"), j = JSON.parse(readFileSync(join(res_, f), "utf8")); delete j.shuffle; put(f, JSON.stringify(j)); } }, "resolved.json's shuffle is not what plan.mjs gives");
+});
+
+test("a run without the field reads as before and refuses a shuffled placement's check", () => {
+  const res = results(), r = report(res);
+  assert.equal(r.exit, 0);
+  assert.equal("shuffle" in r.json, false);
+  assert.ok(!r.md.includes("Inner layout"));
+  assert.ok(!readFileSync(join(res, "plan", "resolved.sh"), "utf8").includes("SHUFFLE"));
+  assert.equal("shuffle" in JSON.parse(readFileSync(join(res, "plan", "resolved.json"), "utf8")), false);
+  const refused = (touch, word) => { const x = report(results({ touch })); assert.equal(x.exit, 2, word); has(x.json.refused, word); };
+  refused((res_, put) => put(join("layout", "base-p320.txt"), `JSON ${JSON.stringify({ ok: true, pad: 320, second: false, shuffled: true, order: "0".repeat(64) })}\n`), "base-p320: no passing layout check for a pad of 320 bytes");
+  refused((res_, put) => { const f = join("plan", "resolved.json"), j = JSON.parse(readFileSync(join(res_, f), "utf8")); j.shuffle = true; put(f, JSON.stringify(j)); }, "resolved.json's shuffle is not what plan.mjs gives");
+});
+
 test("refused: results a failed, misconfigured or altered run could leave", () => {
   const refused = (opts, word) => { const r = report(results(opts)); assert.equal(r.exit, 2, word); has(r.json.refused, word); assert.ok(r.md.startsWith("# Refused")); };
   refused({ touch: (res) => rmSync(join(res, "run-id")) }, "no run-id in the results");
@@ -506,6 +580,8 @@ test("--sized-from: each result that does not size this plan's K is refused in i
   setup((p) => { const { threads, connections, seconds } = p.load; p.load = { seconds, connections, threads }; }, "load differs");
   setup(same, "probe or request script differs", PROBE + "// another probe\n");
   setup((p) => { p.load.threads = 4; p.workloads[0].request.path = "/unstaged"; }, "request, load differ");
+  // An A/A of placements moved by their pads alone does not size a shuffled plan's K.
+  setup((p) => { p.workloads[0].shuffle = true; }, "shuffle differs");
   // What a plan declares before any part is resolved includes the inputs' digest.
   taken({ ...resolved(sized, null, { part: null }), written: true }, "pilot plain: K = 30 placements, R = 2", "plain: inputs: sha256 ");
 });

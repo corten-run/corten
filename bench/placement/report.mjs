@@ -16,6 +16,10 @@
 //   - a binary a comparison reads that was not verified against its side's unpadded binary, has
 //     no passing layout check or, where either side has a section of .text aligned beyond 16
 //     bytes, no second pad's line and map check;
+//   - for a workload the plan shuffles (README.md, workloads[].shuffle), a side without its list
+//     of functions (functions-<side>.txt.gz), or a binary whose layout check (and map check, with
+//     a second pad) is not a shuffled one for the ordering file order.mjs draws from that list,
+//     the seed and the binary's index; for one it does not, a layout or map check that is;
 //   - placements not started one after another in the order run.
 // A placement leaves its comparison without a bound when its directory, its counts, its
 // placement.txt (the comparison, A and B with the build's SHA-256s, the run, the plan, its place
@@ -41,6 +45,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapText, readMap, record, refusals } from "./map.mjs";
+import { names as functionNames, order } from "./order.mjs";
 import { DRAWS, eligibility, failing, LIMIT, SEED, sizeByRule } from "./pilot.mjs";
 import { EVENTS, inputs, K_MAX, K_MIN, problems, resolve, setup } from "./plan.mjs";
 import { lines as scheduleLines, sides } from "./schedule.mjs";
@@ -106,7 +111,7 @@ export function read(dir) {
   if (existsSync(join(dir, "DRYRUN")) !== Boolean(dry)) refused.push("the results and their plan do not agree on whether this is a dry run");
   let r;
   try { r = resolve(plan, saved.part, saved.workload, { K: saved.declaredK === "pilot" ? saved.sized?.K : undefined, dry }); } catch (e) { return { refused: [...refused, `plan.mjs gives no run for the results' plan: ${e.message}`] }; }
-  for (const k of ["K", "R", "seconds", "seed", "P", "Q", "schedule"]) if (!same(r[k], saved[k])) refused.push(`resolved.json's ${k} is not what plan.mjs gives for the plan`);
+  for (const k of ["K", "R", "seconds", "seed", "P", "Q", "schedule", "shuffle"]) if (!same(r[k], saved[k])) refused.push(`resolved.json's ${k} is not what plan.mjs gives for the plan`);
   if (text("schedule.txt") !== scheduleLines(r.schedule)) refused.push(`schedule.txt is not the seeded order of ${r.part} ${r.workload}, K = ${r.K}, seed ${r.seed}`);
   const { part, workload: W, K, R, P, Q } = r;
 
@@ -141,14 +146,31 @@ export function read(dir) {
     const j = text(file).split("\n").find((l) => l.startsWith("JSON "));
     try { const o = JSON.parse(j.slice(5)); return o.ok === true && Object.entries(want).every(([k, v]) => o[k] === v); } catch { return false; }
   };
+  // A shuffled placement's ordering file, as order.mjs draws it from its side's list of functions,
+  // the seed and the placement's index (its place in P or Q); unshuffled, a layout check carries
+  // no "shuffled" and no "order".
+  const lists = new Map();
+  if (r.shuffle) for (const side of r.sides) {
+    const f = join(dir, `functions-${side}.txt.gz`);
+    if (!existsSync(f)) { refused.push(`${side}: no list of its functions (functions-${side}.txt.gz); a shuffled run without it does not show the order each placement was linked in`); continue; }
+    lists.set(side, functionNames(readFileSync(f)));
+  }
+  const orderSha = (side, pad) => {
+    const i = P.includes(pad) ? P.indexOf(pad) + 1 : Q.indexOf(pad) + 1;
+    try { return createHash("sha256").update(order(lists.get(side), r.seed, i)).digest("hex"); } catch { return null; }
+  };
   const used = new Set();
   for (const c of r.comparisons) for (let i = 1; i <= K; i++) for (const b of sides(c, i, P, Q)) used.add(b);
   for (const b of used) {
     const side = b.replace(/-p\d+$/, ""), pad = Number(b.replace(/^.*-p/, ""));
     if (!shas.has(b)) { refused.push(`${b}: not in sha256.txt`); continue; }
     if (verified.get(b) !== side) refused.push(`${b}: not verified to answer as its unpadded binary (verify/verdicts.txt)`);
-    if (!check(join("layout", `${b}.txt`), { pad, second })) refused.push(`${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
-    if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second }))) refused.push(`${b}: no second pad's line with a passing map check (second-pads.txt, layout/${b}-map.txt)`);
+    if (r.shuffle && !lists.has(side)) continue;
+    const shuffled = r.shuffle ? { shuffled: true } : { shuffled: undefined };
+    const sha = r.shuffle ? orderSha(side, pad) : undefined;
+    if (r.shuffle && sha === null) refused.push(`${b}: its side's list of functions makes no ordering file (functions-${side}.txt.gz)`);
+    else if (!check(join("layout", `${b}.txt`), { pad, second, ...shuffled, order: sha })) refused.push(r.shuffle ? `${b}: no passing shuffled layout check for a pad of ${pad} bytes and the ordering file drawn from its side's list of functions, seed ${r.seed} and its index (layout/${b}.txt)` : `${b}: no passing layout check for a pad of ${pad} bytes (layout/${b}.txt)`);
+    if (second && !(secondPads.get(b)?.pad === pad && check(join("layout", `${b}-map.txt`), { pad, second: secondPads.get(b).second, ...shuffled }))) refused.push(`${b}: no second pad's line with a passing map check (second-pads.txt, layout/${b}-map.txt)`);
   }
   if (refused.length) return { refused };
 
@@ -239,10 +261,11 @@ export function report(dir) {
   if (dry) out.push("**DRY RUN: a test of the scripts, read for nothing. No figure below is a measurement of anything.**", "");
   out.push(`Run ${run.runId}, plan sha256 ${run.planSha}, inputs sha256 ${run.inputs.sha256} (the ${run.inputs.files} files the plan names by path: the probe's, the request script and any expected answer, kept with these results); base ${run.base}${part === "gated" ? `, head ${run.head}` : ""}; CPU ${run.hostId.model ?? "?"}, kernel ${run.hostId.kernel ?? "?"}. K = ${K} placements, R = ${R} recorded pairs in each after one that is not, ${run.seconds} s turns of \`wrk -t${plan.load.threads} -c${plan.load.connections}\`, every turn on a freshly started binary, the order drawn from seed ${run.seed}. Figures are per request, B / A - 1 per pair; a placement's statistic is the median of its pairs; the bound is the ${ord(run.rank)} smallest of the ${K} placement medians and the lower bound the ${ord(run.lowerRank)}. Every recorded turn is one in which wrk reported no failed request and every counter ran 100% of the turn.`, "");
   out.push(`The workload as the plan declares it: ${w.declared}`, "");
+  if (run.shuffle) out.push(`Inner layout: shuffled. Each placement i was linked with its pad first and then every function of its side's unpadded build in an order drawn from seed ${run.seed} and i (order.mjs), one order for every binary at i and another at each i, so the placements sample how a build lays its functions against each other as well as where its image lies. Each placement is a link no app builds.`, "");
   // A K nothing checked is said in every reading: no bare pass for a K nobody checked.
   const unchecked = run.sized ? "" : "; K not checked by the kit";
   if (part === "gated") out.push(dry ? `K = ${K} is the dry run's, not one the plan declares or the sizing check passed.` : run.sized ? `K = ${K} is ${run.declaredK === "pilot" ? "the smallest at which the sizing check passes" : `the plan's number (which it says was sized from: ${run.sizedFrom}), checked at that K itself`} from run ${run.sized.from}: ${run.sized.counts.map((m) => `${m.model} ${m.failing} failing draws of ${DRAWS}`).join(", ")}, against at most ${LIMIT}.` : `K = ${K} is the plan's number, which the plan says was sized from: ${run.sizedFrom}. **The kit did not check it**: plan.mjs was given no results to check it from (--sized-from), so whether this K meets the sizing rule is the author's to show, and each reading below says so.`, "");
-  const json = { exit: 0, name: plan.name, run: run.runId, plan: run.planSha, inputs: run.inputs.sha256, part, workload: W, dry: Boolean(dry), K, sizedFrom: run.sizedFrom, sized: part === "gated" ? run.sized : undefined, R, seed: run.seed, host: run.hostId, base: run.base, head: part === "gated" ? run.head : null, complete: {}, problems: {}, records: run.records, secondPads: [...run.secondPads.values()].map((x) => x.line) };
+  const json = { exit: 0, name: plan.name, run: run.runId, plan: run.planSha, inputs: run.inputs.sha256, part, workload: W, dry: Boolean(dry), K, sizedFrom: run.sizedFrom, sized: part === "gated" ? run.sized : undefined, R, seed: run.seed, ...(run.shuffle ? { shuffle: true } : {}), host: run.hostId, base: run.base, head: part === "gated" ? run.head : null, complete: {}, problems: {}, records: run.records, secondPads: [...run.secondPads.values()].map((x) => x.line) };
   for (const c of run.comparisons) {
     json.complete[c] = results[c].complete; json.problems[c] = results[c].why;
     if (!results[c].complete) out.push(`**${c} has no bound** (${results[c].placements.length} of ${K} placements read; none is rerun, replaced or dropped): ${results[c].why.join("; ")}.`, "");
@@ -303,7 +326,7 @@ export function report(dir) {
     out.push(`The side's list, every symbol the map lists in \`.text\` from the first such section on:`, "", "| symbol | archive(member) or object |", "| --- | --- |", ...rec.list.map((s) => `| \`${s.symbol}\` | ${section(s)} |`), "");
   }
   if (run.second) out.push(`Every placement has a second pad, the smallest of 16, 32, 48 and 64 bytes whose map shows \`.data\` where the rule says, and passed the map check against its side's unpadded link:`, "", ...[...run.secondPads.values()].map((x) => `- ${x.line}`), "");
-  else out.push("Neither side has such a section: no second pad, and every placement passed the first point's check that every function moved by exactly its pad.", "");
+  else out.push(run.shuffle ? "Neither side has such a section: no second pad, and every placement passed the check that it holds its side's functions after its pad in the order of its ordering file." : "Neither side has such a section: no second pad, and every placement passed the first point's check that every function moved by exactly its pad.", "");
   json.exit = Object.values(json.complete).every(Boolean) ? 0 : 1;
   return { exit: json.exit, json, md: out.join("\n") };
 }

@@ -24,6 +24,8 @@
 #                of sections aligned beyond 16 bytes, the second pads' lines when there are any,
 #                the probe's source as built with the request script and the expected answer
 #                (checked again against plan/inputs.sha256), and each build's environment;
+#                for a workload the plan shuffles, each side's list of its functions
+#                (functions-<side>.txt.gz), from which report.mjs draws every ordering file again;
 #                host.txt names cargo's config files outside the probe, which nothing checks
 #   verify       every placement answers as its side's unpadded binary (verify.sh); a failure
 #                stops the run
@@ -92,6 +94,7 @@ for s in $SIDES; do
     cp "$B/record-$s.json" "$RES/"; cp "$WORK/maps/$s.map.gz" "$RES/maps/"; cp "$WORK/capture/$s/args.json" "$RES/link-$s.json"; cp "$WORK/build-$s.env" "$RES/"
 done
 [ ! -f "$B/second-pads.txt" ] || { cp "$B/second-pads.txt" "$RES/"; cp "$WORK/maps/placements.sha256" "$RES/maps/"; }
+[ "${SHUFFLE:-0}" = 0 ] || for s in $SIDES; do gzip -9 -n -c "$B/functions-$s.txt" >"$RES/functions-$s.txt.gz"; done
 # The probe's source as build.sh built it, beside the request script and the expected answer in
 # plan/: the files the plan names by path, still what plan.mjs listed.
 sed -n 's/^[0-9a-f]*  \(probe\/.*\)$/\1/p' "$PL/inputs.sha256" | while IFS= read -r f; do mkdir -p "$RES/$(dirname "$f")"; cp "$WORK/$f" "$RES/$f"; done

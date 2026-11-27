@@ -13,9 +13,13 @@
 //   node map.mjs data <unpadded map> <placement map> <first pad bytes>
 //                                               where the placement's .data begins and whether
 //                                               that is where the rule says (exit 1 when not)
-//   node map.mjs check <unpadded map> <placement map> <first pad bytes> <second pad bytes>
+//   node map.mjs check <unpadded map> <placement map> <first pad bytes> <second pad bytes> [--shuffled]
 //                                               the placement against the unpadded link by LLD's
-//                                               layout rule; exit 1 with each reason it fails
+//                                               layout rule; exit 1 with each reason it fails.
+//                                               --shuffled, for a placement linked with a
+//                                               shuffled ordering file (order.mjs): its input
+//                                               sections between the pads are the unpadded
+//                                               link's in any order, which layout.mjs checks
 // A map line is VMA, LMA, size and alignment, then an output section at no indent, an input
 // section (`file:(name)`) at 8 spaces or a symbol at 16. LLD lays the input sections of an output
 // section in order, each at the first multiple of its own alignment at or after the end of the
@@ -120,8 +124,12 @@ export function data(unpadded, placed, pad) {
  * every input section begins at the first multiple of its alignment at or after the end of the
  * one before it; every symbol of .text is in the same input section in both links, as far from
  * its start; and .data is where the rule says.
+ * shuffled: the input sections between the pads are the unpadded link's, each of its size and
+ * alignment, in the order the placement's ordering file gave them (layout.mjs --order checks
+ * that order), each section's symbols compared with those of the unpadded link's section of its
+ * name; the counts of what moved by exactly the pad are not taken.
  */
-export function check(unpadded, placed, pad, second) {
+export function check(unpadded, placed, pad, second, shuffled = false) {
   const A = text(unpadded), B = text(placed), why = [];
   if (A.at !== B.at) why.push(`.text begins at 0x${B.at.toString(16)}, not 0x${A.at.toString(16)} as in the unpadded link`);
   const first = B.inputs[0], last = B.inputs.length > 1 ? B.inputs[B.inputs.length - 1] : null;
@@ -131,7 +139,14 @@ export function check(unpadded, placed, pad, second) {
   const rest = B.inputs.slice(1, -1);
   let same = rest.length === A.inputs.length;
   if (!same) why.push(`.text has ${A.inputs.length} input sections unpadded and ${rest.length} between the pads in the placement`);
-  else for (let i = 0; i < rest.length; i++) {
+  else if (shuffled) {
+    const tally = new Map(), k = (s) => `${s.id}\0${s.size}\0${s.align}`;
+    for (const s of A.inputs) tally.set(k(s), (tally.get(k(s)) ?? 0) + 1);
+    for (const s of rest) tally.set(k(s), (tally.get(k(s)) ?? 0) - 1);
+    // The counts match, so an unpadded section with no match between the pads is one of them with another size or alignment, or another section in its place.
+    const off = [...tally].filter(([, n]) => n > 0), count = off.reduce((t, [, n]) => t + n, 0), [first] = off.map(([x]) => x.split("\0"));
+    if (count) { same = false; why.push(`${count} input sections of the unpadded .text are not between the pads with one size and alignment: ${first[0]} (${first[1]} bytes, aligned to ${first[2]})`); }
+  } else for (let i = 0; i < rest.length; i++) {
     const a = A.inputs[i], b = rest[i];
     if (a.id !== b.id || a.size !== b.size || a.align !== b.align) { same = false; why.push(`input section ${i} differs: ${a.id} (${a.size} bytes, aligned to ${a.align}) against ${b.id} (${b.size}, ${b.align})`); break; }
   }
@@ -141,15 +156,18 @@ export function check(unpadded, placed, pad, second) {
   if (looseB) why.push(`${looseB} input sections of the placement's .text do not begin at the first multiple of their alignment at or after the end of the one before`);
   let symbols = 0, off = 0, exact = 0, sectionsExact = 0;
   const before = A.inputs.findIndex((s) => s.align > STEP), firstAligned = before < 0 ? A.inputs.length : before;
-  if (same) for (let i = 0; i < rest.length; i++) {
-    const a = A.inputs[i], b = rest[i];
+  // Each placement section with the unpadded link's of its place, or, shuffled, of its name (the k-th of a name with the k-th).
+  const byId = new Map();
+  if (shuffled) A.inputs.forEach((a, i) => byId.set(a.id, [...(byId.get(a.id) ?? []), i]));
+  if (same) for (let j = 0; j < rest.length; j++) {
+    const i = shuffled ? byId.get(rest[j].id).shift() : j, a = A.inputs[i], b = rest[j];
     symbols += a.symbols.length;
-    if (i < firstAligned && b.at - a.at === pad) sectionsExact++;
+    if (!shuffled && i < firstAligned && b.at - a.at === pad) sectionsExact++;
     if (a.symbols.length !== b.symbols.length) { off += Math.max(a.symbols.length, b.symbols.length); continue; }
     for (let k = 0; k < a.symbols.length; k++) {
       const x = a.symbols[k], y = b.symbols[k];
       if (x.name !== y.name || x.at - a.at !== y.at - b.at) off++;
-      else if (i < firstAligned && y.at - x.at === pad) exact++;
+      else if (!shuffled && i < firstAligned && y.at - x.at === pad) exact++;
     }
   }
   if (off) why.push(`${off} symbols of .text are not in the input section the unpadded link has them in, as far from its start`);
@@ -157,12 +175,13 @@ export function check(unpadded, placed, pad, second) {
   if (!d.fits) why.push(`.data begins ${d.offset} bytes into a ${LINE}-byte line, not ${d.want}, the unpadded link's offset plus the first pad's size`);
   return {
     ok: why.length === 0, why, pad, second, inputs: A.inputs.length, symbols, sectionsBeforeAligned: firstAligned, sectionsBeforeAlignedMovedByPad: sectionsExact,
-    symbolsBeforeAlignedMovedByPad: exact, dataAt: d.at, dataOffset: d.offset,
+    symbolsBeforeAlignedMovedByPad: exact, dataAt: d.at, dataOffset: d.offset, ...(shuffled ? { shuffled: true } : {}),
   };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const [mode, a, b, padArg, secondArg] = process.argv.slice(2);
+  const args = process.argv.slice(2), shuffled = args[0] === "check" && args.at(-1) === "--shuffled";
+  const [mode, a, b, padArg, secondArg] = shuffled ? args.slice(0, -1) : args;
   const load = (file) => readMap(mapText(readFileSync(file)));
   const fail = (lines) => { for (const l of lines) console.error(`map.mjs: ${l}`); process.exit(1); };
   if (mode === "record" && a) console.log(JSON.stringify(record(load(a))));
@@ -175,12 +194,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.log(`.data 0x${d.at?.toString(16)} offset ${d.offset} want ${d.want} ${d.fits ? "fits" : "elsewhere"}`);
     process.exit(d.fits ? 0 : 1);
   } else if (mode === "check" && b && Number.isInteger(Number(padArg)) && Number.isInteger(Number(secondArg))) {
-    const r = check(load(a), load(b), Number(padArg), Number(secondArg));
-    console.log(`.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link between a first pad of ${r.pad} bytes and a second of ${r.second}; ${r.sectionsBeforeAlignedMovedByPad} of the ${r.sectionsBeforeAligned} sections before the first aligned beyond ${STEP} bytes moved by exactly the pad, with ${r.symbolsBeforeAlignedMovedByPad} symbols; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`);
+    const r = check(load(a), load(b), Number(padArg), Number(secondArg), shuffled);
+    console.log(shuffled
+      ? `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link, in the order of the placement's ordering file, between a first pad of ${r.pad} bytes and a second of ${r.second}; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`
+      : `.text: ${r.inputs} input sections and ${r.symbols} symbols of the unpadded link between a first pad of ${r.pad} bytes and a second of ${r.second}; ${r.sectionsBeforeAlignedMovedByPad} of the ${r.sectionsBeforeAligned} sections before the first aligned beyond ${STEP} bytes moved by exactly the pad, with ${r.symbolsBeforeAlignedMovedByPad} symbols; .data at 0x${r.dataAt?.toString(16)}, ${r.dataOffset} bytes into a line`);
     console.log("JSON " + JSON.stringify(r));
     if (!r.ok) fail(r.why);
   } else {
-    console.error("usage: node map.mjs record|refuse <unpadded map> | data <unpadded map> <placement map> <pad> | check <unpadded map> <placement map> <pad> <second pad>");
+    console.error("usage: node map.mjs record|refuse <unpadded map> | data <unpadded map> <placement map> <pad> | check <unpadded map> <placement map> <pad> <second pad> [--shuffled]");
     process.exit(2);
   }
 }

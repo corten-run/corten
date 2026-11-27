@@ -20,6 +20,11 @@
 // link in the probe's directory is refused, and so is a probe directory that is itself one.
 // DRYRUN=1 in the environment marks the work directory a dry run, a test of the scripts that is
 // read for nothing, with DRY_K (6) placements, DRY_R (2) pairs and DRY_TURN (1) second turns.
+// A workload's shuffle, true when declared, has every placement of its parts relinked with its
+// functions in an order drawn from its seed and the placement's index (order.mjs) as well as
+// with its pad, so its placements sample how a build lays its functions against each other and
+// not only where its image lies (docs/design.md#choice-placement-runs, "Inner layout"). Left out,
+// nothing this script writes differs from a plan without the field.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -48,7 +53,7 @@ const FIELDS = {
   plan: ["plan", "name", "base", "head", "probe", "host", "load", "R", "placementSeconds", "pilot", "workloads"],
   probe: ["dir", "tree", "toolchain", "env", "build", "binary", "start"],
   host: ["cpuModel", "cpus"], "host.cpus": ["server", "load", "driver"], load: ["threads", "connections", "seconds"], pilot: ["K", "why"],
-  workload: ["name", "declared", "request", "status", "mask", "K", "sizedFrom", "seed", "reads", "reduction", "recordsSpread", "start", "expect"],
+  workload: ["name", "declared", "request", "status", "mask", "K", "sizedFrom", "seed", "reads", "reduction", "recordsSpread", "start", "expect", "shuffle"],
   request: ["path", "headers", "script"],
 };
 const unknown = (o, kind, at) => (o !== null && typeof o === "object" && !Array.isArray(o) ? Object.keys(o).filter((k) => !FIELDS[kind].includes(k)).map((k) => `${at}: "${k}" is not a field of a plan`) : []);
@@ -106,6 +111,7 @@ export function problems(plan) {
     if (typeof w.recordsSpread !== "boolean") bad(`${at}: recordsSpread, whether the plan declares that the run's A/A records a placement spread for the workload: true or false`);
     if (w.start !== undefined && !startOk(w.start)) bad(`${at}: start`);
     if (w.expect !== undefined && !relative(w.expect)) bad(`${at}: expect, a path from the plan file`);
+    if (w.shuffle !== undefined && w.shuffle !== true) bad(`${at}: shuffle, true when every placement relinks the workload's functions in an order drawn from its seed and the placement's index; left out when its placements move the image by their pads alone`);
   }
   return why;
 }
@@ -129,6 +135,7 @@ export function resolve(plan, part, workload, { K: given, dry = null, lists = pa
     name: plan.name, part, workload, dry, K, declaredK: declared, sizedFrom: w.sizedFrom ?? null, R, seconds, seed: w.seed, rank, lowerRank: K + 1 - rank, P, Q, coverage: coverage(P, Q),
     sides: part === "pilot" ? ["base"] : ["base", "head"], comparisons: comparisons(part, workload), schedule: schedule(part, workload, K, w.seed),
     base: plan.base, head: plan.head, reduction: w.reduction, reads: w.reads, recordsSpread: w.recordsSpread, declared: w.declared,
+    ...(w.shuffle ? { shuffle: true } : {}),
   };
 }
 
@@ -146,6 +153,7 @@ export function declaration(r) {
     `${r.part} ${r.workload}${r.dry ? " (DRY RUN: a test of the scripts, read for nothing)" : ""}: K = ${r.K} placements${r.dry || r.part === "pilot" ? "" : r.declaredK === "pilot" ? " (from the pilot, by the sizing rule)" : ` (the plan's number, which it says was sized from: ${r.sizedFrom})`}, R = ${r.R} recorded pairs each after one that is not, ${r.seconds} s turns; comparisons ${r.comparisons.join(" and ")}`,
     ...(r.part === "pilot" ? ["a pilot: an A/A of the base read only for the spread of its placement medians, to size K; it reads no threshold"] : [`thresholds: ${thresholds(r).join("; ")}`, `the A/A ${r.recordsSpread ? "records a placement spread for the workload, if it is complete and resolves" : "records no placement spread"}`]),
     `the bound is the ${ord(r.rank)} smallest of the ${r.K} placement medians, the lower bound the ${ord(r.lowerRank)}; the order is drawn from seed ${r.seed}`,
+    ...(r.shuffle ? [`inner layout: shuffled. Each placement i is relinked with its pad first and then every function of its side's unpadded build in an order drawn from seed ${r.seed} and i (order.mjs), the same order for every binary at i, base and head and the A/A's two sides, and another at each i, so the placements sample how the functions lie against each other as well as where the image lies`] : []),
     `pads p (base and head in the change, the A/A's first side): ${r.P.join(" ")}`,
     `pads q (the A/A's second side): ${r.Q.join(" ")}`,
     `${2 * r.K} distinct sizes from ${Math.min(...r.P, ...r.Q)} to ${Math.max(...r.P, ...r.Q)} bytes; p by 64-byte-line phase (0, 16, 32, 48): ${c.P.line.join(", ")}, by quarter of a page: ${c.P.pageQuarters.join(", ")}; q: ${c.Q.line.join(", ")} and ${c.Q.pageQuarters.join(", ")}`,
@@ -158,7 +166,7 @@ export function declaration(r) {
  * number is compared by with the A/A it was sized from. The build command and the build's
  * environment are among it, since they make the binary as the probe's source does.
  */
-export const setup = (plan, w) => ({ request: w.request, start: w.start ?? plan.probe.start, load: plan.load, mask: w.mask, build: plan.probe.build, env: Object.fromEntries(Object.entries(plan.probe.env).sort()) });
+export const setup = (plan, w) => ({ request: w.request, start: w.start ?? plan.probe.start, load: plan.load, mask: w.mask, build: plan.probe.build, env: Object.fromEntries(Object.entries(plan.probe.env).sort()), ...(w.shuffle ? { shuffle: true } : {}) });
 
 // Every file under a directory, by its path from it. A symbolic link is refused: the list holds
 // files by what they hold, and what a link points at lies outside what the plan names by path.
@@ -264,7 +272,7 @@ async function main(argv) {
       // An A/A read under another plan sizes this one only on this plan's setup (the expected
       // answer is the change's own, so it is left out of the comparison).
       const less = (text) => text.replace(/^.*  plan\/expect\.txt\n/m, ""), mine = setup(plan, w);
-      const other = [...Object.keys(mine).filter((k) => !same(mine[k], sized.setup[k])), ...(less(sized.inputs.text) === less(list.text) ? [] : ["probe or request script"])];
+      const other = [...new Set([...Object.keys(mine), ...Object.keys(sized.setup)])].filter((k) => !same(mine[k], sized.setup[k])).concat(less(sized.inputs.text) === less(list.text) ? [] : ["probe or request script"]);
       if (other.length) throw new Error(`${sizedFrom} was read on another setup than this plan's: its ${other.join(", ")} differ${other.length > 1 ? "" : "s"}`);
     }
     if (!sized.ok) throw new Error(w.K === "pilot" ? `${sizedFrom} sizes no K for ${workload}: the workload is not read across placements under this plan` : `${sizedFrom} does not pass K = ${w.K} for ${workload}: the plan takes no K the sizing check does not allow`);
@@ -292,6 +300,7 @@ async function main(argv) {
     CPU_SERVER: c.server, CPU_LOAD: c.load.join(","), CPU_DRIVER: c.driver, CPU_MODEL: plan.host.cpuModel ?? "", WRK_T: plan.load.threads, WRK_C: plan.load.connections, PLACEMENT_SECONDS: plan.placementSeconds,
     // The host's, not the plan's (README.md, What is this host's alone): turns.sh's two servers' ports.
     PORT_A: 18081, PORT_B: 18082,
+    ...(r.shuffle ? { SHUFFLE: 1 } : {}),
   };
   writeFileSync(join(out, "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}=${quote(v)}\n`).join(""));
   console.log(declaration(r).join("\n"));

@@ -36,6 +36,14 @@
 #      checked against the unpadded link's (map.mjs check) and its functions as in 4 but for the
 #      shift (layout.mjs --second);
 #   6. no two binaries of one side have the same SHA-256.
+# For a workload the plan shuffles (README.md, workloads[].shuffle), each side's functions in .text
+# are listed from its unpadded binary (bin/functions-<side>.txt, order.mjs), and placement i of
+# every binary (p_i and q_i alike) is linked with orders/<side>-p<n>.txt in place of
+# pads/order.txt: the pad's function and then those functions in the order order.mjs draws from
+# the workload's seed and i. Such a link fails when LLD warns that a name in the file is no symbol
+# (relink.mjs --every-name), and 4 and 5's checks of the functions are layout.mjs --order with the
+# unpadded map, which asks for them in the file's order in place of each moved by the pad with
+# its neighbours (5's map check takes --shuffled, its sections in any order).
 # A refusal (3 or 5) ends with a line "REFUSED: ..." in bin/refused.txt and exit 3: that side
 # does not pass and shows no win, and nothing is turned. 3 refuses before any placement is linked;
 # 5 can only be seen as the placements are linked. Writes bin/, maps/, pads/, capture/,
@@ -43,6 +51,7 @@
 set -eu
 [ $# -eq 1 ] && [ -f "$1/plan/resolved.sh" ] || { echo "usage: build.sh <work dir>   (after plan.mjs wrote <work dir>/plan/)" >&2; exit 2; }
 . "$1/plan/resolved.sh"
+SHUFFLE=${SHUFFLE:-0}
 B=$WORK/bin; M=$WORK/maps
 fail() { echo "build: $*" >&2; exit 1; }
 refused() { mkdir -p "$B"; echo "REFUSED: $*" | tee "$B/refused.txt" >&2; exit 3; }
@@ -51,8 +60,9 @@ case "$WORK" in /*/*) ;; *) fail "the work directory $WORK is not a directory of
 [ ! -f "$HOME/.cargo/env" ] || . "$HOME/.cargo/env"
 export RUSTUP_TOOLCHAIN="$TOOLCHAIN"
 rustc -V
-for d in bin maps pads capture work probe wrap target-base target-head; do rm -rf "${WORK:?}/$d"; done
+for d in bin maps pads orders capture work probe wrap target-base target-head; do rm -rf "${WORK:?}/$d"; done
 mkdir -p "$B/layout" "$M" "$WORK/pads" "$WORK/capture" "$WORK/wrap"
+[ "$SHUFFLE" = 0 ] || { echo "shuffled: every placement's functions in an order drawn from seed $SEED and its index"; mkdir -p "$WORK/orders"; }
 cp -R "$PROBE" "$WORK/probe"
 # What the plan names by path is what plan.mjs listed when it resolved the plan, and nothing more:
 # cp -R keeps a symbolic link a link, so everything under the copy that is not a directory (a file,
@@ -107,26 +117,46 @@ build() { # <side> <commit>
     node "$KIT/map.mjs" record "$M/$side.map" >"$B/record-$side.json"
     node "$KIT/map.mjs" refuse "$M/$side.map" >"$B/refuse-$side.txt" 2>&1 || refused "$side has no reading across placements: $(sed 's/^map.mjs: //' "$B/refuse-$side.txt" | paste -sd';' -)"
     sum "$side"
+    [ "$SHUFFLE" = 0 ] || node "$KIT/order.mjs" functions "$B/$side" >"$B/functions-$side.txt" || fail "$side: its functions in .text could not be listed for the ordering files"
     echo "$side built in $(( $(date +%s) - started )) s"
 }
 aligned() { node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).aligned.length)' "$B/record-$1.json"; }
-place() { # <side> <pad> (POSIX sh shares variables: this one names its own pl_*)
+place() { # <side> <pad> <index> (POSIX sh shares variables: this one names its own pl_*)
     pl=$1-p$2
+    pl_order=$WORK/pads/order.txt
+    if [ "$SHUFFLE" = 1 ]; then
+        pl_order=$WORK/orders/$pl.txt
+        node "$KIT/order.mjs" order "$B/functions-$1.txt" "$SEED" "$3" >"$pl_order" || fail "no ordering file for $pl"
+    fi
     if [ "$SECOND" = 0 ]; then
-        node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" || fail "relink failed: $pl"
-        node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions moved by its pad"
+        if [ "$SHUFFLE" = 0 ]; then
+            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" || fail "relink failed: $pl"
+            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions moved by its pad"
+        else
+            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl" --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name || fail "relink failed: $pl"
+            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --order "$pl_order" --map "$M/$1.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and its pad in the order of orders/$pl.txt"
+        fi
     else
         pl_kept=; pl_at=; pl_tried=
         for pl_n in 16 32 48 64; do
-            node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl-l$pl_n" --map "$M/$pl-l$pl_n.map" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" --second "$WORK/pads/pad2-$pl_n.o" || fail "relink failed: $pl with a second pad of $pl_n"
+            if [ "$SHUFFLE" = 0 ]; then
+                node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl-l$pl_n" --map "$M/$pl-l$pl_n.map" --pad "$WORK/pads/pad-$2.o" --order "$WORK/pads/order.txt" --second "$WORK/pads/pad2-$pl_n.o" || fail "relink failed: $pl with a second pad of $pl_n"
+            else
+                node "$KIT/relink.mjs" "$WORK/capture/$1" "$B/$pl-l$pl_n" --map "$M/$pl-l$pl_n.map" --pad "$WORK/pads/pad-$2.o" --order "$pl_order" --every-name --second "$WORK/pads/pad2-$pl_n.o" || fail "relink failed: $pl with a second pad of $pl_n"
+            fi
             pl_d=$(node "$KIT/map.mjs" data "$M/$1.map" "$M/$pl-l$pl_n.map" "$2") && pl_fits=1 || pl_fits=0
             pl_tried="$pl_tried $pl_n:$(echo "$pl_d" | cut -d' ' -f4)"
             if [ -z "$pl_kept" ] && [ $pl_fits = 1 ]; then pl_kept=$pl_n; pl_at=$(echo "$pl_d" | cut -d' ' -f2); else rm -f "$B/$pl-l$pl_n" "$M/$pl-l$pl_n.map"; fi
         done
         [ -n "$pl_kept" ] || refused "$1 has no reading across placements: none of the four sizes of second pad puts $pl's .data $(( $2 % 64 )) bytes on from the unpadded link's, mod 64 (size:offset in a line$pl_tried)"
         mv "$B/$pl-l$pl_kept" "$B/$pl"; mv "$M/$pl-l$pl_kept.map" "$M/$pl.map"
-        node "$KIT/map.mjs" check "$M/$1.map" "$M/$pl.map" "$2" "$pl_kept" >"$B/layout/$pl-map.txt" || fail "$pl fails the map check"
-        node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --second >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and the two pads"
+        if [ "$SHUFFLE" = 0 ]; then
+            node "$KIT/map.mjs" check "$M/$1.map" "$M/$pl.map" "$2" "$pl_kept" >"$B/layout/$pl-map.txt" || fail "$pl fails the map check"
+            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --second >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and the two pads"
+        else
+            node "$KIT/map.mjs" check "$M/$1.map" "$M/$pl.map" "$2" "$pl_kept" --shuffled >"$B/layout/$pl-map.txt" || fail "$pl fails the map check"
+            node "$KIT/layout.mjs" "$B/$1" "$B/$pl" "$2" --second --order "$pl_order" --map "$M/$1.map" >"$B/layout/$pl.txt" || fail "$pl is not its side's functions and the two pads in the order of orders/$pl.txt"
+        fi
         echo "$pl: first pad $2 (mod 64: $(( $2 % 64 ))), second pad $pl_kept, .data at $pl_at; .data's offset in a 64-byte line with each size:$pl_tried" >>"$B/second-pads.txt"
         echo "$(sha256sum "$M/$pl.map" | cut -d' ' -f1)  $pl.map" >>"$M/placements.sha256"
         gzip -9 "$M/$pl.map"
@@ -142,8 +172,11 @@ for s in $SIDES; do
 done
 [ "$SECOND" = 0 ] || { echo "a second pad in every placement of every side (the fifth point)"; : >"$B/second-pads.txt"; }
 started=$(date +%s)
-for n in $PADS_P $PADS_Q; do place base "$n"; done
-case " $SIDES " in *" head "*) for n in $PADS_P; do place head "$n"; done ;; esac
+# A pad's index is its place in its list, so p_i and q_i, the A/A's two sides at i, and the
+# change's base and head at p_i, take one ordering file's order when the plan shuffles.
+pi=0; for n in $PADS_P; do pi=$((pi + 1)); place base "$n" "$pi"; done
+pi=0; for n in $PADS_Q; do pi=$((pi + 1)); place base "$n" "$pi"; done
+case " $SIDES " in *" head "*) pi=0; for n in $PADS_P; do pi=$((pi + 1)); place head "$n" "$pi"; done ;; esac
 for s in $SIDES; do
     dups=$(awk -v s="$s" '$1 == s || index($1, s "-p") == 1 { print $2 }' "$B/sha256.txt" | sort | uniq -d)
     [ -z "$dups" ] || fail "$s: binaries of one build with the same sha256: $dups"
