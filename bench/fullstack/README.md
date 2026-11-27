@@ -1423,10 +1423,19 @@ three runs:
    there), every later step that changes the droplet, the unit's start included, first checks it
    is still this launch's and runs one at a time with the others (but the upload, which only writes
    `/bench/src.tgz` for a step that does to unpack), and the clear runs in one step with a second
-   check that must read as the first did. A launch that fails releases it; one interrupted
-   (Ctrl-C), or whose unit's start was sent but not acknowledged (a dropped connection, so whether
-   the round is starting is not known; such a start is not tried again), leaves it, and says how
-   to check the round and remove the lock once no launch is running (`rm` it on the droplet). The
+   check that must read as the first did. The start counts as acknowledged only when
+   `systemctl start` succeeded, or, when it failed, when the same step then finds no job queued for
+   the unit (`systemctl list-jobs`) and reads it inactive or failed; only such a failed start is
+   tried again. `systemctl start` can fail having lost systemd's reply while its job goes on, so a
+   failed start with a job still listed, any other state or a query that failed is not
+   acknowledged. A launch that fails releases the lock; one interrupted (Ctrl-C), or whose unit's
+   start was sent but not acknowledged (that, or a dropped connection, so whether the round is
+   starting is not known; such a start is not tried again), leaves it, and says how to check the
+   round read-only (`systemctl status` and `systemctl list-jobs`) and remove the lock once no
+   launch is running (`rm` it on the droplet). Do not `--collect` such a round until its unit is
+   running, or no start job for it is queued and it is inactive or failed: `--collect` reads only
+   the unit's state and the log, so a queued start reads as a stopped round, and it downloads
+   partial results and destroys the droplet. The
    upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.

@@ -410,10 +410,12 @@ const launch = async () => {
       suite === "fullstack" ? `systemctl enable --quiet ${unitName}` : "true",
     ].join(" && "), 2), lockLost);
     // The start runs under the same flock as the other steps, after the lock check (round.mjs,
-    // startUnit), and says when systemctl's start has returned. One that failed after saying so has
-    // settled, and starting a unit that has started does nothing, so it is tried again. One whose
-    // acknowledgment did not come back (a dropped connection, its time limit, no turn at the flock)
-    // may still be starting the round: it is not tried again, and the lock stays (below).
+    // startUnit), and says when it has settled: systemctl's start succeeded, or it failed and the
+    // manager then lists no job for the unit and reads it inactive or failed. One that failed after
+    // saying so cannot still be starting, and starting a unit that has started does nothing, so it
+    // is tried again. One that did not say so (its reply from systemd lost while the job goes on, a
+    // job still queued, a query that failed, a dropped connection, its time limit, no turn at the
+    // flock) may still be starting the round: it is not tried again, and the lock stays (below).
     mayDestroy = false;
     await retry(3, () => {
       const r = remote(startUnit(lock, token, unitName), 2, { quiet: true, allowFail: true });
@@ -422,7 +424,7 @@ const launch = async () => {
       if (out) process.stdout.write(out);
       const settled = startSettled(out);
       startUnknown = !lockLost(r) && !settled;
-      throw Object.assign(new Error(`the start of ${unitName} failed: ${String(r.stderr ?? "").trim() || `exit ${r.status}`}${settled ? "" : " (its acknowledgment did not come back)"}`), { status: r.status, unknown: startUnknown });
+      throw Object.assign(new Error(`the start of ${unitName} failed: ${String(r.stderr ?? "").trim() || `exit ${r.status}`}${settled ? "" : " (it did not settle: its acknowledgment did not come back, or a start job may still be running)"}`), { status: r.status, unknown: startUnknown });
     }, (e) => lockLost(e) || e.unknown);
     started = true;
   } catch (e) {
@@ -430,7 +432,7 @@ const launch = async () => {
     // here), and release runs under the same flock as remote steps, after any still running. A
     // start not acknowledged is the exception: whether the round is starting is not known, so the
     // lock is left, as an interrupt leaves it, with how to check and remove it.
-    if (startUnknown) console.log(`the start of ${unitName} on the droplet at ${host} was not acknowledged, so whether round ${round} is running is not known and the launch lock ${lock} is left there: see whether it runs with ssh root@${host} systemctl status ${unitName} (the droplet is left for a --collect, below), and once no droplet.mjs is launching round ${round} there, remove the lock with ssh root@${host} rm ${lock}`);
+    if (startUnknown) console.log(`the start of ${unitName} on the droplet at ${host} was not acknowledged, so whether round ${round} is running is not known and the launch lock ${lock} is left there, as is the droplet (below). Check read-only with ssh root@${host} systemctl status ${unitName} and ssh root@${host} systemctl list-jobs, and do not run --collect until the unit is running, or no start job for it is queued and it is inactive or failed: --collect reads only the unit's state and the log, so a start still queued reads as a stopped round, and it downloads partial results and deletes the droplet. Once no droplet.mjs is launching round ${round} there, remove the lock with ssh root@${host} rm ${lock}`);
     else if (!started) await releaseLock(token);
     throw e;
   }

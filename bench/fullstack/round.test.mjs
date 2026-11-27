@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall, takeLaunch, unit } from "./round.mjs";
+import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, clearAfterCustody, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hostOnlyFile, hoursFor, launchLock, mayStart, outputReleaseMs, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, resumeAt, roundNameError, runSteps, startMinutes, startSettled, startUnit, steps, stepsUntil, superviseCall, takeLaunch, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -319,9 +319,9 @@ test("a relaunch on a droplet reads the round's progress file there as run-all.m
   }
 });
 
-// systemctl as relaunchCustody and droplet.mjs call it, answering from FAKE_* variables (a known,
-// disabled, inactive unit with no control group of its own unless they say otherwise), each call
-// recorded in FAKE_SYSTEMCTL_LOG.
+// systemctl as relaunchCustody, startUnit and droplet.mjs call it, answering from FAKE_* variables
+// (a known, disabled, inactive unit with no control group of its own and no job queued, whose start
+// succeeds, unless they say otherwise), each call recorded in FAKE_SYSTEMCTL_LOG.
 const fakeSystemctl = [
   "#!/bin/sh",
   'printf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"',
@@ -334,6 +334,8 @@ const fakeSystemctl = [
   "    esac ;;",
   '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
   '  stop) exit "${FAKE_STOP_RC:-0}" ;;',
+  '  start) exit "${FAKE_START_RC:-0}" ;;',
+  '  list-jobs) [ -z "$FAKE_JOBS_FAIL" ] || exit 1; [ -z "$FAKE_JOBS" ] || printf "%s\\n" "$FAKE_JOBS" ;;',
   '  is-enabled) echo "${FAKE_ENABLED-disabled}"; [ "${FAKE_ENABLED-disabled}" = enabled ] ;;',
   "esac",
   "exit 0",
@@ -513,6 +515,58 @@ test("a launch's lock is taken by one launch at a time, and the clear runs only 
   }
 });
 
+test("startUnit says its start settled only when systemctl start succeeded, or when the manager then lists no job for the unit and reads it inactive or failed", { skip: process.platform === "win32" && "stands in for systemctl with a shell script" }, () => {
+  const root = mkdtempSync(join(tmpdir(), "start-unit-"));
+  try {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "systemctl"), fakeSystemctl, { mode: 0o755 });
+    const lock = join(root, "launch-r1.lock");
+    symlinkSync("launch-a", lock);
+    const log = join(root, "systemctl.log");
+    const run = (/** @type {Record<string, string>} */ fake, token = "launch-a") => {
+      rmSync(log, { force: true });
+      const r = spawnSync("bash", ["-c", startUnit(lock, token, "corten-bench-r1")], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_SYSTEMCTL_LOG: log, ...fake } });
+      return { ...r, settled: startSettled(r.stdout), calls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [] };
+    };
+    // A start that succeeded has settled; the manager is not asked again.
+    const ok = run({});
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(ok.stdout, "start settled 0\n");
+    assert.deepEqual(ok.calls, ["start corten-bench-r1", "is-active --quiet corten-bench-r1"]);
+    // One that failed, with no job left for the unit and the unit inactive or failed, has settled:
+    // the jobs are listed before the state is read.
+    for (const state of ["failed", "inactive"]) {
+      const r = run({ FAKE_START_RC: "1", FAKE_STATE: state });
+      assert.equal(r.status, 1, state);
+      assert.equal(r.stdout, "start settled 1\n", state);
+      assert.deepEqual(r.calls, ["start corten-bench-r1", "list-jobs --no-legend --no-pager corten-bench-r1.service", "show -p ActiveState --value corten-bench-r1.service"], state);
+    }
+    // One that failed but may still be starting the unit (its reply from systemd lost while its job
+    // goes on): a job listed, a query that failed, or any other state. Nothing settled is printed.
+    for (const [label, fake] of /** @type {[string, Record<string, string>][]} */ ([
+      ["a start job queued", { FAKE_JOBS: "41 corten-bench-r1.service start waiting" }],
+      ["a start job running, the unit inactive", { FAKE_JOBS: "41 corten-bench-r1.service start running", FAKE_STATE: "inactive" }],
+      ["the jobs could not be listed", { FAKE_JOBS_FAIL: "1", FAKE_STATE: "failed" }],
+      ["the state could not be read", { FAKE_STATE_FAIL: "1" }],
+      ["activating", { FAKE_STATE: "activating" }],
+      ["active", { FAKE_STATE: "active" }],
+      ["no state", { FAKE_STATE: "" }],
+    ])) {
+      const r = run({ FAKE_START_RC: "1", ...fake });
+      assert.equal(r.status, 1, label);
+      assert.equal(r.stdout, "", label);
+      assert.ok(!r.settled, label);
+    }
+    // A launch that no longer holds the lock starts nothing.
+    const lost = run({}, "launch-b");
+    assert.equal(lost.status, 4, lost.stderr);
+    assert.deepEqual(lost.calls, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("droplet.mjs uploads none of a round's progress files or logs from the working tree", () => {
   for (const member of ["./bench/fullstack/results-r1.progress", "bench/fullstack/results-m3.log", "./bench/live/results-l2.log", "./bench/live/results-l2.progress\r"]) assert.ok(hostOnlyFile(member), member);
   for (const member of ["./bench/fullstack/round.mjs", "./bench/fullstack/results-r1.progress.bak", "./bench/browser/results-r1.log", "./bench/fullstack/results/r1/run.log", "./x/bench/fullstack/results-r1.progress"]) assert.ok(!hostOnlyFile(member), member);
@@ -576,8 +630,10 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     const remoteLog = join(remote, "bench", "bench", "fullstack", "results-r1.log");
     const lock = join(remote, "lock", "launch-r1.lock");
     const target = () => { try { return readlinkSync(lock); } catch { return null; } };
-    /** @param {{ progress?: string | null, extra?: string[], hook?: string, held?: string, fake?: Record<string, string> }} setup */
-    const launch = ({ progress = null, extra = [], hook, held, fake = {} }) => {
+    // With `fast`, droplet.mjs waits no minute between the tries of a step (its retry).
+    const fastTimers = `data:text/javascript,${encodeURIComponent("const wait = globalThis.setTimeout; globalThis.setTimeout = (f, ms, ...a) => wait(f, ms === 60_000 ? 0 : ms, ...a);")}`;
+    /** @param {{ progress?: string | null, extra?: string[], hook?: string, held?: string, fake?: Record<string, string>, fast?: boolean }} setup */
+    const launch = ({ progress = null, extra = [], hook, held, fake = {}, fast = false }) => {
       rmSync(remote, { recursive: true, force: true });
       mkdirSync(join(remote, "bench", "bench", "fullstack"), { recursive: true });
       mkdirSync(join(remote, "systemd"), { recursive: true });
@@ -592,7 +648,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       rmSync(join(root, "hook"), { force: true });
       if (hook) writeFileSync(join(root, "hook"), hook);
       for (const file of ["log", "systemctl"]) rmSync(join(root, file), { force: true });
-      const r = spawnSync(process.execPath, [join(fullstack, "droplet.mjs"), "r1", "--host", "203.0.113.9", ...extra, "--detach"], { cwd: tree, encoding: "utf8", env: { ...env, ...fake }, timeout: 120_000 });
+      const r = spawnSync(process.execPath, [...(fast ? ["--import", fastTimers] : []), join(fullstack, "droplet.mjs"), "r1", "--host", "203.0.113.9", ...extra, "--detach"], { cwd: tree, encoding: "utf8", env: { ...env, ...fake }, timeout: 120_000 });
       const calls = existsSync(join(root, "log")) ? readFileSync(join(root, "log"), "utf8").split("\n=====\n").filter(Boolean) : [];
       const units = existsSync(join(root, "systemctl")) ? readFileSync(join(root, "systemctl"), "utf8").trim().split("\n") : [];
       return { ...r, calls, units, started: units.includes("start corten-bench-r1"), progress: existsSync(remoteProgress) ? readFileSync(remoteProgress, "utf8") : null };
@@ -669,7 +725,30 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.notEqual(target(), "another-launch");
     // The round may be running: the droplet is left for a --collect, nothing downloaded from it.
     assert.ok(!dropped.stdout.includes("downloading what it has"), dropped.stdout);
-    assert.match(dropped.stdout, /droplet 203\.0\.113\.9 is left as it is \(a round there goes on by itself\)/);
+    assert.match(dropped.stdout, /droplet 203\.0\.113\.9 is left as it is \(a round there goes on by itself\)/);    assert.match(dropped.stdout, /systemctl list-jobs/);
+    assert.match(dropped.stdout, /do not run --collect until the unit is running, or no start job for it is queued and it is inactive or failed/);
+    // systemctl start returns nonzero while the manager still lists its start job (its reply from
+    // systemd lost while the job goes on): not settled, so not tried again, and the lock stays.
+    const queued = launch({ progress: unfinished(other), fake: { FAKE_START_RC: "1", FAKE_JOBS: "41 corten-bench-r1.service start waiting" } });
+    assert.notEqual(queued.status, 0, queued.stdout);
+    assert.deepEqual(queued.units.filter((u) => u === "start corten-bench-r1"), ["start corten-bench-r1"], queued.units.join("; "));
+    assert.ok(!queued.stdout.includes("start settled"), queued.stdout);
+    assert.ok(!queued.stdout.includes("retrying"), queued.stdout);
+    assert.match(queued.stdout, /the start of corten-bench-r1 on the droplet at 203\.0\.113\.9 was not acknowledged/);
+    assert.match(queued.stdout, /do not run --collect until/);
+    assert.ok(!queued.calls.some((c) => c.includes("launch release")), "a start whose job is queued released the lock");
+    assert.notEqual(target(), null, "a start whose job is queued released the lock");
+    assert.ok(!queued.stdout.includes("downloading what it has"), queued.stdout);
+    // The control: the start failed, no job is left and the unit failed. It has settled, so it is
+    // tried again (three times in all) and the lock is released, as before.
+    const failed = launch({ progress: unfinished(other), fake: { FAKE_START_RC: "1", FAKE_STATE: "failed" }, fast: true });
+    assert.notEqual(failed.status, 0, failed.stdout);
+    assert.equal(failed.units.filter((u) => u === "start corten-bench-r1").length, 3, failed.units.join("; "));
+    assert.match(failed.stdout, /^start settled 1$/m);
+    assert.match(failed.stdout, /retrying \(2 of 2\): the start of corten-bench-r1 failed/);
+    assert.ok(!failed.stdout.includes("was not acknowledged"), failed.stdout);
+    assert.ok(failed.calls.some((c) => c.includes("launch release")), "a settled start kept the lock");
+    assert.equal(target(), null, "a settled start kept the lock");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
