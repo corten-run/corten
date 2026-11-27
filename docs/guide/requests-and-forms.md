@@ -2242,7 +2242,8 @@ redirect the address can differ from the one the form reaches without JavaScript
 fragment, and is followed as a navigation (below). No entry is added: Back goes to the page before the screen,
 not to the scope before this one, as after `history.replaceState`. The entry keeps its state: its
 `history.state`, and the Navigation API's (`navigation.currentEntry.getState()`), which the runtime
-puts back on the entry once the address is in. A reload, a bookmark and a shared link then
+puts back on the entry once the address is in, unless a script put a state of its own in the entry as
+the address went in (in a `currententrychange` listener), which stays. A reload, a bookmark and a shared link then
 reach what the screen shows, and a form that posts without an `action` sends to it. Only an
 answer that draws whole moves the address: a 204, an empty patch, a patch with an element that
 finds no place and a 5xx (which may still draw) leave it, while removing an element the page no

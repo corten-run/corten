@@ -1855,18 +1855,37 @@ async function markedPatchVisits(browser, errors) {
 
   // The same press of Day, which the server now answers with its patch (`drawnPress`); and again
   // with a `currententrychange` listener that replaces the entry inside Week's replace, which Day's
-  // answer then leaves, as any replace but Week's own.
-  for (const listener of [false, true]) {
+  // answer then leaves, as any replace but Week's own. A listener that puts a state of its own in
+  // the entry there (`updateCurrentEntry`) replaces nothing: Day's answer puts its address in, and
+  // the state is the listener's, which neither answer puts the entry's older one back over.
+  for (const listener of /** @type {const} */ (["", "replace", "state"])) {
     const drawn = await drawnPress(page, listener);
     check(
-      listener
+      listener === "replace"
         ? "a marked patch whose drawn element presses the form again as it connects, and a currententrychange listener's replace during its own, leave the listener's address"
-        : "a marked patch whose drawn element presses the form again as it connects leaves the address of that press's drawn answer",
+        : listener === "state"
+          ? "a marked patch whose drawn element presses the form again as it connects puts that press's address in over a state a currententrychange listener puts in the entry during its own replace, and keeps that state"
+          : "a marked patch whose drawn element presses the form again as it connects leaves the address of that press's drawn answer",
       drawn.pressed && drawn.answered && drawn.drawn && drawn.added === 0 && drawn.shown === "day" &&
-        (listener ? drawn.at === "?scope=week" && drawn.state === "listener" : drawn.at === "?scope=day" && drawn.state === null),
+        (listener === "replace"
+          ? drawn.at === "?scope=week" && drawn.state === "listener"
+          : listener === "state"
+            ? drawn.at === "?scope=day" && drawn.state === null && drawn.navState === "listener"
+            : drawn.at === "?scope=day" && drawn.state === null),
       JSON.stringify(drawn),
     );
   }
+
+  // A page's own `getState` of the entry that pushes an entry of the page's, with a state of its
+  // own, and answers the state of the entry it was asked on: Week's answer, which reads the entry's
+  // state as it draws, is drawn on the entry it was pressed on, which is no longer the screen's. It
+  // puts no address in and no state over the pushed entry's.
+  const pushed = await pushedInRead(page);
+  check(
+    "a marked patch whose read of the entry's Navigation API state pushes another entry leaves that entry's address and state",
+    pushed.read && pushed.pushed && pushed.drawn && pushed.at === "" && pushed.navState === "pushed" && pushed.ahead === 1 && pushed.before === "older",
+    JSON.stringify(pushed),
+  );
 
   // Week's patch draws an element whose `connectedCallback` begins a navigation to Month, which a
   // `navigate` listener of the page cancels: nothing took the screen's place, so Week's answer, drawn
@@ -2280,11 +2299,13 @@ async function heldLoad(page, kind, marked) {
 /**
  * Presses Week, whose patch draws an element whose `connectedCallback` presses Day on the form
  * Week's answer drew, before Week's address goes in; the server answers both, and Day's answer
- * draws. With `listener` (the Navigation API only), a `currententrychange` listener of the page
- * replaces the entry again (the same address, another state) inside Week's replace. Says whether
+ * draws. Says whether
  * Day was pressed, answered and drawn, and where the page is then, with its state and how many
- * entries were added.
- * @param {import("@playwright/test").Page} page @param {boolean} listener
+ * entries were added. With `listener` "replace" (the Navigation API only), a `currententrychange`
+ * listener of the page replaces the entry again (the same address, another state) inside Week's
+ * replace; with "state", the entry has a Navigation API state of its own before Week is pressed,
+ * and the listener puts another in the entry inside Week's replace (`updateCurrentEntry`).
+ * @param {import("@playwright/test").Page} page @param {"" | "replace" | "state"} listener
  */
 async function drawnPress(page, listener) {
   const home = `${base}/smoke/address`;
@@ -2312,12 +2333,15 @@ async function drawnPress(page, listener) {
         }
       },
     );
+    const nav = /** @type {any} */ (window).navigation;
+    if (listener === "state") nav.updateCurrentEntry({ state: "older" });
     if (listener) {
       let once = false;
-      /** @type {any} */ (window).navigation.addEventListener("currententrychange", (/** @type {any} */ event) => {
+      nav.addEventListener("currententrychange", (/** @type {any} */ event) => {
         if (once || event.navigationType !== "replace") return;
         once = true;
-        history.replaceState("listener", "", location.href);
+        if (listener === "state") nav.updateCurrentEntry({ state: "listener" });
+        else history.replaceState("listener", "", location.href);
       });
     }
     return history.length;
@@ -2331,10 +2355,66 @@ async function drawnPress(page, listener) {
   await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
   await page.unroute(week);
   const end = await page.evaluate(
-    (length) => ({ at: location.search, state: history.state, shown: document.querySelector("#smoke-address output")?.textContent ?? null, added: history.length - length }),
+    (length) => ({
+      at: location.search,
+      state: history.state,
+      navState: /** @type {any} */ (window).navigation?.currentEntry.getState() ?? null,
+      shown: document.querySelector("#smoke-address output")?.textContent ?? null,
+      added: history.length - length,
+    }),
     length,
   );
   return { pressed, answered: came, drawn, ...end };
+}
+
+/**
+ * Gives the entry a Navigation API state, and wraps the entries' `getState` so that the first
+ * read of it once Week is pressed pushes an entry of the page's at the same address with a state
+ * of its own (`updateCurrentEntry`), then answers the state of the entry it was asked on. Presses
+ * Week and says whether the state was read and the entry pushed, whether Week's answer drew,
+ * where the page is then, the screen's entry's state, the state of the entry Week was pressed on
+ * and how far the screen's entry is past it. The Navigation API only.
+ * @param {import("@playwright/test").Page} page
+ */
+async function pushedInRead(page) {
+  await page.goto(`${base}/smoke/address`);
+  await page.evaluate(() => {
+    const nav = /** @type {any} */ (window).navigation;
+    nav.updateCurrentEntry({ state: "older" });
+    const proto = Object.getPrototypeOf(nav.currentEntry);
+    const getState = proto.getState;
+    Object.assign(window, { __read: false, __pushed: false, __armed: false, __pressedOn: nav.currentEntry });
+    proto.getState = function () {
+      const w = /** @type {any} */ (window);
+      if (w.__armed) {
+        w.__armed = false;
+        w.__read = true;
+        history.pushState(null, "", location.href);
+        nav.updateCurrentEntry({ state: "pushed" });
+        w.__pushed = nav.currentEntry !== this;
+      }
+      return getState.call(this);
+    };
+  });
+  await page.evaluate(() => Object.assign(window, { __armed: true }));
+  await page.getByRole("button", { name: "Week", exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const drawn = await page
+    .waitForFunction(() => document.querySelector("#smoke-address output")?.textContent === "week" && !document.getElementById("smoke-address-form")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 })
+    .then(() => true, () => false);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)), 200)));
+  const end = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    w.__armed = false;
+    return {
+      read: w.__read,
+      pushed: w.__pushed,
+      at: location.search,
+      navState: w.navigation.currentEntry.getState() ?? null,
+      before: w.__pressedOn.getState() ?? null,
+      ahead: w.navigation.currentEntry.index - w.__pressedOn.index,
+    };
+  });
+  return { drawn, ...end };
 }
 
 /**

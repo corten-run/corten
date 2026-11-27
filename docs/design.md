@@ -11645,8 +11645,11 @@ rules something out.
     Navigation API is, the entry's state there (`getState()`), which `replaceState` drops: the
     runtime reads it just before the replace and puts it back with `navigation.updateCurrentEntry`
     on the entry the replace made, which keeps its key and `id` and begins no navigation (not on
-    an entry a listener replaced inside the runtime's call, which is that listener's; a state the
-    runtime cannot read leaves the address as it was). The limit is a
+    an entry a listener replaced inside the runtime's call, which is that listener's, nor over a
+    state a listener put in the entry there, which is newer; a state the runtime cannot read
+    leaves the address as it was). It reads the state before it checks the entry, the page and
+    the navigation on its way (below), so whatever a page's own `getState` does as it is read (a
+    push of another entry, a replace) is checked as anything else is. The limit is a
     redirect (a 3xx that is not Corten's own): the runtime puts in the URL the redirect reached
     with no `#fragment`. The browser's own GET reaches the fragment the redirect's `Location`
     names, else the action's, and `fetch` shows neither (`Response.url` never carries one), so
@@ -11753,7 +11756,9 @@ rules something out.
     the entry that replace found and the entry is still exactly the one it left. It keeps them
     only when, with the Navigation API, the entry changed once inside its `replaceState`
     (`currententrychange`), so a listener's own replace there, which changes it again, leaves the
-    press refused as before. A page's `navigate` listener that cancels the runtime's replace and
+    press refused as before. A listener that puts a state in the entry there
+    (`updateCurrentEntry`, whose `currententrychange` has a null `navigationType`) changes no
+    entry, and is not counted: the runtime counts only an event with a `navigationType`. A page's `navigate` listener that cancels the runtime's replace and
     replaces the entry itself, to the same address, inside it, is taken for the runtime's replace;
     the address is then the one the runtime meant to put in, and the press's answer puts its own
     in over it. So is page code that replaces the entry to the same address inside the runtime's
@@ -12006,11 +12011,12 @@ rules something out.
       runtime makes that replace itself, in the task the press was made in, so it is the one
       replace it can tell is its own without tracking navigations.
 
-    What it costs: the runtime every page loads is 2,182 bytes larger raw (46,502 to 48,684), 906
-    with gzip (16,718 to 17,624) and 800 with brotli (15,106 to 15,906), paid once a release by
-    every user (121, 53 and 53 larger than the build before this one, which dropped the entry's
-    Navigation API state as it put the address in, and allocated an answer's draw note for every
-    `data-patch` answer, marked or not). A
+    What it costs: the runtime every page loads is 2,267 bytes larger raw (46,502 to 48,769), 925
+    with gzip (16,718 to 17,643) and 820 with brotli (15,106 to 15,926), paid once a release by
+    every user (85, 19 and 20 larger than the build before this one, which read the entry's
+    Navigation API state only after it checked the entry, counted a change of that state alone as
+    a replace, put the older state back over one a listener had put in, and allocated a draw note
+    for a whole document's answer, which never uses it). A
     `data-patch` submit reads one attribute and its form's id, and keeps its press as that id's
     latest in a map until the press settles, so the map holds only presses still to be sent or
     drawn; a read compares its press with the id's latest, by identity, where it could draw or be
@@ -12046,7 +12052,8 @@ rules something out.
     `replaceState` there runs inside the runtime's, in the
     smoke's checks in each engine; `replaceState` drops the entry's Navigation API state, and
     `updateCurrentEntry` sets it on the same entry, keeping its key and `id`, firing
-    `currententrychange` and no `navigate`, in the smoke's checks in each engine; `fetch` keeps an empty query (`?`) in its response's
+    `currententrychange` with a null `navigationType` and no `navigate`, in the smoke's checks in
+    each engine; `fetch` keeps an empty query (`?`) in its response's
     URL, where Chromium's `URL.search` setter drops it, measured once in each engine; a `fetch`
     that followed a redirect shows no `#fragment` in its response's URL, where the browser's own
     GET reaches the `Location`'s fragment, else the request's, in the smoke's checks in each
@@ -12100,7 +12107,8 @@ rules something out.
     `#id` or a traversal between `#id` entries stops firing `popstate` before the script that made
     it goes on in one, or the key stops changing before `currententrychange` fires in one, or a
     replace stops giving the entry a new `id`, or `history.state` a new object, in one, or
-    `updateCurrentEntry` stops keeping the entry's key and `id` or comes to fire a `navigate`,
+    `updateCurrentEntry` stops keeping the entry's key and `id`, or comes to fire a `navigate` or
+    a `currententrychange` with a `navigationType`,
     or `replaceState` comes to keep the Navigation API state, in one; or the platform
     shows a load of another document on its way, or `navigation.transition` comes to show a
     navigation begun in `navigatesuccess`, in one, when the address could be left for those too.
@@ -12123,6 +12131,12 @@ rules something out.
     and a `NaN` state kept across reads without the Navigation API, in Playwright 1.65.1's
     Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, which the build before this one
     fails);
+    2026-11-26, a press a marked answer's drawn element makes as it connects, whose answer puts
+    its address in over a state a `currententrychange` listener put in the entry inside the first
+    answer's replace and keeps that state, and a page's own `getState` that pushes an entry as the
+    runtime reads the state, whose address and state the answer then leaves, in Playwright
+    1.65.1's Chromium 159, Firefox 159 and WebKit 27.2 (the smoke's checks, which the build before
+    this one fails in all three);
     2026-11-26, a press a marked answer's drawn element makes as it connects, whose own answer
     draws, with and without the Navigation API, and with a `currententrychange` listener's replace
     inside the first answer's, in Playwright 1.65.1's Chromium 159, Firefox 159 and WebKit 27.2

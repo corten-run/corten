@@ -2661,9 +2661,15 @@ let moves = 0;
  * in a listener heard before the runtime's is counted on the entry it is made on.
  */
 const look = () => void (where() !== entrySeen && ((entrySeen = where()), (moves += 1)));
-/** How many times the Navigation API said the entry on screen changed, a replace included. */
+/**
+ * How many times the Navigation API said another entry took the screen or the entry was replaced:
+ * not a change of its state alone (`updateCurrentEntry`, whose `navigationType` is null), which
+ * keeps the entry.
+ */
 let changes = 0;
-navigation ? navigation.addEventListener("currententrychange", () => ((changes += 1), look())) : addEventListener("popstate", look);
+navigation
+  ? navigation.addEventListener("currententrychange", (event) => (event.navigationType !== null && (changes += 1), look()))
+  : addEventListener("popstate", look);
 /**
  * The history entry on screen and the page on it, by the moves since the page loaded
  * ({@link moves}). A page drawn in place on the entry (a form's answer, the page reading itself
@@ -3621,10 +3627,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
       // `Location`'s if it names one, else the action's, and `fetch` shows neither, so the runtime
       // does not guess.
       // Only for a press made on a marked form, which knows its entry: one sent again from a form an
-      // answer marked draws as an unmarked form's does, and leaves the address.
+      // answer marked draws as an unmarked form's does, and leaves the address. So does a whole
+      // document ({@link swapDocument}), which takes no draw note.
       /** @type {(() => void) | undefined} */
       let done;
-      if (pending.here?.at != null && hasAttr(form, "data-address") && res.status < 500) {
+      if (pending.here?.at != null && !whole && hasAttr(form, "data-address") && res.status < 500) {
         /** @type {Draw} */
         const draw = {};
         done = function replace() {
@@ -3641,11 +3648,11 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           // own replace): the runtime does not tell whose it was, and the answer is drawn under
           // the address put in then, as an unmarked form's is. The one exception is the replace
           // of the marked answer whose draw made this press, which it came before ({@link onEntry}).
-          const transition = navigation?.transition;
-          if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
           // The entry's state is kept, as the browser's own GET leaves it with no new entry: its
           // `history.state`, and the Navigation API's own (`getState()`), which `replaceState`
           // drops, put back once the address is in. One the runtime cannot read leaves the address.
+          // It is read before everything above is checked, so what runs as it is read (a page's
+          // own `getState`, which can move or replace the entry) is checked too.
           /** @type {unknown} */
           let state;
           try {
@@ -3653,6 +3660,8 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           } catch {
             return;
           }
+          const transition = navigation?.transition;
+          if (!here(true) || to === location.href || (transition && transition !== readAgainTransition) || !onEntry(pending.here)) return;
           const before = exact();
           const seen = changes;
           try {
@@ -3669,7 +3678,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           entrySeen = where();
           // What it left, for a press this draw made: only when the Navigation API saw no other
           // change of the entry inside the call (a listener's own `replaceState`), which would
-          // be another's replace.
+          // be another's replace. A state a listener puts in the entry there changes no entry.
           const alone = !navigation || changes === seen + 1;
           if (alone) {
             draw.found = before;
@@ -3677,12 +3686,14 @@ async function send(form, submitter, sends, within = asking(form, submitter), pr
           }
           // Its Navigation API state, back in the entry this replace made (`updateCurrentEntry`
           // keeps its key and id, adding no entry and beginning no navigation). Not in one a
-          // listener replaced inside the call, which is that listener's.
+          // listener replaced inside the call, which is that listener's, nor over a state a
+          // listener put in it there (the entry no longer has none, as the replace left it), nor
+          // in another entry that reading it made the screen's.
           if (alone && state !== undefined)
             try {
-              navigation?.updateCurrentEntry({ state });
+              if (navigation?.currentEntry?.getState() === undefined && unreplaced(draw.left)) navigation?.updateCurrentEntry({ state });
             } catch {
-              // A document no longer fully active: no one reads the entry's state from it.
+              // A document no longer fully active, or a state the runtime cannot read: it is left.
             }
           // Read again at the new address, which without the Navigation API goes by the path.
           if (location.pathname !== path) readAgainLater();
