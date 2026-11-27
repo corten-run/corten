@@ -953,6 +953,22 @@ mod tests {
         list.iter().map(|&(key, value)| (Cow::Borrowed(key), Cow::Borrowed(value))).collect()
     }
 
+    /// Whether each key and each value of `pairs` is borrowed from the query. `assert_eq!` compares
+    /// a `Cow` by its text alone, so a read that copied what it could borrow would pass it.
+    fn borrowed(pairs: &[Pair<'_>]) -> Vec<(bool, bool)> {
+        pairs.iter().map(|(key, value)| (matches!(key, Cow::Borrowed(_)), matches!(value, Cow::Borrowed(_)))).collect()
+    }
+
+    /// What [`sorted_pairs`] reads from `query`, which must be what the form decoder reads: the
+    /// same pairs, each key and value borrowed where the decoder's is and owned where it is.
+    #[track_caller]
+    fn read_as_decoded(query: &str) -> Vec<Pair<'_>> {
+        let (read, decoded) = (sorted_pairs(query), decoded(query));
+        assert_eq!(read, decoded, "{query}");
+        assert_eq!(borrowed(&read), borrowed(&decoded), "borrowed or owned: {query}");
+        read
+    }
+
     #[test]
     fn a_query_reads_as_the_form_decoder_reads_it() {
         // Every key with every value, plain and escaped, among empty fields, a field with no `=`,
@@ -966,10 +982,10 @@ mod tests {
         for key in keys {
             for value in values {
                 let query = format!("&&{key}={value}&z&{key}&=v&{key}=last&&");
-                assert_eq!(sorted_pairs(&query), decoded(&query), "{query}");
+                read_as_decoded(&query);
                 // And with the value as the key and the key as a value after a plain one.
                 let query = format!("{value}&first=1&k={key}&last={value}");
-                assert_eq!(sorted_pairs(&query), decoded(&query), "{query}");
+                read_as_decoded(&query);
             }
         }
         let long = "k".repeat(70_000);
@@ -989,9 +1005,17 @@ mod tests {
             long_keys.as_str(),
         ];
         for query in queries {
-            assert_eq!(sorted_pairs(query), decoded(query), "{query}");
+            read_as_decoded(query);
         }
-        // And as written here, so the decoder is not the only word on it.
+        // And as written here, so the decoder is not the only word on it. Nothing of a query with
+        // no escape is copied, and of one with an escape only the key or the value that has it;
+        // what is not quite an escape (`%zz`) is borrowed as written.
+        assert_eq!(borrowed(&sorted_pairs("a=1&b=2")), [(true, true), (true, true)]);
+        assert_eq!(
+            borrowed(&sorted_pairs("q=first+edition&page=2&r=%zz&s%20=1&t")),
+            [(true, true), (true, false), (true, true), (false, true), (true, true)],
+            "`page`, `q`, `r`, `s ` and `t`"
+        );
         assert_eq!(sorted_pairs(""), pairs(&[]));
         assert_eq!(sorted_pairs("&&&"), pairs(&[]), "empty fields are skipped");
         assert_eq!(sorted_pairs("=&=&&==&"), pairs(&[("", ""), ("", ""), ("", "=")]), "a field of `=` alone is one");
@@ -1047,8 +1071,7 @@ mod tests {
             ("a=1&+", &[(" ", ""), ("a", "1")]),
         ];
         for (query, read) in cases {
-            assert_eq!(sorted_pairs(query), pairs(read), "{query}");
-            assert_eq!(sorted_pairs(query), decoded(query), "{query}");
+            assert_eq!(read_as_decoded(query), pairs(read), "{query}");
         }
     }
 
@@ -1065,21 +1088,19 @@ mod tests {
             for at in places(plain) {
                 for escape in ["+", "%2B", "%41", "+%20"] {
                     let query = format!("{}{escape}{}", &plain[..at], &plain[at..]);
-                    let read = sorted_pairs(&query);
+                    let read = read_as_decoded(&query);
                     // Not decoded, the escape would be in a key or a value as it was written.
                     assert!(read.iter().all(|(key, value)| !key.contains(escape) && !value.contains(escape)), "{query}");
-                    assert_eq!(read, decoded(&query), "{query}");
                 }
                 // What is no escape is in the one it was written in, as written.
                 for not_one in ["%", "%z", "%4"] {
                     let query = format!("{}{not_one}{}", &plain[..at], &plain[at..]);
-                    let read = sorted_pairs(&query);
+                    let read = read_as_decoded(&query);
                     // Before a hex digit of the query's own, `%4` is an escape after all.
                     if !plain[at..].starts_with(|next: char| next.is_ascii_hexdigit()) || not_one == "%z" {
                         let written = read.iter().filter(|(key, value)| key.contains(not_one) || value.contains(not_one));
                         assert_eq!(written.count(), 1, "{query}");
                     }
-                    assert_eq!(read, decoded(&query), "{query}");
                 }
             }
         }
