@@ -28,8 +28,9 @@ On a monitored Hardening run the same stream reports
 ordered cell-start lines. A count describes cells entered, not completed
 or qualified. It is not a saved campaign result, proof of an active cell,
 or authority to collect or retire a host. An older controller or one that
-has not received a complete first marker has no count. If the next
-ordered marker is missing, the last reported count need not be current.
+has not received a complete first marker has no count. A missed marker or
+failed telemetry write can leave the last reported count stale. Telemetry
+failure does not cancel the command or change the required control checks.
 
 ## Parent interface
 

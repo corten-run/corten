@@ -157,7 +157,7 @@ export function createCampaign({ authorize }) {
       let nativeProgress;
       if (c.stream && binding.request.group === "hardening" && invocation === binding.execution.invocation) {
         const active = status(c);
-        nativeProgress = watchHardeningCells((nativeCellProgress) => c.stream.progress({ ...active, nativeCellProgress }));
+        nativeProgress = watchHardeningCells((nativeCellProgress) => c.stream.cellProgress({ ...active, nativeCellProgress }));
       }
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",

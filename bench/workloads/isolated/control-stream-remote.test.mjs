@@ -13,6 +13,7 @@ import { binding, registration } from "../test-fixtures/control-stream-fixture.m
 import { streamHash, verifyStreamDrain } from "./control-stream.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
 import { digest } from "./evidence.mjs";
+import { supervise } from "./process.mjs";
 
 async function fixture(t, { survivor = false, autoExit = true, beforeReady = false, probe } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-control-lease-")), abort = new AbortController();
@@ -166,7 +167,8 @@ for mode in ('normal','wrong-at-start','drift','stale','eof','late-stop'):
 test("independent consumer supervises native windows, paused audit, immutable seal and actual drain probe", async (t) => {
   const f = await fixture(t), s = f.supervisor;
   const payload = { state: "active", nextGroup: "hardening", nativeCellProgress: { started: 19, total: 108 } };
-  s.progress(payload);
+  const samples = f.samples(); s.cellProgress(payload);
+  assert.equal(f.samples(), samples);
   assert.deepEqual(f.get("stream-state.json"), { kind: "progress", payload });
   s.open({ app: "1", api: "2", load: "3-7" }); s.close();
   s.progress({ state: "blocked-review-needed", campaign: "r21-0123456789abcdef", auditGroup: "json-api", auditSubjectSha256: "e".repeat(64) });
@@ -184,6 +186,33 @@ test("expired or stale guardian lease irrevocably cancels native independently o
   f.lease(); assert.throws(() => f.supervisor.check(), /revoked/);
   assert.equal((await f.lastFault()).reason, "campaign lease expiry");
   assert.equal(readFileSync(join(f.root, "stream-invalid.json")).length, 0);
+});
+
+test("a failed cell-progress publication cannot cancel the native command or block the next required state", { timeout: 15000 }, async (t) => {
+  const f = await fixture(t), s = f.supervisor, initial = { state: "active", nextGroup: "hardening" };
+  s.progress(initial);
+  const rename = fs.renameSync;
+  let faults = 0;
+  const fault = t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === join(f.root, "stream-state.json")) {
+      faults++; throw Object.assign(new Error("synthetic telemetry disk failure"), { code: "ENOSPC" });
+    }
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  let result;
+  try {
+    result = await supervise({ executable: "node", shell: false, argv: ["bench/workloads/dispatcher-fixtures/native.mjs", "exit", "0"] },
+      { cwd: resolve(import.meta.dirname, "../../.."), env: process.env, signal: f.abort.signal,
+        log(_bytes, channel) { if (channel === "stdout") s.cellProgress({ ...initial, nativeCellProgress: { started: 1, total: 108 } }); } });
+  } finally { fault.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(faults, 1);
+  assert.equal(result.success, true);
+  assert.equal(f.abort.signal.aborted, false);
+  assert.deepEqual(f.get("stream-state.json"), { kind: "progress", payload: initial });
+  assert.equal(existsSync(f.root + ".cell-progress.pending"), false);
+  const proof = await s.seal();
+  await s.finish({ id: registration.id, nativeTerminal: true, sealSha256: digest(JSON.stringify(proof)) });
 });
 
 test("a pinned watchdog winning at publication preserves its first failure", async (t) => {

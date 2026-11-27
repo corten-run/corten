@@ -746,7 +746,7 @@ test("monitored Hardening relays only complete ordered native stdout cell starts
   binding.resources.budget = hardeningBudgets().resources;
   binding.execution.effectiveOptions = { isolated: true, profile: "bounded" };
   binding.sources.files.push({ path: hardeningCpuGate });
-  const sent = [], stream = { registration: admittedApparatus, check() {}, open() {}, close() {}, progress(frame) { sent.push(frame); },
+  const sent = [], stream = { registration: admittedApparatus, check() {}, open() {}, close() {}, progress() {}, cellProgress(frame) { sent.push(frame); },
     async seal() { return { registration: admittedApparatus }; } };
   const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
   controlWindows.directory = handle.directory; controlWindows.phase = "00-hardening-timing";

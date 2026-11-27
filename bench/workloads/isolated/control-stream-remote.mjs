@@ -1,7 +1,7 @@
 // Campaign-owned lease consumer, independent of the SSH guardian. No reconnect.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, write } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, unlinkSync, write, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
@@ -128,6 +128,22 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       if (status.state === "blocked-review-needed") publish("audit-ready", { campaign: status.campaign, group: status.auditGroup,
         subjectSha256: status.auditGroup === "mixed-production" ? status.mixedAuditSubjectSha256 : status.auditSubjectSha256 });
       else publish("progress", status);
+    },
+    cellProgress(status) {
+      if (revoked || sealed || draining) return;
+      // The watchdog and required publications still check the lease. This
+      // one writer's optional update neither scans nor shares their stage.
+      // Keep the stage outside the fixed custody inventory in case cleanup fails.
+      const stage = root + ".cell-progress.pending";
+      let created = false;
+      try {
+        const fd = openSync(stage, "wx", 0o600); created = true;
+        try { writeFileSync(fd, JSON.stringify({ kind: "progress", payload: status })); }
+        finally { closeSync(fd); }
+        renameSync(stage, join(root, "stream-state.json"));
+      } catch {
+        if (created) try { unlinkSync(stage); } catch { /* Leave required control writes unaffected. */ }
+      }
     },
     audit(group, bytes) {
       check(); assert.ok(!sealed && !draining); const proof = read("stream-audit-" + group + ".json");
