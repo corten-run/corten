@@ -1,0 +1,18 @@
+FROM maven:3.10-eclipse-temurin-27@sha256:a83dca2f65c72ace081f55a63231adbd6d88741caa4fdc68f7d5c9e450d1070c AS build
+WORKDIR /src
+COPY mixed/pom.xml ./pom.xml
+COPY .mvn ./.mvn
+RUN timeout --verbose --kill-after=10s 15m mvn -B dependency:go-offline
+COPY mixed/src ./src
+COPY src/main/java/bench/itempage/MarketplaceFormat.java src/main/java/bench/itempage/MarketplaceRecord.java ./src/main/java/bench/itempage/
+COPY src/main/resources/templates ./src/main/resources/templates
+COPY src/main/resources/static ./src/main/resources/static
+COPY src/main/resources/marketplace-labels.json ./src/main/resources/
+ADD --checksum=sha256:a0abb04f2f45a1f89d1d4844023245537e5e6014c87b144553e0607b4cc32130 https://unpkg.com/htmx.org@4.0.1/dist/htmx.min.js src/main/resources/static/htmx.min.js
+RUN timeout --verbose --kill-after=10s 3m mvn -B package -DskipTests
+
+FROM eclipse-temurin:27-jre@sha256:8f8cfda6393f63a029dbe83ceda4c19a31d268184662e96d9641f57afdaf870b
+WORKDIR /app
+COPY --from=build /src/target/app.jar ./
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -206,3 +206,19 @@ are focused functional checks, not performance or whole-workload qualification.
 Caller abort while synchronous MVC is blocked still has no pre-response disconnect
 notification: the upstream may remain pending until the independent ten-second
 deadline. The required 500 ms caller-cancellation observation still fails.
+
+## Mixed-only WebFlux candidate
+
+`Dockerfile.mixed` builds a separate WebFlux/Netty application for the localized
+marketplace routes, record JSON and alert forms/readback. The upstream exchange and
+body read belong to the request subscription. All existing Spring deployment
+recipes still use `Dockerfile` and MVC/Tomcat; the candidate is not selected by
+the official runner yet.
+
+From this directory, build the candidate with `docker build -f Dockerfile.mixed .`.
+Run `node --test mixed-http.test.mjs` with `SPRING_MIXED_IMAGE` set to its full
+`sha256:` image ID. The HTTP tests cover all three locales, with an upstream
+holding either headers or the rest of a partially sent body. A connected client
+must stay pending until release; disconnect must close the one unfinished
+upstream response before release. These are functional checks, not timing or
+whole-group evidence.
