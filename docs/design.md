@@ -3503,7 +3503,18 @@ rules something out.
     an idle time under the deadline (any route whose deadline is set lower brings the 503 back,
     and nginx's `client_body_timeout`, whose minute the idle time follows, is usually what a proxy
     in front already uses); a deadline that starts after the body has arrived (a client that sends
-    slowly would then hold a handler's slot past any bound).
+    slowly would then hold a handler's slot past any bound); `Body::empty()` for a body that has
+    ended, which needs no type of its own and is what a request made in process already brings.
+    Counted as the body that holds nothing was, against the same base, it makes the same
+    allocations and, by the two counts' medians, runs fewer instructions a request: 4 to 7
+    fewer in the cases whose handler does not take the request's body, 45 to 47 fewer in the
+    `get` cases, whose handler does, and the same in the two with a body. It changes two
+    answers, and the issue asked that each stay as it was: a handler's request body prints as
+    `Body(empty)` where it printed `Body(..)`, and it is one held whole, which only `corten dev`
+    reads, of an answer made of its request's body. Two trials under `corten dev`, a `Public`
+    answer made of its request's body over a socket and a `Public` page of no bytes, were each
+    told the same thing with either body: an answer of no bytes is refused as empty before
+    whether it is held whole is read.
 
     Stands on: platform (hyper, serving HTTP/1.1: a request with no length or a length of zero,
     with `Expect: 100-continue` or asking to switch protocols as without, is handed on with a
@@ -3511,7 +3522,20 @@ rules something out.
     any other with one that has not ended, a chunked one whatever it holds); platform (RFC 9110,
     section 15.5.9: 408 Request Timeout); reasoned (the wait is
     known where the deadline is, in the same poll, so the mark reads that poll's wait and needs no
-    allocation); measured (callgrind, card-market's item page and its JSON over one keep-alive
+    allocation); reasoned (a box of a value with no size allocates nothing, and the body handed
+    on for one that has ended has none, which the socket test reads as a size of zero where a
+    chunked or sized body's is not); measured (`bench/request-cost` in a Linux container, taken
+    once, three counts a case and one profile of 1,000 requests for a case's allocations,
+    `15838d5d8` against `e733f3d88`: one allocation a request fewer in each of the 17 cases
+    without a body and the same in the two with one; 86 to 153 instructions a request fewer in
+    the first and 6 and 7 more in the second; and of the three idle readings, three runs a build
+    over 5,000 connections, head's median growth above base's by 8,192 bytes after three of a
+    browser's requests and by 12,288 before any byte, and 4,096 below it after one request. The
+    same kit on another host and on a hosted runner, `089b5a694` against `e8734f929`, each taken
+    once, counted the same allocations in its ten cases and read the first of those above base
+    by 12,288 and by 8,192, and neither of the other two as a rise. No run says what those
+    pages are; nothing the change adds is held for a connection); measured (callgrind,
+    card-market's item page and its JSON over one keep-alive
     connection, 1,300 requests less 300 over 1,000, three repeats each, medians and ranges: the
     page 86,737 (86,721 to 86,743) instructions a request on `5dba8477` and 86,767 (86,761 to
     86,779) with the mark, 30 more, a difference of 0.03%; its JSON 65,737 (65,736 to 65,764) and
@@ -3528,7 +3552,9 @@ rules something out.
 
     Last checked: 2026-11-07, the count on `e4d8281c` (`5dba8477` with this change), and the
     socket tests at the default deadline; 2026-11-26, hyper 1.12.0 (`Cargo.lock`), its source
-    read for which request bodies have ended as they are handed on, with a socket test of each.
+    read for which request bodies have ended as they are handed on, with a socket test of each;
+    2026-11-27, the kit's count on `15838d5d8` against `e733f3d88` (valgrind 3.24.0, rustc
+    1.100.0), and the same count with `Body::empty()` in the body's place, which was not kept.
 
 31. <a id="choice-favicon-path"></a>**`/favicon.ico` is the static directory's icon itself, the
     SVG when there is no `.ico`, not a redirect to its versioned URL.** Browsers ask for the
