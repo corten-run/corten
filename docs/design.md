@@ -10366,11 +10366,12 @@ rules something out.
     place, and at least two must be compared; the report states, at each index, how many were
     compared and how many left out. What is left out is unchecked: two links can lay base's and
     head's copies of a repeated name at other places, and a symbol one side alone has (an alias)
-    can move a section both have that holds no compared name, and the run reads either as alike.
+    can move a section both have that holds no compared name, or move one that holds a compared
+    name past sections that hold none, and the run reads each as alike.
     The other way, it refuses some pairs that are right: two input sections that share a key
     through a local name each defines (`init` in two objects), each also holding a name defined
     once, can lie in either order in either link, since LLD sorts by the key alone, and the check
-    compares those names in the order each link laid them (a real LLD link at seed 13 did). On the probe of the
+    compares those names in the order each link laid them. On the probe of the
     diagnosis above, relinked with six shuffled orders, that is 34 of 3,467 shared names, each
     defined more than once on a side, against 3,433 compared. That is not the pinned layout turned away below, which gates one layout; it
     samples many. Its cost is that each placement is a link no app builds, which may cost every
@@ -11088,8 +11089,8 @@ rules something out.
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a key of the
     seed, the index and a function's name orders the functions two sides share alike at one
     index, so a shuffled placement's two sides differ by the change's own functions unless a
-    symbol one side alone has moves a section both have, which the run refuses where that section
-    holds a name it compares; a bound inside
+    symbol one side alone has moves a section both have, which the run refuses where the move
+    changes the order of the names it compares; a bound inside
     the spread is one the build's own placement could account for, by the spread one run measured;
     with no spread of the setup's own, a bound inside the widest recorded is one placement has
     been seen to account for elsewhere, which is reason to read it across placements and no
