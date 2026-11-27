@@ -27,7 +27,7 @@ not remove that requirement.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux, and a WebSocket or tunnel counts until its route closes it; `.own_http1(true)`: requests without a body are read and answered by Corten's own connection code in the place of hyper's, with every limit here held the same ([below](#cortens-own-connection)); connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux, and a WebSocket or tunnel counts until its route closes it; `.own_http1(true)`: requests and their bodies are read and answered by Corten's own connection code in the place of hyper's, with every limit here held the same ([below](#cortens-own-connection)); connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Deadline | a handler that has not started its answer in 30 seconds is answered 503 (`Failure::TimedOut`), or, under `serve`, the client's 408 when it was waiting for the body (`Failure::Failed`) | `.deadline(d)` (`None` for none); `Area::deadline`, `Api::deadline` for slower routes at a prefix |
 | Request bodies | `Json`, `Form`, `String` and `Bytes` read at most 2 MiB, and an `Upload` keeps as much unless its handler sets `upload.limit(bytes)`; over it, a 413 | `.body_limit(bytes)`; `Area::body_limit`, `Api::body_limit` (the innermost prefix that sets one decides); a proxy in front sizes its own body limit from it (nginx's `client_max_body_size`, [Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
@@ -207,20 +207,46 @@ document, so the layout is never stale.
 ## Corten's own connection
 
 `corten::serve` reads and writes HTTP/1.1 with hyper. `.own_http1(true)` has Corten's own
-connection code answer the requests that have no body, and leaves the rest to hyper
-([design Choice 78](../design.md#choice-own-http1)). It is off unless the app sets it.
+connection code read and answer a connection's requests, their bodies too, and leaves a switch
+of protocols to hyper ([design Choice 78](../design.md#choice-own-http1)). It is off unless the
+app sets it.
 
 ```rust,ignore
 let app = App::new(url::router()).own_http1(true);
 ```
 
 A connection's requests are then read and answered by Corten up to the first one whose head has
-a `Content-Length`, a `Transfer-Encoding`, an `Expect` or an `Upgrade` header (whatever the
-header says), or that is a `CONNECT`, or an HTTP/1.0 request that asks to keep its connection.
-The answers before that request are sent, and it and every request after it on the connection
-are hyper's, as all are with the switch off. So a request's body is read by hyper either way, and
-a WebSocket's handshake and a tunnel are hyper's too: a route sees the same `Upgrade` and the same
+an `Upgrade` header (whatever the header says), or that is a `CONNECT`, or an HTTP/1.0 request
+that asks to keep its connection. The answers before that request are sent, and it and every
+request after it on the connection are hyper's, as all are with the switch off. So a WebSocket's
+handshake and a tunnel are hyper's either way: a route sees the same `Upgrade` and the same
 socket.
+
+A request's body is read as hyper reads one. A `Content-Length` is that many bytes, and a
+`Transfer-Encoding` that ends in `chunked` is chunks, with their extensions passed over and
+their trailers given to the handler as a frame of their own. A head that says both is read as
+chunks, loses its `Content-Length` and closes the connection behind its answer. A head is
+refused with 400 for two lengths that differ, a length that is anything but digits (a sign, a
+space, a list), a coding that does not end in `chunked`, or any `Transfer-Encoding` on HTTP/1.0.
+A body that is not framed as its head said (a chunk size that is not hexadecimal or does not
+fit 64 bits, a line that does not end in CR and LF, extensions of 16 KiB or more together,
+trailers as long together as `max_request_head` or more than 100 of them), or whose client
+closes its side before its end, fails where the handler reads it, and the connection is closed
+behind that request's answer. What the answer is then is the reader's, as with hyper: `Json`,
+`Form`, `String` and `Bytes` answer 400. A client that sent `Expect: 100-continue` is told to
+send when the handler first asks for the body, and is told nothing if the handler answers
+without asking. A handler is given a body that says the same of its length and its end, gives
+the same bytes and fails with the same error as hyper's, so `body_limit`, a reader's own limit,
+an `Upload` and the 408 a deadline gives a client that is slow to send hold as they do with
+the switch off.
+
+The body is read from the socket only as the handler asks for it, a read at a time. What its
+client has sent beyond that waits in the socket, so a handler that reads slowly holds its
+client back, and a body no handler reads costs the server what came with its head. A body
+its handler left unfinished is read past only where that takes no waiting, two more pieces of
+it at the most and no more than 24 KiB; otherwise the connection is closed behind the answer,
+and the rest of the body is not read. That is hyper's rule, drawn in one place a little
+differently (item 5 below).
 
 The app is given the same requests, and its clients are answered in correct HTTP with the head
 hyper writes: the same lines in the same order. This is not a promise of hyper's bytes for every
@@ -248,9 +274,12 @@ answers any other ([below](#host-names)). What differs:
    213 and 219 for answers of 77 and 75 bytes, the shortest there are.
    So a handler can run for a request whose answer is never sent, where hyper would not have
    begun it: the client left or stopped reading, or the connection closed on an answer before
-   its own. A handler that changes something has changed it then. Only a client that pipelines
+   its own. A handler that changes something has changed it then, and a request with a body
+   is such a request like any other: a `POST` sent behind other requests by a client that
+   reads nothing is read and handled while the answers ahead of it wait (as many `POST`s as
+   `GET`s in the same measurement). Only a client that pipelines
    sends such requests, and HTTP promises it nothing about a request it got no answer to. An
-   app whose handlers for requests without a body are costly, or change something, should
+   app whose handlers are costly, or change something, should
    leave the switch off or bound that work itself (for each client, or by how much runs at
    once), unless its clients reach it through a proxy that does not pipeline.
 2. An answer's trailers are not sent, nor a `Trailer` line with them, and a status's reason
@@ -269,14 +298,18 @@ answers any other ([below](#host-names)). What differs:
    of its body, then a closed connection) where hyper would have sent none of it. A client takes
    neither for a whole answer.
 5. A request whose body its handler did not read. hyper keeps such a connection only if one more
-   read of the socket finishes the body, and otherwise closes it behind the answer. That is
-   hyper's rule with the switch on or off, but where its reads end is not the same: with the
-   switch on they are counted from the request with the body, the ones before it having been
-   answered without hyper. So behind an unread body too long for hyper's next read to finish
-   (16 KiB or more beyond what came with its head), a connection may be kept with the switch on
+   read of the socket finishes the body, and otherwise closes it behind the answer. Corten's
+   connection has the same rule, but its reads do not end where hyper's do: hyper's are of
+   8 KiB, then 16 KiB and so on, counted from the connection's first byte, and Corten's
+   connection reads such a body as far as 24 KiB (hyper's first two reads together) past what
+   it had read when the handler left it. So behind an unread body of more than about 24 KiB, or
+   one that follows 8 KiB of other requests, a connection may be kept with the switch on
    where it would have been closed with it off, or closed where it would have been kept. Nothing
    is answered twice or out of order, and a client that sends its next request again on a new
-   connection, as HTTP has it do when a connection is closed on it, sees no difference.
+   connection, as HTTP has it do when a connection is closed on it, sees no difference. For
+   the same reason an answer to such a request may say `connection: close` on one and close
+   without saying so on the other, where the body turns out to be wrong, or its client leaves,
+   in the part one of them had read and the other had not.
 6. A client that pipelines requests and reads no answer holds a little more of the server's
    memory than with hyper: the same flood of such clients took a 4 GiB container to 2,178 to
    2,323 MiB with the switch on and 2,101 to 2,137 MiB with it off (measured at `568aa8d1a`,
@@ -306,6 +339,21 @@ answers any other ([below](#host-names)). What differs:
    the answer by then: of 41 MB in 20 KiB pieces a run read all from hyper and 2.6 MB from
    Corten's connection, and of 20 MB in 512-byte pieces 1.1 MB from hyper and 2.1 MB from
    Corten's.
+9. A chunked body with a line feed that has no carriage return before it among its trailers.
+   Corten's connection fails the body there, so the handler's read fails and the connection is
+   closed behind its answer. hyper takes that line feed for a byte of a trailer and goes on
+   reading trailers, through whatever the client sends next, to the next empty line that ends
+   in CR and LF: the request sent behind the body is read as trailers and never answered. This
+   is the one place where Corten's connection is stricter than hyper's in what it takes for a
+   body, and it is so on purpose. A proxy in front that takes a bare line feed for a line's
+   end, as many parsers do, sees the body end where hyper does not, and would send another
+   client's request where hyper is still reading trailers. No client that follows HTTP sends
+   such a body.
+10. How far ahead of the handler a body is read. hyper keeps one piece of a body ready beyond
+    what the handler has taken, read as soon as it arrives, unless the client waits to be told
+    to send. Corten's connection reads when the handler asks. A handler sees the same bytes
+    either way, in pieces that end where each connection's reads did, which no reader should
+    count on with either.
 
 What it saves, counted in instructions a request over a socket (release build, jemalloc, one
 connection, at `568aa8d1a`): the shortest request the counting kit sends, to a route that says

@@ -1517,10 +1517,10 @@ rules something out.
     2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
        server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
        for them as Corten could not be, and nothing measured here points at it. That last is no
-       longer so, and [Choice 78](#choice-own-http1) reopens this step for the requests that
-       frame nothing: an app that asks (`App::own_http1`, off unless set) has a connection's
-       requests without a body read and answered by Corten's own code, held to hyper's answers by
-       a differential test. A request's body, a protocol switch and every connection of an app
+       longer so, and [Choice 78](#choice-own-http1) reopens this step: an app that asks
+       (`App::own_http1`, off unless set) has a connection's requests read and answered by
+       Corten's own code, first those that frame nothing and then their bodies too, held to
+       hyper's answers by a differential test. A protocol switch and every connection of an app
        that does not ask stay hyper's, and so does everything below.
 
        While a connection is idle, a request's head must arrive within `App::header_timeout` (30

@@ -926,8 +926,8 @@ try {
 
   // Requests a client sends in one write, one with a body among them, are each answered, in
   // order, with the bytes each gets alone on a connection of its own (all but `Date` and
-  // `Connection`). With `OWN_HTTP1` set the server's own connection answers those before the body
-  // and hands the connection to hyper at it (`App::own_http1`); without it hyper answers them all.
+  // `Connection`). With `OWN_HTTP1` set the server's own connection reads and answers them all,
+  // the one with the body too (`App::own_http1`); without it hyper does.
   const { hostname, port, host } = new URL(base);
   const raw = (/** @type {string} */ text) =>
     /** @type {Promise<string>} */ (
