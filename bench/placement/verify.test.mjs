@@ -376,7 +376,7 @@ test("verify.sh runs serve.mjs and answers.mjs with no NODE_OPTIONS of the calle
 
 test("verify.sh stops an answers.mjs that does not end, at its bound, and fails with the base stopped and nothing left on its port", LINUX, async (t) => {
   // A stand-in for answers.mjs that ignores TERM and would run 45 s: timeout ends it 30 s on, with KILL 5 s after its TERM.
-  const answers = 'process.on("SIGTERM", () => {}); require("node:fs").appendFileSync(require("node:path").join(import.meta.dirname, "..", "stalled"), process.pid + "\\n"); setTimeout(() => process.exit(0), 45000);\n';
+  const answers = 'import { appendFileSync } from "node:fs";\nimport { join } from "node:path";\nprocess.on("SIGTERM", () => {});\nappendFileSync(join(import.meta.dirname, "..", "stalled"), process.pid + "\\n");\nsetTimeout(() => process.exit(0), 45000);\n';
   const r = await verify(t, "answers-stalled", "/page", { kind: "yielding", answers, file: true });
   assert.equal(r.error, undefined, `verify.sh did not end within 60 s (${r.seconds} s): ${r.said}`);
   assert.equal(r.status, 1, r.said);
