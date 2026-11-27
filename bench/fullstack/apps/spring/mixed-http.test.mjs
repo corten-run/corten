@@ -61,18 +61,18 @@ test("cancellation proof refuses an upstream socket destroyed before the close c
   } finally { caller.destroy(); await close(server); }
 });
 
-async function withCandidate(args, run) {
-  const image = process.env.SPRING_MIXED_IMAGE;
+async function withCandidate(args, run, { image = process.env.SPRING_MIXED_IMAGE, command = docker } = {}) {
   assert.match(image ?? "", /^sha256:[a-f0-9]{64}$/, "set SPRING_MIXED_IMAGE to the local candidate image ID");
   const owner = "spring-mixed-http-" + randomBytes(8).toString("hex");
   let id;
   try {
-    id = docker("create", "--name", owner, "--label", "agent.owner=codex", "--label", "agent.task=" + owner,
+    id = command("create", "--pull=never", "--name", owner, "--label", "agent.owner=codex", "--label", "agent.task=" + owner,
       ...(process.platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
       "-p", "127.0.0.1::8080", "-e", "PROFILE=matched", "-e", `HOSTS=${owner},localhost,127.0.0.1`, ...args, image);
     assert.match(id, /^[a-f0-9]{64}$/);
-    docker("start", id);
-    const port = JSON.parse(docker("inspect", "--format", "{{json .NetworkSettings.Ports}}", id))["8080/tcp"][0].HostPort;
+    assert.equal(command("inspect", "--type", "container", "--format", "{{.Image}}", id), image, "created container image differs from the supplied image ID");
+    command("start", id);
+    const port = JSON.parse(command("inspect", "--format", "{{json .NetworkSettings.Ports}}", id))["8080/tcp"][0].HostPort;
     const base = "http://127.0.0.1:" + port;
     const deadline = performance.now() + 30000;
     for (;;) {
@@ -87,11 +87,45 @@ async function withCandidate(args, run) {
     await run(base, image);
   } finally {
     if (/^[a-f0-9]{64}$/.test(id ?? "")) {
-      assert.equal(docker("inspect", "--format", '{{index .Config.Labels "agent.task"}}', id), owner);
-      docker("rm", "-f", "-v", id);
+      assert.equal(command("inspect", "--format", '{{index .Config.Labels "agent.task"}}', id), owner);
+      command("rm", "-f", "-v", id);
     }
   }
 }
+
+test("Spring Mixed refuses a missing full image ID without pulling or starting", async () => {
+  const image = `sha256:${"a".repeat(64)}`, missing = new Error("No such local image");
+  const calls = [];
+  const command = (...args) => {
+    calls.push(args[0]);
+    assert.equal(args[0], "create");
+    assert.equal(args[1], "--pull=never");
+    assert.equal(args.at(-1), image);
+    throw missing;
+  };
+  await assert.rejects(withCandidate([], () => assert.fail("unexpected candidate"), { image, command }), (error) => error === missing);
+  assert.deepEqual(calls, ["create"]);
+});
+
+test("Spring Mixed refuses and removes an owned container for a different image before starting", async () => {
+  const image = `sha256:${"a".repeat(64)}`, id = "b".repeat(64), calls = [];
+  let owner;
+  const command = (...args) => {
+    calls.push(args[0]);
+    if (args[0] === "create") { owner = args[args.indexOf("--name") + 1]; return id; }
+    if (args[0] === "inspect" && args.at(-2) === "{{.Image}}") {
+      assert.equal(args.at(-1), id);
+      return `sha256:${"c".repeat(64)}`;
+    }
+    if (args[0] === "inspect") {
+      assert.deepEqual(args, ["inspect", "--format", '{{index .Config.Labels "agent.task"}}', id]);
+      return owner;
+    }
+    assert.deepEqual(args, ["rm", "-f", "-v", id]);
+  };
+  await assert.rejects(withCandidate([], () => assert.fail("unexpected candidate"), { image, command }), /created container image differs/);
+  assert.deepEqual(calls, ["create", "inspect", "inspect", "rm"]);
+});
 
 test("Spring Mixed image passes the existing bounded production precheck", { timeout: 120000 }, async (t) => {
   const fixture = records(), temp = mkdtempSync(join(tmpdir(), "spring-mixed-http-"));
