@@ -2410,6 +2410,7 @@ async fn a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_h
     let (told, mut heard) = tokio::sync::mpsc::unbounded_channel();
     let app = waiting(told).deadline(LONG).shutdown_grace(Duration::from_millis(20));
     let (addr, stop, server) = listening(app).await;
+    let before = taken();
     let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
     for _ in 0..3 {
         assert_eq!(asked(&mut conn, "GET /wait").await.1, "done");
@@ -2419,6 +2420,7 @@ async fn a_deadline_on_a_connections_timer_fires_at_its_own_time_once_shutdown_h
     conn.write_all(b"GET /never HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
     while heard.recv().await.expect("the app holds the sender") != Told::Began {}
     tokio::time::sleep(SLACK.saturating_sub(asked_never.elapsed())).await;
+    assert_eq!(taken() - before, 2, "the third to wait took the connection's timer, and this request's deadline has it now");
     let stopped = std::time::Instant::now();
     stop.send(()).unwrap();
     assert!(asked_never.elapsed() < LONG, "shutdown began after the deadline: {:?}", asked_never.elapsed());

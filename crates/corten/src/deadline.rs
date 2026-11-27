@@ -151,9 +151,9 @@ impl<C: Future> Future for Keeps<C> {
     // connection fewer than two of whose requests have waited: 17 instructions (callgrind,
     // keep-alive requests over TCP: this function's 386 a poll against 369 for the connection's
     // own poll without it). The connection itself is polled in one place, here, so its poll is
-    // still compiled into its one caller, which is now this function (`serve_listener` polls
-    // the wrapper at three places: while it serves, to close now when the server is gone, and
-    // to drain at a shutdown). [`Polling`] owns nothing to drop and reads what it lent from the
+    // compiled into its one caller, which is this function (`serve_listener` polls the wrapper
+    // at three places: while it serves, to close now when the server is gone, and to drain at
+    // a shutdown). [`Polling`] owns nothing to drop and reads what it lent from the
     // thread, so putting the thread back is compiled in here too. One that has made its timer
     // lends it and takes it back in every poll, whatever it is serving: a request that does not
     // wait then costs about 25 instructions more. A timer left set costs every connection of
