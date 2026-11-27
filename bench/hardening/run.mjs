@@ -9,7 +9,7 @@ import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
   boundedRequestsVersion, deploymentQualificationVersion, connectionFloodResistance } from "./plan.mjs";
 import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, verifyHardeningCpuRoles, verifyHardeningCpuScope, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
-  savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage, proxyConfig } from "./evidence.mjs";
+  savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage, proxyConfig, edgePublicOrigin } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
 import { assessNative } from "./native.mjs";
@@ -198,6 +198,7 @@ export async function run(args) {
       }
       const app = await owned(appName, ["run", "-d", "--network", network, "--network-alias", "fsw-target", ...limits(cell.mode === "direct" ? "applicationDirect" : "applicationEdge"), ...fixture,
         "-e", `MARKETPLACE_SOURCE=${cell.source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json", "-e", `API_BASE=http://${upstreamName}:8080`,
+        ...(cell.mode === "deployed-edge" ? ["-e", `MARKETPLACE_PUBLIC_ORIGIN=${edgePublicOrigin}`] : []),
         "-e", "PORT=8080", "-e", "HOSTS=fsw-target,localhost,127.0.0.1", "-e", `PROFILE=${qualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`, image.Id]);
       targets.push({ id: "application", role: "application", name: appName, info: app, source: `${summary.commit}:sha256:${source}` });
       await ready(appName, out, image.Id);

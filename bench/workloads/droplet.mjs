@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, canSkipHostChromium, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerCheckSeconds, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
+import { archiveLimit, archiveMembers, digest, discardPublicationStage, durable, durableCopy, durableNew, evidenceFileIdentity, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory,
   pinEvidenceTree, treeHash, verifyArchiveTree, withVerifiedArchive } from "./cloud-local.mjs";
 import { absentCollectionCandidate, absentCollectionPolicy, campaignOutcome, controllerFailure, controllerState, erroredCreate, fleetCatalogResult, full, pendingCreate, providerAccount, providerFailure, unitQuery, unsentCreate, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
@@ -19,7 +19,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   handoffLocks, handoffRetirementPolicy, pinHandoffRetirement, verifyHandoffCustody,
   exitOneEvidenceFingerprint, failedExitOneObservation, failedExitOnePolicy, verifyFailedExitOneCustody, verifyFailedExitOneRetirement,
-  interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+  interruptedFirstUpload, settledBootstrap, SetupWatcherProofMissing, setupWatcherFailures, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence, createErroredBytes, createErroredCustody, createErroredReceipt, createErroredRecord, createRecheckLock, pendingCreateErroredReceipt,
   verifyCreateErrored, offlineNeverStarted, createContradiction, contradictionStages, createReappeared, createReappearedWitness, publicationStages } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -35,7 +35,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 
-function acquireHandoffLock(path, bytes) {
+function acquireHandoffLock(path, bytes, message = "handoff operation lock changed; preserve custody") {
   const fd = openSync(path, "wx", 0o600);
   let owned;
   try {
@@ -47,7 +47,7 @@ function acquireHandoffLock(path, bytes) {
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
     return current?.isFile() && ["dev", "ino", "birthtimeNs", "ctimeNs", "nlink"].every(key => current[key] === owned[key]);
   };
-  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), "handoff operation lock changed; preserve custody");
+  return () => assert.ok(matches() && regular(path, 1024).equals(bytes) && matches(), message);
 }
 
 const sameStateFile = (a, b) => ["dev", "ino", "birthtimeNs"].every(key => a[key] === b[key]);
@@ -93,6 +93,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   assert.equal(options.absentMeasuredCheckout !== undefined, absenceOnly, "production absence approval required");
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   let assertHandoffLock, assertHandoffCustody, handoffReceiptSha256, expectedHandoffState, afterSettle;
+  // The lock this process's current locked() operation holds, while it holds it: its name
+  // and a check that it is still the file this process created, unchanged. An ordinary
+  // operation holds operation.lock; an invalid-monitor recovery holds stream-recovery.lock
+  // and never takes the original operation.lock it finds.
+  let heldLock;
   let exitOneFenceFinishedAtMs;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -186,13 +191,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     saved.control.monitor.phase = phase; publish(saved); state = saved;
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
-  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
+  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration, beforeDelete) {
     const creating = binary === "doctl" && args[0] === "compute" && args[1] === "droplet" && args[2] === "create";
     const prepareDelete = typeof deleteProofExpiresAtMs === "object" ? deleteProofExpiresAtMs : undefined;
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
       assert.ok(prepareDelete || Number.isSafeInteger(deleteProofExpiresAtMs));
     }
+    if (beforeDelete !== undefined) assert.ok(binary === "doctl" && args[2] === "delete" && typeof beforeDelete === "function");
     const settleUnsentCreate = () => {
       try {
         boundary();
@@ -202,7 +208,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         writeState(state, renameSync, "create-unsent");
       } catch (cause) { preserveOperationLock = true; throw cause; }
     };
-    const invoke = async (argv, permittedFailure = false, expiry) => {
+    const invoke = async (argv, permittedFailure = false, expiry, beforeDispatch) => {
       try { check(); }
       catch (error) {
         if (creating && argv[2] === "create") settleUnsentCreate();
@@ -213,7 +219,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
         if (groupedExitOne) assert.ok(current >= exitOneFenceFinishedAtMs, "current retirement proof clock reversed");
       };
-      const guardDispatch = pinnedRetirement && expiry !== undefined ? () => {
+      const pinnedGuard = pinnedRetirement && expiry !== undefined ? () => {
         checkHandoffDelete();
         if (prepareDelete?.onUnsent) {
           const now = Date.now();
@@ -221,8 +227,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         fresh();
       } : undefined;
+      // A transport may await between run() and the request (production crosses a
+      // cancellation checkpoint), so the caller's last check runs again in the guard
+      // it calls after that await, refusing by throwing before any pinned outcome.
+      const guardDispatch = beforeDispatch === undefined ? pinnedGuard
+        : () => { beforeDispatch(); return pinnedGuard?.(); };
       if (expiry !== undefined) {
-        if (guardDispatch && !prepareDelete?.publishIntent) checkHandoffDelete(false);
+        if (pinnedGuard && !prepareDelete?.publishIntent) checkHandoffDelete(false);
         fresh();
       }
       let r;
@@ -235,6 +246,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.deletionIntentAt = new Date().toISOString(); save();
         }
       }
+      // After the account preflight and the proof's deadline, the last local check before run().
+      beforeDispatch?.();
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration, guardDispatch); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r === unsentCreate) {
@@ -284,7 +297,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
     }
     const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
-    const result = await invoke(scoped(args), allowFail, expiry);
+    const result = await invoke(scoped(args), allowFail, expiry, beforeDelete);
     if (prepareDelete) assert.ok(result.status === 0 && !result.error, "delete outcome uncertain; preserve intent");
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
@@ -793,9 +806,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     const lockBytes = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`;
-    if (pinnedRetirement || absenceOnly) assertHandoffLock = acquireHandoffLock(lock, Buffer.from(lockBytes));
-    else durable(lock, lockBytes);
+    // Every lock keeps the identity of the file this process created, so neither a dispatch
+    // guard nor teardown can mistake a replacement for it.
+    const handoff = pinnedRetirement || absenceOnly;
+    physical(local);
+    const ownLock = acquireHandoffLock(lock, Buffer.from(lockBytes), handoff ? undefined : `${name} changed; preserve custody`);
+    if (handoff) assertHandoffLock = ownLock;
+    const outerLock = heldLock;
+    heldLock = { name, own: ownLock };
     preserveOperationLock = false;
+    let failure;
     try {
       assertHandoffLock?.();
       state = read(); check();
@@ -806,6 +826,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (recovery) assert.equal(state.control?.monitor?.phase, "invalid", "only irrevocably failed monitoring can recover");
       return await fn();
     }
+    catch (error) { failure = error; throw error; }
     finally {
       try { await settle(); }
       catch (error) {
@@ -815,10 +836,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           diagnostic ? { providerDiagnostic: diagnostic } : {});
       }
       finally {
+        heldLock = outerLock;
         if (!preserveOperationLock) {
           if (afterSettle) afterSettle();
           else if (expectedHandoffState !== undefined) assertHandoffState();
           else assertHandoffLock?.();
+          // Never remove a lock this process no longer owns: a replacement stays for its owner.
+          try { ownLock(); }
+          catch (cause) {
+            preserveOperationLock = true;
+            // Report the replacement; an earlier refusal stays as the cause.
+            throw new Error(`${name} was replaced during this operation; the replacement is kept; preserve custody`, { cause: failure ?? cause });
+          }
           unlinkSync(lock); syncDirectory(local);
         }
       }
@@ -885,28 +914,58 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return report;
   }
   const deletedCode = () => state.validation.status === "verified" && state.exitCode === 0 ? 0 : 1; // Intrinsic evidence only, never readiness.
-  const setupExit = () => {
-    verifyArchive(); const extracted = join(local, state.evidence); physical(extracted);
-    assert.equal(treeHash(extracted), state.evidenceSha256, "failed setup archive extraction changed");
+  // With `pins`, also adds a cheap recheck of what this verified, for the DELETE's dispatch
+  // guard: the archive's file identity, recorded around its hash, and the extracted tree's
+  // metadata, recorded by the same walk that hashes it. Neither rereads the payload.
+  const setupExit = (pins) => {
+    const archiveIdentity = evidenceFileIdentity(archive);
+    verifyArchive();
+    assert.ok(evidenceFileIdentity(archive) === archiveIdentity, "archive changed; preserve host");
+    const extracted = join(local, state.evidence); physical(extracted);
+    const treeUnchanged = pinEvidenceTree(extracted, state.evidenceSha256, "failed setup archive extraction changed");
     const campaign = join(extracted, "campaign");
     if (existsSync(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), [], "native data cannot use setup retirement"); }
     const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
     full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit required");
-    const exit = Number(marker.trim()); assert.ok(exit <= 255); return exit;
+    const exit = Number(marker.trim()); assert.ok(exit <= 255);
+    // The tree walk is the slow part, so the archive's identity is checked on both sides of
+    // it: a change made to results.tgz while the tree is walked is still seen.
+    const archiveUnchanged = () => {
+      try { assert.ok(evidenceFileIdentity(archive) === archiveIdentity); }
+      catch (cause) { throw new Error("setup archive changed; preserve host", { cause }); }
+    };
+    pins?.push(() => {
+      archiveUnchanged();
+      try { treeUnchanged(); }
+      catch (cause) { throw new Error("setup evidence changed; preserve host", { cause }); }
+      archiveUnchanged();
+    });
+    return exit;
   };
   const retirementFile = (kind) => kind === "setup-failed" ? "failed-setup-host.json" : "unused-host.json";
-  const verifyRetirementRecord = (bytes, kind) => {
+  // `interrupted` verifies a receipt left without its intent for archival only: a retry
+  // has since appended controls, so it is checked against the ledger prefix it was
+  // written for. Only a receipt for the final control can authorize a DELETE.
+  const verifyRetirementRecord = (bytes, kind, interrupted = false, pins) => {
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
     if (!setup) return verifyUnusedEvidence(record, state);
-    const expected = setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local);
+    let bound = state;
+    if (interrupted && state.control) {
+      const length = record.observation?.control?.requests?.length;
+      assert.ok(Number.isSafeInteger(length) && length > 0 && length <= state.control.ledger.length, "interrupted receipt outside the saved ledger");
+      bound = { ...state, control: { ...state.control, ledger: state.control.ledger.slice(0, length) } };
+    }
+    // The preserved archive selects the schema: v3 only beside an archived watcher failure.
+    const exit = setupExit(pins), failures = bound.control && bound.preBootstrapTerminal ? setupWatcherFailures(bound, local) : [];
+    const expected = setupEvidence(raw, bound, terminalSetupScript(bound, exit, bound.control ? record.observation.control.requests.length - 1 : undefined, failures), exit, record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
-  const verifyRetirement = () => {
+  const verifyRetirement = (pins) => {
     if (state.retirement.kind === "native-failed") return verifyFailedNativeRetirement(local, state);
     const bytes = regular(join(local, retirementFile(state.retirement.kind)), state.control && state.retirement.kind === "setup-failed" ? 8 * 1024 * 1024 : 4096);
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
-    verifyRetirementRecord(bytes, state.retirement.kind);
+    verifyRetirementRecord(bytes, state.retirement.kind, false, pins);
   };
   const requireUnusedBootstrapCustody = () => {
     const interrupted = interruptedFirstUpload(state, local), uploads = interrupted || settledBootstrap(state, local);
@@ -950,38 +1009,179 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return uploads;
   };
   const retire = async (kind, evidence, finishedAtMs) => {
+    // A retirement runs only under the exclusive lock this operation took, and refuses
+    // before it writes a receipt, a digest or an intent if that lock is gone or replaced.
+    const held = heldLock;
+    assert.ok(held && ["operation.lock", recoveryLock].includes(held.name), "retirement requires this process's operation lock");
+    held.own();
     const pinned = options.unusedBootstrapKnownHosts !== undefined;
-    const deleteProofExpiresAtMs = pinned ? evidence.startedAtMs + 60000 : undefined;
+    // A drain proof shows a host state that can change, so like the pinned unused proof
+    // its 60-second deadline from the query's start goes with the DELETE itself.
+    const drained = kind === "setup-failed" && evidence.schema === "benchmark-failed-setup-retirement/v3", bounded = pinned || drained;
+    const deleteProofExpiresAtMs = bounded ? evidence.startedAtMs + 60000 : undefined;
     const requireFreshProof = () => {
       const current = Date.now();
-      assert.ok(current >= finishedAtMs && (pinned ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
+      assert.ok(current >= finishedAtMs && (bounded ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
         "retirement proof expired before deletion");
     };
-    await own(); check();
+    // The saved reservation as this process last loaded or saved it, read before the first
+    // await and required to hold exactly the state this process has: every retirement write
+    // is made only over these bytes, so a change made during the host read, an evidence
+    // verification or a provider read refuses and is kept as made, never overwritten. Each
+    // save below replaces them with the bytes it wrote.
+    const changedReservation = "saved reservation changed before the deletion intent; preserve host";
+    let trusted = regular(statePath, 1024 * 1024), intentSaved = false;
+    try { assert.equal(stateBytes(JSON.parse(trusted)), stateBytes(state)); }
+    catch { throw new assert.AssertionError({ message: changedReservation }); }
+    const path = join(local, retirementFile(kind));
+    // A v2 or v3 setup receipt left without its intent is recovered against the ledger
+    // prefix it names, using its own timestamps, so its bytes must also be the ones whose
+    // digest was saved before it was published. v1, unused and pinned unused receipts are
+    // still recovered only by full verification against the current state.
+    const recorded = kind === "setup-failed" && !!state.control;
+    const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
+    const bytes = `${JSON.stringify(evidence, null, 2)}\n`, written = digest(bytes);
+    // The bytes this process wrote, not the file, are the authority: once published, the
+    // receipt must still be them at every later check until the DELETE is sent.
+    const requirePublished = () => assert.equal(digest(regular(path, limit)), written,
+      "published retirement receipt differs from the bytes written; preserve host");
+    // What the intent's verification pinned: for a v2 or v3 receipt the archived control
+    // custody its proof was built from (including any watcher failure) and, for a setup
+    // retirement, the archive and the extracted tree its replay verifier hashes.
+    const pins = [], custody = recorded ? evidence.observation.control.custody : undefined;
+    const requireEvidence = () => {
+      if (custody) {
+        try {
+          const directory = join(local, state.evidence, "control"); physical(directory);
+          assert.deepEqual(readdirSync(directory).sort(), custody.map((entry) => entry.name).sort());
+          for (const entry of custody) {
+            const bytes = regular(join(directory, entry.name), 8 * 1024 * 1024);
+            assert.ok(bytes.length === entry.bytes && digest(bytes) === entry.sha256);
+          }
+        } catch (cause) { throw new Error("archived control custody changed; preserve host", { cause }); }
+      }
+      for (const pin of pins) pin();
+    };
+    let published = false, verified = false, dispatched = false;
+    // The one custody every write and the DELETE rest on, checked after each await or slow
+    // step and immediately before each write, including inside each state save and receipt
+    // or history publication between its synced stage and the rename or link. In order: the
+    // evidence the intent's verification pinned (once verified), which is the slowest part,
+    // then the receipt this process published (once published), the lock this operation
+    // holds, the saved reservation byte for byte and, until the intent, a bounded proof's
+    // deadline, so the fast checks always follow the slow ones and a change made while the
+    // evidence is walked is still seen. After the intent the deadline goes with the DELETE
+    // itself, and once the DELETE has been sent only the lock and the reservation remain:
+    // the absence read and destroyedAt must not be refused for a deadline the DELETE already
+    // met, and the receipt and evidence are verified again by any later collect.
+    const requireCustody = () => {
+      if (verified && !dispatched) requireEvidence();
+      if (published && !dispatched) requirePublished();
+      held.own();
+      assert.ok(regular(statePath, 1024 * 1024).equals(trusted), intentSaved
+        ? "saved retirement reservation changed; preserve host" : changedReservation);
+      if (bounded && !intentSaved) requireFreshProof();
+    };
+    // A state save writes and syncs its stage before the rename that replaces state.json, so
+    // custody is checked again between the two: a change made while the stage was written
+    // refuses before the rename, and the stage this call created is removed unread.
+    const saveState = (kind) => {
+      check();
+      writeState(state, (stage, target) => {
+        try { requireCustody(); } catch (error) { unlinkSync(stage); throw error; }
+        renameSync(stage, target);
+      }, kind);
+    };
+    // The provider read awaits, so custody is checked again after it and before each
+    // publication below: a lock or reservation changed during the read refuses with
+    // nothing saved.
+    await own(); check(); requireCustody();
     if (pinned) requireUnusedBootstrapCustody();
     requireFreshProof();
-    const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
-    assert.ok(Buffer.byteLength(bytes) <= (state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096), "bounded retirement record required");
-    const path = join(local, retirementFile(kind));
+    assert.ok(Buffer.byteLength(bytes) <= limit, "bounded retirement record required");
+    // A staged publication (durableNew) runs the same custody check between its synced stage
+    // and the link that publishes it; a refusal there removes that stage, so nothing is
+    // published over a change made while it was written.
+    const publish = recorded ? (target, content) => durableNew(target, content, requireCustody) : durable;
+    // Such a receipt and its history copy are published whole (durableNew), so a write
+    // interrupted before publication leaves only an untrusted stage, removed here unread.
+    if (recorded) { requireCustody(); discardPublicationStage(path); }
     if (existsSync(path)) {
       // A crash between receipt and state writes is recoverable. Preserve the
       // exact old record, but only this operation's fresh probe authorizes intent.
       assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
-      const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
-      const prior = regular(path, limit), hash = digest(prior); verifyRetirementRecord(prior, kind);
+      const prior = regular(path, limit), hash = digest(prior);
+      if (recorded) {
+        assert.ok(state.pendingRetirement, "interrupted retirement receipt has no recorded digest; preserve host");
+        assert.ok(state.pendingRetirement.kind === kind && state.pendingRetirement.evidenceSha256 === hash,
+          "interrupted retirement receipt differs from its recorded digest; preserve host");
+      }
+      // Verifying a setup receipt hashes the archive and its extraction, a slow step, so
+      // custody is checked again after it and before each of the writes that follow.
+      verifyRetirementRecord(prior, kind, true);
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
-      if (existsSync(retained)) assert.equal(digest(regular(retained, 4096)), hash, "interrupted retirement history differs");
-      else durable(retained, prior);
+      if (recorded) { requireCustody(); discardPublicationStage(retained); }
+      if (existsSync(retained)) assert.equal(digest(regular(retained, limit)), hash, "interrupted retirement history differs");
+      else { requireCustody(); publish(retained, prior); }
       assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
-      unlinkSync(path); syncDirectory(local);
+      requireCustody(); unlinkSync(path); syncDirectory(local);
     }
-    durable(path, bytes);
-    if (pinned) requireFreshProof();
-    Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
-    verifyRetirement();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
+    // Supersedes any earlier digest; the retirement state below clears it. The digest is
+    // saved before the receipt is published, so a published receipt always has one. Like
+    // publishCreateErrored, it goes through its own fresh exclusive stage, so a save torn
+    // here leaves an unread stage rather than a state.json.tmp that blocks the next collect.
+    if (recorded) {
+      check(); requireCustody(); state.pendingRetirement = { kind, evidenceSha256: written }; saveState("pending-retirement");
+      trusted = Buffer.from(stateBytes(state));
+    }
+    requireCustody(); publish(path, bytes);
+    published = true; requireCustody();
+    const publishIntent = () => {
+      // A drain proof's intent follows the DELETE's account preflight, which awaits, so
+      // custody (including the receipt) is checked first; the intent save would otherwise
+      // overwrite a change made during that read and then guard against itself.
+      requireCustody();
+      // The retirement is verified, and its archive and extraction pinned, before the intent
+      // is saved, so evidence that changed leaves the receipt and its digest with no intent,
+      // which the next collect recovers on a fresh proof. From then on custody includes the
+      // pinned evidence, so the check after this verification and the one between the intent
+      // stage's sync and its rename cover the evidence, the receipt, the lock, the
+      // reservation and a bounded proof's deadline.
+      const prior = state, intended = { ...prior, status: "retired", retirement: { kind, evidenceSha256: written }, deletionIntentAt: new Date().toISOString() };
+      delete intended.pendingRetirement;
+      state = intended;
+      try { verifyRetirement(pins); verified = true; requireCustody(); }
+      catch (error) { state = prior; verified = false; pins.length = 0; throw error; }
+      saveState();
+      trusted = Buffer.from(stateBytes(state)); intentSaved = true;
+    };
+    // Everything the DELETE relies on, as this process left it, through the same custody
+    // check: the pinned evidence first, then the receipt, the lock and the saved reservation
+    // that names its digest, so the last step before dispatch follows the slow ones. The
+    // transport calls this again after its last local await before the request.
+    const requireRetirementCustody = () => {
+      assert.ok(intentSaved, "deletion intent required before the DELETE; preserve host");
+      requireCustody();
+    };
+    const deletion = ["compute", "droplet", "delete", state.id, "--force"];
+    if (drained) {
+      // A drain proof's intent is saved only after the DELETE's own account preflight and
+      // the deadline check that follows it, so a proof that expires during that read leaves
+      // the receipt and its digest with no intent, which the next collect recovers on a
+      // fresh proof. The deadline still goes with the DELETE itself.
+      await execute("doctl", deletion, 120000, false, { expiresAt: () => deleteProofExpiresAtMs, publishIntent },
+        undefined, undefined, requireRetirementCustody);
+    } else {
+      publishIntent();
+      requireRetirementCustody();
+      await execute("doctl", deletion, 120000, false, deleteProofExpiresAtMs, undefined, undefined, requireRetirementCustody);
+    }
+    dispatched = true;
     await confirmDeleted();
-    state.destroyedAt = new Date().toISOString(); save(); return 1;
+    // The absence read awaits too: destroyedAt is published only while this operation still
+    // holds its lock and the saved reservation is still the intent it wrote.
+    requireCustody();
+    state.destroyedAt = new Date().toISOString(); saveState(); return 1;
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
@@ -1008,23 +1208,36 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const refuseSetup = (stage) => { throw Object.assign(new Error(stage), { controllerStage: stage }); };
   const checkSetupCustody = (exit) => {
-    const custody = join(local, state.evidence, "control");
-    if (existsSync(custody) && readdirSync(custody).some((name) => /^watch-failure-[a-f0-9]{32}\.json$/.test(name)))
-      refuseSetup("setup-watcher-proof-missing");
+    // An archived watcher failure is never a receipt. It selects the separate drain
+    // proof only when every failure names a settled bootstrap row without a receipt.
+    // A custody read failure is not a missing proof: it keeps its own error, which the
+    // production wrapper reports as controller-collect, and still stops before any query.
+    let failures;
+    try { failures = setupWatcherFailures(state, local); }
+    catch (error) { if (error instanceof SetupWatcherProofMissing) refuseSetup("setup-watcher-proof-missing"); throw error; }
     // An acknowledged refusal is not a missing result. Do not append more
     // controls on restart or treat the refusal as permission to retire.
     const rows = state.control.ledger, last = rows.at(-1);
     if (last?.setupProofRejected) refuseSetup("setup-host-proof-refused");
     if (last?.localTerminal && last.code > 0 && last.code < 255 && last.request.epoch === "collection"
       && last.request.invocation.channel === "ssh"
-      && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1)}\n`))
+      && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1, failures)}\n`))
       refuseSetup("setup-host-proof-refused");
+    return failures;
+  };
+  // After registration a watcher failure still refuses before any query. The drain proof
+  // is only for the pre-registration bootstrap, where no stream state can exist yet.
+  const refuseRegisteredWatcher = () => {
+    const custody = join(local, state.evidence, "control");
+    if (state.control && existsSync(custody) && readdirSync(custody).some((name) => /^watch-failure-[a-f0-9]{32}\.json$/.test(name)))
+      refuseSetup("setup-watcher-proof-missing");
   };
   const retireFailedSetup = async () => {
     assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
     const exit = setupExit(), beforeEntry = !!state.preBootstrapTerminal;
-    if (beforeEntry) checkSetupCustody(exit);
-    const script = terminalSetupScript(state, exit), startedAtMs = Date.now();
+    if (!beforeEntry) refuseRegisteredWatcher();
+    const failures = beforeEntry ? checkSetupCustody(exit) : [];
+    const script = terminalSetupScript(state, exit, undefined, failures), startedAtMs = Date.now();
     const sequence = state.control?.ledger.length;
     const result = await ssh(script, 30000, beforeEntry).catch((error) => {
       // The SSH checkpoint may abort after saving the exit but before handing

@@ -156,7 +156,7 @@ impl Upgrade {
         let https_only = shared.is_some_and(|s| s.https_only);
         // Under an API, the sites its `allow_origin` names too, as for its writes.
         let api = shared.and_then(|s| s.scopes.as_ref()?.mount(parts.uri.path()));
-        if !crate::security::write_allowed(allowed, https_only, &parts.headers)
+        if !crate::security::write_allowed(allowed, https_only, &parts.uri, &parts.headers)
             && !api.is_some_and(|mount| crate::security::allowed(&parts.headers, mount.origins()))
         {
             return Err(Error::corten("a switch from another site's page is refused, as a cross-site write is")

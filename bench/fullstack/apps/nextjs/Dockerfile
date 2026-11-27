@@ -23,7 +23,7 @@ ARG EDGE_HOST=localhost:19411
 ENV PROFILE=$PROFILE EDGE_HOST=$EDGE_HOST
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
-COPY --from=build /app/package.json /app/next.config.mjs /app/server.mjs /app/server-profile.mjs ./
+COPY --from=build /app/package.json /app/next.config.mjs /app/server.mjs /app/server-profile.mjs /app/marketplace-origin.ts ./
 COPY --from=build /app/public ./public
 EXPOSE 8080
 CMD ["node", "server.mjs"]

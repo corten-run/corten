@@ -46,6 +46,16 @@ and guards repeated submit events until completion. It releases the guard on
 success or failure; the next accepted submission carries the response's cookie.
 This does not add a page-load session allocation or replace native JS transport.
 
+The native POST and the enhanced Pages API POST normally check against the
+connection's origin. With an exact `MARKETPLACE_PUBLIC_ORIGIN` such as
+`https://localhost:8080`, a POST on that exact Host (including port) must carry
+that Origin, even when the TLS edge connects over HTTP. There is no HTTP
+fallback on that Host; other hosts, including the direct HTTP preflight, still
+use the connection. A configured HTTPS origin also sets `Secure` on that host's
+session cookies. This is a Pages Router form policy, not a change to Next.js
+Server Actions or to the matched server's Host allowlist. The form checks
+Fetch Metadata independently and does not use forwarding headers.
+
 The cross-app native write-boundary regression is
 `node --test --test-concurrency=1 alerts-boundary.test.mjs`.
 Build all six apps first. It checks malformed links and retries in every locale,
@@ -70,6 +80,9 @@ non-document POST in enhanced mode, and reads back through
 `context.request.get` using the browser context's own cookie jar. HTTP checks
 also cover rejected writes, multiple clients and concurrent accepted requests.
 These are functional checks, not throughput measurements.
+
+The built-server suite (`npm run test:production`) includes the public-origin
+controls for both form POST paths, including session readback.
 
 `node --test --test-name-pattern="enhanced alert POST" production.test.mjs`
 starts the built app and a synthetic HTTP upstream to check source failures,

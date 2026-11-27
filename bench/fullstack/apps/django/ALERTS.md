@@ -5,6 +5,18 @@ database session. `GET /api/alerts` uses `JsonResponse` to return only the curre
 session's rows as `[{item_id,email,target_minor}]`, ordered by insertion ID.
 CSRF middleware, templates, forms and scripts remain native. Rejected validation,
 missing records, missing CSRF tokens and cross-site requests do not write alerts.
+
+For the Hardening TLS edge only, set `MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080`.
+Django would otherwise compare Origin with the plain HTTP upstream scheme. The
+opt-in CSRF middleware subclass changes only the Origin decision for a marketplace
+form POST whose Django-validated Host matches that authority, port included: it
+requires the exact configured Origin, even if the request has no Origin header.
+It does not set global `CSRF_TRUSTED_ORIGINS`, read forwarding headers, or change the
+request scheme or Origin. Django still checks the CSRF cookie and token;
+`ALLOWED_HOSTS` and the view's cross-site Fetch Metadata check still apply.
+All other requests, including the direct `http://127.0.0.1:8080` form preflight,
+continue through Django's ordinary CSRF checks.
+
 Validation returns the localized message and half-up rounded minor units from one
 parse; amounts beyond signed 64-bit minor units are rejected safely.
 Before a POST renders or persists, its complete source record is checked for required

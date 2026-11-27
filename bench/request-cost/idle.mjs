@@ -52,7 +52,7 @@ const addresses = whole("addresses", values.addresses);
 const port = whole("port", values.port);
 if (addresses > 254) throw new Error("--addresses takes at most 254");
 const [name] = /** @type {[string]} */ (named(values.case));
-const { configuration } = /** @type {typeof cases[string]} */ (cases[name]);
+const { configuration, hosts } = /** @type {typeof cases[string]} */ (cases[name]);
 
 // Resident memory moves a page at a time, so a difference of one page is the least a reading shows.
 const pageSize = spawnSync("getconf", ["PAGESIZE"], { encoding: "utf8" });
@@ -60,7 +60,7 @@ const pageText = pageSize.stdout?.trim() ?? "";
 const page = Number(pageText);
 if (pageSize.status !== 0 || !/^[1-9]\d*$/.test(pageText) || !Number.isSafeInteger(page)) throw new Error("getconf PAGESIZE did not give the page size");
 
-const probe = await start(binary, configuration, { cpu: values.cpu, port });
+const probe = await start(binary, configuration, { cpu: values.cpu, port, hosts });
 const memory = () => resident(readFileSync(`/proc/${probe.pid}/status`, "utf8"));
 const files = () => readdirSync(`/proc/${probe.pid}/fd`).length;
 /** The run as JSON, printed after the probe has stopped. @type {string | undefined} */

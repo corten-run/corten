@@ -806,7 +806,7 @@ fn a_plain_origin_is_http_off_loopback() {
         if let Some(site) = fetch_site {
             headers.insert("sec-fetch-site", HeaderValue::from_static(site));
         }
-        crate::page::plain_origin(&headers)
+        crate::page::plain_origin(&http::Uri::default(), &headers)
     };
     let plain = |origin: &str| with(origin, origin.split_once("://").map_or("", |(_, host)| host), None);
     for origin in
@@ -827,7 +827,7 @@ fn a_plain_origin_is_http_off_loopback() {
     ] {
         assert!(!plain(origin), "{origin}");
     }
-    assert!(!crate::page::plain_origin(&HeaderMap::new()), "no Origin: not a browser's write");
+    assert!(!crate::page::plain_origin(&http::Uri::default(), &HeaderMap::new()), "no Origin: not a browser's write");
     // A default port is the same written or left out, as in the same-origin check.
     assert!(with("http://lan", "lan:80", None));
     assert!(with("http://lan:80", "lan", None));
@@ -838,6 +838,45 @@ fn a_plain_origin_is_http_off_loopback() {
     assert!(!with("http://automation.lan:3001", "automation.lan:3001", Some("same-origin")));
     // Another origin's write (`Policy::allow_origin`): the response is this host's, not that one's.
     assert!(!with("http://admin.lan", "automation.lan:3001", None));
+}
+
+#[tokio::test]
+async fn an_absolute_target_chooses_the_notice_cookie_by_its_own_host() {
+    use crate::extract::FromRequestParts;
+
+    for (origin, cookie) in [("http://desk.lan:3001", "corten-notice"), ("http://desk.lan:3002", "__Host-corten-notice")] {
+        let request = Request::post("http://desk.lan:3001/").header(header::HOST, "desk.lan:3002").header(header::ORIGIN, origin);
+        let (mut parts, _) = request.body(Body::empty()).unwrap().into_parts();
+        let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+        let res = req.redirect_with_notice(&Done, "Saved.").unwrap().into_response();
+        assert_eq!(res.headers()[header::SET_COOKIE].to_str().unwrap().split_once('=').unwrap().0, cookie, "{origin}");
+    }
+}
+
+#[tokio::test]
+async fn a_notice_after_an_absolute_target_is_rewritten_uses_the_handler_visible_host() {
+    struct PathOnly;
+    impl crate::Middleware for PathOnly {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
+            *req.uri_mut() = http::Uri::from_static("/");
+            next.run(req).await
+        }
+    }
+    let app = || {
+        let routes =
+            Table::new().route("/", crate::router::post(|req: Req| async move { req.redirect_with_notice(&Done, "Saved.") }));
+        App::new(Routes::from(routes)).policy(crate::security::Policy::new().host("desk.lan"))
+    };
+    for (router, cookie) in [(app().router(), "corten-notice"), (app().middleware(PathOnly).router(), "__Host-corten-notice")] {
+        let request = Request::post("http://desk.lan:3001/")
+            .header(header::HOST, "desk.lan:3002")
+            .header(header::ORIGIN, "http://desk.lan:3001")
+            .body(Body::empty())
+            .unwrap();
+        let res = router.oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers()[header::SET_COOKIE].to_str().unwrap().split_once('=').unwrap().0, cookie);
+    }
 }
 
 /// A write from a plain `http://` origin on the LAN, which a browser does not count as secure and so

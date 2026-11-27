@@ -7,7 +7,7 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { hostDurableWriter, storageLimits } from "./host-durable-writer.mjs";
-import { ioError, record, storageControl } from "./test-fixtures/host-durable-writer-control.mjs";
+import { deferred, ioError, record, storageControl } from "./test-fixtures/host-durable-writer-control.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { beginLifetime } from "./host-lifetime.mjs";
 import { supervise } from "./process.mjs";
@@ -234,18 +234,131 @@ test("queue bytes include the in-flight frame and admission is atomic", async (t
   assert.equal(f.writer.state().frames, 0); assert.equal(f.live.size, 0);
 });
 
-test("a paused host observation write retains 20 seconds of 100 ms samples", { timeout: 5000 }, async (t) => {
-  const f = await storageControl(t), pause = f.pause("write", isSamples);
+test("queued host observation samples catch up in bounded guarded appends", { timeout: 5000 }, async (t) => {
+  const f = await storageControl(t), pause = f.pause("stat", isSamples);
   const frames = Array.from({ length: 201 }, (_, sequence) => `${JSON.stringify({ sequence })}\n`);
+  const appends = [];
   try {
     f.writer.enqueue([], frames[0]); await pause.entered;
     for (const frame of frames.slice(1)) f.writer.enqueue([], frame);
     assert.equal(f.writer.state().frames, frames.length);
     assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), "");
   } finally { pause.release(); }
+  f.before = (step, path, [data]) => { if (step === "write" && isSamples(path)) appends.push(data.toString()); };
   assert.equal((await f.writer.finish()).samples, frames.length);
   assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), frames.join(""));
+  assert.equal(appends.length, 14, "a lone append followed by 13 batches");
+  assert.deepEqual(appends.map((append) => append.split("\n").length - 1), [1, ...Array(12).fill(16), 8]);
+  assert.equal(f.trace.filter((s) => s.name === "stat" && s.phase === "begin" && isSamples(s.path)).length,
+    appends.length + 2, "one sample identity check per append, plus open and final sync");
   assert.equal(f.live.size, 0);
+});
+
+test("sample batches cap encoded bytes and keep each frame's encoding", async (t) => {
+  const f = await storageControl(t), appends = [];
+  f.before = (step, path, [data]) => { if (step === "write" && isSamples(path)) appends.push(Buffer.from(data)); };
+  const large = "\u00e9".repeat(70 * 1024) + "\n";
+  const frames = [large, large, "\ud83d", "\ude00\n", "x".repeat(257 * 1024) + "\n", "later\n"];
+  for (const frame of frames) f.writer.enqueue([], frame);
+  assert.equal((await f.writer.finish()).samples, frames.length);
+  const encoded = frames.map((frame) => Buffer.from(frame));
+  assert.deepEqual(appends, [encoded[0], Buffer.concat(encoded.slice(1, 4)), encoded[4], encoded[5]]);
+  assert.deepEqual(fs.readFileSync(join(f.directory, "samples.jsonl")), Buffer.concat(encoded));
+});
+
+test("a record-bearing frame is an append barrier in both directions", async (t) => {
+  const f = await storageControl(t), pause = f.pause("sync", isRecord), appends = [];
+  const before = f.before;
+  f.before = async (step, path, args) => {
+    if (step === "write" && isSamples(path)) appends.push(args[0].toString());
+    return before(step, path, args);
+  };
+  const frames = ["before 1\n", "before 2\n", "reference\n", "after 1\n", "after 2\n"];
+  for (const [i, frame] of frames.entries()) f.writer.enqueue(i === 2 ? [record(1)] : [], frame);
+  await pause.entered;
+  assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), frames.slice(0, 2).join(""));
+  assert.equal(f.writer.state().pendingRecords, 1);
+  assert.equal(f.writer.state().frames, 3);
+  pause.release();
+  assert.equal((await f.writer.finish()).samples, frames.length);
+  assert.deepEqual(appends, [frames.slice(0, 2).join(""), frames[2], frames.slice(3).join("")]);
+  assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), frames.join(""));
+});
+
+for (const method of ["drain", "settled"]) test(`${method} waits for its own FIFO prefix`, { timeout: 5000 }, async (t) => {
+  const f = await storageControl(t), pause = f.pause("write", isSamples);
+  const before = f.before;
+  f.before = (step, path, args) => {
+    if (step === "write" && isSamples(path) && args[0].includes(Buffer.from("later"))) return before(step, path, args);
+  };
+  f.writer.enqueue([], "first\n");
+  const prefix = method === "drain" ? f.writer.drain() : f.writer.settled;
+  f.writer.enqueue([], "later\n");
+  await pause.entered; await prefix;
+  assert.equal(fs.readFileSync(join(f.directory, "samples.jsonl"), "utf8"), "first\n");
+  pause.release(); assert.equal((await f.writer.finish()).samples, 2);
+});
+
+for (const mode of ["finish", "error", "cancel", "timeout", "overflow"]) test(`a short sample batch write retains ownership through ${mode}`, {
+  timeout: 5000,
+}, async (t) => {
+  const f = await storageControl(t), guard = f.pause("stat", isSamples);
+  const entered = deferred(), release = deferred(), path = join(f.directory, "samples.jsonl");
+  f.releases.push(release.resolve);
+  const frames = ["first\n", "second\n", "third\n", "last\n"];
+  const prefix = frames.slice(0, 2).join("") + frames[2][0];
+  let writes = 0;
+  if (mode === "timeout") t.mock.timers.enable({ apis: ["setTimeout"] });
+  f.writer.enqueue([], frames[0]); await guard.entered;
+  for (const frame of frames.slice(1)) f.writer.enqueue([], frame);
+  f.before = async (step, path, args) => {
+    if (step !== "write" || !isSamples(path)) return;
+    if (++writes === 2) args[2] = Buffer.byteLength(frames[1]) + 1;
+    if (writes === 3) {
+      entered.resolve();
+      await release.promise;
+      if (mode === "error") throw ioError();
+      if (mode !== "finish") args[2] = 1;
+    }
+  };
+  guard.release(); await entered.promise;
+  assert.equal(fs.readFileSync(path, "utf8"), prefix);
+  assert.equal(f.writer.state().frames, 3);
+  assert.equal(f.writer.state().queuedBytes, Buffer.byteLength(frames.slice(1).join("")));
+  const overflow = { operation: "storage-admission", code: "ERR_ASSERTION", limit: "queued-frames" };
+  if (mode === "overflow") {
+    for (let i = 3; i < storageLimits.frames; i++) f.writer.enqueue([], "backlogged\n");
+    assert.equal(f.writer.state().frames, 300);
+    assert.throws(() => f.writer.enqueue([], "overflow\n"), overflow);
+    assert.equal(f.writer.state().pendingOwnership, true);
+  }
+  const deadline = { operation: "sample-write", code: "ETIMEDOUT" };
+  if (mode === "timeout") {
+    t.mock.timers.tick(30000);
+    // No caller is waiting yet: only the writer's append deadline can fail it.
+    assert.deepEqual(f.writer.state().error, deadline);
+    assert.equal(f.writer.state().pendingOwnership, true);
+    assert.equal(f.writer.state().openFiles, 1);
+    assert.equal(f.writer.state().frames, 3);
+  }
+  const finish = f.writer.finish();
+  if (mode === "cancel") {
+    f.writer.abort();
+    assert.equal(f.writer.state().pendingOwnership, true);
+  }
+  release.resolve();
+  if (mode === "finish") assert.equal((await finish).samples, frames.length);
+  if (mode === "error") await assert.rejects(finish, { operation: "sample-write", code: "EIO" });
+  if (mode === "cancel") await assert.rejects(finish, /storage cancelled/);
+  if (mode === "timeout") await assert.rejects(finish, deadline);
+  if (mode === "overflow") await assert.rejects(finish, overflow);
+  await f.writer.settled;
+  assert.equal(writes, 3);
+  assert.equal(f.writer.state().complete, mode === "finish");
+  assert.equal(f.writer.state().pendingOwnership, false);
+  assert.equal(f.writer.state().queuedBytes, 0);
+  assert.equal(f.live.size, 0);
+  assert.equal(fs.readFileSync(path, "utf8"), mode === "finish" ? frames.join("") : prefix + (mode === "error" ? "" : frames[2][1]));
 });
 
 test("the bounded frame queue includes the one in progress", { timeout: 5000 }, async (t) => {

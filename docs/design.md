@@ -2798,8 +2798,77 @@ rules something out.
     `localhost:8080`, a look at each of its 14 bytes. With `Host` last of eight it counted 235
     more: main never looked for `Host` in such an app, and a later line is found by the server's
     read of the names in turn, for its mark, and then by the hashed search. So half a percent of
-    such a request (64 of an unstaged one's 12,709) is not reached by a reader that looks at
-    every byte, and one that looked at fewer would answer a `Host` that is none.
+    such a request (64 of an unstaged one's 12,709) was not reached by that reader, which looked
+    at every byte a byte at a time, and one that looked at fewer would answer a `Host` that is
+    none. Whether any reader of every byte can reach it is not shown: the reader below spent 59
+    on the name and port in its build against 56, which is how that build spends them, not a
+    least.
+    Read again for
+    [#2115 The Host check in #2037 costs an app that answers any host 111 to 312 instructions a request, and its cycles miss is not yet told apart from code arrangement](https://github.com/corten-run/corten/issues/2115):
+    a name of 8 to 16 bytes that are all letters, digits, `-` and `.` (`localhost`,
+    `shop.example`) is read in line as its first and last eight bytes, which the compiler joins
+    into one look at sixteen; a longer one is read sixteen at a look out of line, as far as the
+    first look that finds another byte, and the table reads on from the first byte no earlier
+    look read: where that look starts, or, when the last sixteen find it, which overlap the look
+    before them, the first byte after the whole sixteens (byte 32 of a name of 40, whose last
+    look starts at byte 24); any other name, one shorter than eight bytes included, is read by
+    the table as before; and the
+    check at a route that says `unstaged` decides once whether the app holds names, so the
+    reader of an app that answers to any host holds none. That came in three commits:
+    `b52f57475` read the short name in line, decided once at `unstaged`, and read a longer name
+    sixteen at a look to its end, then one with another byte by the table again from its start;
+    `ecb6e2bd6` stopped at the first look that finds another byte; and the table reads on from
+    there since `a0cd728aa`, which only the hosted job's table on #2134 (below) measures.
+    Counted with `bench/request-cost`
+    (below), whose four cases of an app that answers to any host came with this change, at
+    `ea3983d0b` against its base `3d84f7de4`, which is main with #2037: such an app's unstaged
+    request costs 27 fewer with `Host` first and 28 fewer with it last of a browser's eight
+    lines, its `GET` through the stages 17 and 18 fewer, and every other case 1 to 9 fewer.
+    Those figures are of that earlier tree, whose `security.rs` and `Cargo.lock` are not those
+    merged: it read a long name with another byte from its start again by the table, and it had
+    no case with a name other than `localhost`. The five cases that came after it,
+    `unstaged-any-name` (a name of 40 bytes), `unstaged-any-long` (4,095 `a` and a `_`),
+    `unstaged-any-encoded` (4,093 `a` and `%4a`, where a table that read the percent-encoded
+    byte from the name's start would read 4,080 bytes more), `unstaged-any-short` (`a.test`,
+    6 bytes, fewer than the eight read in line) and `unstaged-subdomain`
+    (`seller-desk.localhost` in an app with the default names, whose 11 bytes before
+    `.localhost` the same reader reads in line), and the count of the head of
+    [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134)
+    against its merge base, are that pull request's hosted job's table. The encoded case counts
+    the read but does not by itself catch a reader given the name from its start again, as the
+    merge base it is counted against reads the whole name twice; the unit test
+    `a_long_names_encoded_bytes_are_read_from_the_look_that_found_them` in `security.rs` does,
+    by seeing the bytes that reader is given.
+    Measured over a socket on a bench app the repository does not hold, at `b52f57475`, so of
+    its reader with neither the stop nor the read on, against main before #2037 and against its
+    head,
+    [#2037 Answer 400 to a request HTTP/1.1 does not allow: no Host, two Host lines, a Host that is no host](https://github.com/corten-run/corten/pull/2037)
+    (below), as the difference of two builds' medians of three runs: an unstaged request to an
+    app that answers to any host costs 84.5 more than main with `Host` first (0.75%), 226.9
+    with it second and 285.6 with it last of eight, where #2037's head cost 111.4, 254.6 and
+    311.9 more; a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with it last of
+    eight, where it cost 102.0 and 302.1 more; and a request to an app that names its hosts
+    costs 2 to 9 fewer than #2037's head. Half a percent of the unstaged request (56) is still
+    not reached. Of the 94 instructions the check ran for `localhost:8080` first in that build,
+    by callgrind's count of each instruction, 11 are the call, 3 choose the reader with no names,
+    10 find the line, 3 see that the target names no host, 8 look at the value's shape (empty,
+    `[`, its length), 35 take the port off the end, a byte at a time, and 24 read the name,
+    sixteen bytes in one look; the server's call counts 8 fewer than main's. In that build the
+    port and the name come to 59, more than the 56 on their own; that is how this build's code
+    spends them, not the least a reader of every byte must. With `Host` on
+    a later line the 140 to 200 more are the two searches for it that the check before this one
+    already made (the server's read of the names for its mark, 66 with it last of eight, and the
+    hashed one, about 130), which this change leaves as they were. Tried and not kept, each an
+    uncommitted variant counted once beside the build it changed: the check called in line where
+    the route reads the request, which took 14 more from an unstaged request (11,334 against
+    11,348) and added 38 to 39 to every request through the stages counted (16,671 against 16,633 in
+    an app that answers to any host, 16,757 against 16,718 in one that names its hosts), since
+    the compiler then called `HeaderMap::get` in the stages' handler in place of putting it in
+    line there: code arrangement, not work the check does; the stages' check deciding once as
+    well, 6 to 7 more through the stages; the port's last eight bytes read at once as one word,
+    0 to 3 fewer, which did not earn its 25 lines; and the later lines read in turn, the next
+    seven names and then the hashed search, 69 to 70 fewer with `Host` second and 15 to 16 more
+    with it last of eight, as before.
     The refusals stay. The three of `Host` are what HTTP requires, which is correctness and comes
     before the count (the README's Values), and a route that skipped them would answer a request
     with two `Host` lines that every other route refuses. The three by choice cost nothing beside
@@ -2810,7 +2879,7 @@ rules something out.
     was for a request whose first header line is `Host` in an app that names its hosts, the lane's
     and step 4's 98 and 94 still counted against it. For a request with `Host` on a later line or
     none it moves by what the refusals cost, the 19 to 60 counted, and in an app that answers to any
-    host by the 111 to 311 counted, which is the read of `Host` every other app paid already (about
+    host by the 84.5 to 285.6 measured since `b52f57475` (111 to 311 at `5c7b006dc`), which is the read of `Host` every other app paid already (about
     400 of the host check's 494) come to it for the refusals; no further in either. The harness the
     bound's counts came from is not in the repository and was not run for this change, so what an
     unstaged route counts there now is not known; by the counts that were taken it is less than it
@@ -3022,7 +3091,26 @@ rules something out.
     fewer in one count and none in the next; and the later lines read in turn for `Host` in place of
     the hashed search, which took 70 to 80 from a request with `Host` second and 18 from one with it
     last of eight and added 12 to every request with it first, or, held out of line, added about 80
-    to one with it last of eight); measured (callgrind, release, three runs each, the stages written as combinators
+    to one with it last of eight); measured (callgrind, release, jemalloc, rustc 1.100.0 and
+    valgrind 3.24.0 on Debian 13, a request counted as callgrind's collection over 1,000
+    requests on one keep-alive connection after 240 it does not count, a bench app the
+    repository does not hold, `Host: localhost:8080` first, after an `Accept` line and last of a
+    browser's eight, the any-host reader at `b52f57475` against its base `fca4ccd58`, main
+    `ba6a7fe56` and main built a second time as the control, each built from the same path, the
+    four counted one after another for each request and that three times, median, every build's
+    three runs within 2 of each other and the control within 1 of main: an unstaged route in an
+    app that answers to any host 11,352, 12,081 and 16,989 with `Host` first, second and last of
+    eight, against the base's 11,379, 12,109 and 17,015 and main's 11,267, 11,854 and 16,703;
+    in one that names its hosts 11,434, 12,163 and 17,070 against 11,443, 12,172 and 17,079 and
+    main's 11,567, 12,154 and 17,025; a `GET` through the stages in an app that answers to any
+    host 16,637, 17,507 and 22,795 against 16,655, 17,525 and 22,814 and main's 16,553, 17,281
+    and 22,511; in one that names its hosts 16,718, 17,588 and 22,876 against 16,720, 17,590 and
+    22,878 and main's 16,855, 17,583 and 22,835; allocations the same in the three builds, 13.64
+    a request at the unstaged route and 18.60 through the stages with `Host` first; in process,
+    `tests/router_cost.rs`, the run of 1,200 less the run of 200 over 1,000, the three in turn
+    three times, every run within 1: an unstaged route 5,387 against 5,392 and main's 5,332, and
+    the parameter route through the stages 11,764 against 11,764 and 11,716. No cycles were
+    counted, and no control that shares no code with Corten); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -3114,8 +3202,8 @@ rules something out.
     an API's module, whose lane runs the same `unstaged_headers` (7,003 and 7,068 through its lane,
     7,030 and 7,076 since step 4), and over what its host check has cost
     since it refuses what HTTP does not allow (`5c7b006dc`: 19 to 49 for a request whose first
-    header line is not `Host`, and in an app that answers to any host 111 with `Host` first and
-    311 with it last of eight), when a control that shares no code with
+    header line is not `Host`, and in an app that answers to any host 84.5 with `Host` first and
+    285.6 with it last of eight since `b52f57475`, measured), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -3159,7 +3247,14 @@ rules something out.
     when a stage comes to read something of an answer or its request that the pass's two tests
     cannot vary, so that nothing would hold the two paths equal.
 
-    Last checked: 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
+    Last checked: 2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
+    instructions and allocations a request by `bench/request-cost` in the hosted Request Cost job
+    ([run 45924572746](https://github.com/corten-run/corten/actions/runs/45924572746), AMD EPYC
+    9V74, valgrind 3.26.0, rustc 1.100.0; no cycles); 2026-11-25, the earlier any-host reader
+    experiment at `b52f57475` against `fca4ccd58` and main
+    `ba6a7fe56` built twice, callgrind over a socket on the same kind of bench app and in process
+    with `tests/router_cost.rs`, rustc 1.100.0, valgrind 3.24.0 (no cycles under load measured
+    here either); 2026-11-24, the host check with HTTP's refusals at `5c7b006dc` against main
     `c46092aeb`, against main built again and against `68057e40d`, callgrind over a socket on a
     bench app the repository does not hold (the next check writes its own: one keep-alive
     connection, a `GET` to a route that says `unstaged` and to routes through the stages, with `Host: localhost` and its port first,
@@ -9417,9 +9512,11 @@ rules something out.
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
     `Location` of a write that did not fail: RFC 9111 sections 4.2.1, 5.1 and 4.4; a recipient
-    counts an answer's lifetime less its `Age`, section 4.2.3; the connection is HTTP/1.1, so a
-    request's target is its path and query and its host is the `Host` header,
-    [Limit 14](#limit-http1)); reasoned (the inputs a kept page's handler may take read, of a whole
+    counts an answer's lifetime less its `Age`, section 4.2.3; for HTTP/1.1 an absolute-form target
+    supplies its own authority, RFC 9112 section 3.2.2); reasoned (the connection to the app
+    speaks HTTP/1.1 ([Limit 14](#limit-http1)); the store answers only origin-form requests,
+    whose target is a path and query and whose host comes from `Host`, and invalidates using the
+    authority the write requested; the inputs a kept page's handler may take read, of a whole
     document's `GET` without credentials, its URL, its `Host` and, for its language,
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
@@ -9492,7 +9589,9 @@ rules something out.
     against the sentence that a placement run declared after a single-build miss does not
     clear it.
 
-    Last checked: 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
+    Last checked: 2026-11-26 with http 1.5.0 for a write with an absolute-form target: the router test
+    `an_absolute_form_write_drops_the_page_named_by_a_matching_location` checks which `Location`
+    invalidates the kept page; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
     6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
     `evidence/0c0c599c`, and for its instructions, `149e0f5b4` against `a03547c3c` under
@@ -9952,8 +10051,10 @@ rules something out.
     its A/A under the turn protocol. The rule does not wait on a kit for it: each run below
     adapted the kit before it, under its evidence tag; on 2026-11-24 no script under `bench/`
     did any of it (`df9242b56`); `bench/placement` now does, for a probe a plan file names, and
-    no run has been read from it; and no run has read the image `count.mjs` starts across
-    placements, which that kit does not read either, so a catalog target the band leaves not
+    the first run read from it is the trend's of 2026-11-26, which gates no change
+    ([design Choice 76](#choice-counted-or-measured)); and no run has read the image
+    `count.mjs` starts across placements, which that kit does not read either, so a catalog
+    target the band leaves not
     decided has that to build, unless its plan names a probe workload for it that is read
     across placements (The catalog's `page` and `json`, below). The
     band is a default by policy, not a bound on what placement moves on a setup nobody has read
@@ -10921,8 +11022,12 @@ rules something out.
     takes the medians of the A/A it was sized from as independent and alike over time and the
     setup's spread as holding from one run to the next
     (in the fourth run's 100 medians no test detected drift or dependence, normality was
-    rejected, and the A/A resolved at the 100 its plan took; no run has yet been read at a K the
-    rule gave); a spread measured on one setup holds
+    rejected, and the A/A resolved at the 100 its plan took; the first run read at a K the rule
+    gave is the trend's of 2026-11-26, tag `evidence/trend-2026-11-26`, which sized K = 60 on
+    `plain` and K = 28 on `unstaged` from pilots of 100 placements, and both A/As resolved, with
+    bounds of +0.62% as recorded and +0.31% with the labels swapped on `plain` and +0.47% and
+    +0.61% on `unstaged`: one run, which does not test how often an A/A so sized fails); a
+    spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
     protocol and code;
     a second never-called function of 16 to 64 bytes laid last in `.text` costs a request
@@ -11106,7 +11211,11 @@ rules something out.
     [the change](https://github.com/corten-run/corten/pull/2066#issuecomment-7187087634)), their
     pairs worked again from the posted rows (the label swaps by the two-direction rule, 100,000
     draws of a seeded generator), and `count.mjs` and that kit's `run.sh` (tag
-    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`.
+    `evidence/shutdown-poll-plan`) read for what differs by a side's name, at `4e4146a95`;
+    2026-11-27 (UTC), the trend's first run, read from its tag at `d4a002f34`
+    (`evidence/trend-2026-11-26`) for each pilot's K and sizing counts, each gated part's K,
+    and its A/A's bounds as recorded and with the labels swapped, from each part's
+    `results/report.json`.
 
 73. <a id="choice-no-native-components"></a>**An `html!` component is drawn by a browser engine,
     not compiled to a native toolkit.** A component is HTML from `html!`, a stylesheet scoped at
@@ -11411,7 +11520,8 @@ rules something out.
     placements against the last release, is the run
     [#2113 Nothing reads main's cycles a request across placements over time, so small costs that each pass can add up unseen](https://github.com/corten-run/corten/issues/2113)
     asks for: [`bench/placement`](../bench/placement/README.md#the-trend) has its plan, its
-    command and the page a run adds a row to, and no run has been made. It gates no pull
+    command and the page a run adds a row to, whose first row is the first run, of 2026-11-26
+    (The trend's first run, below). It gates no pull
     request, for the reason
     [design Choice 72](#choice-placement-runs) gives against gating a release: it reads every
     change since that release together and cannot attribute a cost to one.
@@ -11440,9 +11550,13 @@ rules something out.
     over fewer decides nothing. The figures a
     connection are rounded and do not decide it: on
     [#2134 Read an any-host app's Host sixteen bytes at a look](https://github.com/corten-run/corten/pull/2134),
-    head read 1 byte a connection above base's three equal figures, which one page or two can
-    give, and the growths in bytes were not recorded
-    ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)). No run is taken again for its
+    head's median rounded figure a connection was 1 byte above base's three equal figures. Rounding
+    keeps the order, so head's growth was above base's, and over 5,000 connections in 4,096-byte
+    pages by one or two pages: a rise, which the rule of that time, on rounded figures with no
+    allowance, failed. The growths in bytes were not recorded
+    ([#2136 The counted gate fails idle memory one page over base when base's three readings agree, below what bench/request-cost can resolve](https://github.com/corten-run/corten/issues/2136)),
+    so the rule above, which allows one page, cannot decide that run (one page passes, two fail),
+    and the hosted job's growths on its head decide it. No run is taken again for its
     result, as no count or placement of the measured way is; a run the kit refuses gave no
     figure, so taking it again is not that. The maintainer accepted both figures, this budget
     and the 2% between releases (Revisit when, below), as proposals on 2026-11-25, told that
@@ -11461,7 +11575,8 @@ rules something out.
     the changes that sentence names, and the author says why a change is of none of its kinds,
     which the review accepts, as a negative control's declaration is accepted. The trend reads
     what is left as it adds up (twenty costs at the budget are about 10% more instructions),
-    and no run of it has been made. A release takes the kit's counts of its candidate against
+    one row a run, the first of 2026-11-26. A release takes the kit's counts of its candidate
+    against
     the last release's tag, which anyone can take in minutes and which read instructions, not
     cycles, unless a row of the trend reads the commit of `main` that candidate is made from
     against that tag with every workload read
@@ -11477,6 +11592,37 @@ rules something out.
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     ran 1.52% fewer user instructions on `kept` and read 0.07% fewer cycles across placements,
     with a bound of +0.28%, one change in a reading that gated nothing.
+
+    The trend's first run. Its first run with every workload read was a condition under Revisit
+    when (below), and that run has been made. It read `main` at `056aba61c` against `v0.2.0`
+    at `a833b4e3e`, started 2026-11-26T18:03:43Z and ended 2026-11-27T00:52:27Z with exit 0
+    (tag `evidence/trend-2026-11-26`, commit `d4a002f34`), and its row reads `pass: no rise of
+    +2.00% shown`. Cycles a request, user and kernel, `main` against the release, across
+    placements (measured, one run): `plain` -6.53% by the lower bound and -5.77% by the bound,
+    median -6.17%, at K = 60, and `unstaged` -1.84% and -0.96%, median -1.62%, at K = 28, each K
+    the smallest at which the sizing check passed from that workload's pilot of 100 placements.
+    In this run both A/As, the release against itself in the same run, resolved: bounds of
+    +0.62% as recorded and +0.31% with its labels swapped on `plain`, and +0.47% and +0.61% on
+    `unstaged`, each under the +1% the kit asks of an A/A. The Choice was read again for it on
+    2026-11-27
+    (UTC). The run bears out three of the statements it stands on: the plan, its command and
+    the placement kit make a run with every workload read, at the K the sizing rule gives; the
+    kit's example probe builds at the release's tag and at `main` on both workloads (the
+    placement kit's probe, not `bench/request-cost`'s, whose build at a release's tag for a
+    release's count is still not tried); and the
+    release and `main` answer `plain` differently, by a difference the run recorded and nobody
+    reviewed (the `corten-shell` header, the script hash in the policy and the body, 6,124 bytes
+    on each side), so part of what `plain` read can be the answer and not the path to it. It
+    leaves the rest open. The threshold is still a proposal nobody has accepted: the A/A bounds
+    are what this one run resolved, not a limit on what a run of the plan can show and not what
+    rise a release can carry, and the maintainer settles it.
+    One run of one commit says nothing of runs made weekly and before each release. A reading
+    of every change since the release together, here less on both workloads, attributes a cost
+    to none of them, so it does not show that a change that merged counted costs a request
+    under +1%, and a span that costs less as a whole can hold a change that costs more. Two
+    requests to one probe still do not take every path a counted change can cost on. So the
+    Choice decides as it did, and under Revisit when the condition the run met gives way to
+    the one that follows it, the threshold settled.
 
     The way is a line of the description, `Request path: counted` or `Request path: measured`,
     the simplest thing a hosted job can read; a label is not, since a fork's author cannot set
@@ -11538,10 +11684,12 @@ rules something out.
     binary and never to be compared with another's; the kit's probe builds against the last
     release's tag often enough for a release's count to be taken, which was not tried; the
     trend is made, weekly and before a release, before counted costs add up past what a
-    release can carry, its plan, command and page being in the placement kit and no such run
-    having been made; its threshold, `main` at least +2% over the release on a workload by the
-    lower bound of its cycles, is a proposal no reading stands behind and nobody has accepted,
-    the 2% above being of instruction counts between releases; and the placement kit's example
+    release can carry, its plan, command and page being in the placement kit and one such run
+    made, of 2026-11-26, with every workload read; its threshold, `main` at least +2% over the
+    release on a workload by the lower bound of its cycles, is a proposal nobody has accepted,
+    beside which that run's A/A bounds, +0.31% to +0.62%, are what one run resolved
+    and not what rise a release can carry, the 2% above being of instruction counts between
+    releases; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the
     handler add up to, though two requests to one probe do not take every path a counted change
     can cost on, and the release and `main` answer one of them differently, by a difference a
@@ -11558,7 +11706,8 @@ rules something out.
     for one row of one run, `get`'s 3 of a budget of 91, and
     the six runs a job of each idle reading 0 to 4 bytes a connection; the
     default band and the estimate of a reading across placements, which are
-    [design Choice 72](#choice-placement-runs)'s); reasoned (a bound inside the default band does
+    [design Choice 72](#choice-placement-runs)'s; and the trend's first run, one run under the
+    tag `evidence/trend-2026-11-26`, every workload read and both A/As resolved); reasoned (a bound inside the default band does
     not decide, so for a change this small the only cycles reading was across placements; a
     count of one binary repeats within 4 in 18,987, so a rise of 0.5% is not the count's own
     noise, which says nothing of two commits (the bet above); callgrind counts the serving
@@ -11581,10 +11730,13 @@ rules something out.
     a change that merged counted is later read, by the trend or by any reading
     across placements, to cost a request more than +1% of its cycles, so the list misses a kind
     or the budget is too wide; the trend moves past its threshold with every change since the
-    last release counted inside the budget; the trend's first run with every workload read is
-    made, which shows what a run of its plan resolves and so informs a review of the threshold,
-    not what rise a release can carry; a run of the trend leaves a workload not read, whatever
-    its row gives as the reason (the probe does not build at the release's tag, the kit refuses
+    last release counted inside the budget; the maintainer settles the trend's threshold, at
+    +2% on the lower bound or another figure, since this Choice leans on it as a proposal nobody
+    has accepted (this entry first named the trend's first run with every workload read, which
+    the run of 2026-11-26 met, showing what a run of the plan resolves and not what rise a
+    release can carry: The trend's first run, above); a run of the trend leaves a workload not
+    read, whatever its row gives as the reason (the probe does not build at the release's tag,
+    the kit refuses
     a side, a pilot sizes no K, a part does not complete, a comparison has no bound, an A/A
     does not resolve, a placement answers with another body), so nothing read what this Choice
     leans on the trend to read; a release is
@@ -11626,9 +11778,605 @@ rules something out.
     nothing, no run having been made; 2026-11-26, that dry run made again with `main` at
     `aa526350f` and the command as it reads after its first review: both sides built, the
     same difference on `plain` and none on `unstaged`, and each of the 36 placements answered
-    with the bodies the check had recorded for its sides, by their digests.
+    with the bodies the check had recorded for its sides, by their digests; 2026-11-27 (UTC),
+    the trend's first run, `main` at `056aba61c` against `v0.2.0`, read from its tag at
+    `d4a002f34` (`evidence/trend-2026-11-26`): `run.out`, `run.started`, `run.ended`,
+    `run.exit`, `run/row.md`, `run/plan.json` and each part's `results/report.json`, the
+    change's and the A/A's cycles, user and kernel, as recorded and with the labels swapped,
+    each K and the pilot it was sized from, and each side's aligned sections and second pads,
+    none in any part.
 
-77. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+77. <a id="choice-deadline-timer"></a>**A connection keeps one timer for its requests' deadlines.**
+    A request's deadline needs a timer once its handler waits
+    ([design Choice 30](#choice-deadline-body) says what it then answers). Every deadline made
+    one and dropped it, and in tokio 1.54.1 a timer made and a timer dropped each take the one
+    lock of the runtime's timer wheel, so on the multi-threaded runtime every thread serving such
+    requests queued there twice a request. A connection `corten::serve` accepts now keeps one
+    (`crates/corten/src/deadline.rs`) once two of its requests have waited: the connection's
+    first two deadlines to wait make their own, as before, and at the second the connection makes
+    one; each deadline after them moves that timer later (`Sleep::reset`, a compare-and-swap with
+    no lock while the timer is still set and the new time is not earlier) and gives it back still
+    set; the timer is dropped with the connection. A connection whose only request waits makes
+    none. The connection's task owns the timer and lends it to the thread only while the
+    connection is polled, under a number of the connection's own, so a deadline finds it there
+    and gives it back only to the connection that made it. A deadline that finds none makes its
+    own and drops it: the connection's first two to wait, a second deadline in one request, and a
+    request polled anywhere else (`app.router()` served another way, a call a layer moved to
+    another task).
+
+    What it gave is requests a second where threads queued on that lock, measured on this form
+    (`bf13f4822` against `main` at `e2d0c464e`; every run, with its scripts, under the tag
+    `evidence/deadline-timer-4`). One machine of 48 CPUs, a Xeon Platinum 8280, the server on 24
+    of them and the load on the other 24 (which of them share a core was not recorded), a new
+    server every run, ten rounds with the builds' order reversed in even rounds and two runs of
+    the base's build in each, 720 runs, none failed. What would be read was written down before
+    the first run: a workload's noise is the largest difference between the base's two runs of
+    one round, and a difference is resolved when its median is beyond that noise with at least
+    nine rounds of ten on the median's side. A staged route whose handler sleeps 10 ms on
+    tokio's timer, on tokio's multi-threaded runtime with 24 workers, answered 14.4% more
+    requests a second at 32,000 connections in 10 s runs (11.4% to 17.0% round by round, 353,056
+    and 400,814 by the medians, noise 5.2%) and 13.0% more in 40 s runs (10.2% to 15.4%, noise
+    2.8%), its p50 and p99 12.6% to 13.7% lower; 31.4% more at 8,192 connections (27.6% to
+    33.8%, noise 4.9%); and 18.5% more with 48 workers on the same 24 CPUs (15.5% to 24.5%,
+    noise 4.7%). Nothing was resolved where threads do not queue: at 1,024 connections, where
+    the handler's sleep bounds the load (0.3% fewer, noise 0.5%, though the server's CPU time a
+    request fell 23.5% there, in every round); with 4 workers on 4 CPUs (0.9% more, noise 4.2%);
+    with 16 workers on 16 CPUs (6.3% more, every round up, under a noise of 9.4%); and with one
+    single-threaded runtime a core at 32,000 connections (0.6% fewer, no round up, noise 1.4%).
+    So on this machine the gain begins somewhere above 4 busy workers and is not shown below 24.
+    That handler makes and drops a tokio timer of its own, so the deadline's two takings of the
+    lock were two of its four. Under that contention the server's cycles a request, counted over
+    its CPUs for the whole run, fell 11.9% (noise 9.8%) and 16.2% (noise 4.0%): time no longer
+    spent at the lock, not a cheaper request, since on one single-threaded runtime, where the
+    lock is never waited for, a staged request whose handler sleeps 1 ms costs 134 and 132
+    instructions fewer of 23,810. Requests that never wait, at 64 and at 1,024 busy connections
+    beside 48 connections that each wait once a second, resolved nothing in requests a second,
+    p99 or cycles a request (0.7% and 0.5% more cycles, noise 2.8% and 3.3%). It is a
+    measurement of time, of one build of each tree on one host, with the placement of the code
+    not varied; the server's CPU time is recorded by it but was not among the values written
+    down before it ran.
+
+    An earlier session measured the change's earlier forms (`69663386e`, and `4c6cdf4ad` or, in
+    two of its four passes, a patch one `mut` from it), which made the connection's timer at its
+    first request to wait and took it from the second, where this form makes it at the second
+    and takes it from the third; its results are under the tag `evidence/deadline-timer`. On
+    another machine of the same model and the same division of its CPUs, six passes of three to
+    five 10 s runs a build (two with each build's runs together, the second in the reverse
+    order, four alternating the builds run by run), the same route at 32,000 connections
+    answered 371,061 to 381,443 requests a second on the base (pass medians) and 435,601 to
+    447,668 with the kept timer, 17.0% to 18.7% more pass by pass, with a p99 of 131 to 135 ms
+    against 158 to 164; four 40 s runs of each read 368,321 to 374,014 and 439,502 to 447,122.
+    The run on this form did not reproduce that size: with the earlier form's build
+    (`4c6cdf4ad`) and its base (`be1192a7b`) built again and run in the same rounds, the earlier
+    form read 13.0% and 13.2% over its own base (10 s and 40 s runs), and this form 1.0% and
+    0.3% over the earlier form. The earlier base answered fewer requests here (347,782 and
+    351,051 by the medians of its 40 s and 10 s runs, this form's base 345,921 and 353,056,
+    against 368,321 to 381,443 then); the builds differ (the whole tree's lock file, with hyper
+    1.12.0, here; the crates alone, resolving hyper 1.13.0, then) and so does the machine, and
+    which of those it is was not isolated. That session also read: with the deadline off, the
+    route answered 18.8% and 20.5% more, which is all there was to gain there; a staged route
+    that waits on a pooled connection to a local service instead (4,096 connections) answered
+    5.7%, 3.6%, 2.8%, 2.5% and 1.6% more in five passes and 0.1% fewer in one, a gain its runs
+    do not separate from their own spread; routes that do not wait answered within -0.3% and
+    +1.5% of the base, and one that waits 10 ms with no deadline within -0.6% and +0.8%.
+
+    A deadline fired when it did. 200 deadlines of 50 ms on one connection were answered, on
+    the earlier forms (three runs of each; the logs do not name their build), 0.87 to 0.97 ms
+    late at the least, 2.03 to 2.07 ms at the median and 2.80 to 3.21 ms at the most on the
+    base, and 0.87 to 0.94, 2.06 to 2.08 and 2.86 to 3.45 ms with the kept timer, whose third
+    run was later at the most than any run of the base. On this form, on another machine (so
+    its figures are not to be read beside those), five rounds of the same test with nothing
+    else running, the base (`e2d0c464e`, with the test carried to it) and then this form
+    (`bf13f4822`'s code) in each: 1.48 to 1.55 ms late at the least, 2.65 to 2.70 at the
+    median and 3.46 to 3.61 at the most on the base, and 1.48 to 1.55, 2.65 to 2.67 and 3.46
+    to 3.69 with the kept timer, whose most was above the base's in two rounds and below it
+    in three. The runs do not tell the two apart (tag `evidence/deadline-timer-4`).
+
+    What it costs, in instructions a request by callgrind (medians of three counts, two rounds,
+    `main` at `81e77162a` against this form's code, `ca259c467`; every count, with its commands,
+    is under the tag `evidence/deadline-timer-2`; the counts of a set timer in cost 1 are of
+    `main` at `e2d0c464e` against `bf13f4822`, the same code, under the tag
+    `evidence/deadline-timer-4`), and otherwise:
+
+    1. Every connection is polled through a wrapper. For a connection that has made no timer,
+       which is every one fewer than two of whose requests have waited, that was 13 instructions
+       a poll in the form before this one, whose poll of such a connection differs only in the
+       values it compares (not counted again a poll until the fourth merge of `main`, where
+       by function it is 17: below). A staged request that does not wait costs
+       8 more of 19,980 in both rounds on one single-threaded runtime and 6 and 5 of 20,590 on
+       the multi-threaded one; a route with no deadline (`unstaged`) 17 and 18 more of 12,170
+       when it does not wait and 37 and 27 of 18,200 when it does. The requests that do not wait
+       after a connection's one request that did run the same code as the first of those (the
+       connection has made no timer) and counted 1 fewer and 4 more on the multi-threaded
+       runtime and 49 and 28 more on the single-threaded one. There a build's counts of one
+       request sit on one of two levels about 21 apart (`main` 19,961 or 19,981, the change
+       19,988 or 20,010, on this row and the first alike), and which level of one answers which
+       of the other is not known, so either row reads 7 or 8 more, 28, or 49 by which levels
+       meet: an earlier count of the same binaries gave 7 and 28 on the first row and 7 in both
+       rounds on this one. A connection for each request that does not wait was not readable:
+       three counts of one build are up to 886 apart, and the two rounds gave 20 fewer and 4
+       more on the multi-threaded runtime and 384 more and 720 fewer on the single-threaded one.
+       A connection that has made its timer lends it to the thread and takes it back in every
+       poll, whatever it is serving: after two requests that waited, a request that does not
+       wait costs 33 and 29 more (32 and 53 single-threaded, with the same levels).
+
+       From a connection's third request that waits its timer is set, and a set timer costs
+       somewhere else, and not its own connection alone. While any timer waits in a runtime's
+       timer wheel, tokio's time driver reads the clock and works out a timeout each time it
+       parks, and looks for timers that are due when it wakes: about 190 instructions a park,
+       paid by whatever the thread serves next. A connection that never waited, one request a
+       park, beside one idle connection that had waited three times, costs 193 and 187 more a
+       request of 20,620 (192 and 193 of 19,980 single-threaded), 0.9% and 1.0%, which is what
+       the connection whose own timer is set pays, less the lend (223 and 188; 219 and 221);
+       beside a connection that waited once, which makes no timer, 11 more and 37 fewer (7 and
+       7). A busy thread parks less often than it answers, so the cost thins: in a closed loop
+       of connections that had each waited three times, a request costs 216 and 217 more on one
+       connection (220 and 220), at one park a request, and 47 and 59 more on 8 (53 and 61), at
+       0.13 to 0.15 parks a request; on 64, at 0.02, it read 49 and 51 more (25 and 29), where
+       the same loop with no waits before it read 8 fewer and 59 more (7 more and 11 fewer), so
+       it is not told from nothing there. It lasts until the time the last deadline to take a
+       timer set it for, a deadline's length after the runtime's last request that waited on a
+       kept timer (30 s by default): beside an idle connection it was still there after 1.5 s
+       under that deadline (210 and 145; 193 and 194) and gone after 3 s under a deadline of
+       2 s (0 more and 14 fewer; 7 and 7), and a connection that waited three times and then
+       sent 200 requests that do not wait, 20 ms apart under a deadline of 1 s, paid 89 and 84
+       more a request over them all (87 and 81), the timer's time coming among them.
+
+       An app that has a timer of its own waiting pays those parks without this change: with a
+       task that sleeps in a loop, `main`'s request that does not wait costs 184 and 188 more
+       than `main` without it where the sleep is 1 s (177 and 179 single-threaded), 191 and
+       159 (187 and 187) at 30 s and 197 and 186 (195 and 196) at an hour, and beside the 30 s
+       one this form's request after three waits is 11 and 37 over `main`'s (32 and 32). So
+       the cost is new only to a runtime that had no timer waiting between requests.
+
+       In time, on the machine of 48 CPUs above: one connection that never waits, one request
+       a park, beside one idle connection that had waited three times within the deadline's
+       length, took 4.0% more of the server's CPU time a request on the multi-threaded runtime
+       with 24 workers (1.4% to 5.5% round by round, every round up, noise 2.1%; 18.59 to 19.26
+       microseconds, about 0.7 more) and 4.3% more on one single-threaded runtime (2.5% to
+       5.1%, every round up, noise 2.6%; 18.24 to 19.02), and answered 1.1% and 1.5% fewer
+       requests a second, nine rounds of ten down and neither resolved (noise 2.3% and 2.4%).
+       With no idle connection the same request read 1.2% more CPU time on both runtimes, not
+       resolved, so not all of the 4% is the set timer's. By the rule that measurement wrote
+       down for a workload of two conditions, which reads a build's change from no idle
+       connection to one against the base's own, the set timer's part is 2.6% on the
+       multi-threaded runtime (0.9% to 4.1%, every round up, under a noise of 3.6%, so not
+       resolved) and 3.3% on the single-threaded one (2.3% to 4.6%, every round up, noise
+       3.1%, resolved). Either reading is three to four times what the instructions give:
+       callgrind counts none of the kernel's, and a park with a timeout has the kernel set a
+       timer of its own (reasoned, not measured). The CPU time is recorded by that measurement
+       but was not among the values written down before it ran. It is the request the change
+       costs most. No cycle run has read it; the one this change is gated
+       by declares, in the pull request and before its first turn, the workloads it reads.
+    2. A connection whose only request waits, the default of a proxy that opens a connection for
+       each request, makes no timer, and pays for the first deadline telling the connection it
+       waited: 171 and 199 instructions more of 35,060, 0.5% and 0.6%, on one single-threaded
+       runtime, the client waiting 10 ms after each close (the change's six counts are within
+       76 there and `main`'s within 31), and 81 and 124 of 38,400 on the multi-threaded one; an
+       earlier count of the same binaries gave 168 and 169, and 110 and 127. No allocation
+       more. Among the requests the rule below reads it is the one the change costs most, and
+       the cycle run reads it as a touched workload (`close`). On `main` as it was at the
+       fourth merge the single-threaded figure read 184 and 190, and the multi-threaded one
+       is unread: its recount gave 150 and 546 where the control, the binaries of the figures
+       above built again, gave 313 more and 428 fewer, in a session whose counts of one build
+       spanned 648 on that row (below). A recount with the machine to itself would read it.
+    3. Every connection `serve` accepts asks its allocator for 128 bytes more, whether a
+       request of its ever waits, and for 240 more, in one block more, from its second request
+       that waits until it closes. Those are bytes asked for and not yet freed, as DHAT counts
+       them, on the benchmark app built with `--cfg tokio_unstable`; they are not a reading of
+       the memory a process holds (DHAT's bytes live with 600 idle connections less 100, over
+       500, `main` at
+       `e2d0c464e` against `bf13f4822`: 20,158 a connection on `main` in every state, 20,286
+       here after a request that does not wait or one that does, and 20,398 after two or three
+       that wait; tokio 1.54.1, x86-64 Linux; under the tag `evidence/deadline-timer-4`). The
+       second step is the kept timer, a boxed `Sleep` of 112 bytes. The first is the wrapper's
+       two words taking the connection's task over a step of its allocation, which tokio
+       aligns to 128 bytes on x86-64 (read in tokio 1.54.1; reasoned, since no count separates
+       it). That is 128 MB for a million idle connections and 240 MB for a million that have
+       each waited twice, of bytes asked for. The request-cost kit's reading of resident
+       memory, of its probe built as an app builds by default and run with jemalloc preloaded,
+       does not show the 128: 5,000 connections that had each answered one request held
+       8,473, 8,472 and 8,471 bytes each on `main` at `d15d3ac3a` and 8,471 in each of three
+       runs on the merge `ffc686e39` (after three of a browser's requests 12,563, 12,563 and
+       12,562 against 12,562, 12,562 and 12,534; under the tag `evidence/deadline-timer-8`),
+       and the hosted job read a median of 8,430 for both builds in each of its two runs
+       named below. So the 128 is not shown for a default build, where a connection may hold
+       less than that more, or nothing more; why was not looked for. No reading of the kit is
+       of a connection that has waited, so the 240 has none.
+    4. A kept timer that is set, and that no deadline takes before its time is up, wakes the
+       connection's task once, for nothing: after the connection's third request that waited, or
+       a later one. A test on tokio's paused clock counts that wake under a deadline of 30 s:
+       none at 29.998 s, one at 30.002 s and no other in the 90 s after. And a timer
+       moved later stays where it was in the wheel until the driver reaches that time and puts
+       it where it now belongs, about once a connection for each deadline's length of time:
+       work moved to the timer driver, under its lock, not removed. Where requests that wait
+       are many to a deadline's length that is lost in what they save, and where they are few
+       it is not: one connection whose requests each wait 1 ms, 150 ms apart, costs 118 and 19
+       fewer instructions a request than `main` under the default deadline (multi-threaded and
+       single-threaded, one round), and under a deadline of 1 s, the driver waking 0.19 times a
+       request more, 83 and 62 more than `main` (171 and 155 single-threaded). In the runs of
+       requests a second, the 40 s ones outlast the 30 s deadline, so each of their 32,000
+       timers was moved by the driver once; they read 13.0% more where the 10 s runs read
+       14.4%, each inside the other's range.
+    5. The timer keeps the waker of whatever polled it last until it fires or is polled again. That
+       is the connection's task, except where a handler polls its request another way (it blocks
+       on a runtime of its own, or a layer polls through a `FuturesUnordered`): then that waker,
+       and what it holds (an inner runtime's handle, after that runtime is dropped), stays for up
+       to the deadline, an hour under an area's long one.
+    6. A handler that serves a request on a runtime of its own inside a connection's poll
+       (`block_in_place` and `block_on`, which a test here treats as supported) has that request's
+       deadline wait on the connection's timer, the outer runtime's, once two deadlines of the
+       connection have waited, whichever requests they were. It fires on time while the outer
+       runtime runs. If the outer runtime shuts down first, the deadline's next poll panics
+       inside the handler's catch ("it is being shutdown", tokio's check) and the inner request
+       is answered 500, where its own timer would have gone on waiting (a test serves such a
+       request, shuts the outer runtime down and sees the 500). Whether the current runtime is
+       the timer's is not checked: the way to a runtime's identity is `Handle::current()`, which
+       clones the runtime's `Arc`, two atomic operations on a count every thread shares. Making
+       a timer and registering it cloned it twice, and `Sleep::reset` clones it once itself
+       (read in tokio 1.54.1), so a deadline on the kept timer does that pair once where it did
+       it twice, and the check would make it twice again: no better than before on that count,
+       for a case no app is known to have. And `Handle::id` is behind `tokio_unstable` at the
+       crate's minimum tokio, 1.44.
+    7. A test on tokio's paused clock that leaves a served connection open sees the clock move to
+       the kept timer's time when nothing else is due, once three requests of the connection
+       have waited: after three requests of 40 ms under a 300 ms deadline the clock stood at
+       120 ms on the base while the connection sat idle and went to 380 ms with the kept timer;
+       after one such request it stays at 40 ms and after two at 80 ms, the timer made and not
+       set (the guide says what a test does about it).
+    8. On a runtime with no clock a handler that waits is answered 500, as before (making its
+       deadline's timer panics inside the handler's catch), and the connection goes on serving:
+       a deadline tells the connection it has waited only after it has made its own timer, and
+       the connection makes its timer inside a catch of its own, for a handler that made its
+       timer on a runtime it had entered.
+
+    The branch then merged `main` at `df9242b56`, which had changed `answer.rs` and `route.rs`
+    on every request's path, and the rows the cycle plan's expectations rest on were counted
+    again, that commit against the merge, `2a653b1d0`, in one session with the pair above as a
+    control (round 1 and round 2; under the tag `evidence/deadline-timer-3`). A staged request
+    that does not wait costs 7 and 2 more on the multi-threaded runtime and 5 and 28 on the
+    single-threaded one; the kept-alive request that waits 131 and 139 fewer, and 125 and 128;
+    a connection for each request whose handler waits 152 and 137 more, and 185 and 155 with
+    the wait after each close; a request that does not wait after three that did 215 and 216
+    more, and 220 and 219. The control read 2 and 4, and 48 and 27; 134 and 129 fewer, and 136
+    and 132; 144 and 96, and 181 and 175; 213 and 209, and 220 and 221. `main` itself counts
+    within 22 of what it did at the earlier base on each of these rows, so the costs above
+    stand on this base as counted. The branch merged `main` once more, at `e2d0c464e`, for
+    the rules its cycle run is read by (the merge is `185e1a1b1`): that commit changes nothing
+    under `crates/`, no manifest and no lock file since `df9242b56`, and the two merges hold
+    the same `crates/`, so those counts are of the code as it then was. The counts of a set
+    timer in cost 1 and the runs of requests a second were then taken on that base and this
+    form's commit `bf13f4822`, and read the same rows again: the staged request that does not
+    wait 5 and 3 more (7 and 9 single-threaded), the kept-alive request that waits 117 and 119
+    fewer (134 and 132), a connection for each request whose handler waits 131 and 105 more
+    (152 and 149 with the wait after each close), a request that does not wait after three
+    that did 223 and 188 more (219 and 221). The branch merged `main` a third time, at
+    `26ab0e37f`: that commit too changes nothing under `crates/`, no manifest and no lock file
+    since `e2d0c464e`. Since `bf13f4822` the crate has changed in one comment of
+    `deadline.rs`, which takes the lines it took, and in its tests.
+
+    The fourth merge of `main`, at `d15d3ac3a` (the merge is `ffc686e39`), was not like those:
+    `main` had changed 42 files under `crates/`, every request's path among them, and the
+    function the wrapper sits in, where the connection's wait for shutdown is no longer an arm
+    of a `select!` beside the connection but is polled after it, and only when a waker of its
+    own has fired. So what rested on the task as it was was taken again, `d15d3ac3a` against
+    `ffc686e39`, with the pair before the merge (`26ab0e37f` and `f8934bc99`) built again
+    beside them as a control; every count, with its scripts, is under the tag
+    `evidence/deadline-timer-8`.
+
+    1. An idle connection's bytes (cost 3) did not move. `main` holds 20,198 a connection in
+       every state, 40 bytes and one block more than it did, and the merge 20,326 after a
+       request that does not wait or one that does and 20,438 after two or three that wait:
+       128 and 240 more, as before. The control read 20,158, 20,286 and 20,398 again.
+    2. A poll (cost 1) was counted by function, which it had not been since the form before
+       this one. The staged request that does not wait polls its connection once, and the
+       function that polls it counts 386 instructions a request with the wrapper against 369
+       without it: 17 a poll, in both pairs and on both runtimes, not the 13 of the earlier
+       form. In all four builds that poll is a function of its own that the task calls; with
+       the wrapper, hyper's poll is compiled into the wrapper's and has no copy of its own.
+       On that row the request as a whole reads less than 17 more (3.7 in the profile's one
+       single-threaded count of the merged pair) because the deadline's own code counts 14
+       fewer where no deadline waits: 31 fewer in the function that runs the handler, 17 more
+       where its futures are dropped.
+    3. The rows were counted again by the session that counted them after `df9242b56`
+       (round 1 and round 2; multi-threaded, then single-threaded). A staged request that
+       does not wait: 4 and 55 fewer, then 4 and 8 more. The kept-alive request that waits:
+       182 and 110 fewer, then 75 and 145 fewer. A connection for each request whose handler
+       waits: 150 and 546 more, then 184 and 190 more with the wait after each close. A
+       request that does not wait after three that did: 200 and 257 more, then 175 and 216
+       more. The control read 28 more and 58 fewer, then 34 and 1 more; 134 and 145 fewer,
+       then 155 and 208 fewer; 313 more and 428 fewer, then 164 and 147 more; 221 and 229
+       more, then 214 and 212 more. This session read worse than those before it: the machine
+       ran other work beside it, and three counts of one build were up to 125 apart on the
+       kept-alive rows, on levels about 50 apart, and up to 648 apart on a connection for
+       each request. It shows no row that moved, and what carries that is those spans: on
+       every row but one, in both rounds, the merged pair's figure is no farther from the
+       control's than three counts of one build were apart at the widest on that row (71,
+       106, 648 and 97 on the four rows above on the multi-threaded runtime, where the pair
+       is 32 and 3, 48 and 35, 163 and 974, and 21 and 28 from the control; 92, 85, 112 and
+       63 on the single-threaded one, where it is 30 and 7, 80 and 63, 20 and 43, and 39 and
+       4). The one is a connection for each request on the multi-threaded runtime in round
+       2, 974 against 648, and the control's own two rounds, of the same two binaries, are
+       741 apart there: the session does not read that row, so cost 2's figure for the
+       multi-threaded runtime is unread on this base. The control does not carry the
+       conclusion. It is 23 and 61, 17 and 26, 182 and 533, and 2 and 41 from what the same
+       code counted before (5 and 3 more; 117 and 119 fewer; 131 and 105 more; 223 and 188
+       more, multi-threaded), and the merged pair is farther from it than that in both
+       rounds on the kept-alive request that waits and in round 2 on a connection for each
+       request, as it is in round 1 on the other two rows. The session could not show a row
+       that moved by less than about 100 on the kept-alive rows. Of the rows it reads, the
+       nearest to a move is the kept-alive request that waits on the single-threaded
+       runtime, whose gain read 80 and 63 less than the control's, under the 85 its counts
+       spanned.
+       `main` itself counts about 700 fewer than at the
+       earlier base on the staged request that does not wait (673 to 731) and 937 to 999
+       fewer on the one that waits.
+    4. Two other counts read the change on this base to an instruction, and neither is of
+       the benchmark app, so they are not the rows above. `main`'s own kit,
+       [`bench/request-cost`](../bench/request-cost/README.md) (its probe, jemalloc
+       preloaded, three counts of a case within 2 of each other), counted the merge over
+       `d15d3ac3a` at 22 more on `get` (of 18,335, 0.12%), 30 on `unstaged` (of 12,528,
+       0.24%), 31 on `pipeline` (of 10,569, 0.29%) and 21 on `text` (of 17,181, 0.12%), and
+       at 16 requests at a time 5 fewer, 3 more, 2 more and 5 fewer; each is within 2 of what
+       it counted `f8934bc99` over `26ab0e37f`. The pull request's hosted job (the
+       `Request Cost` workflow, whose log holds each count) read 23, 30, 29 and 19, then 5
+       fewer, 3 more, 3 more and 8 fewer, for `ffc686e39` over `d15d3ac3a` (run
+       45880658451), and 21, 30, 29 and 21, then 5 fewer, 2 more, 2 more and 9 fewer, for
+       `cce69b778` over `49e9a3a1f` (run 45901199943); the run of a later head is in the
+       pull request's description, not here.
+
+       The kit's sizes are not the rows' for the same kind of request, and no count here
+       says why. A staged request that does not wait is 4 and 8 more on the benchmark app's
+       single-threaded row (3.7 in its profile) and 22 on the kit's `get`; a route with no
+       deadline that does not wait is 17 and 18 more in cost 1 (this session's recount of
+       that row, 74 fewer and 18 more beside a control of 69 and 11 more, does not read it)
+       and 30 on the kit's `unstaged`. The kit's two figures for a case, one request at a
+       time and 16, solve to 28 to 31 instructions for each batch of requests the connection
+       reads, and to 7 fewer for each staged request (`get`, `text`) and 0 to 1 more for
+       each that is not (`unstaged`, `pipeline`), where the benchmark app's profile gives 17
+       a poll and 14 fewer a staged request. So either the probe's connection is polled more
+       than once for a request written alone, or a poll through the wrapper costs more in a
+       build without `tokio_unstable`, or the two apps differ some other way; nothing kept
+       says which. A count by function on the kit's probe, with the calls of the wrapper's
+       poll a request, as item 2 took it on the benchmark app, would settle it. The larger
+       figures are the kit's, and they are the ones held to the line below. And the harness
+       [design Choice 60](#choice-connection-info)'s Last checked describes, a typed route's
+       plain request through `corten::serve` on one single-threaded runtime, built again and
+       counted in two sessions of three rounds: `d15d3ac3a` 16,972.596 and 16,974.877
+       instructions and the merge 16,998.608 and 16,997.529, 26.0 and 22.7 more, and with
+       jemalloc preloaded 15,412.503 and 15,414.189 against 15,434.935 and 15,435.759, 22.4
+       and 21.6 more, 0.13% to 0.15%. That Choice holds a change to the connection task, which
+       this is, to +0.5% of its base on the kit's `get`, `unstaged`, `pipeline` and `text`,
+       one request at a time or 16: the most here is 0.29%, on `pipeline`, so this change
+       does not reopen it. (Until 2026-11-26 its line was a fixed count, about 17,557 on that
+       harness at `9060dfb2a`, which read 17,554.920 and 17,554.916 in the same sessions;
+       the merge is about 560 under it.)
+    5. The review of that merge found that no test would fail if a kept timer's wake were
+       lost once shutdown has begun: in the one test where shutdown begins while a request
+       waits on a kept timer, the task's own wait for the time its connection is held to
+       polls the connection within milliseconds of the deadline. A test whose connection is
+       held half a deadline past the request's own time was added (`d79cbad1a`): with that
+       wake lost it fails and the earlier one passes. It also asserts, by the count the
+       crate's tests keep of deadlines that took a connection's timer, that the request's
+       deadline has that timer when shutdown begins, so it cannot pass on a timer of the
+       request's own.
+
+    The branch merged `main` a fifth time, at `49e9a3a1f` (the merge is `c8f710609`), for
+    that Choice's line as restated: since `d15d3ac3a` that commit changes, under `crates/`,
+    the `corten` command alone, no manifest and no lock file. And a sixth, at `cbca34579`
+    (the merge is `0aada69c3`): since `49e9a3a1f` that commit changes, under `crates/`, how
+    the crate reads the authority a request names (`security.rs`, the lines of `app.rs`,
+    `kept.rs`, `page.rs` and `upgrade.rs` that call it, and tests), no manifest and no lock
+    file, and not the function the wrapper sits in, which serves a connection; nothing under
+    a tag was counted again for it. Since the fourth merge the crate has changed, of this
+    change's own, in that test and in one comment of `deadline.rs`.
+
+    Not chosen: leaving each deadline its own timer (the numbers above are against it). A pool
+    of timers a thread keeps, lent to whichever request waits (as fast: 17.4% to 18.5% more
+    requests a second in the same passes, and 20,599 instructions for the staged request that
+    does not wait where the kept timer's first form took 20,655 and the base 20,607; but a timer
+    must go back to a thread of the runtime it was made on, which needs `Handle::id`, unstable
+    before tokio 1.49 with the crate at 1.44, and up to 4,096 timers a thread outlive their
+    connections). A clock the watch thread sweeps instead of tokio's timer (19.6% and 20.7% more,
+    the most of any, since no deadline touches the wheel at all; but a deadline then fires up to
+    two of the clock's ticks late, a second each at the default header timeout, tokio's paused
+    test clock no longer moves it, and a request polled outside a connection still needs tokio's
+    timer, so there would be two mechanisms). Turning on tokio's timer for each worker
+    (`enable_alt_timer`): behind `tokio_unstable` in 1.54.1, and the runtime is the app's to
+    build, not `serve`'s.
+
+    Not chosen among the forms of the kept timer, each counted on the same rows against `main`
+    at `81e77162a` (round 1 and round 2; the rows, commands and logs of all three are under the
+    tag `evidence/deadline-timer-2`):
+
+    1. A, the connection's timer made at its first request to wait (`098f56243`, this change as
+       first proposed). A connection's second waiting request already takes the timer, but a
+       connection whose only request waits makes a timer no later request uses: that request
+       cost 458 and 444 instructions more than `main` on one single-threaded runtime (402 and
+       393 on the multi-threaded one) and one allocation more, where B as it was counted beside
+       A (A with the second stage and nothing else) cost 171 and 148 (114 and 113) and none; B
+       as it is, with the second review's findings, is cost 2's 171 and 199 (81 and 124). The
+       kept-alive request that waits gained the same:
+       136 and 129 fewer for A, 134 and 121 for B. An earlier rule kept A unless B brought that
+       request under 100 over `main`; the second review asked why, with the request at +1.3%
+       in instructions against a margin of +1% in cycles, and the rule below replaced it.
+    2. C, a slot for the timer in the connection's `Watch`, behind a mutex (`05c9bf95f`, built
+       and counted): no wrapper round the connection, no connection numbers and no states, and a
+       deadline gives the timer back from any thread or task. But it lends the watch to the
+       thread on every poll of every watched request, 23 to 28 instructions on a staged request
+       that does not wait. Its timer is set from the first wait and stays in the wheel, so the
+       connection for each request whose handler waits cost 505 and 500 more than `main`
+       (single-threaded; 515 and 466 multi-threaded with the same 10 ms after each close), and
+       the requests that do not wait after a connection's one request that did cost 214 more
+       (217 and 202 multi-threaded), which B costs only after a connection's third. The
+       kept-alive request that waits gained 72 and 74 (multi-threaded), where A and B gained 121
+       to 136. And a deadline polled while a layer holds another runtime's `EnterGuard` makes
+       C's kept timer on that runtime: it fires on time while that runtime lives, and once that
+       runtime has shut down every later request of the connection that waits panics in the
+       timer's poll and is answered 500, for the life of the connection (measured by a test
+       there). A and B make the timer in the connection's own poll and do not have that.
+    3. Two variants of C's keep policy, counted one round each and not committed. In d the
+       first deadline to wait uses its own timer and leaves the connection one not set, as A
+       does: the later requests that do not wait came to 20 and 29 over `main` (multi-threaded
+       and single-threaded), and the connection for each request stayed about 390 and 450 over.
+       In t the first wait leaves a mark and the second makes the timer, as B does: the
+       connection for each request came to about 130 and 160 over; it was not a declared
+       candidate, and being C otherwise it keeps C's lend on every poll.
+    4. Forms of B that end cost 1's parks sooner, by taking a set timer out of the wheel or
+       setting it nearer, each built from `bf13f4822` and counted on the same rows against
+       `main` at `e2d0c464e` (under the tag `evidence/deadline-timer-4`). A timer taken out
+       after one or eight polls of its connection that did not use it, or after one or eight
+       requests of its that did not wait, does nothing for another connection beside an idle
+       one whose timer is set, since an idle connection is not polled: that request stayed 168
+       to 225 over `main`. On the connection's own request after three waits they read 36 to
+       91 over `main` where B reads 188 to 223, and they pay for it where requests that wait
+       and requests that do not alternate (up to 329 over `main`, B 27 to 50), and most lose
+       the kept-alive request's gain (5 more to 27 fewer, B 117 to 134 fewer; the two written
+       to leave a poll's cost as it was keep 78 to 97 of it). A timer set no later than 1 s
+       ahead, and set again each second
+       while its deadline waits, ends the parks a second after the last wait, and costs a
+       request that is followed by 1.2 s of quiet 4,447 instructions more than `main` and one
+       that waits 2.5 s 12,238 more (multi-threaded, one round). A timer set that near once,
+       then to its deadline's own time, and taken out when it is given back, costs those 4,422
+       and 6,172 more. A timer moved to a far time when it is given back stays in the wheel,
+       and the parks with it (225 to 245 over `main` after three waits).
+
+    The rule that chose was written when A's and B's counts were known on every row but the
+    requests after a connection's one that waited, and before C was built. A form is out if a
+    test that goes through `serve` fails on it, if it needs `unsafe`, or if it raises the
+    crate's minimum tokio; it must be within 100 instructions of the best on the kept-alive
+    request that waits, multi-threaded (all three are); and of those the form is taken whose
+    worst other row is least over `main`, forms within 50 of each other being tied.
+    The worst row of each is the connection for each request whose handler waits: B 171, A 458,
+    C 505 (single-threaded with the wait after each close, round 1; 114, 402 and 515
+    multi-threaded, the same order), so B, by more than 50. The connection for each request
+    that does not wait could not be read for any form (cost 1) and decided nothing. The rule's
+    first point is read with each form's tests asserting that form's own rule for when the
+    timer is made: as A wrote them, ten tests fail on B, three of them through `serve` and the
+    same three that fail on variant t, because they assert that a connection's first wait makes
+    its timer; rewritten for the second wait, all pass.
+
+    Stands on: platform (tokio 1.54.1, the version in `Cargo.lock`: the timer wheel of a runtime
+    has one lock, which `Sleep`'s first registration and its drop take, and `Sleep::reset` to a
+    time not earlier than a timer still set is a compare-and-swap that takes none, the timer
+    driver moving the entry when it reaches the old time; while the wheel holds any timer the
+    driver reads the clock at each park and parks with a timeout, and with none it does
+    neither, and no public call takes a set timer out of the wheel short of dropping it; at
+    tokio 1.44.0, the least the crate
+    allows, `reset` is the same but the wheel is in shards, each with its own lock under a shared
+    read lock, so threads queue there less and the gain measured here is 1.54.1's, not measured
+    at 1.44); bet (connections that serve handlers that wait mostly serve more than two such
+    requests, so the timer a connection makes is used; a runtime that serves requests that
+    wait, on any of its connections, mostly either has a timer waiting already (a handler's own
+    sleep or timeout, an interval of the app's), so that cost 1's parks are not new to it, or
+    has threads busy enough that one park serves many requests; the runtime that has no timer
+    of its own, serves a request that waits now and then on a connection that has waited
+    before, and otherwise parks once a request pays the whole of cost 1 on every request of
+    every connection for a deadline's length after each such wait, 1% in instructions and 4%
+    in the server's CPU time as measured, and the bet is that it is rare enough, and that cost
+    small enough beside the gain where threads queue, to be worth it; no app has been measured
+    for which of these it is, and no cycle run has read that request yet; a proxy that opens a
+    connection for each request pays cost 2 instead, and an app whose requests arrive that way
+    has not been measured in cycles yet; and the one wake of an idle connection and its 128 or
+    240 bytes are cheap beside what a connection already costs); measured (requests a second
+    and p99, the base `be1192a7b` against
+    the change's first form, `69663386e`, in two passes and its form at `4c6cdf4ad` in four, two
+    of those on a patch one `mut` from it, one machine of 48 CPUs, a Xeon Platinum 8280 whose
+    topology was not recorded, Linux 7.0, tokio 1.54.1 and hyper 1.13.0 as each image
+    resolved them, the benchmark app having no lock file of its own; the deadline's lateness
+    on those forms and the timer's size; every such run's result and scripts under the tag
+    `evidence/deadline-timer`; instructions and allocations a request, `main` at `81e77162a`
+    against `ca259c467`, A at `098f56243` and C at `05c9bf95f`, callgrind 3.24, tokio 1.54.1
+    and hyper 1.12.0, A and B in one session and C with its own count of A in another; the
+    paused clock and the shut-down runtime on this form; those under the tag
+    `evidence/deadline-timer-2`; seven of those rows again on `main` at `df9242b56` against the
+    merge, `2a653b1d0`, with the earlier pair built again as a control, under the tag
+    `evidence/deadline-timer-3`; on this form, `main` at `e2d0c464e` against `bf13f4822`:
+    requests a second, latency, the server's CPU time and its cycles a request, with
+    `be1192a7b` and `4c6cdf4ad` built again beside them, on another machine of 48 CPUs of the
+    same model, Linux 7.0, tokio 1.54.1 and hyper 1.12.0 by the tree's lock file; the
+    instructions of a set timer, of a timer of the app's own on `main` and of the forms not
+    chosen, callgrind 3.24; an idle connection's bytes, DHAT 3.24; the deadline's lateness;
+    those under the tag `evidence/deadline-timer-4`; after the fourth merge, `main` at
+    `d15d3ac3a` against the merge `ffc686e39`, with `26ab0e37f` and `f8934bc99` built again
+    as the control: the rows, an idle connection's bytes and a poll by function, callgrind
+    and DHAT 3.24, tokio 1.54.1 and hyper 1.12.0; the request-cost kit's counts of the same
+    four; and a plain request on the harness of
+    [design Choice 60](#choice-connection-info) on `9060dfb2a`, `d15d3ac3a` and `ffc686e39`,
+    with glibc's allocator and with jemalloc preloaded; those under the tag
+    `evidence/deadline-timer-8`; every binary of the benchmark app
+    measured under any of the tags, which is every count of its rows, of an idle connection's
+    bytes and of a poll by function, and every run of requests a second, was built with
+    `--cfg tokio_unstable`, which compiles tokio's timer with the branches of its second
+    flavour, so none is the build an app makes by default, and the lateness, the timer's
+    size, the kit's probe with its counts and its readings of resident memory, that harness
+    and the crate's tests, built by `cargo test`, are without it; the hosted job's counts,
+    of the same kit, are in the logs of the runs the Choice names and under no tag); platform
+    (hyper 1.12.0's HTTP/1
+    server polls one request's future at a time, inside the connection's own poll, and reads no
+    later request's head while it answers; the code does not need that to be right, since a
+    deadline that finds the timer taken makes its own, only to be worth having); reasoned (the
+    connection makes its timer in its own poll, so the timer is of the runtime that polls the
+    connection whatever a handler had entered; a timer goes back only under its connection's
+    number and only while that connection is being polled, so no thread holds one between polls
+    and no connection gets another's; what a poll changed on the thread is put back when the
+    poll ends, also by a panic, so a connection polled inside another's poll leaves the outer
+    one's timer in place; a deadline that takes the timer sets and polls it in the same call, so
+    its waker is registered before the timer can fire; and every path that is not the common one
+    is what every deadline did before); value (Fast, and proven fast: handlers that wait no
+    longer queue on one lock, measured on this form where they queued and not shown where they
+    do not; Verified, not assumed: the costs above are counted, the cost of a set timer in the
+    server's time too, and what no cycle run has read is said where it stands, README Values).
+
+    Revisit when: tokio's timer for each worker (`enable_alt_timer`) is stable and the default,
+    or tokio's wheel otherwise stops taking one lock for a timer made and dropped, which leaves
+    this module nothing to save and it is deleted; `Sleep::reset` to a later time takes a lock;
+    Corten serves HTTP/2 itself, where a connection answers many requests at once and one timer
+    a connection serves one of them; a cycle run finds a workload its plan declared for this
+    change over that workload's margin (a connection for each request whose handler waits,
+    which leaves no cheaper form known here; a request that does not wait while a timer is
+    set, for which the forms that take the timer out of the wheel were counted and not
+    chosen), which reopens this Choice; an app is found that pays cost 1's parks on most of its
+    requests, a runtime with no timer of its own whose connections wait now and then; an app
+    is found whose handlers serve requests on a runtime of their own under a server it shuts
+    down first, which asks for the check cost 6 leaves out; a second build or host does not
+    show the gain measured on this form, or shows the larger one the earlier forms read; or a
+    run at tokio 1.44, or built without `tokio_unstable`, shows no gain where apps run.
+
+    Last checked: 2026-11-24, requests a second, p99 and lateness on `be1192a7b`, `69663386e` and
+    `4c6cdf4ad`, the thread pool's instructions on `be1192a7b` and on `69663386e` with the
+    pool's module over it, and the timer's size on `6c94d5324`, results under the tag
+    `evidence/deadline-timer`; 2026-11-24, instructions and allocations a request on
+    `81e77162a`, `098f56243`, `05c9bf95f` and `ca259c467`, and the paused clock and the tests
+    against broken rules on `ca259c467`, results under the tag `evidence/deadline-timer-2`;
+    2026-11-24, instructions and allocations a request on `df9242b56` and `2a653b1d0`, with
+    `81e77162a` and `ca259c467` as the control, and the tests against broken rules on
+    `2a653b1d0`, results under the tag `evidence/deadline-timer-3`; 2026-11-24, `crates/`,
+    `Cargo.toml` and `Cargo.lock` read as the same git objects in `185e1a1b1` and `2a653b1d0`,
+    and in `e2d0c464e` and `df9242b56`;
+    2026-11-24, tokio 1.54.1 (`Cargo.lock`) and tokio 1.44.0 read for the wheel's locks and
+    `Sleep::reset`, and hyper 1.12.0 (`Cargo.lock`) for one request at a time; 2026-11-25,
+    requests a second, latency, CPU time and cycles a request on `e2d0c464e` and `bf13f4822`,
+    with `be1192a7b` and `4c6cdf4ad` beside them, the instructions of a set timer, an idle
+    connection's bytes and the lateness on `e2d0c464e` and `bf13f4822`, and tokio 1.54.1 read
+    for what its time driver does at a park and for a task's alignment, results under the tag
+    `evidence/deadline-timer-4`; 2026-11-25, `crates/`, `Cargo.toml` and `Cargo.lock` read as
+    the same git objects in `26ab0e37f` and `e2d0c464e`; 2026-11-26, after the fourth merge:
+    instructions and allocations a request, an idle connection's bytes and a poll by function
+    on `d15d3ac3a` and `ffc686e39`, with `26ab0e37f` and `f8934bc99` as the control, the
+    request-cost kit's counts of those four, a plain request on the harness of
+    [design Choice 60](#choice-connection-info) on `9060dfb2a`, `d15d3ac3a` and `ffc686e39`,
+    and the shutdown tests against a lost wake on
+    `d79cbad1a`, results under the tag `evidence/deadline-timer-8`; 2026-11-26, `crates/corten`,
+    `Cargo.toml` and `Cargo.lock` read as the same git objects in `49e9a3a1f` and `d15d3ac3a`;
+    2026-11-26, after that merge's second review: the rows' figures read again against the
+    spans of their counts, the kit's readings of resident memory under that tag and the
+    hosted job's runs 45880658451 and 45901199943 read for cost 3 and for the kit's counts,
+    and `Cargo.toml`, `Cargo.lock` and the crate's own manifest read as the same git objects
+    in `cbca34579` and `49e9a3a1f`, with `app.rs` differing in one line, of the request's
+    layer.
+
+78. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
     place of the history entry's as its patch is drawn.** A filter or scope that redraws one part
     of a screen with a GET `data-patch` form left the address as it was: a reload and a bookmark
     lost the filter, the page's other forms still carried the old one, and the same form without
@@ -12895,7 +13643,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     developers, or when Chromium's panel stops showing an event stream's messages.
 26. <a id="limit-origin-scheme"></a>Without `Policy::hsts`, a write or a WebSocket handshake that carries no `Sec-Fetch-Site`
     (every handshake from Chromium and Firefox, and any write from a plain-http page, to which
-    browsers send none) is held to its `Origin`'s name and port against `Host`, not its scheme: a
+    browsers send none) is checked against the request-target's authority, or `Host` when the
+    target names none. Only the `Origin`'s name and port are compared, not its scheme: a
     plain-http page on the app's host passes against the app served over HTTPS
     ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
     The app cannot tell which scheme it is served over: a proxy or CDN in front usually ends TLS

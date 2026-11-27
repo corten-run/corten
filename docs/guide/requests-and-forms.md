@@ -2532,9 +2532,10 @@ whose status line would have said it shows it through `corten:notice` alone.
 
 A browser refuses a `Secure` cookie, and so a `__Host-` one, from a plain `http://` origin other
 than loopback: a tool served on the LAN as `http://automation.lan:3001` or `http://192.168.1.5`.
-Corten sees that in the write (an `Origin` of this host over `http://`, no `Sec-Fetch-Site`) and
-sets the notice in a plain `corten-notice` cookie instead (`HttpOnly`, `SameSite=Lax`, a minute),
-with nothing for the app to do. A page reads that one only from a request without
+Corten checks that the write has no `Sec-Fetch-Site` and that its `http://` `Origin` matches the
+[requested host and port](app.md#host-names): the target's authority when present, otherwise
+`Host`. For a matching non-loopback origin it sets the notice in a plain `corten-notice` cookie
+instead (`HttpOnly`, `SameSite=Lax`, a minute), with nothing for the app to do. A page reads that one only from a request without
 `Sec-Fetch-Site`, which current browsers send to every secure origin, so on HTTPS another site on
 the domain cannot plant a notice in it there; a browser too old to send it (Safari before 16.4,
 Firefox before 90) could be shown one, as text. An app served only over HTTPS says so with
