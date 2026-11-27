@@ -167,7 +167,8 @@ const synthetic = (${syntheticDependencies.toString()})({
       assert.equal(source.split(entry).length, 2, "review refusal-recording seam");
       source = source.replace(entry, "async function syntheticProductionMain(") + `
 export async function productionMain(...args) {
-  const dispatch = ${JSON.stringify(dispatch ? { path: path.join(h.base, ...dispatch.path), cancel: dispatch.cancel } : undefined)};
+  const dispatch = ${JSON.stringify(dispatch ? { path: path.join(h.base, ...dispatch.path), cancel: dispatch.cancel,
+    quarantine: dispatch.quarantine } : undefined)};
   if (dispatch) {
     const previous = args[1].interrupted;
     let afterIntent = 0;
@@ -175,7 +176,14 @@ export async function productionMain(...args) {
       const target = syntheticPath.join(syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], 'groups-r21', 'state.json');
       if (syntheticFs.existsSync(target) && JSON.parse(syntheticFs.readFileSync(target, 'utf8')).createIntentAt
           && ++afterIntent >= (dispatch.cancel || 1)) {
-        if (!syntheticFs.existsSync(dispatch.path)) syntheticFs.writeFileSync(dispatch.path, '{}', { flag: 'wx' });
+        if (!syntheticFs.existsSync(dispatch.path)) {
+          const contents = dispatch.quarantine ? JSON.stringify({
+            schema: 'benchmark-create-quarantine-witness/v1',
+            quarantineSha256: digest(syntheticFs.readFileSync(syntheticPath.join(syntheticPath.dirname(dispatch.path), 'create-quarantine.json'))),
+            dropletId: '123',
+          }) : '{}';
+          syntheticFs.writeFileSync(dispatch.path, contents, { flag: 'wx' });
+        }
       }
       return previous() || dispatch.cancel && syntheticFs.existsSync(dispatch.path);
     };
@@ -1181,13 +1189,14 @@ test("continuation appends authorized retries after no-create and retirement whi
 
 for (const scenario of ["admission", "nonterminal sighting", "count-mismatch sighting", "external host sighting", "malformed name sighting", "malformed tags sighting",
   "oversized array sighting", "oversized tags sighting", "incomplete absence", "malformed absence",
-  "witnessed census", "absent census", "capacity", "historical ID", "replacement absent", "replacement sighted"]) {
+  "witnessed census", "absent census", "capacity", "historical ID", "replacement absent", "replacement sighted", "replacement late sighting"]) {
 test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, async (t) => {
   const mixed = scenario === "historical ID";
   const external = scenario === "external host sighting";
   const replacement = scenario.startsWith("replacement ");
   const group = mixed ? "recoverable-live" : replacement ? "mixed-production" : "json-api", other = "hardening", round = "r19", next = "r21",
-    p = fixture(t, "success", replacement ? group : other), slot = path.join(p.h.base, group);
+    dispatch = scenario === "replacement late sighting" ? { path: [group, "receipts", "create-quarantine-witness.json"], quarantine: true } : undefined,
+    p = fixture(t, "success", replacement ? group : other, dispatch), slot = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   p.deps.inspect = () => { assert.fail("no collected evidence"); };
   // This control exercises the admission and approval bytes, not Linux actor
@@ -1266,7 +1275,8 @@ test(`a quarantined unacknowledged create: ${scenario}`, { timeout: 60000 }, asy
       assert.equal(code, 3); assert.equal(posts.length, 1); assert.ok(state.createIntentAt);
       assert.equal(treeHash(slot), sealed);
     } else {
-      assert.equal(code, 2); assert.equal(posts.length, 0); assert.equal(state.createIntentAt, undefined);
+      assert.equal(posts.length, 0); assert.equal(code, 2); assert.equal(state.createIntentAt, undefined);
+      assert.equal(state.status, "reserved");
       const witness = JSON.parse(fs.readFileSync(path.join(slot, "receipts", "create-quarantine-witness.json")));
       assert.deepEqual(witness, { schema: "benchmark-create-quarantine-witness/v1", quarantineSha256, dropletId: "123" });
       assert.equal(fileHash(path.join(local, "state.json")), binding.stateSha256);

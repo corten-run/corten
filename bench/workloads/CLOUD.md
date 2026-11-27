@@ -1004,8 +1004,10 @@ Use this only after independently checking the original custody proof and
 reviewing the risk that the unacknowledged allocation could still appear. The
 prepared fleet binds exactly one earlier, same-group quarantine. It has its own
 ownership, launch intent and approval. It takes the same account-bracketed
-census as another group: any sighting is witnessed and refuses before the new
-create intent or POST. A replacement does not settle or edit the original
+census as another group: any sighting in the census is witnessed and refuses
+before the new create intent. A final local custody check after the intent and
+just before dispatch refuses a newly recorded witness without sending the POST.
+A replacement does not settle or edit the original
 attempt, and another replacement requires the preceding attempt to be settled
 or superseded under the ordinary rules for a never-launched reservation.
 

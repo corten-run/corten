@@ -306,9 +306,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   try {
   let checkHistoricalDispatch;
-  const setupDispatchRefusals = new WeakSet();
+  const createDispatchRefusals = new WeakSet();
   const run = productionDispatch({ processRun, provider: () => providerRun, interrupted,
-    historicalDispatch: () => checkHistoricalDispatch, dispatchRefusals: setupDispatchRefusals });
+    historicalDispatch: () => checkHistoricalDispatch, dispatchRefusals: createDispatchRefusals });
   const manifest = options.group === undefined ? undefined
     : requireStagedFleet(JSON.parse(regular(resolve(options.fleet), 1024 * 1024)));
   const stagedSibling = manifest && options.group !== manifest.jobs[0].group;
@@ -394,13 +394,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       }
       if (beforeCreate !== "census") {
         for (const row of externalFailures) recheckExternalFailedHost(root, row, manifest);
-        const checkSetup = (check) => {
+        const checkCustody = (check) => {
           try { return check(); } catch (error) {
-            if (beforeCreate === "dispatch" && error instanceof Error) setupDispatchRefusals.add(error);
+            if (beforeCreate === "dispatch" && error instanceof Error) createDispatchRefusals.add(error);
             throw error;
           }
         };
-        const setupIdleChecks = checkSetup(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
+        const setupIdleChecks = checkCustody(() => setupRetirements.map((row) => recheckSetupRetirement(root, row, indexedCustody)));
         for (const row of exitOneRetirements) recheckExitOneRetirement(root, row);
         // A continuation approval predating this binding cannot create beside
         // an unbound r78 slot. Do not try to replay its archive from the child.
@@ -412,16 +412,23 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
           assert.ok(!failedExitOneScope(state) || !state.archiveSha256, "prior exit-one retirement custody is not bound; do not create");
         }
         if (beforeCreate === "dispatch" && setupIdleChecks.length) {
-          checkSetup(() => {
+          checkCustody(() => {
             recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
             for (const stillIdle of setupIdleChecks) stillIdle();
+          });
+        }
+        if (beforeCreate === "dispatch") {
+          checkCustody(() => {
+            for (const row of quarantined) recheckCreateQuarantine(root, row, manifest);
           });
         }
       }
       return currentPeers;
     }
   });
-  if (exitOneRetirements.length || externalFailures.length || setupRetirements.length) checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
+  if (exitOneRetirements.length || externalFailures.length || setupRetirements.length || quarantined.length) {
+    checkHistoricalDispatch = () => checkFleetAdmission("dispatch");
+  }
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
