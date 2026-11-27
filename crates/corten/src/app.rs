@@ -2290,7 +2290,7 @@ pub(crate) struct Scope {
     csp: Arc<Csp>,
     shell: u64,
     /// The lines the stages give its answers that bring none of them ([`Applied::lines`]).
-    lines: http::HeaderMap,
+    lines: crate::security::Lines,
     /// Its middleware, after the app's: each area's around it, outermost first, then its API's
     /// (with the APIs' around it).
     middleware: crate::middleware::Stack,
@@ -2780,7 +2780,7 @@ impl<S: Steps> Layer<S> {
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {
-                res = cache::tag(res, &has).await;
+                res = cache::tag(res, &has, ready.then_some(&scope.lines)).await;
             }
         }
         if let Some(mount) = mount {

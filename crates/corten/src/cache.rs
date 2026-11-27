@@ -755,19 +755,17 @@ pub(crate) struct Unrepeatable;
 /// value drawn for this request ([`Unrepeatable`]), is left as it is. An answer compression sends
 /// as it is (an image, a PDF, `no-transform`) is tagged too: its `304` saves no compression but the
 /// whole body, which costs the client far more to receive than the hash costs here.
-pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
-    let headers = res.headers();
+///
+/// `given` is the answer's scope's lines when it was given them in one pass
+/// ([`crate::security::Applied::ready`]): it brought its `Content-Type` at most, and every other
+/// line it has is one of those. Where none of them leaves an answer untagged or is part of a tag,
+/// which the lines say of themselves ([`crate::security::Lines::beside_a_tag`]), its lines are
+/// not searched for one that does and its tag is made from its type alone: the answer and the
+/// tag the search would give. Any other answer is searched.
+pub(crate) async fn tag(res: Response, has: &[HeaderValue], given: Option<&crate::security::Lines>) -> Response {
+    let ready = given.is_some_and(crate::security::Lines::beside_a_tag);
     if res.status() != StatusCode::OK
-        || headers.contains_key(header::ETAG)
-        || headers.contains_key(header::CONTENT_ENCODING)
-        || headers.contains_key(header::CONTENT_RANGE)
-        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
-            // The default says neither, and most answers have it: it is compared, not searched.
-            // An immutable answer is never asked about again.
-            *line != PRIVATE
-                && (mentions_no_store(line.as_bytes())
-                    || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")))
-        })
+        || (!ready && untagged(res.headers()))
         || res.extensions().get::<crate::answer::Relayed>().is_some()
         || res.extensions().get::<Unrepeatable>().is_some()
         || http_body::Body::size_hint(res.body()).exact().is_none()
@@ -781,7 +779,7 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
         return unread(parts);
     };
     // A kept answer's body is read once, for its first tag.
-    let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers);
+    let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers, ready);
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
@@ -828,19 +826,63 @@ impl http_body::Body for Unsized {
 #[cfg(test)]
 fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     let body = bytes::Bytes::copy_from_slice(body);
-    tagged(crate::kept::Kept::hashed(&http::Extensions::new(), &body, &*TAG_KEY), headers)
+    tagged(crate::kept::Kept::hashed(&http::Extensions::new(), &body, &*TAG_KEY), headers, false)
+}
+
+/// Whether a header line of an answer leaves it without a tag ([`tag`]): a tag or an encoding of
+/// its own, a part of a body, or a `Cache-Control` that keeps it out of every cache or says it
+/// never changes. In line in [`tag`], which asks it of every answer whose lines it searches: as a
+/// call, with the lookup of `Cache-Control` a call inside it, a page's request counted 67
+/// instructions more (`bench/request-cost`, `page-browser`).
+#[inline(always)]
+fn untagged(headers: &HeaderMap) -> bool {
+    headers.contains_key(header::ETAG)
+        || headers.contains_key(header::CONTENT_ENCODING)
+        || headers.contains_key(header::CONTENT_RANGE)
+        || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
+            // The default says neither, and most answers have it: it is compared, not searched.
+            // An immutable answer is never asked about again.
+            *line != PRIVATE
+                && (mentions_no_store(line.as_bytes())
+                    || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")))
+        })
+}
+
+/// Whether a header line of this name is part of an answer's tag ([`tagged`]).
+fn counts(name: &header::HeaderName) -> bool {
+    name == header::CONTENT_TYPE || name.as_str().starts_with("corten-")
+}
+
+/// Whether `lines`, a scope's ([`crate::security::Applied::lines`]), are beside the tag of an
+/// answer they are given to: none leaves it untagged ([`untagged`]) and none is part of its tag
+/// ([`counts`]), by the two tests [`tag`] makes of an answer's lines. Read once for each scope
+/// when the router is built ([`crate::security::Lines`]), which is what lets `tag` make neither
+/// test of an answer whose other lines are its scope's.
+pub(crate) fn beside_a_tag(lines: &HeaderMap) -> bool {
+    !untagged(lines) && !lines.keys().any(counts)
 }
 
 /// The tag from `hasher`, which has read the body with its length
-/// ([`crate::kept::Kept::hashed`]), and the headers that count.
-fn tagged(mut hasher: std::hash::DefaultHasher, headers: &HeaderMap) -> [u8; 20] {
+/// ([`crate::kept::Kept::hashed`]), and the headers that count, in the order the answer has them:
+/// found among all of them, or, for an answer whose other lines are beside a tag (`ready`,
+/// [`tag`]), its `Content-Type` alone, the one line of such an answer that can count.
+fn tagged(mut hasher: std::hash::DefaultHasher, headers: &HeaderMap, ready: bool) -> [u8; 20] {
     use std::hash::Hasher;
-    for (name, value) in headers {
-        if name == header::CONTENT_TYPE || name.as_str().starts_with("corten-") {
-            hasher.write_usize(name.as_str().len());
-            hasher.write(name.as_str().as_bytes());
-            hasher.write_usize(value.len());
-            hasher.write(value.as_bytes());
+    let mut line = |name: &header::HeaderName, value: &HeaderValue| {
+        hasher.write_usize(name.as_str().len());
+        hasher.write(name.as_str().as_bytes());
+        hasher.write_usize(value.len());
+        hasher.write(value.as_bytes());
+    };
+    if ready {
+        if let Some(kind) = headers.get(header::CONTENT_TYPE) {
+            line(&header::CONTENT_TYPE, kind);
+        }
+    } else {
+        for (name, value) in headers {
+            if counts(name) {
+                line(name, value);
+            }
         }
     }
     let hash = hasher.finish();
