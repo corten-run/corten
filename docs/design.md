@@ -2704,10 +2704,13 @@ rules something out.
     answer given its scope's lines brought its `Content-Type` at most, so its tag
     ([Limit 21](#limit-etag)) is made without a search of its lines for one that leaves it
     untagged and without a walk over them for the ones a tag is made from, where the scope's
-    lines say that none of them does either. They say it of themselves as they are made
-    (`security::Lines`, which nothing else makes), by the two tests `cache::tag` makes of any
-    other answer's lines, so no one has to remember it when a line is added: a scope whose
-    lines came to hold such a line has its answers searched as before. The tag is the same
+    lines say that none of them does either. What they say is read from the lines themselves
+    when the router is built (`cache::BesideATag`, which only its `of` makes, from a scope's
+    lines), by the two tests `cache::tag` makes of any other answer's lines, so no one has to
+    remember it when a line is added: a scope whose lines came to hold such a line has its
+    answers searched as before. It is one byte of a scope, in room the scope had beside its
+    `own`, so a scope is as large as it was and each of its other fields is where it was
+    (Stands on). The tag is the same
     bytes either way, since the one line of such an answer that is part of a tag is its type,
     hashed as the walk hashes it. Two more tests hold that:
     `an_answer_given_its_scope_s_lines_in_one_pass_is_tagged_as_one_whose_lines_are_searched`
@@ -3206,18 +3209,23 @@ rules something out.
     11,075 to 10,625, and the 404 page, which does not take it, 15,322 to 15,343; with glibc
     12,207 to 11,716, 9,518 to 9,155, 12,682 to 12,235 and 17,078 to 17,105); measured
     (the tag of an answer that took the pass, made without a search of its lines,
-    `bench/request-cost` at `3e3b6d1b7` against main `e87ad02da`, instructions a request, the
+    `bench/request-cost` at `10bfc8a21` against main `e87ad02da`, instructions a request, the
     median of three counts, valgrind 3.24.0 and rustc 1.100.0: `text-browser`, the kit's one
     case that takes the pass and is tagged, 25,840 to 25,275, 565 fewer; the staged cases that
     take the pass and are not tagged one more, which carries that the pass was taken to the
-    stage after it, twice two more at a median (`get` 18,352 to 18,354, `post` 22,834 to
-    22,835, `text` 17,193 to 17,194, `get-browser` 23,892 to 23,893); `page`, which takes
+    stage after it, three of them two more at a median (`get` 18,352 to 18,353, `post` 22,834
+    to 22,835, `text` 17,193 to 17,194, `get-browser` 23,892 to 23,893); `page`, which takes
     neither, 33,214 to 33,215 and `page-browser`, tagged after a search as before, 211,828 to
-    211,836; no unstaged case moved; allocations a request the same in all 19 cases and idle
-    memory no higher. With the search a function the stage calls rather than in line in it,
-    `page-browser` counted 59 more than that, and with the tag made once where the pass is
-    taken and once where it is not, so that nothing is carried, the staged cases counted 62
-    more, each counted once on a build that was not kept); value
+    211,836; the unstaged cases within one; allocations a request the same in all 19 cases
+    and idle memory no higher. A scope is 336 bytes before and after, with each of its other
+    fields at the offset it had and the new byte beside `own` (x86-64 Linux, rustc 1.100.0,
+    printed by a test that was not kept). How the search is compiled decides more than the
+    change does on a tagged page: with the search a function the stage calls rather than in
+    line in it, `page-browser` counted 59 more, and at `dd17a6e8c`, which handed the stage the
+    byte itself where `10bfc8a21` hands it by reference, 211,891, 55 more, the lookup of
+    `Cache-Control` a call in both; with the tag made once where the pass is taken and once
+    where it is not, so that nothing is carried, the staged cases counted 62 more. The first
+    and the last were each counted once on a build that was not kept); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -3281,18 +3289,15 @@ rules something out.
     when a stage comes to read something of an answer or its request that the pass's two tests
     cannot vary, so that nothing would hold the two paths equal. Search the lines of every
     answer for its tag again when a tag comes to be made from something of an answer's lines
-    that `cache::tag`'s two tests of them do not read, which `security::Lines` would then not
+    that `cache::tag`'s two tests of them do not read, which `cache::BesideATag` would then not
     know of; or when leaving the search out saves `text-browser` fewer than about 150
-    instructions (565 at `3e3b6d1b7`).
+    instructions (565 at `10bfc8a21`); or when a scope comes to be larger than it was before
+    it kept what its lines say, or to keep that where a request reads nothing else.
 
-    Last checked: 2026-11-26, the tag of an answer that took the pass at `3e3b6d1b7` against
+    Last checked: 2026-11-26, the tag of an answer that took the pass at `10bfc8a21` against
     `e87ad02da`, instructions and allocations a request and idle memory by
-    `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), and its two tests and
-    the pass's second against eight ways of breaking it, each of which fails one of them: the
-    type left out of such an answer's tag or hashed under another name, every scope's lines
-    said to need no search, a line that is part of a tag or one that leaves an answer untagged
-    not looked for in a scope's lines, a scope's lines not asked, no answer searched, and no
-    answer spared the search;
+    `bench/request-cost` (valgrind 3.24.0, rustc 1.100.0; no cycles), and a scope's size and
+    its fields' offsets on both;
     2026-11-26, the final any-host reader at `b37df86a6` against `cbca34579`,
     instructions and allocations a request by `bench/request-cost` in the hosted Request Cost job
     ([run 45924572746](https://github.com/corten-run/corten/actions/runs/45924572746), AMD EPYC

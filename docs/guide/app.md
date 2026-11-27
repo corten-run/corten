@@ -1108,17 +1108,17 @@ scope's lines is part of an `ETag` or leaves an answer without one, so its
 its body and its type, as it did. Any other answer's lines are searched as before, and the tag
 is the same bytes either way. Counted over a socket with
 [`bench/request-cost`](../../bench/request-cost/README.md) (instructions a request, the median
-of three counts, `e87ad02da` before and `3e3b6d1b7` after):
+of three counts, `e87ad02da` before and `10bfc8a21` after):
 
 | Request | Before | After |
 |---|---|---|
 | a short text from a page route, a browser's request headers (`text-browser`): tagged, lines given in one pass | 25,840 | 25,275 |
 | the same without them (`text`): not tagged | 17,193 | 17,194 |
-| a short text from a route under an API (`get`): not tagged | 18,352 | 18,354 |
+| a short text from a route under an API (`get`): not tagged | 18,352 | 18,353 |
 | a 12 KB page compressed for a browser (`page-browser`): tagged, lines searched | 211,828 | 211,836 |
 
-The one or two more is the cost: the last stage carries whether the pass was taken to where the
-tag is made.
+The cost is one instruction on an answer that is not tagged, for the last stage to carry
+whether the pass was taken to where the tag is made, and eight on a tagged page.
 
 ## Your own middleware
 
