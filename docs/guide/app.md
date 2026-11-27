@@ -1603,7 +1603,8 @@ put a `Public` answer it converted in its place (`*page = Public::new(..).into_r
 stages keep the mark past the app's middleware for an answer that comes back through the `next`
 of the request they gave it: a middleware that makes a new response of that answer does not take
 the mark away, nor one that also gives `next` a request rebuilt without the first one's
-extensions, on whatever thread it calls or polls `next`. A middleware that asks another router
+extensions or with a signal of its own (a key `req.rendered` drew into text or `Json<T>`
+included), on whatever thread it calls or polls `next`. A middleware that asks another router
 for an answer of its own (a router it holds, called on its own) and makes a new response of that
 one must keep the response's extensions (`Response::from_parts` with the parts it was given):
 without them this app may tag that answer, keep it, or keep a lifetime a middleware gives it. The watch

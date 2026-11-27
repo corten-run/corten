@@ -1566,6 +1566,15 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
     }
 }
 
+/// The signal of a request a middleware passed on without one ([`crate::signal::Detached`]),
+/// shared by every `Req` of it and read as its answer comes back, or a signal of the `Req`'s own
+/// where there is none (a bare router in a test).
+#[cold]
+#[inline(never)]
+fn detached(extensions: &Extensions) -> crate::Signal {
+    extensions.get::<crate::signal::Detached>().map_or_else(crate::Signal::default, |detached| detached.0.clone())
+}
+
 impl Req {
     /// `notice`: read the request's notice (its answer then removes it). Only a write's `Origin`
     /// is looked at for the plain cookie; a `GET` looks up one header more, the notice a page
@@ -1584,7 +1593,7 @@ impl Req {
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let whole_action =
             mode == Mode::Action && write && signal.map_or_else(|| prefers_whole(headers), |signal| signal.draws_whole(headers));
-        let signal = signal.cloned().unwrap_or_default();
+        let signal = signal.cloned().unwrap_or_else(|| detached(extensions));
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),

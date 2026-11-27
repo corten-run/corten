@@ -1046,7 +1046,8 @@ async fn a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_k
         for path in keyed {
             let (status, headers, body) = fetch(&router, "GET", path, &[]).await;
             let (_, again, other) = fetch(&router, "GET", path, &[]).await;
-            assert_eq!(status, StatusCode::OK, "{label}: {path}");
+            let expected = if *path == "/v2/refused" { StatusCode::CONFLICT } else { StatusCode::OK };
+            assert_eq!(status, expected, "{label}: {path}");
             assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{label}: {path}");
             for headers in [&headers, &again] {
                 let cdn = CDN_OVERRIDES.iter().filter(|cdn| headers.contains_key(**cdn)).count();
@@ -1103,9 +1104,13 @@ async fn replaced_keyed() -> Result<crate::JsonResponse, JsonError> {
     Ok(replaced_json(true))
 }
 
+/// A refusal that holds such a response, `409`, on a route whose success (`Json<T>`) is never
+/// `Public`: only the refusal's `JsonError` says its handler is watched.
 #[cfg(feature = "json")]
-async fn replaced_refused() -> Result<crate::JsonResponse, JsonError> {
-    Err(JsonError::Own(Box::new(replaced_json(true))))
+async fn replaced_refused() -> crate::JsonResult<u32> {
+    let mut refusal = replaced_json(true);
+    *refusal.status_mut() = StatusCode::CONFLICT;
+    Err(JsonError::from(refusal))
 }
 
 #[cfg(feature = "json")]
@@ -1183,10 +1188,12 @@ async fn an_answer_that_drew_a_submit_key_is_asked_about_again_whatever_lifetime
 /// headers and body of the one it was given, with none of its extensions or with a signal of its
 /// own ([`Rebuilds`]), and make a new response of the answer it gets back, without its extensions
 /// either. The route then marks no signal the stages read, and the answer's own mark is gone, but
-/// the stages hold their signal past the middleware: an answer whose handler or page drew a form's
-/// new submit key still goes out the browser's alone, without the CDN caching headers the
-/// middleware wrote and without a tag, whatever the app keeps. One with no key keeps its lifetime,
-/// those headers and its tag.
+/// the stages hold their signal past the middleware, and the end of the chain carries the mark of
+/// the signal the route's request had (the middleware's, or one made for it) as the answer comes
+/// back: an answer whose handler or page drew a form's new submit key, or that holds one a
+/// `req.rendered` render drew (text and `Json<T>`, which no watch is around), still goes out the
+/// browser's alone, without the CDN caching headers the middleware wrote and without a tag,
+/// whatever the app keeps. One with no key keeps its lifetime, those headers and its tag.
 #[tokio::test]
 async fn an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches() {
     let mut wrong = Vec::new();
@@ -1333,8 +1340,10 @@ impl crate::Middleware for OnAThread {
 
 /// The keyed answers `steps()`'s middleware sends open to a CDN (`private, no-cache` is the only
 /// right `Cache-Control`; no CDN caching header the middleware wrote, no tag), for `/text`, a
-/// `Public` text whose handler drew a form's new submit key, and `/page`, a `Public` page with such
-/// a form, with the default store and with none kept. `/plain`, with no key, must keep its
+/// `Public` text whose handler drew a form's new submit key, `/page`, a `Public` page with such
+/// a form, and `/rendered-text` and `/rendered-json`, text and `Json<T>`, which no watch is
+/// around, with a key made with `req.rendered`, which marks the signal of the request the route
+/// was given, with the default store and with none kept. `/plain`, with no key, must keep its
 /// lifetime, those headers and its tag.
 async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, steps: impl Fn() -> M) -> Vec<String> {
     use crate::route::get as typed;
@@ -1343,24 +1352,37 @@ async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, 
     let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
     let filler = || "keyed ".repeat(200);
     let routes = || {
-        Routes::from(
-            Table::new()
-                .route("/text", typed(move || async move { Public::new(minute, format!("{}{}", field().to_html(), filler())) }).0)
-                .route(
-                    "/page",
-                    typed(move |req: Req| async move {
-                        let form = html! {
-                            <form method="post">
-                                {field()}
-                                <p>{filler()}</p>
-                            </form>
-                        };
-                        Public::new(minute, req.test_page_for("Keyed", form))
-                    })
-                    .0,
-                )
-                .route("/plain", typed(move || async move { Public::new(minute, filler()) }).0),
-        )
+        let routes = Table::new()
+            .route("/text", typed(move || async move { Public::new(minute, format!("{}{}", field().to_html(), filler())) }).0)
+            .route(
+                "/page",
+                typed(move |req: Req| async move {
+                    let form = html! {
+                        <form method="post">
+                            {field()}
+                            <p>{filler()}</p>
+                        </form>
+                    };
+                    Public::new(minute, req.test_page_for("Keyed", form))
+                })
+                .0,
+            )
+            .route("/plain", typed(move || async move { Public::new(minute, filler()) }).0)
+            .route(
+                "/rendered-text",
+                typed(move |req: Req| async move { format!("{}{}", req.rendered(field()).into_string(), filler()) }).0,
+            );
+        #[cfg(feature = "json")]
+        let routes = routes.route(
+            "/rendered-json",
+            typed(move |req: Req| async move { Json(format!("{}{}", req.rendered(field()).into_string(), filler())) }).0,
+        );
+        Routes::from(routes)
+    };
+    let keyed: &[&str] = if cfg!(feature = "json") {
+        &["/text", "/page", "/rendered-text", "/rendered-json"]
+    } else {
+        &["/text", "/page", "/rendered-text"]
     };
     // A tag is made for a request that names one.
     let asks = [("if-none-match", "\"other\"")];
@@ -1369,7 +1391,7 @@ async fn rebuilt_keyed_answers_open_to_a_cdn<M: crate::Middleware>(label: &str, 
         ("the default store", App::new(routes()).middleware(steps()).router()),
         ("none kept", App::new(routes()).kept_answers(0).middleware(steps()).router()),
     ] {
-        for path in ["/text", "/page"] {
+        for path in keyed {
             let (status, headers, body) = fetch(&router, "GET", path, &asks).await;
             let (_, _, other) = fetch(&router, "GET", path, &asks).await;
             assert_eq!(status, StatusCode::OK, "{label} {app}: {path}");
@@ -7305,7 +7327,8 @@ async fn settle_unstaged_private() -> String {
 /// version's URL) asked for as HTML: the static files' `404` with the error page in its place;
 /// `fill`, a page with a layout read's place ([`SettleCount`]) whose body fails as it is read to be
 /// filled, asked for as HTML: Corten's `500` with the error page in its place. `json` is a `Public`
-/// JSON body with no key; `unstaged-public` a `Public` text body from a route that says `unstaged`,
+/// JSON body with no key, and `json-private` the same body as a plain `JsonResult<T>`, whose handler
+/// is watched since its `JsonError` may hold a `JsonResponse`; `unstaged-public` a `Public` text body from a route that says `unstaged`,
 /// with no key, which is watched for one; `unstaged-private` text from such a route, which says no
 /// caching. The pages are made as an app's routes are (`corten::get`), where an answer is known to
 /// be `Public`. `SETTLE_KEPT=0` keeps none (`App::kept_answers(0)`), so a `Public` answer's handler
@@ -7421,6 +7444,11 @@ fn what_settling_a_page_costs() {
         let body = move || async move { Public::new(minute, Ok::<_, JsonError>(Json("<form method=\"post\">".repeat(80)))) };
         routes = Table::new().route("/", crate::route::get(body).0);
     }
+    #[cfg(feature = "json")]
+    if case == "json-private" {
+        let body = || async { Ok::<_, JsonError>(Json("<form method=\"post\">".repeat(80))) };
+        routes = Table::new().route("/", crate::route::get(body).0);
+    }
     let app = match case.as_str() {
         "unstaged-public" => App::new(settle_unstaged_url::router()),
         "unstaged-private" => App::new(settle_unstaged_private_url::router()),
@@ -7488,7 +7516,9 @@ fn what_settling_a_page_costs() {
                     assert!(parts.status == StatusCode::BAD_REQUEST && body.contains("no post named"), "{}: {body}", parts.status)
                 }
                 // JSON writes the markup's quotes escaped.
-                "json" => assert!(parts.status == StatusCode::OK && body.contains("<form method="), "{}: {body}", parts.status),
+                "json" | "json-private" => {
+                    assert!(parts.status == StatusCode::OK && body.contains("<form method="), "{}: {body}", parts.status)
+                }
                 _ => {
                     assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status)
                 }

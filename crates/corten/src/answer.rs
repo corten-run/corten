@@ -740,6 +740,11 @@ pub(crate) mod sealed {
     /// say no.
     pub struct MayShare(pub(crate) bool);
 
+    /// What `ToJson::__into_response` gives, the response `Json` sends. Only Corten can name it,
+    /// so a `ToJson` of the app's own writes its value and no more: no whole response of its own
+    /// (a `Public` one it converted) from a `Json<T>` route, whose handler is not watched.
+    pub struct JsonBody(pub(crate) crate::response::Response);
+
     impl MayShare {
         /// A type of Corten's that is never [`Public`].
         pub(crate) const NO: Self = MayShare(false);

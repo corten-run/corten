@@ -8523,7 +8523,13 @@ rules something out.
     form's new submit key is the request's alone: not kept, and sent `private, no-cache` without
     a CDN's caching header, as a page whose render drew the key is, and without a tag it was
     given (the app's, a middleware's or a relayed upstream's): that tag names a body whose key a
-    browser may have sent already, and a `304` to it would keep that body. A page's render marks the key it drew; markup rendered any other way (into JSON,
+    browser may have sent already, and a `304` to it would keep that body. A lifetime a middleware
+    or the app gave it goes too, so the browser asks again before it shows a key it may have sent:
+    a plain `private, max-age=60` goes out `private, no-cache`, and one with a `no-store`
+    (`private, no-store, max-age=60`) `private, no-store`, which `b910dedf7` sent as written
+    (`cache::tests::an_answer_that_drew_a_submit_key_is_not_shared` fails there); the scan of its
+    `Cache-Control` for a `no-store` that decides which (`cache::keyed_private`) is made only on
+    an answer that drew a key and whose header is a plain `private` already. A page's render marks the key it drew; markup rendered any other way (into JSON,
     text or a file, or to a string a page holds as `raw` markup)
     carries no mark, so the handler of every route whose answer may be `Public` is watched (its
     own polls) for one being drawn, and the watch marks the answer (`cache::Unrepeatable`) as a
@@ -8540,6 +8546,10 @@ rules something out.
     fails there), and what holds one (`HtmlResult`, `PageOr`, `JsonError`, whose own refusal is a
     `JsonResponse`, and so `JsonResult<T>`); each of Corten's other answers says no (text,
     `Json<T>` alone, a status, a file, a relay, a live stream, a feed), and
+    `Json<T>` truly: the response a `ToJson` is sent in (`ToJson::__into_response`) has a type an
+    app cannot name, so an app's own `ToJson` writes its value and no more, and cannot hand back a
+    `Public` response it converted (a `compile_fail` doctest; at `b910dedf7` that override
+    compiled), and
     one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
     answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
@@ -8577,7 +8587,17 @@ rules something out.
     answer comes back past the middleware. The route's side of the chain (`middleware::handle`,
     which no middleware can stand in for) looks at the answer as it comes back
     (`middleware::Keyed`) and, when it has the mark, whoever put it on, marks the stages' own
-    signal before any middleware sees the answer. The stages hold the route and a reference to
+    signal before any middleware sees the answer. A render made with `req.rendered` and placed
+    in an answer no watch is around (text, `Json<T>`) marks only the signal of the `Req` it is
+    called on, so for a request that does not carry the stages' signal `handle` takes the one it
+    carries, or makes one for a request with none, which each of its `Req`s shares
+    (`signal::Detached`, beside the request's extensions, so what reads a `Signal` still finds
+    none), and marks the answer from it as it comes back, in the box a layout read's fill already
+    takes: the usual request pays a look for its signal in its extensions, compared by pointer,
+    and the route's future is the size it was. Before this a middleware that passed text or
+    `Json<T>` such a request sent that key with its own lifetime and CDN caching headers
+    (`tests::cache::an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches`
+    fails at `b910dedf7` for `/rendered-text` and `/rendered-json`). The stages hold the route and a reference to
     their signal in one place (`middleware::Ends`), and each link of the chain carries a
     reference to it, so the route goes down the chain as one pointer where it was two, and the
     signal with it. A

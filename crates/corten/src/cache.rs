@@ -504,6 +504,10 @@ pub(crate) fn settle_drawn(res: &mut Response, seen: Seen, path: &str, drew_key:
         // that ignores `no-store`.
         if (personal || partial) && !(is_private && plain) {
             headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+        } else if drew_key {
+            // Already a plain `private` with its `no-store`: a lifetime beside them goes, as on
+            // every answer that drew a form's new submit key ([`keyed_private`]).
+            keyed_private(headers);
         } else if quoted || !text {
             headers.insert(header::CACHE_CONTROL, NO_STORE);
         } else if lines > 1 {
@@ -1242,8 +1246,8 @@ mod tests {
 
     /// A page that drew a submit key for this request ([`Unrepeatable`]) is the browser's alone
     /// and asked about again, whoever set its header: a plain `private` with a lifetime goes out
-    /// `private, no-cache`, and a `no-store` goes out `private, no-store`, since some CDNs keep an
-    /// answer that says only `no-store`.
+    /// `private, no-cache`, and a `no-store` goes out `private, no-store`, with no lifetime beside
+    /// it and `private` since some CDNs keep an answer that says only `no-store`.
     #[test]
     fn an_answer_that_drew_a_submit_key_is_not_shared() {
         let drawn = |cache: Option<Cache>, lines: &[&'static str], seen: Seen| {
@@ -1272,6 +1276,11 @@ mod tests {
             let asked = || Seen { partial, ..seen() };
             assert_eq!(drawn(None, &["private, max-age=60"], asked()), "private, no-cache", "a lifetime the app gave it");
             assert_eq!(drawn(None, &["private, no-store=1"], asked()), "private, no-store", "a no-store with a value");
+            assert_eq!(
+                drawn(None, &["private, no-store, max-age=60"], asked()),
+                "private, no-store",
+                "a no-store with a lifetime"
+            );
         }
         assert_eq!(drawn(None, &["private, no-store"], seen()), "private, no-store", "already private");
         // Every way a `no-store` goes out keeps the browser out and says `private` to a CDN.

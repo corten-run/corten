@@ -264,10 +264,18 @@ impl Next for Handle<'_> {
 /// own `404` is (`crate::cache::Unshared`). The answer is read for a form's new submit key as it
 /// comes back ([`Keyed`]), before any middleware sees it.
 #[inline]
-fn handle<'a>(ends: &'a Ends<'a>, req: Request) -> impl Future<Output = Response> + Send + 'a {
+fn handle<'a>(ends: &'a Ends<'a>, mut req: Request) -> impl Future<Output = Response> + Send + 'a {
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it.
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+    // A request a middleware rebuilt, with a signal of its own or none: the signal its `Req`s
+    // mark (`Req::rendered`), read as the answer comes back. The usual request carries the
+    // stages' own, which `Keyed` marks.
+    let theirs = if req.extensions().get::<crate::Signal>().is_some_and(|signal| signal.is(ends.signal)) {
+        None
+    } else {
+        Some(rebuilt(&mut req))
+    };
     let answer = match &ends.route {
         Some(route) => Either::Left(route.call(req)),
         // Made as it is polled, so the future holds no response while it waits: with one held
@@ -275,20 +283,46 @@ fn handle<'a>(ends: &'a Ends<'a>, req: Request) -> impl Future<Output = Response
         // request where main calls it once (callgrind).
         None => Either::Right(async { crate::cache::unshared(IntoResponse::into_response(http::StatusCode::NOT_FOUND)) }),
     };
-    let answer =
-        match here {
-            None => Either::Left(answer),
-            // Boxed, so a request in an app without layout reads carries none of the fill's state.
-            Some(here) => Either::Right(Box::pin(async move { here.fill(answer.await).await })
-                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
-        };
+    let answer = match (here, theirs) {
+        (None, None) => Either::Left(answer),
+        // Boxed, so a request in an app without layout reads, to which no middleware gave a
+        // rebuilt request, carries none of the fill's or that signal's state.
+        (here, theirs) => Either::Right(Box::pin(async move {
+            let mut res = answer.await;
+            if let Some(here) = here {
+                res = here.fill(res).await;
+            }
+            // Marked as a render marks the answer it is drawn for, so `Keyed` marks the stages'
+            // signal too.
+            if theirs.is_some_and(|theirs| theirs.key_drawn()) {
+                crate::cache::unrepeatable(&mut res);
+            }
+            res
+        }) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
+    };
     Keyed { answer, signal: ends.signal }
+}
+
+/// The signal of a request a middleware rebuilt: the one it gave the request, or, for one it gave
+/// none, one made here for the request's `Req`s to share ([`crate::signal::Detached`]), leaving
+/// it without a `Signal` for what reads that.
+#[cold]
+#[inline(never)]
+fn rebuilt(req: &mut Request) -> crate::Signal {
+    if let Some(theirs) = req.extensions().get::<crate::Signal>() {
+        return theirs.clone();
+    }
+    let made = crate::Signal::default();
+    req.extensions_mut().insert(crate::signal::Detached(made.clone()));
+    made
 }
 
 pin_project_lite::pin_project! {
     /// The route's answer (its page filled), which marks the stages' own signal ([`Ends`]) when it
     /// drew a form's new submit key (`crate::cache::Unrepeatable`, put on by the render that drew
-    /// it or the watch around a `Public` handler, which marks only the answer). A render marks the
+    /// it or the watch around a `Public` handler, which marks only the answer, or by [`handle`] for
+    /// a request a middleware rebuilt, from the signal its `Req`s mark: `req.rendered` marks only
+    /// that one, in an answer no watch is around, text or `Json<T>`). A render marks the
     /// signal its request carries too, and a middleware may have given it one it made, with no
     /// signal or another one: the stages read theirs before they settle the answer, so a middleware
     /// that then makes a new response of this one, without its extensions, takes the mark away no

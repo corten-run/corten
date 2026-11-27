@@ -97,6 +97,15 @@ pub enum Abort {
 #[derive(Clone, Default)]
 pub struct Signal(Arc<Inner>);
 
+/// The signal of a request a middleware passed on to the route without one (rebuilt without the
+/// first one's extensions), made where the app's middleware ends (`middleware::handle`) and put
+/// beside the request's extensions rather than as its `Signal`, which is still missing for what
+/// reads that. Each [`crate::Req`] of the request takes it in place of a signal of its own, so a
+/// render one makes ([`crate::Req::rendered`]) marks the signal the end of the chain reads as
+/// the answer comes back.
+#[derive(Clone)]
+pub(crate) struct Detached(pub(crate) Signal);
+
 /// [`Inner::locale`]: the handler chose it.
 const CHOSEN: u16 = 0x8000;
 /// [`Inner::locale`]: the index plus one.
@@ -557,6 +566,11 @@ impl Signal {
     /// Whether the request's answer drew a form's new submit key ([`Signal::mark_key_drawn`]).
     pub(crate) fn key_drawn(&self) -> bool {
         self.0.drawn.load(Ordering::Relaxed) & KEY_DRAWN != 0
+    }
+
+    /// Whether this is `other`: the same request's, not one a middleware made.
+    pub(crate) fn is(&self, other: &Signal) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     /// The handler chose the locale at `index` in the app's locales from the URL.
