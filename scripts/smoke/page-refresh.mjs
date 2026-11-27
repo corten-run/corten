@@ -1743,9 +1743,13 @@ export async function pageRefresh(page, swaps, noSwaps, errors, signsIn) {
             }
           };
           w.__smokeReplacedNote = note;
-          // The document's own number, with how it was loaded (a reload, or a navigation).
+          // The document's own number, with how it was loaded (a reload, or a navigation): from its
+          // navigation timing entry, or, where the browser has none yet as the document starts
+          // (WebKit), from the older `performance.navigation`, which says a reload as 1.
           const loaded = /** @type {PerformanceNavigationTiming | undefined} */ (performance.getEntriesByType("navigation")[0]);
-          w.__smokeReplacedDocumentAt = note({ kind: "document", url: location.href, load: loaded?.type ?? null });
+          const older = /** @type {{ type?: number } | undefined} */ (/** @type {any} */ (performance).navigation)?.type;
+          const load = loaded?.type ?? (older === 1 ? "reload" : older === 0 ? "navigate" : older === 2 ? "back_forward" : null);
+          w.__smokeReplacedDocumentAt = note({ kind: "document", url: location.href, load });
           const original = window.fetch;
           w.__smokeReplacedFetch = original;
           window.fetch = function (/** @type {RequestInfo | URL} */ input, /** @type {RequestInit | undefined} */ init) {
