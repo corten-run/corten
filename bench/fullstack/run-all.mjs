@@ -16,7 +16,8 @@
 //     In the count step it goes on only where it started in another boot, by the boot's ID on the
 //     step's start line: a start again in the same boot, which cannot tell its perf is gone, ends
 //     the round (round.mjs, countRestartError), as does a progress file whose last line was cut
-//     short. Each line is written whole and synced before its step starts (appendLine).
+//     short, checked before the start writes anything; a cut file is left as it is, so every start
+//     refuses on it again. Each line is written whole and synced before its step starts (appendLine).
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
 //     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
@@ -35,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil } from "./round.mjs";
+import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -77,31 +78,22 @@ const skip = (/** @type {string} */ step, /** @type {string} */ why) => {
 
 // Runs one call and resolves to its exit code and, unattended, why it was stopped: past its
 // limit or quiet for too long, it is stopped with everything it started (its process group: perf,
-// the docker clients; the containers they started go in reset()).
-const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** @type {Promise<{ stopped: string | null, code: number | null }>} */ (new Promise((done) => {
+// the docker clients; the containers they started go in reset()), and an output something it
+// started holds open after it exits is released (round.mjs, superviseCall).
+const call = async (/** @type {number} */ limit, /** @type {string[]} */ args) => {
   console.log(now(), "node", args.join(" "));
   // Unattended, its output passes through here so a quiet call can be told from a busy one.
   const child = spawn("node", args, { cwd: here, stdio: unattended ? ["ignore", "pipe", "pipe"] : "inherit", detached: unattended });
-  const started = Date.now();
-  let heard = started;
-  /** @type {string | null} */
-  let stopped = null;
-  for (const stream of [child.stdout, child.stderr]) stream?.on("data", (chunk) => { heard = Date.now(); process.stdout.write(chunk); });
-  const kill = (/** @type {NodeJS.Signals} */ signal) => { try { process.kill(-(child.pid ?? 0), signal); } catch {} };
-  const watch = unattended ? setInterval(() => {
-    if (stopped) return;
-    if (Date.now() - started > limit * minute) stopped = `${args[0]} ran longer than ${limit} minutes, so it was stopped`;
-    else if (Date.now() - heard > idleMinutes * minute) stopped = `${args[0]} printed nothing for ${idleMinutes} minutes, so it was stopped`;
-    else return;
-    kill("SIGTERM");
-    setTimeout(() => kill("SIGKILL"), 30_000).unref();
-  }, 15_000) : null;
-  child.on("close", (code) => {
-    if (watch) clearInterval(watch);
-    if (!stopped && code !== 0) console.log(`step failed with ${code}`);
-    done({ stopped, code });
+  const result = await superviseCall(child, {
+    label: args[0],
+    limitMs: unattended ? limit * minute : Infinity,
+    idleMs: unattended ? idleMinutes * minute : Infinity,
+    signalGroup: (pid, signal) => process.kill(-pid, signal),
+    write: (chunk) => process.stdout.write(chunk),
   });
-}));
+  if (!result.stopped && result.code !== 0) console.log(`step failed with ${result.code}`);
+  return result;
+};
 
 // Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
 // restart. The benchmark's containers go
@@ -198,6 +190,8 @@ function keepKernelLog(start) {
   }
 }
 
+/** Whether a failed round may record "failed" in its progress file: not when that would end a line cut short (below). */
+let recordFailure = true;
 try {
   /** @type {string | null} */
   let first = from;
@@ -207,15 +201,20 @@ try {
     const text = existsSync(progressFile) ? readFileSync(progressFile, "utf8") : "";
     const state = resumeAt(text, from);
     if (state.ended) process.exit(0);
+    // Before anything is written or cleaned: a count step whose perf may still run ends the round,
+    // as a halt does. A progress file whose last line was cut short is left as it is: appending
+    // ends that line first, and a start stopped part way through the append would leave the next
+    // one no cut line to read, so every start refuses on it again instead. Otherwise the refusal
+    // is recorded as the round's failure, which no later start goes on past.
+    const halted = countRestartError(text, bootId());
+    if (halted) {
+      if (text.length && !text.endsWith("\n")) recordFailure = false;
+      skip("count", halted);
+      throw new Error(halted);
+    }
     // Written before anything else, so every start counts, even one cut short in reset().
     progress("boot");
     if (state.boots) {
-      // Before the clean slate: a count step whose perf may still run ends the round, as a halt does.
-      const halted = countRestartError(text, bootId());
-      if (halted) {
-        skip("count", halted);
-        throw new Error(halted);
-      }
       console.log(now(), "the round starts again after the droplet restarted");
       // First, before anything else runs: what the boot that ended left of its kernel log.
       keepKernelLog(state.boots + 1);
@@ -251,6 +250,6 @@ try {
   });
 } catch (e) {
   console.log(now(), `round failed: ${e instanceof Error ? e.message : e}`);
-  progress("failed");
+  if (recordFailure) progress("failed");
   process.exit(1);
 }

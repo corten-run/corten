@@ -299,7 +299,7 @@ export function parsePerfCounts(/** @type {string} */ text) {
  * A count's counts from perf's rows a CPU (`-A -x , -G`: CPU, count, unit, event, cgroup, running
  * time in ns, running percentage), each event summed here over `cpus`, the CPUs perf was given. An
  * event is usable only when every one of those CPUs gave it exactly one row, with a whole count, a
- * running time above zero and a running percentage, and no other CPU did: perf 6.1 goes on past a
+ * running time above zero and a running percentage from 0 to 100, and no other CPU did: perf 6.1 goes on past a
  * CPU whose counter it could not enable, and its own total sums the times of every CPU, so a 100%
  * total does not show each CPU counted. A CPU the cgroup never ran on gives no running time either,
  * and is refused the same way, as it cannot be told apart. Its percentage is the lowest of its CPUs'.
@@ -308,7 +308,7 @@ export function parsePerfCounts(/** @type {string} */ text) {
  */
 export function parsePerCpuCounts(text, cpus) {
   if (!Array.isArray(cpus) || !cpus.length || !cpus.every((c) => Number.isSafeInteger(c) && c >= 0)) throw new Error(`a count's CPUs are ${JSON.stringify(cpus)}, not a list of CPU numbers`);
-  /** @type {Map<string, Map<number, { raw: string, count: number | null, run: number | null, pct: number | null, twice: boolean }>>} */
+  /** @type {Map<string, Map<number, { raw: string, count: number | null, run: number | null, pct: number | null, pctRaw: string, twice: boolean }>>} */
   const rows = new Map();
   for (const line of text.split("\n")) {
     const [cpuField, value = "", , event, , run, running] = line.split(",");
@@ -323,6 +323,7 @@ export function parsePerCpuCounts(text, cpus) {
       count: /^\d+$/.test(raw) ? Number(raw) : null,
       run: /^\d+$/.test(run?.trim() ?? "") ? Number(run) : null,
       pct: /^\d+(?:\.\d+)?$/.test(running?.trim() ?? "") ? Number(running) : null,
+      pctRaw: running?.trim() ?? "",
       twice: at.has(n),
     });
   }
@@ -340,6 +341,8 @@ export function parsePerCpuCounts(text, cpus) {
       if (r.twice) error ??= `two rows for CPU ${cpu}`;
       if (r.count === null) error ??= `CPU ${cpu}: ${r.raw || "missing count"}`;
       else if (!r.run) error ??= `CPU ${cpu}: no running time, so perf is not shown to have counted there`;
+      // A percentage above 100 is not one perf can mean; the lowest would read it as 100.
+      if (r.pct !== null && !(r.pct <= 100)) error ??= `CPU ${cpu}: running percentage ${r.pctRaw} is outside 0 to 100`;
       runningPct = r.pct === null || runningPct === null ? null : Math.min(runningPct, r.pct);
       count += r.count ?? 0;
     }

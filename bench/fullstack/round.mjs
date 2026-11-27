@@ -114,6 +114,97 @@ export const hoursFor = (passes) => fullstackHours + Math.ceil(((passes - 1) * s
 /** How long an unattended call may write nothing before it is stopped (the longest quiet stretch in r5-r8 was 26 minutes, in count.mjs). */
 export const idleMinutes = 60;
 
+/** After a call's process exits, how long run-all.mjs waits for its output to close before it releases it (superviseCall). */
+export const outputReleaseMs = 10_000;
+
+/** After a stopped call is sent SIGTERM, how long before SIGKILL (superviseCall). */
+export const killGraceMs = 30_000;
+
+/**
+ * Watches one of run-all.mjs's calls, `child` (spawned detached when unattended, so it leads its
+ * own process group, whose ID is its PID), and resolves to its exit code and, when it was stopped
+ * or its output released, why. Past `limitMs`, or quiet for `idleMs`, it is stopped: SIGTERM to
+ * its group, then SIGKILL after `graceMs`, each sent from a timer only while the call's process
+ * has not been reaped (an unreaped leader, even a zombie, keeps the group's number its own; once
+ * reaped, the number may be another group's, so it is never signalled again).
+ *
+ * It settles on the process's exit, not on its output closing: something it started (a detached
+ * descendant, or a group member that outlived it) can hold the output open after it exits, and
+ * `close` then never comes. The output gets `releaseMs` after the exit to close; then it is
+ * destroyed and the call settles with its exit code and a reason, so a released output never
+ * reads as a clean success. A stopped call whose process does not exit at all is released
+ * `graceMs + releaseMs` after the stop, left running unreferenced, and settles the same way.
+ * The effects are passed in so round.test.mjs runs this with its own.
+ * @param {import("node:events").EventEmitter & { pid?: number, exitCode: number | null, signalCode: string | null, stdout?: any, stderr?: any, unref: () => void }} child
+ * @param {{
+ *   label: string,
+ *   limitMs: number,
+ *   idleMs: number,
+ *   signalGroup: (pid: number, signal: NodeJS.Signals) => void,
+ *   write: (chunk: Buffer) => void,
+ *   tickMs?: number,
+ *   graceMs?: number,
+ *   releaseMs?: number,
+ * }} options
+ * @returns {Promise<{ stopped: string | null, code: number | null }>}
+ */
+export function superviseCall(child, { label, limitMs, idleMs, signalGroup, write, tickMs = 15_000, graceMs = killGraceMs, releaseMs = outputReleaseMs }) {
+  return new Promise((done) => {
+    const started = Date.now();
+    let heard = started;
+    /** @type {string | null} */
+    let stopped = null;
+    /** @type {number | null} */
+    let code = null;
+    let settled = false;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let grace;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let release;
+    const reaped = () => child.exitCode !== null || child.signalCode !== null;
+    // Checked and sent in one step, from a timer: never for a process already reaped.
+    const signal = (/** @type {NodeJS.Signals} */ s) => {
+      if (reaped() || !child.pid) return;
+      try { signalGroup(child.pid, s); } catch {}
+    };
+    const settle = (/** @type {string | null} */ why) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(watch); clearTimeout(grace); clearTimeout(release);
+      done({ stopped: stopped && why ? `${stopped}; ${why}` : stopped ?? why, code });
+    };
+    const arm = (/** @type {number} */ ms) => {
+      if (release !== undefined) return;
+      release = setTimeout(() => {
+        const running = !reaped();
+        child.stdout?.destroy(); child.stderr?.destroy();
+        if (running) child.unref();
+        settle(running ? `${label} was still running ${Math.round(ms / 1000)} s after it was stopped, so it was left and its output released`
+          : `${label} exited ${code ?? child.signalCode} but its output stayed open ${Math.round(ms / 1000)} s after, so it was released`);
+      }, ms);
+    };
+    for (const stream of [child.stdout, child.stderr]) stream?.on("data", (/** @type {Buffer} */ chunk) => { heard = Date.now(); write(chunk); });
+    const watch = Number.isFinite(limitMs) || Number.isFinite(idleMs) ? setInterval(() => {
+      if (stopped || reaped()) return;
+      if (Date.now() - started > limitMs) stopped = `${label} ran longer than ${Math.round(limitMs / 60_000)} minutes, so it was stopped`;
+      else if (Date.now() - heard > idleMs) stopped = `${label} printed nothing for ${Math.round(idleMs / 60_000)} minutes, so it was stopped`;
+      else return;
+      signal("SIGTERM");
+      grace = setTimeout(() => signal("SIGKILL"), graceMs);
+      arm(graceMs + releaseMs);
+    }, tickMs) : undefined;
+    child.on("exit", (exit) => {
+      code = exit;
+      clearInterval(watch); clearTimeout(grace);
+      clearTimeout(release); release = undefined;
+      arm(releaseMs);
+    });
+    child.on("close", (exit) => { code ??= exit; settle(null); });
+    // A process that could not be started: no exit comes, only this and its close.
+    child.on("error", (/** @type {Error} */ e) => { if (!reaped() && child.pid === undefined) settle(`${label} could not be started: ${e.message}`); });
+  });
+}
+
 /** Where an app's build comes in the build step: the compiled apps first, the rest as given. */
 const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? compiledFirst.indexOf(name) : compiledFirst.length);
 

@@ -1385,7 +1385,10 @@ three runs:
    downloads the results and destroys the droplet once the round has ended (or says where it is).
    On the droplet, `run-all.mjs --unattended` gives each call a time limit (at least twice the
    longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
-   or prints nothing for an hour. A kernel lockup (r8's) panics the kernel, which reboots the
+   or prints nothing for an hour (SIGTERM to its process group, SIGKILL 30 s later, neither once
+   its process has been reaped). A call ends when its process exits: output that something it
+   started holds open is released 10 s after the exit, and the call is then taken as stopped, never
+   as a clean exit. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step.
    The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
    seen to end, item 5) or is stopped or killed before `count.mjs` saw its `perf`s end (the stop
@@ -1397,7 +1400,8 @@ three runs:
    stopped), or with no ID to compare, ends the round the same way, before its clean slate. Each
    progress line is written whole and synced before its step starts (a write cut short stops the
    round there, recorded failed), and a progress file whose last line was cut short is read as a
-   count step that had not ended.
+   count step that had not ended. That is checked before a start writes anything, and the cut file
+   is left as it is, so a start stopped part way through cannot hide it from the next.
    A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
@@ -1521,7 +1525,8 @@ three runs:
    whose counter it could not enable, and its own total sums the enabled and running times of every
    CPU, so a total at 100% does not show that each CPU counted. An event is usable only when every
    CPU `perf` was given (`-C`'s list, or every online CPU for `-a`) gave it one row with a whole
-   count, a running time above zero and 100% of its enabled time, and no other CPU did. A CPU the
+   count, a running time above zero and 100% of its enabled time (a percentage above 100 is
+   refused, not read as 100), and no other CPU did. A CPU the
    app never ran on during the load gives no running time either and cannot be told from one whose
    counter was not enabled, so it fails the count too: on a bench host the app is pinned to the one
    CPU it is counted on (`BENCH_APP_CPUS=1`); an unpinned local count with `-a` is kept only where

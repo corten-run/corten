@@ -10,7 +10,7 @@ import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
+import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hoursFor, mayStart, outputReleaseMs, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, superviseCall, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -400,10 +400,180 @@ test("an unattended run-all.mjs that starts again in the boot its count step sta
       } else {
         assert.equal(exit, 1, `${name}: ${said}`);
         assert.deepEqual(ran, [], `${name}: ${said}`);
-        assert.deepEqual(progress, ["boot", name === "cut" ? "start co" : "start count", "boot", "failed"], `${name}: ${said}`);
+        // Refused before anything is written: a cut file is left as it is, the others record the failure.
+        assert.deepEqual(progress, name === "cut" ? ["boot", "start co"] : ["boot", "start count", "failed"], `${name}: ${said}`);
         assert.match(skipped, name === "same" ? /step count skipped: the round stopped in its count step and it started again in the boot its count step started in, so a perf or probe that step started may still run; nothing more runs on this host/
           : name === "cut" ? /step count skipped: the round's progress file ends in a line cut short, so whether its count step started is not known/ : /its count step's start recorded no boot ID/, name);
       }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** A child process as superviseCall reads it, with outputs that never close unless told to. */
+function fakeChild() {
+  const stream = () => Object.assign(new EventEmitter(), { destroyed: false, destroy() { this.destroyed = true; } });
+  return Object.assign(new EventEmitter(), { pid: 4242, exitCode: /** @type {number | null} */ (null), signalCode: null, unrefs: 0, unref() { this.unrefs += 1; }, stdout: stream(), stderr: stream() });
+}
+const wait = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+
+test("a call settles on its process's exit and releases an output something it started holds open, never as a clean success", async () => {
+  // Exit 4 with the output held open: settled with the code and a reason, the outputs destroyed, nothing signalled.
+  const held = fakeChild();
+  /** @type {string[]} */
+  const signals = [];
+  const heldRun = superviseCall(/** @type {any} */ (held), { label: "count.mjs", limitMs: Infinity, idleMs: Infinity, signalGroup: (_, s) => signals.push(s), write: () => {}, releaseMs: 100 });
+  held.exitCode = 4; held.emit("exit", 4, null);
+  const first = await Promise.race([heldRun, wait(5000).then(() => "pending")]);
+  assert.notEqual(first, "pending", "a call whose output stays open after its exit never settled");
+  assert.equal(/** @type {any} */ (first).code, 4);
+  assert.match(/** @type {any} */ (first).stopped, /^count\.mjs exited 4 but its output stayed open 0 s after, so it was released$/);
+  assert.ok(held.stdout.destroyed && held.stderr.destroyed);
+  assert.equal(countHalt(/** @type {any} */ (first)), "count.mjs exited 4: a perf it started was not seen to end");
+  // An exit 0 with its output released is not a clean success either.
+  const zero = fakeChild();
+  const zeroRun = superviseCall(/** @type {any} */ (zero), { label: "conform.mjs", limitMs: Infinity, idleMs: Infinity, signalGroup: (_, s) => signals.push(s), write: () => {}, releaseMs: 50 });
+  zero.exitCode = 0; zero.emit("exit", 0, null);
+  assert.match((await zeroRun).stopped ?? "", /exited 0 but its output stayed open/);
+  // The control: an exit whose output closes settles clean, with what it wrote passed on.
+  const clean = fakeChild();
+  /** @type {string[]} */
+  const wrote = [];
+  const cleanRun = superviseCall(/** @type {any} */ (clean), { label: "conform.mjs", limitMs: Infinity, idleMs: Infinity, signalGroup: (_, s) => signals.push(s), write: (c) => wrote.push(String(c)), releaseMs: 5000 });
+  clean.stdout.emit("data", Buffer.from("ok"));
+  clean.exitCode = 0; clean.emit("exit", 0, null); clean.emit("close", 0, null);
+  assert.deepEqual(await cleanRun, { stopped: null, code: 0 });
+  assert.deepEqual(wrote, ["ok"]);
+  assert.deepEqual(signals, []);
+});
+
+test("a stopped call's group is signalled only while its process is unreaped, and one that never exits is left and released at a bound", async () => {
+  // Stopped: SIGTERM; its process exits 4 before the grace, so no SIGKILL goes to the group's number afterwards.
+  const exits = fakeChild();
+  /** @type {string[]} */
+  const signals = [];
+  const run = superviseCall(/** @type {any} */ (exits), {
+    label: "count.mjs", limitMs: 0, idleMs: Infinity, tickMs: 20, graceMs: 200, releaseMs: 50, write: () => {},
+    signalGroup: (pid, s) => { signals.push(`${s} ${pid}`); setImmediate(() => { exits.exitCode = 4; exits.emit("exit", 4, null); }); },
+  });
+  const result = await run;
+  assert.equal(result.code, 4);
+  assert.match(result.stopped ?? "", /^count\.mjs ran longer than 0 minutes, so it was stopped; count\.mjs exited 4 but its output stayed open/);
+  await wait(400);
+  assert.deepEqual(signals, ["SIGTERM 4242"], "a group was signalled after its leader was reaped");
+  // Reaped (its exit fields set) before its exit event is delivered: past its limit, nothing is signalled.
+  const reaped = fakeChild();
+  /** @type {string[]} */
+  const none = [];
+  reaped.exitCode = 0;
+  const reapedRun = superviseCall(/** @type {any} */ (reaped), { label: "look.mjs", limitMs: 0, idleMs: 0, tickMs: 10, graceMs: 20, releaseMs: 1000, write: () => {}, signalGroup: (_, s) => none.push(s) });
+  await wait(100);
+  reaped.emit("exit", 0, null); reaped.emit("close", 0, null);
+  assert.deepEqual(await reapedRun, { stopped: null, code: 0 });
+  assert.deepEqual(none, []);
+  // Never exits: SIGTERM, then SIGKILL while still unreaped, then left unreferenced with its output released.
+  const stuck = fakeChild();
+  /** @type {string[]} */
+  const both = [];
+  const stuckResult = await superviseCall(/** @type {any} */ (stuck), { label: "count.mjs", limitMs: 0, idleMs: Infinity, tickMs: 20, graceMs: 50, releaseMs: 50, write: () => {}, signalGroup: (_, s) => both.push(s) });
+  assert.deepEqual(both, ["SIGTERM", "SIGKILL"]);
+  assert.equal(stuckResult.code, null);
+  assert.match(stuckResult.stopped ?? "", /count\.mjs was still running 0 s after it was stopped, so it was left and its output released/);
+  assert.ok(stuck.stdout.destroyed && stuck.stderr.destroyed && stuck.unrefs === 1);
+  assert.notEqual(countHalt(stuckResult), null);
+});
+
+test("a real call that exits 4 while a detached descendant holds its output settles within the release bound", async () => {
+  const holder = "setTimeout(() => {}, 20000)";
+  const script = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(holder)}], { detached: true, stdio: ["ignore", "inherit", "inherit"] }).unref(); console.log("started"); process.exit(4);`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+  /** @type {string[]} */
+  const signals = [];
+  let wrote = "";
+  const began = Date.now();
+  const result = await superviseCall(child, { label: "count.mjs", limitMs: Infinity, idleMs: Infinity, signalGroup: (_, s) => signals.push(s), write: (c) => (wrote += c), releaseMs: 500 });
+  assert.ok(Date.now() - began < 10_000, `took ${Date.now() - began} ms`);
+  assert.equal(result.code, 4);
+  assert.match(result.stopped ?? "", /exited 4 but its output stayed open/);
+  assert.match(wrote, /started/);
+  assert.deepEqual(signals, []);
+});
+
+test("an unattended run-all.mjs whose count exits 4 while a descendant holds its output open still stops the round", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
+  const bench = resolve(import.meta.dirname, "..");
+  const root = mkdtempSync(join(tmpdir(), "run-all-held-"));
+  try {
+    const copy = join(root, "bench");
+    for (const file of importClosure(join(import.meta.dirname, "run-all.mjs"))) {
+      mkdirSync(dirname(join(copy, relative(bench, file))), { recursive: true });
+      copyFileSync(file, join(copy, relative(bench, file)));
+    }
+    const here = join(copy, "fullstack");
+    // A descendant in a session of its own (out of the call's group) holds the output for 60 s, bounded by itself.
+    writeFileSync(join(here, "count.mjs"), `import { appendFileSync } from "node:fs";\nimport { spawn } from "node:child_process";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, "count.mjs\\n");\nspawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] }).unref();\nprocess.exit(4);\n`);
+    for (const script of ["conform.mjs", "summarize.mjs"]) writeFileSync(join(here, script), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, ${JSON.stringify(script)} + "\\n");\nprocess.exit(0);\n`);
+    const scratch = join(root, "tmp");
+    mkdirSync(scratch);
+    const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
+      cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let said = "";
+    for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
+    const bound = outputReleaseMs + 20_000;
+    const exit = await Promise.race([new Promise((done) => child.on("exit", done)), wait(bound).then(() => "pending")]);
+    if (exit === "pending") child.kill("SIGKILL");
+    assert.notEqual(exit, "pending", `run-all.mjs did not end within ${bound} ms of a count that exited 4: ${said}`);
+    assert.equal(exit, 1, said);
+    assert.deepEqual(readFileSync(join(here, "ran.txt"), "utf8").split("\n").filter(Boolean), ["count.mjs"], said);
+    assert.deepEqual(readFileSync(join(here, "results-r1.progress"), "utf8").split("\n").filter(Boolean).map((l) => l.split(" ").slice(1, 3).join(" ")), ["boot", "start count", "failed"], said);
+    assert.match(readFileSync(join(here, "results", "r1", "skipped.txt"), "utf8"), /step count skipped: count\.mjs exited 4: a perf it started was not seen to end/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a restart on a progress file cut short writes nothing over it, so a start stopped part way leaves the next start the same refusal", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
+  const bench = resolve(import.meta.dirname, "..");
+  const root = mkdtempSync(join(tmpdir(), "run-all-torn-"));
+  try {
+    const copy = join(root, "bench");
+    for (const file of importClosure(join(import.meta.dirname, "run-all.mjs"))) {
+      mkdirSync(dirname(join(copy, relative(bench, file))), { recursive: true });
+      copyFileSync(file, join(copy, relative(bench, file)));
+    }
+    const here = join(copy, "fullstack");
+    for (const script of ["count.mjs", "conform.mjs", "summarize.mjs"]) writeFileSync(join(here, script), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, ${JSON.stringify(script)} + "\\n");\nprocess.exit(0);\n`);
+    const torn = "t boot\nt start co";
+    writeFileSync(join(here, "results-r1.progress"), torn);
+    // The first restart stops dead (as a power loss would) right after any progress line it writes is synced.
+    const patch = join(root, "stop-after-sync.mjs");
+    writeFileSync(patch, `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const write = fs.writeSync, sync = fs.fsyncSync;
+let wrote = null;
+fs.writeSync = function (fd, ...rest) { const n = write.call(this, fd, ...rest); wrote = fd; return n; };
+fs.fsyncSync = function (fd) { sync.call(this, fd); if (fd === wrote) process.kill(process.pid, "SIGKILL"); };
+syncBuiltinESMExports();
+`);
+    const scratch = join(root, "tmp");
+    mkdirSync(scratch);
+    /** Each start's output and the progress file after it. @type {[string, string, string][]} */
+    const starts = [];
+    for (const start of ["stopped after its first write", "next"]) {
+      const child = spawn(process.execPath, [...(start === "next" ? [] : ["--import", pathToFileURL(patch).href]), join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      let said = "";
+      for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
+      await new Promise((done) => child.on("close", done));
+      starts.push([start, said, readFileSync(join(here, "results-r1.progress"), "utf8")]);
+    }
+    const ran = existsSync(join(here, "ran.txt")) ? readFileSync(join(here, "ran.txt"), "utf8").split("\n").filter(Boolean) : [];
+    assert.deepEqual(ran, [], `count dispatched past a cut progress line: ${JSON.stringify(starts)}`);
+    for (const [start, said, text] of starts) {
+      assert.equal(text, torn, `${start}: ${said}`);
+      assert.match(said, /round failed: the round's progress file ends in a line cut short/, start);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -607,6 +777,10 @@ test("a count's events are summed over each CPU perf was given, and kept only wh
     [two("CPU0,23,,instructions:k,app.scope,7000,100.00,,"), [0], "two rows for CPU 0"],
     // Counts whose sum is not exact.
     [two(`CPU1,${2 ** 53},,instructions:k,app.scope,7000,100.00,,`), [0, 1], "its CPUs' counts sum past 2^53 - 1"],
+    // A percentage past 100, which the lowest of the CPUs' would otherwise read as 100, on either CPU.
+    [two("CPU1,23,,instructions:k,app.scope,7000,101.00,,"), [0, 1], "CPU 1: running percentage 101.00 is outside 0 to 100"],
+    [`CPU0,100,,instructions:k,app.scope,5000,100.01,,\nCPU1,23,,instructions:k,app.scope,7000,100.00,,`, [0, 1], "CPU 0: running percentage 100.01 is outside 0 to 100"],
+    [two(`CPU1,23,,instructions:k,app.scope,7000,${"9".repeat(400)},,`), [0, 1], `CPU 1: running percentage ${"9".repeat(400)} is outside 0 to 100`],
   ]) assert.equal(parsePerCpuCounts(/** @type {string} */ (text), /** @type {number[]} */ (cpus)).get("instructions:k")?.error, error, String(text));
   // A total (no CPU column) is not a count's row at all.
   assert.equal(parsePerCpuCounts("123,,instructions:k,app.scope,7000,100.00,,", [1]).get("instructions:k"), undefined);
