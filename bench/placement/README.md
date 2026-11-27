@@ -42,7 +42,7 @@ that is not in this table is refused, so a misspelled field is not read as one l
 | `pilot` | Optional: `K` of the pilot A/A, and `why` when it is not 100. |
 | `workloads[].name` | Lowercase letters. A work directory runs one workload. |
 | `workloads[].declared` | What the plan says of the workload; the report prints it. |
-| `workloads[].request` | `path`, `headers` (each `"Name: value"`) and optionally `script`, a `wrk` script in place of [`get.lua`](get.lua) that ends with the same `RESULT` line. |
+| `workloads[].request` | `path`, `headers` (each `"Name: value"`) and optionally `script`, a `wrk` script in place of [`get.lua`](get.lua) that ends with the same `RESULT` line. The path is the request target, sent as written (a `/./` or `/../` in it included): it starts with `/`, is printable ASCII and holds no quote, backslash or `#`, since a fragment is never sent. |
 | `workloads[].status` | The status every compared answer must have. |
 | `workloads[].mask` | The header values masked when two answers are compared: `{ "header": name }`, with `"range": [low, high]` for one the workload's cost depends on. `[]` when none. Every masked header must differ between two starts of the base, and one with a range (`low` under `high`) must also be within it in every answer; a single stated value could not do both, so the kit takes a range alone. A header with a range that the two starts send alike stops the run at `verify.sh`: see [what it does not do](#what-it-does-not-do), item 12. |
 | `workloads[].K` | `"pilot"`, the smallest K the sizing check passes from this plan's pilot, or a number from 5 to 254. |
@@ -228,13 +228,16 @@ one of the commands above with its output under `<run dir>/log`:
    neither a request nor its bound, and with `--noproxy '*'`, so no `http_proxy` or `ALL_PROXY`
    of the environment's answers for the servers, each bound to a second. The answers both
    scripts check are captured by `curl`, which `answers.mjs` runs with `--disable` and
-   `--noproxy '*'` as well, and `--globoff`, so a path such as `/{a,b}` is sent as it is and never
-   becomes two requests: one request each, sending the `Host` line and the plan's header lines
+   `--noproxy '*'` as well, `--globoff`, so a path such as `/{a,b}` is sent as it is and never
+   becomes two requests, and `--path-as-is`, so a path such as `/root/../target` is asked for as
+   written, not as `/target`: one request each, sending the `Host` line and the plan's header lines
    (`curl`'s own `Accept` and `User-Agent` left out unless the plan has them), bound to 10 s, its
    header lines kept as `curl` writes them and its body as received, and refused unless its final
    response has the plan's status. An interim `1xx` response (`103 Early Hints`) is not the
    answer's status, but its header lines are kept and compared with the final response's, so an
-   answer with early hints differs from one without. Both scripts run `answers.mjs` with an
+   answer with early hints differs from one without. The mask's checks (every masked header sent
+   once, different in two starts, and within its stated range) read the final response's header
+   lines alone, so a masked header only an interim response sends is sent 0 times. Both scripts run `answers.mjs` with an
    environment of `PATH` alone (so no `NODE_OPTIONS` holds it) under `timeout`, 30 s (60 s for a
    placement's comparison, which takes three answers) and KILL 5 s after, and fail saying so when
    it is stopped. That stop reaches `answers.mjs` alone, so each command it runs has a bound of its
@@ -348,7 +351,7 @@ while it ran.
 | The map check | `map.mjs check` | With aligned code, the placement's map against the unpadded link's by LLD's layout rule, in place of "moved by the pad". |
 | Distinct SHA-256s | `build.sh` | No two placements of one build are one binary. |
 | The host and the counters | `run.sh` | The plan's CPU model and CPUs, the CPU model of the A/A a K was checked from, and every counter above zero and at 100% for an attached process, before any turn. |
-| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
+| The mask | `verify.sh`, `answers.mjs`, `mask.mjs` | Every masked value differs between two starts of the base's unpadded binary; one with a stated range is also within it in every answer. Both read each answer's final response, never an interim `1xx` one's header lines. Only answers of the plan's status are evidence: one of another status stops the run. A masked header the two starts send alike stops the run, with a range or without. |
 | Answers | `plan.mjs`, `verify.sh`, `turns.sh`, `answers.mjs` | Each placement answers as its unpadded binary, and a placement's two binaries alike or exactly as the plan's expected difference says (the same header lines, and bodies of the same lengths and SHA-256s, whether the two bodies differ or are one), before its turns. Each answer is captured once by `curl`, with the plan's status, and every fact about it is taken from those bytes, the headers' difference by the system `diff`; the difference and the bodies line are compared and written as `diff.txt` once, created new, and never read back, with `bodies.txt` and a `handoff.json` that names the outcome and both files' SHA-256s. Anything already at a file it writes (a file, or a link, to `/dev/null` or the expected difference say), an answer of another status, cut short or not sent in 10 s, fails the placement. `verify.sh` records a placement only as `answers.mjs verified` reads it from that handoff. |
 | Turns | `turns.sh`, `answers.mjs` | Every turn on a fresh start on the server's CPU, its `perf` and `wrk` output written to files created new for that turn and kept byte for byte; a failed request, output that is not exactly one complete `RESULT` line of decimal counts and each counter once in a row that ends with a newline, or a counter that is zero or whose percentage is not `100.00` (or `100`) as written, fails the placement, and nothing is run again. |
 | The results are the plan's run | `report.mjs` | Refuses results whose plan, pads, order, binaries, records or files named by path are not what the plan gives. |
@@ -426,8 +429,8 @@ side's aligned sections, its list and the second pads' lines.
 ## What is this host's alone
 
 The scripts assume, and nothing in a plan changes: an x86-64 Linux host (a pad is bytes of `int3`,
-`0xcc`); ports 18081 and 18082 on 127.0.0.1 for a placement's two servers and 18083 for
-`verify.sh`'s, free when a run starts; `cc` on `PATH` as the C compiler that assembles the pads
+`0xcc`); ports 18081 and 18082 on 127.0.0.1 for a placement's two servers (`plan.mjs` writes
+them to `resolved.sh` as `PORT_A` and `PORT_B`) and 18083 for `verify.sh`'s, free when a run starts; `cc` on `PATH` as the C compiler that assembles the pads
 and that `rustc` links through (`wrap/cc` runs `/usr/bin/cc` after recording the link); a probe
 binary named `probe`; `/proc/cpuinfo` for the CPU model; and, for `setup.sh` only, Debian 13's
 package names. `get.lua` and a plan's own script are `wrk`'s Lua.

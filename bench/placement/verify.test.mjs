@@ -26,7 +26,11 @@ const LINUX = { skip: tools ? false : "needs Linux with taskset, timeout and cur
 const POSIX = { skip: process.platform === "win32" ? "needs POSIX signals and sockets" : false };
 const tmp = process.platform === "win32" ? null : realpathSync(mkdtempSync(join(tmpdir(), "placement-verify-")));
 after(() => tmp && rmSync(tmp, { recursive: true, force: true }));
-const taken = () => spawnSync("curl", ["--disable", "--noproxy", "*", "-s", "-o", "/dev/null", "--max-time", "1", "http://127.0.0.1:18083/"]).status !== 7;
+const taken = (port = 18083) => spawnSync("curl", ["--disable", "--noproxy", "*", "-s", "-o", "/dev/null", "--max-time", "1", `http://127.0.0.1:${port}/`]).status !== 7;
+// turns.sh's two ports for a placement verify.sh runs, which a plan's resolved.sh gives it: not
+// the host's 18081 and 18082, which trend.test.mjs's runs of turns.sh take while this file runs
+// beside it (npm run check runs the placement test files in parallel).
+const PORTS = [18084, 18085];
 const lines = (file) => { try { return readFileSync(file, "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; } };
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 /** Whether the fixture whose liveness socket this is still runs: it takes a connection. */
@@ -91,8 +95,9 @@ function prepare(t, name, path, { kind = "stubborn", start = "$BIN $PORT", life 
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   assert.ok(!taken(), "port 18083 is in use, and verify.sh's port is fixed: this test needs it free");
+  for (const port of PORTS) assert.ok(!taken(port), `port ${port} is in use, and this test gives turns.sh it: this test needs ${PORTS.join(" and ")} free`);
   const own = serve !== null || turns !== null || answers !== null;
-  const work = join(tmp, name), vars = { WORK: work, KIT: own ? join(work, "kit") : here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: pads, PADS_Q: "", SIDES: "base" };
+  const work = join(tmp, name), vars = { WORK: work, KIT: own ? join(work, "kit") : here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: 60, PADS_P: pads, PADS_Q: "", SIDES: "base", PORT_A: PORTS[0], PORT_B: PORTS[1] };
   mkdirSync(join(work, "plan"), { recursive: true });
   mkdirSync(join(work, "bin"));
   writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));

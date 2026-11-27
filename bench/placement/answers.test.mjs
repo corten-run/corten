@@ -64,6 +64,66 @@ test("the one request goes to the path as written: curl globs nothing, so /{a,b}
   }
 });
 
+test("the one request's target is the plan's path byte for byte: curl removes no dot segment, so /root/../target is asked for as that, not as /target", LINUX, async (t) => {
+  const s = await serving((q, r) => plain(`<${q.url}>`)(q, r));
+  t.after(s.close);
+  for (const path of ["/root/../target", "/a/./b", "/a/b/..", "/.."]) {
+    s.asked.length = 0;
+    const r = await capture(s.port, path, [], join(fresh(), "x"));
+    assert.deepEqual(s.asked.map((a) => a.url), [path], path);
+    assert.equal(r.body.toString(), `<${path}>`);
+  }
+  // Two servers that answer alike at /target and differently at the target the plan names: had
+  // curl asked both for /target, the comparison would have sealed "same".
+  const at = (body) => (q, r) => plain(q.url === "/target" ? "same" : body)(q, r);
+  const a = await serving(at("aaaa")), b = await serving(at("bbbb"));
+  t.after(a.close);
+  t.after(b.close);
+  const dir = fresh(), r = await compare({ dir, ports: [a.port, b.port], path: "/root/../target", lines: [], status: 200, mask: [], say: () => {} });
+  assert.equal(r.outcome, "differ");
+  assert.deepEqual([...a.asked, ...b.asked].map((x) => x.url), Array(3).fill("/root/../target"));
+  assert.ok(readFileSync(join(dir, "diff.txt"), "latin1").endsWith(`sha256 ${sha256("aaaa")} and ${sha256("bbbb")}\n`));
+});
+
+test("a path curl would still rewrite, one with a fragment, is refused before any request", LINUX, async (t) => {
+  const s = await serving(plain("aaaa"));
+  t.after(s.close);
+  const dir = fresh();
+  await refused(capture(s.port, "/page#top", [], join(dir, "x")), "with no fragment (#)");
+  assert.deepEqual(s.asked, []);
+  assert.ok(!existsSync(join(dir, "x.raw-headers")));
+});
+
+test("a masked header's stated range is held by the final response's header lines alone: an interim 103's Age neither stands in for a final one nor is checked", LINUX, async (t) => {
+  const mask = [{ header: "age", range: [0, 3] }];
+  // Age in the 103 alone: the final 200 sends none, which is not once.
+  const hinted = await raw("HTTP/1.1 103 Early Hints\r\nAge: 1\r\n\r\nHTTP/1.1 200 OK\r\n");
+  t.after(hinted.close);
+  await refused(compare({ dir: fresh(), ports: [hinted.port, hinted.port], path: "/page", lines: [], status: 200, mask, say: () => {} }), "a masked header is not within the range the plan states: A: age: sent 0 times, not once");
+  // Age in the final 200, within the range, and an interim 103 that sends one out of it: the
+  // final one is held to the range, and the interim block stays in the headers compared.
+  const final = await raw("HTTP/1.1 103 Early Hints\r\nAge: 9\r\n\r\nHTTP/1.1 200 OK\r\nAge: 2\r\n");
+  t.after(final.close);
+  const dir = fresh();
+  assert.equal((await compare({ dir, ports: [final.port, final.port], path: "/page", lines: [], status: 200, mask, say: () => {} })).outcome, "same");
+  assert.ok(readFileSync(join(dir, "A.headers"), "latin1").startsWith("HTTP/1.1 103 Early Hints\nage: <masked>\n\nHTTP/1.1 200 OK\nage: <masked>\n"));
+});
+
+test("two starts' proof of the mask reads each start's final response alone: an Age only interim 103s send, differing, does not show the final one differs", () => {
+  const dir = fresh(), mask = join(dir, "mask.json"), early = (n, last = "") => `HTTP/1.1 103 Early Hints\r\nAge: ${n}\r\n\r\nHTTP/1.1 200 OK\r\n${last}content-type: text/plain\r\n\r\n`;
+  writeFileSync(mask, JSON.stringify([{ header: "age", range: [0, 3] }]));
+  const starts = (one, two) => {
+    for (const [f, text] of [["start-1", one], ["start-2", two]]) { rmSync(join(dir, f), { force: true }); writeFileSync(join(dir, f), text); }
+    return spawnSync(process.execPath, [join(here, "answers.mjs"), "starts", "verify", mask, join(dir, "start-1"), sha256(one), join(dir, "start-2"), sha256(two)], { encoding: "utf8" });
+  };
+  const no = starts(early(1), early(2));
+  assert.equal(no.status, 1, no.stdout);
+  assert.ok(no.stderr.includes("verify: age: two starts sent it 0 and 0 times"), no.stderr);
+  const yes = starts(early(1, "Age: 1\r\n"), early(1, "Age: 2\r\n"));
+  assert.equal(yes.status, 0, yes.stderr);
+  assert.ok(yes.stdout.includes("every header the plan masks differs between them (age)"), yes.stdout);
+});
+
 test("the final response's status is the answer's, an interim 1xx's header lines kept and compared: 103 then 503 refused as 103, 103 then 200 accepted as 200", LINUX, async (t) => {
   const hinted = (code) => (q, s) => { s.writeEarlyHints({ link: "</a.css>; rel=preload" }); s.statusCode = code; plain("aaaa")(q, s); };
   const busy = await serving(hinted(503)), ok = await serving(hinted(200)), none = await serving(plain("aaaa"));
@@ -92,10 +152,11 @@ test("a diff that stalls is gone within its own bound after the timeout around a
   const s = await serving(plain("aaaa"));
   t.after(s.close);
   const stub = fresh(), pidFile = join(stub, "diff.pid");
+  // The stand-in ends by itself (a sleep of 30 s) if the bound under test fails to end it: the
+  // test sends it no signal, since by then its number need no longer name it.
   writeFileSync(join(stub, "diff"), `#!/bin/sh\necho $$ >'${pidFile}'\nexec sleep 30\n`, { mode: 0o755 });
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   let pid = 0;
-  t.after(() => { if (pid && alive(pid)) process.kill(pid, "SIGKILL"); });
   const code = `import(${JSON.stringify(new URL("./answers.mjs", import.meta.url).href)}).then((m) => m.compare({ dir: ${JSON.stringify(fresh())}, ports: [${s.port}, ${s.port}], path: "/page", lines: [], status: 200, mask: [], say: () => {}, diffSeconds: 5 }))`;
   // As turns.sh runs answers.mjs, with an environment of PATH alone, but stopped at 2 s, before diff's own 5 s.
   const wrapper = spawn("timeout", ["--foreground", "-k", "1", "2", process.execPath, "-e", code], { env: { PATH: `${stub}:${process.env.PATH}` }, stdio: "ignore" });

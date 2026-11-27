@@ -46,6 +46,8 @@ test("the example plan is usable, and each field that is not is named", () => {
   bad((p) => { p.workloads.push(p.workloads[0]); }, "used once");
   bad((p) => { p.workloads[0].declared = " "; }, "declared");
   bad((p) => { p.workloads[0].request.headers = ["Accept-Encoding"]; }, 'each "Name: value"');
+  // A fragment is never sent: curl and wrk would ask for the path without it.
+  bad((p) => { p.workloads[0].request.path = "/page#top"; }, "request.path, from /, of printable ASCII, with no quote, backslash or fragment (#)");
   bad((p) => { p.workloads[0].mask = [{ header: "Date" }]; }, "Date is left out of every comparison");
   bad((p) => { p.workloads[0].reduction = 2; }, "reduction");
   bad((p) => { delete p.workloads[0].seed; }, "seed");
@@ -112,6 +114,12 @@ test("the mask: only named headers, each differing between two starts, one with 
   has(stated([{ header: "age", range: [0, 2] }], one), '"3", not a number from 0 to 2');
   has(stated([{ header: "age", range: [0, 3] }], one.replace("age: 3", "age: soon")), '"soon", not a number from 0 to 3');
   has(stated([{ header: "age", range: [0, 3] }], "HTTP/1.1 200 OK\r\n\r\n"), "sent 0 times, not once");
+  // An interim 1xx response's header lines are no evidence for the answer's own: both checks read the final response's alone.
+  const hinted = (early, last) => `HTTP/1.1 103 Early Hints\r\n${early}\r\nHTTP/1.1 200 OK\r\n${last}content-type: text/html\r\n\r\n`;
+  has(stated([{ header: "age", range: [0, 3] }], hinted("age: 1\r\n", "")), "sent 0 times, not once");
+  assert.deepEqual(stated([{ header: "age", range: [0, 3] }], hinted("age: 9\r\n", "age: 2\r\n")), []);
+  has(starts([{ header: "age", range: [0, 3] }], hinted("age: 1\r\n", ""), hinted("age: 2\r\n", "")), "sent it 0 and 0 times");
+  assert.deepEqual(starts([{ header: "etag" }], hinted("", 'ETag: "a"\r\n'), hinted("", 'ETag: "b"\r\n')), []);
   has(maskProblems([{ header: "age", range: [3, 0] }]), "range");
   // A range of one value could never hold a header that two starts send differently.
   has(maskProblems([{ header: "age", range: [0, 0] }]), "age's range is not [low, high] with low under high");

@@ -6,7 +6,8 @@
 // included, fails it), hashes the bytes captured and seals them, and reads perf's and wrk's output.
 // An answer is captured by curl, once, the request as the kit has always sent it (curl's own
 // Accept and User-Agent left out unless the plan's lines have one, no configuration file, no
-// proxy, its URL taken literally (no globbing), 10 s), its header lines as curl writes them (-D),
+// proxy, its URL taken literally (no globbing, and no dot segment removed: the path is the
+// request target as the plan gives it, as wrk sends it), 10 s), its header lines as curl writes them (-D),
 // an interim 1xx response's included, and its body as received, straight into files this process
 // has just created and holds open; its status is the final response's, as curl reports it and as
 // the last status line it wrote says. The headers' difference is the system diff's, run once, on
@@ -116,8 +117,10 @@ const brief = (err) => err.toString("latin1").trim().split("\n").at(-1)?.slice(0
  * One answer of 127.0.0.1:port to the workload's request, captured by curl, once, the one request
  * turns.sh's and verify.sh's checks share: Host and the plan's header lines, and curl's own
  * Accept and User-Agent left out unless those lines have one, with --disable (no .curlrc),
- * --noproxy '*', --globoff (the path is sent as it is: no {a,b} or [1-2] makes it two requests)
- * and --max-time 10. curl writes the header lines (-D), every response's (an interim 1xx's
+ * --noproxy '*', --globoff (no {a,b} or [1-2] makes it two requests), --path-as-is (no /./ or
+ * /../ is removed, so /root/../target is asked for as that, not as /target) and --max-time 10:
+ * the request target is the plan's path, byte for byte. A path curl would still rewrite (a
+ * fragment, #..., which it never sends) is refused before any request. curl writes the header lines (-D), every response's (an interim 1xx's
  * included), and the body into <prefix>.raw-headers and <prefix>.body, which this process creates
  * new first and hands curl as its descriptors 3 and 4, so what it captured is in those very files,
  * whatever is put at their paths since; its standard output is the final response's status alone
@@ -125,8 +128,9 @@ const brief = (err) => err.toString("latin1").trim().split("\n").at(-1)?.slice(0
  * and the last status line of raw, which must state it.
  */
 export async function capture(port, path, lines, prefix, { bound = 15000 } = {}) {
+  if (!/^\/[\x21-\x7e]*$/.test(path) || path.includes("#")) refuse(`the request's path ${JSON.stringify(path.slice(0, 80))} is not one curl sends as it is: a path from /, of printable ASCII, with no fragment (#)`);
   const has = (name) => lines.some((l) => l.toLowerCase().startsWith(`${name}:`));
-  const args = ["--disable", "--noproxy", "*", "--globoff", "-sS", "--max-time", "10", "-D", "/dev/fd/3", "-o", "/dev/fd/4", "-w", "%{http_code}",
+  const args = ["--disable", "--noproxy", "*", "--globoff", "--path-as-is", "-sS", "--max-time", "10", "-D", "/dev/fd/3", "-o", "/dev/fd/4", "-w", "%{http_code}",
     ...(has("accept") ? [] : ["-H", "Accept:"]), ...(has("user-agent") ? [] : ["-H", "User-Agent:"]),
     ...lines.flatMap((l) => ["-H", l]), `http://127.0.0.1:${port}${path}`];
   const head = createFd(`${prefix}.raw-headers`);

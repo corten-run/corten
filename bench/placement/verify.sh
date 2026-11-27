@@ -37,7 +37,7 @@ set -eu
 [ $# -eq 2 ] && [ -f "$1/plan/resolved.sh" ] || { echo "usage: verify.sh <work dir> <out dir>" >&2; exit 2; }
 . "$1/plan/resolved.sh"
 out=$2; B=$WORK/bin; PL=$WORK/plan
-export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN
+export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN PORT_A PORT_B
 export HEADERS="$PL/headers.txt" SCRIPT="$PL/request.lua" MASK="$PL/mask.sed" MASK_JSON="$PL/mask.json" WARMUP=0 EXPECT=
 mkdir -p "$out"; : >"$out/verdicts.txt"
 # Each start of the base is run by serve.mjs, which starts the server as its own child and stops

@@ -868,7 +868,7 @@ function check(name, base, head, seconds, { expect = null, path = "/page", start
   const cpu = /: *(\d+)/.exec(spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf8" }).stdout)?.[1];
   assert.ok(cpu, "taskset names no CPU this process may run on");
   for (const port of [18081, 18082]) assert.ok(!taken(port), `port ${port} is in use, and the kit's ports are fixed: this test needs 18081 and 18082 free`);
-  const work = join(tmp, name), vars = { KIT: here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: seconds };
+  const work = join(tmp, name), vars = { KIT: here, START: start, REQ_PATH: path, STATUS: 200, EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, CPU_DRIVER: cpu, WRK_T: 1, WRK_C: 1, TURN: 1, W: "plain", PLACEMENT_SECONDS: seconds, PORT_A: 18081, PORT_B: 18082 };
   mkdirSync(join(work, "plan"), { recursive: true });
   mkdirSync(join(work, "bin"));
   writeFileSync(join(work, "plan", "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}='${v}'\n`).join(""));
@@ -1183,7 +1183,7 @@ async function stopping(t, name, { base, head, path = "/page", signal = null, wh
     }
   });
   if (before !== null) await before(work);
-  const env = { ...process.env, KIT: here, START: "$BIN $PORT", REQ_PATH: path, STATUS: "200", EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, WRK_T: "1", WRK_C: "1", TURN: "1", WARMUP: "0", EXPECT: "", HEADERS: join(plan, "headers.txt"), SCRIPT: join(plan, "request.lua"), MASK: join(plan, "mask.sed"), MASK_JSON: join(plan, "mask.json"), ...(first ? { PATH: `${first}:${process.env.PATH}` } : {}) };
+  const env = { ...process.env, KIT: here, PORT_A: "18081", PORT_B: "18082", START: "$BIN $PORT", REQ_PATH: path, STATUS: "200", EVENTS: "cycles:u", CPU_SERVER: cpu, CPU_LOAD: cpu, WRK_T: "1", WRK_C: "1", TURN: "1", WARMUP: "0", EXPECT: "", HEADERS: join(plan, "headers.txt"), SCRIPT: join(plan, "request.lua"), MASK: join(plan, "mask.sed"), MASK_JSON: join(plan, "mask.json"), ...(first ? { PATH: `${first}:${process.env.PATH}` } : {}) };
   const began = Date.now(), child = spawn("sh", [join(here, "turns.sh"), join(work, "compare"), "plain", String(pairs), join(work, "bin", "base"), join(work, "bin", "head")], { stdio: ["ignore", "pipe", "pipe"], env });
   let said = "";
   child.stdout.on("data", (d) => { said += d; });

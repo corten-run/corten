@@ -89,7 +89,8 @@ export function problems(plan) {
     why.push(...unknown(w, "workload", at), ...unknown(w.request, "request", `${at}: request`));
     if (!(printable(w.declared) && w.declared.trim())) bad(`${at}: declared, what the plan says of the workload before the run`);
     const r = w.request ?? {};
-    if (!/^\/[\x21-\x7e]*$/.test(r.path ?? "") || /['"\\]/.test(r.path)) bad(`${at}: request.path`);
+    // A fragment is no part of a request target: curl and wrk would send the path without it.
+    if (!/^\/[\x21-\x7e]*$/.test(r.path ?? "") || /['"\\#]/.test(r.path)) bad(`${at}: request.path, from /, of printable ASCII, with no quote, backslash or fragment (#)`);
     if (!Array.isArray(r.headers) || !r.headers.every((h) => printable(h) && /^[A-Za-z0-9-]+: ?\S/.test(h))) bad(`${at}: request.headers, each "Name: value"`);
     if (r.script !== undefined && !relative(r.script)) bad(`${at}: request.script, a path from the plan file to a wrk script`);
     if (!int(w.status, 100) || w.status > 599) bad(`${at}: status`);
@@ -288,6 +289,8 @@ async function main(argv) {
     TOOLCHAIN: plan.probe.toolchain, BUILD: plan.probe.build, BINARY: plan.probe.binary, TREE: plan.probe.tree.join(" "), PROBE: from(plan.probe.dir),
     START: w.start ?? plan.probe.start, REQ_PATH: w.request.path, STATUS: w.status, EXPECT: w.expect ? join(out, "expect.txt") : "", EVENTS,
     CPU_SERVER: c.server, CPU_LOAD: c.load.join(","), CPU_DRIVER: c.driver, CPU_MODEL: plan.host.cpuModel ?? "", WRK_T: plan.load.threads, WRK_C: plan.load.connections, PLACEMENT_SECONDS: plan.placementSeconds,
+    // The host's, not the plan's (README.md, What is this host's alone): turns.sh's two servers' ports.
+    PORT_A: 18081, PORT_B: 18082,
   };
   writeFileSync(join(out, "resolved.sh"), Object.entries(vars).map(([k, v]) => `${k}=${quote(v)}\n`).join(""));
   console.log(declaration(r).join("\n"));

@@ -44,7 +44,7 @@ set -u
 [ $# -gt 0 ] || set -- answers failed limit map inputs refusals zero
 B=$WORK/bin; PL=$WORK/plan; out=$WORK/selftest
 rm -rf "${out:?}"; mkdir -p "$out"
-export KIT START EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C
+export KIT START EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C PORT_A PORT_B
 export HEADERS="$PL/headers.txt" SCRIPT="$PL/request.lua" MASK="$PL/mask.sed" MASK_JSON="$PL/mask.json" WARMUP=1 TURN=1 EXPECT=
 first=$(echo "$PADS_P" | cut -d' ' -f1)
 bad() { echo "SELFTEST FAILED: $*"; exit 1; }
@@ -99,7 +99,7 @@ for case in "$@"; do
         sleep 2
         # A refused connection is curl's 7; anything else (an answer, or 28 for one taken and never
         # answered within the second) is something still there.
-        for port in 18081 18082; do
+        for port in $PORT_A $PORT_B; do
             cst=0; curl --disable --noproxy '*' -s --max-time 1 -o /dev/null "http://127.0.0.1:$port/" </dev/null || cst=$?
             [ $cst = 7 ] || bad "a server was left running after the time limit: something accepts on $port (curl status $cst)"
         done

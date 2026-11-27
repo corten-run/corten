@@ -25,6 +25,8 @@
 #   CPU_SERVER  the CPU every server is pinned to; CPU_LOAD, wrk's CPUs
 #   EVENTS      the perf events counted over each turn; every one must be counted once, a count
 #               above zero, and running 100% of the turn
+#   PORT_A, PORT_B  the ports on 127.0.0.1 A's and B's servers listen on (18081 and 18082, as
+#               plan.mjs writes them)
 # A compared answer is the status line, every header line but Date with the plan's mask applied,
 # each byte as curl wrote it but the CR before each line's end, and the body as received, byte for
 # byte. answers.mjs captures, checks, compares and keeps the answers: curl takes each answer once,
@@ -79,7 +81,7 @@
 # (set -e), so it is that line and status 4 together that say the answers differ and the stop
 # after them passed those checks.
 set -eu
-[ $# -eq 5 ] || { sed -n '2,79p' "$0"; exit 2; }
+[ $# -eq 5 ] || { sed -n '2,82p' "$0"; exit 2; }
 out=$1; workload=$2; pairs=$3; abin=$4; bbin=$5
 status=$STATUS; warmup=$WARMUP; secs=$TURN; events=$EVENTS; cpu=$CPU_SERVER; load=$CPU_LOAD; path=$REQ_PATH
 # One command of its own, so its status is the one checked (a pipeline's is its last stage's).
@@ -99,7 +101,7 @@ answers() {
     return $hst
 }
 
-aport=18081; bport=18082
+aport=$PORT_A; bport=$PORT_B
 # Before any start, nothing takes a connection on either port: curl's 7 is a refused one, and
 # anything else (an answer, or one taken and never answered, 28) is something already there.
 for port in $aport $bport; do

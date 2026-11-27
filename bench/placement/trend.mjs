@@ -367,7 +367,7 @@ function execute(command, args, { env = process.env, log = null } = {}) {
  * keeps what it compared under its own directory's answers/, so this leaves
  * <work dir>/compare/answers/diff.txt, the text a plan's `expect` holds, and bodies.txt.
  */
-export const ANSWERS = '. "$1/plan/resolved.sh" && export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN && HEADERS="$1/plan/headers.txt" SCRIPT="$1/plan/request.lua" MASK="$1/plan/mask.sed" MASK_JSON="$1/plan/mask.json" WARMUP=0 EXPECT= exec timeout -k 30 "$PLACEMENT_SECONDS" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$1/compare" "$W" 0 "$1/bin/base" "$1/bin/head"';
+export const ANSWERS = '. "$1/plan/resolved.sh" && export KIT START REQ_PATH STATUS EVENTS CPU_SERVER CPU_LOAD WRK_T WRK_C TURN PORT_A PORT_B && HEADERS="$1/plan/headers.txt" SCRIPT="$1/plan/request.lua" MASK="$1/plan/mask.sed" MASK_JSON="$1/plan/mask.json" WARMUP=0 EXPECT= exec timeout -k 30 "$PLACEMENT_SECONDS" taskset -c "$CPU_DRIVER" sh "$KIT/turns.sh" "$1/compare" "$W" 0 "$1/bin/base" "$1/bin/head"';
 
 /** A path with every part of it that exists resolved to where it really is. */
 function physical(p) {
