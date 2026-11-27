@@ -332,14 +332,16 @@ for (const mode of ["finish", "error", "cancel", "timeout", "overflow"]) test(`a
     assert.throws(() => f.writer.enqueue([], "overflow\n"), overflow);
     assert.equal(f.writer.state().pendingOwnership, true);
   }
-  const finish = f.writer.finish();
+  const deadline = { operation: "sample-write", code: "ETIMEDOUT" };
   if (mode === "timeout") {
-    const failure = assert.rejects(finish, { operation: "sample-write", code: "ETIMEDOUT" });
-    t.mock.timers.tick(30000); await failure;
+    t.mock.timers.tick(30000);
+    // No caller is waiting yet: only the writer's append deadline can fail it.
+    assert.deepEqual(f.writer.state().error, deadline);
     assert.equal(f.writer.state().pendingOwnership, true);
     assert.equal(f.writer.state().openFiles, 1);
     assert.equal(f.writer.state().frames, 3);
   }
+  const finish = f.writer.finish();
   if (mode === "cancel") {
     f.writer.abort();
     assert.equal(f.writer.state().pendingOwnership, true);
@@ -348,6 +350,7 @@ for (const mode of ["finish", "error", "cancel", "timeout", "overflow"]) test(`a
   if (mode === "finish") assert.equal((await finish).samples, frames.length);
   if (mode === "error") await assert.rejects(finish, { operation: "sample-write", code: "EIO" });
   if (mode === "cancel") await assert.rejects(finish, /storage cancelled/);
+  if (mode === "timeout") await assert.rejects(finish, deadline);
   if (mode === "overflow") await assert.rejects(finish, overflow);
   await f.writer.settled;
   assert.equal(writes, 3);

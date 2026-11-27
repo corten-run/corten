@@ -249,10 +249,13 @@ The sampler retains its actual capture timestamps, 100 ms interval and independe
 one-second replay limit. It can capture ahead of storage without retimestamping
 rows at completion. The combined 256 MiB record/sample limit includes admitted but
 unfinished bytes. Additional queue limits are 8 MiB, 300 frames (30 seconds at
-100 ms) and 4,096 initial records, including the one in-flight frame. Overflow fails rather than waiting on
-the sampler, dropping a member or growing an unbounded queue. Storage uses at most
-two evidence FDs: the sample file and one record or directory. Queue payload and
-V8 heap limits are not claims about total process memory.
+100 ms) and 4,096 initial records. The writer may append up to 16 already-queued
+sample-only frames together, up to 256 KiB in a batch, without waiting to fill it.
+Each in-flight frame keeps its queue credits until the append settles. Overflow
+fails rather than waiting on the sampler, dropping a member or growing an
+unbounded queue. Storage uses at most two evidence FDs: the sample file and one
+record or directory. Queue payload and V8 heap limits are not claims about total
+process memory.
 
 `beginLifetime`, `attach` and `finish` are awaited. Attachment starts periodic
 capture before waiting for its initial record writes, keeping the native bootstrap
@@ -271,7 +274,7 @@ returned observer is disposed without a terminal seal, and pending filesystem I/
 retains its FIFO ownership until it actually returns. Completed attachment releases
 the startup-only listeners, preserving normal drained-cancellation collection.
 
-Storage errors and the existing 30-second startup/frame/drain deadlines are sticky.
+Storage errors and the 30-second startup, append and drain deadlines are sticky.
 A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retains
 ownership until the operation returns and cleanup is attempted; partial files and
 an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
