@@ -8545,11 +8545,10 @@ rules something out.
     `tests::cache::a_public_answer_put_in_another_answer_s_place_is_watched_for_a_submit_key`
     fails there), and what holds one (`HtmlResult`, `PageOr`, `JsonError`, whose own refusal is a
     `JsonResponse`, and so `JsonResult<T>`); each of Corten's other answers says no (text,
-    `Json<T>` alone, a status, a file, a relay, a live stream, a feed), and
-    `Json<T>` truly: the response a `ToJson` is sent in (`ToJson::__into_response`) has a type an
-    app cannot name, so an app's own `ToJson` writes its value and no more, and cannot hand back a
-    `Public` response it converted (a `compile_fail` doctest; at `b910dedf7` that override
-    compiled), and
+    `Json<T>` alone, whose `ToJson` writes its value and no more: the response it is sent in
+    (`ToJson::__into_response`) has a type an app cannot name, so an app's own `ToJson` cannot
+    hand back a `Public` response it converted, which an override did at `b910dedf7` (a
+    `compile_fail` doctest); a status, a file, a relay, a live stream, a feed), and
     one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
     answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
@@ -8592,9 +8591,11 @@ rules something out.
     called on, so for a request that does not carry the stages' signal `handle` takes the one it
     carries, or makes one for a request with none, which each of its `Req`s shares
     (`signal::Detached`, beside the request's extensions, so what reads a `Signal` still finds
-    none), and marks the answer from it as it comes back, in the box a layout read's fill already
-    takes: the usual request pays a look for its signal in its extensions, compared by pointer,
-    and the route's future is the size it was. Before this a middleware that passed text or
+    none), and marks the answer from it as it comes back, in a box of its own (the box a layout read's
+    fill takes holds no signal): every staged request pays a look for its signal in its
+    extensions, compared by pointer, and looks for a layout read's fill only in an app with layout
+    reads, the one place the stages start it, and the route's future is the size it was (costs
+    below). Before this a middleware that passed text or
     `Json<T>` such a request sent that key with its own lifetime and CDN caching headers
     (`tests::cache::an_answer_a_middleware_rebuilt_from_a_rebuilt_request_keeps_its_submit_key_from_shared_caches`
     fails at `b910dedf7` for `/rendered-text` and `/rendered-json`). The stages hold the route and a reference to
@@ -8712,7 +8713,33 @@ rules something out.
     here) but one: a `Public` JSON body made
     for each request counts 54,164 and 54,188 (+25), which by function is `Json`'s
     `into_response` no longer folded into `Public`'s (96 more there, 72 fewer in `Public`'s), an
-    optimizer's choice in that binary rather than work the request does. A first
+    optimizer's choice in that binary rather than work the request does. The review's later
+    changes were counted on 2026-11-27 (Last checked) at `e4a2e3db1`, at `b910dedf7` and with
+    them (`3431fd85b`), in two rounds in opposite orders, each count the same within 1.6, with a
+    plain `JsonResult` route added to `what_settling_a_page_costs` (`json-private`, made with
+    `route::get` and so watched since `6fbba4f8d`): it counts 50,427.3, 50,434.3 and 50,479.3
+    (+52, +0.10% against `e4a2e3db1`), the same made for each request, so its watch is 7 and the
+    rest is the look for the request's signal that `middleware::handle` makes on every staged
+    request, which adds 38 to 45 to each case (a `Public` page given from the store 15,995.0,
+    16,002.0 and 16,040.1; a `Public` JSON body 15,532.2, 15,532.6 and 15,576.6; the private
+    page, whose key is settled where `cache::keyed_private` is, 17,585.7, 17,585.7 and 17,629.7;
+    one behind a middleware that reads the caller 20,385.9, 20,386.9 and 20,430.9). A page in an
+    app with layout reads counts 37,009.0, 37,009.0 and 37,077.5 (+68.5), 58 of them in `handle`,
+    which looks for both there; with the signal in the fill's box (`792100504`) it was +143, the
+    box's future 63 more. With `bench/request-cost`, `b910dedf7` and `3431fd85b` read `get`
+    18,224 and 18,268 (+44, +0.24%), `post` 22,674 and 22,717, `text` 17,074 and 17,118, `page`
+    43,173 and 43,219 (+0.11%), `get-browser` 23,764 and 23,808, `text-browser` 25,723 and
+    25,766, `page-browser` 221,790 and 221,837, at a depth of 16 `get` 16,090 and 16,133 and
+    `text` 14,950 and 14,993, and `unstaged` and `pipeline` within 1, with the same allocations
+    and answers and 8,470 to 8,471 bytes for each idle connection at both; by function
+    (`792100504`, whose `get` read 18,266) the look is 35 in `handle` and 7 reading the signal's
+    type. Looking for a layout read's fill in every app as well, as `b910dedf7` did, counted
+    about 20 more (`899e8dd13`, `get` 18,286). The futures are 2,480 and 760 bytes at all three
+    (`staged_page_future_sizes`, release). A `req.rendered` adds a read of the flag its render
+    set and a branch, and the signal's `or` only when it drew a key. The scan of
+    `Cache-Control` for a `no-store` (`cache::keyed_private`) is made only on an answer that
+    drew a key and whose header is a plain `private`; on one with a `no-store` too it takes the
+    place of the branch that answer took before. These are instructions, not cycles. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -9707,7 +9734,15 @@ rules something out.
     for one, `613ced773` with `Keyed`'s poll `#[inline]` counted once for four, the future
     sizes from `staged_page_future_sizes` in the same builds (2,472 bytes at main with default
     features and `log` too, where the signal's shared state was read with `size_of`), and no
-    cycles under load measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    cycles under load measured for it; 2026-11-27 for the review's later changes to it, `3431fd85b` (this
+    change) against `b910dedf7` and `e4a2e3db1` (`792100504` and `899e8dd13` in earlier
+    rounds), each with the `json-private` case of `what_settling_a_page_costs`, built in
+    release with all features and rustc 1.99.1, each in a target directory of its own, and counted
+    as above (valgrind 3.24.0, Debian's `libjemalloc2`) for seven cases in two rounds in opposite
+    orders, `fill` read by function, with the future sizes from the same builds, and the probe of
+    `bench/request-cost` at `3431fd85b` and `b910dedf7`, built one after another in one
+    directory with rustc 1.100.0 and counted with valgrind 3.24.0, answers compared first with no
+    difference, idle memory in two rounds, and no cycles measured; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
