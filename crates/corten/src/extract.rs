@@ -505,6 +505,45 @@ impl<B: HttpBody + Unpin> HttpBody for Arriving<B> {
     }
 }
 
+/// A request body that had ended when its request came, which is the body of every request sent
+/// without one: it says what hyper's own says of such a body (it is at its end, it is no bytes
+/// long, and a read of it gives nothing), and no read of it waits for the client or fails. It holds
+/// nothing, so the box a [`Body`] keeps it in allocates nothing.
+struct Ended;
+
+impl HttpBody for Ended {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        Poll::Ready(None)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        true
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(0)
+    }
+}
+
+/// The body of a request from the connection ([`crate::serve`]), as the router takes it: read as
+/// it arrives ([`Arriving`]), unless hyper says it has ended already, as it does of a request with
+/// no length or a length of zero. That body has nothing to read and nothing to wait for, so the
+/// stream is not kept or boxed for it ([`Ended`]). A chunked body's end is in the body, so it has
+/// not ended here, whatever it holds.
+pub(crate) fn arriving(body: hyper::body::Incoming) -> Body {
+    if body.is_end_stream() {
+        Body::new(Ended)
+    } else {
+        Body::new(Arriving(body))
+    }
+}
+
 /// Forgets a wait for the request body, before the handler is polled again.
 #[inline]
 pub(crate) fn forget_wait() {
