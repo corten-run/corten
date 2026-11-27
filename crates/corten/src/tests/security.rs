@@ -429,6 +429,83 @@ async fn the_app_refuses_cross_site_writes() {
     assert_eq!(router.oneshot(req("same-origin")).await.unwrap().status(), StatusCode::OK);
 }
 
+/// A proxy may forward the whole target. The port is part of its authority, rather than
+/// the port of the connection to the proxy or the value of the separate Host line.
+#[tokio::test]
+async fn absolute_target_names_the_origin_of_a_write() {
+    use crate::security::Policy;
+    for (policy, path_status) in
+        [(Policy::new(), StatusCode::MISDIRECTED_REQUEST), (Policy::new().any_host(), StatusCode::NO_CONTENT)]
+    {
+        let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
+        let router = App::new(Routes::from(routes)).policy(policy).router();
+        // The in-process router did not read an HTTP/1.1 message from a connection. No Host
+        // line is required here, but the authority is still available to the origin check.
+        let no_line = Request::post("http://localhost/").header("origin", "http://localhost").body(Body::empty()).unwrap();
+        assert_eq!(router.clone().oneshot(no_line).await.unwrap().status(), StatusCode::NO_CONTENT);
+        let path = Request::post("/").header("host", "proxy.example").body(Body::empty()).unwrap();
+        assert_eq!(router.clone().oneshot(path).await.unwrap().status(), path_status);
+        for (target, origin, site, expected) in [
+            ("http://localhost/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("http://localhost/", "http://proxy.example", None, StatusCode::FORBIDDEN),
+            ("http://localhost:8000/", "http://localhost:8000", None, StatusCode::NO_CONTENT),
+            ("http://localhost:8000/", "http://localhost", None, StatusCode::FORBIDDEN),
+            ("http://localhost:80/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("https://localhost/", "https://localhost:443", None, StatusCode::NO_CONTENT),
+            ("http://localhost/", "http://localhost", Some("cross-site"), StatusCode::FORBIDDEN),
+            ("http://localhost/", "http://localhost", Some("same-origin"), StatusCode::NO_CONTENT),
+        ] {
+            let mut req = Request::post(target).header("host", "proxy.example").header("origin", origin);
+            if let Some(site) = site {
+                req = req.header("sec-fetch-site", site);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), expected, "{target} {origin} {site:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_absolute_form_write_over_a_connection_reaches_the_named_route() {
+    let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
+    let (addr, stop, server) = on_the_wire(App::new(Routes::from(routes))).await;
+    let mut wire = Wire::to(addr).await;
+    let (status, _, _) = wire
+        .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://localhost\r\nContent-Length: 0\r\n\r\n")
+        .await;
+    assert_eq!(status, 204);
+    let (status, _, _) = wire
+        .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://other.example\r\nContent-Length: 0\r\n\r\n")
+        .await;
+    assert_eq!(status, 403);
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[test]
+fn an_authority_form_target_supplies_the_origin_comparisons_port() {
+    let policy = crate::security::Policy::new();
+    let req = Request::builder()
+        .method(http::Method::CONNECT)
+        .uri("shop.example:8443")
+        .header("origin", "https://shop.example:8443")
+        .header("host", "shop.example")
+        .body(())
+        .unwrap();
+    assert!(policy.same_origin(req.method(), req.uri(), req.headers()));
+}
+
+#[test]
+fn an_https_only_policy_checks_the_origin_against_the_supplied_target() {
+    let policy = crate::security::Policy::new().hsts();
+    let uri = http::Uri::from_static("https://shop.example/");
+    for (origin, allowed) in [("https://shop.example", true), ("http://shop.example", false)] {
+        let req = Request::post(uri.clone()).header("origin", origin).header("host", "proxy.example").body(()).unwrap();
+        assert_eq!(policy.same_origin(req.method(), req.uri(), req.headers()), allowed, "{origin}");
+    }
+}
+
 /// A write redirected to an origin the form's page does not allow in `form-action` is an error in
 /// a debug build, as the browser stops it there; one the policy allows, a path, a page's own
 /// host and a `GET` are not, and an area's policy or the sending page's counts.
@@ -487,6 +564,8 @@ async fn a_write_redirected_outside_form_action_is_an_error_in_debug_builds() {
         let (status, _) = send("/else", "POST", mode).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}");
     }
+    let (status, _) = send("http://app.localhost/own", "POST", &[("host", "proxy.example")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "a redirect to the target's own host is 'self'");
     // Without a Referer the form may be on any of the app's pages: the checkout area allows this.
     let (status, _) = send("/sibling", "POST", &[]).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "some page of the app allows it");

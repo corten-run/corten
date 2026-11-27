@@ -3635,6 +3635,28 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE), "and no other path's page");
 }
 
+#[tokio::test]
+async fn an_absolute_form_write_drops_the_page_named_by_a_matching_location() {
+    let runs = Runs::default();
+    let location =
+        |url: &'static str| crate::router::post(move || async move { (StatusCode::SEE_OTHER, [(header::LOCATION, url)]) });
+    let routes = kept_routes(&runs)
+        .route("/update", location("https://catalog.example/"))
+        .route("/elsewhere", location("https://proxy.example/"));
+    let router = App::new(Routes::from(routes)).policy(crate::security::Policy::new().host("catalog.example")).router();
+    let host = [("host", "catalog.example")];
+    assert_eq!(fetch(&router, "GET", "/", &host).await.0, StatusCode::OK);
+    assert!(fetch(&router, "GET", "/", &host).await.1.contains_key(header::AGE));
+    let headers = [("host", "proxy.example"), ("content-type", "application/json")];
+    let (status, _, _) = fetch(&router, "POST", "https://catalog.example/update", &headers).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(fetch(&router, "GET", "/", &host).await.0, StatusCode::OK);
+    assert_eq!(runs.count(), 2, "the write's Location names the target authority, so the page is made again");
+    assert_eq!(fetch(&router, "POST", "https://catalog.example/elsewhere", &headers).await.0, StatusCode::SEE_OTHER);
+    assert!(fetch(&router, "GET", "/", &host).await.1.contains_key(header::AGE));
+    assert_eq!(runs.count(), 2, "a Location on the Host line's authority alone does not drop this page");
+}
+
 /// What a write's handler finds: whether the app has a store of kept pages, and whether the
 /// write is counted, for its path or with the writes from before the app counts by path.
 async fn store_and_count(signal: crate::Signal) -> String {
