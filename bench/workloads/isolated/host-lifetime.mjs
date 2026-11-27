@@ -19,6 +19,7 @@ const root = "/sys/fs/cgroup";
 const sampleIntervalMs = 100, maximumSampleGapMs = 1000;
 const browserStorageYieldMs = 50;
 const observationOperations = new WeakMap();
+const executableRecheckReasons = new WeakMap();
 const executableSuccessors = new WeakMap();
 function observing(operation, action) {
   try { return action(); }
@@ -101,13 +102,28 @@ function effectiveControls(files) {
   if (cpus !== null) cpuRanges(cpus);
   return cpu !== null && cpus !== null && memory !== null;
 }
-function executableHash(at, executables) {
-  const executable = observing("executable-link", () => readlinkSync(`${at}/exe`));
+function executableLookup(at, executables) {
+  const link = observing("executable-link", () => readlinkSync(`${at}/exe`));
   const inode = observing("executable-stat", () => statSync(`${at}/exe`));
-  const key = `${executable}:${inode.dev}:${inode.ino}:${inode.size}:${inode.mtimeMs}:${inode.ctimeMs}`;
-  let hash = executables.get(key);
-  if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
-  return hash;
+  const { dev, ino, size, mtimeMs, ctimeMs } = inode;
+  const key = `${link}:${dev}:${ino}:${size}:${mtimeMs}:${ctimeMs}`;
+  let lookup = executables.get(key);
+  if (!lookup) {
+    const hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`)));
+    lookup = { hash, link, dev, ino };
+    executables.set(key, lookup);
+  }
+  return lookup;
+}
+function recheckExecutable(opening, closing) {
+  if (opening.hash === closing.hash) return;
+  // The same lookup key always returns the same digest. If file identity
+  // and link agree, only the size/mtime/ctime part of the key can differ.
+  const reason = opening.dev !== closing.dev || opening.ino !== closing.ino ? "device-or-inode"
+    : opening.link !== closing.link ? "link" : "metadata";
+  const error = new assert.AssertionError({ message: "executable digest differs between census bookends" });
+  executableRecheckReasons.set(error, reason);
+  throw error;
 }
 function scopeGroups(path, keys = fields) {
   const groups = [];
@@ -156,7 +172,9 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       // A racing exit invalidates this entire census, never just this member.
       const at = `/proc/${pid}`, stat = observing("process-stat", () => readFileSync(`${at}/stat`, "utf8"));
       const identity = observing("process-identity", () => processIdentity(stat));
-      const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
+      const openingExecutable = pending ? null : executableLookup(at, executables);
+      const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid))
+        : { executableSha256: openingExecutable.hash };
       const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
       observing("process-membership", () => assert.equal(groupPath(cgroup), current));
       const type = observing("process-cmdline", () => processRole(readFileSync(`${at}/cmdline`).toString("utf8"), () => readlinkSync(`${at}/exe`)));
@@ -188,7 +206,7 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
           }
           throw error;
         }
-      } else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
+      } else observing("executable-recheck", () => recheckExecutable(openingExecutable, executableLookup(at, executables)));
       if (censusRename) observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
@@ -585,7 +603,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // error properties. First/last plus a count bound disk and memory on failure.
     const proofFailure = phase === "executables" ? error : null;
     const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
+    const executableRecheckReason = executableRecheckReasons.get(error);
     const entry = { phase, operation: proofFailure?.operation ?? observationOperations.get(error) ?? sampleOperation, code,
+      ...(executableRecheckReason ? { executableRecheckReason } : {}),
       ...(proofFailure?.executableRef ? { executableRef: proofFailure.executableRef } : {}),
       at: Date.now(), samples, lastSampleAt, ...(catalog && timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
@@ -631,7 +651,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   // The fresh bootstrap still waits for IPC outside this empty command scope.
   // Hash its actual executable before sampling starts, not across the empty-to-
   // attached boundary. Attach independently rechecks the executable cache key.
-  try { executableHash(`/proc/${pid}`, executables); sample(); checkStartup(); assert.equal(closed, false); }
+  try { executableLookup(`/proc/${pid}`, executables); sample(); checkStartup(); assert.equal(closed, false); }
   catch (error) {
     dispose();
     if (!writer.state().pendingOwnership) rmdirSync(join(root, path));

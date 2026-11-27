@@ -399,6 +399,8 @@ for (const [mode, outcome] of [["prepare", "anchored"], ["prepare", "unanchored"
       assert.equal(faults, 1); assert.equal(replay.status, "blocked");
       assert.equal(f.terminal.observerFailures.first.operation, mode !== "prepare" ? "executable-recheck"
         : outcome === "unanchored" ? "executable-recheck-inode" : "executable-recheck-successor");
+      assert.equal(f.terminal.observerFailures.first.executableRecheckReason,
+        mode === "prepare" ? undefined : mode === "check-only-no-build" ? "device-or-inode" : "link");
       if (mode === "prepare") assert.equal(f.proof().executables.length, 1);
     }
   });

@@ -31,6 +31,13 @@ preparation census, a failed closing procfs stat is `executable-recheck-renamed`
 otherwise it retains the `executable-recheck` operation and the existing
 process-read rules.
 
+An inline (unpinned) executable digest mismatch still reports
+`executable-recheck` and refuses the census. Its optional
+`executableRecheckReason` names the first differing lookup field class, in
+order: `device-or-inode`, `link`, or `metadata` (size/mtime/ctime). This
+compares only the existing lookup inputs, adds no procfs reads,
+and does not prove an exec or admit a retry. Legacy receipts need not have it.
+
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
 time from the last admitted sample timestamp to entry into the interval callback.
@@ -369,6 +376,10 @@ The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases
 both a real shell exec at the catalog closing read and a chmod of the same
 running inode, without substituting procfs stat results. The former requires
 both image digests in replay; the latter must not seal the mutated descriptor.
+The exact JSON API timing binding (without launching the benchmark) also tests
+a same-name exec between unpinned bookends and an unchanged child. The exec
+must block with a `device-or-inode` reason despite matching process identity
+and an empty terminal; the unchanged control must verify.
 Other cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure
