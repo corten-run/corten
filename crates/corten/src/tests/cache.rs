@@ -845,7 +845,8 @@ async fn a_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone_
 /// another thread (a blocking task) marks only the request's signal: the watch around the handler
 /// polls nothing that drew it. The app's store reads that mark before it keeps the answer, so the
 /// first answer is not kept to be given to the next visitor: both go out `private, no-cache`, as
-/// the handler made them (no `Age`), each with its own key.
+/// the handler made them (no `Age`), each with its own key. Under `corten dev` the log says so
+/// from the same mark (`Verdict::DrewKey`), not that a release build would keep it.
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_public_answer_with_a_key_rendered_on_another_thread_is_not_kept() {
@@ -855,15 +856,19 @@ async fn a_public_answer_with_a_key_rendered_on_another_thread_is_not_kept() {
     let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit);
     // Of a size the app keeps, so the key is what keeps it out of the store.
     let filler = || "keyed ".repeat(200);
-    let routes = Table::new().route(
-        "/blocking",
-        typed(move |req: Req| async move {
-            let field = tokio::task::spawn_blocking(move || req.rendered(field()).into_string()).await.unwrap();
-            Public::new(minute, Ok::<_, JsonError>(Json((field, filler()))))
-        })
-        .0,
-    );
-    let router = App::new(Routes::from(routes)).router();
+    let routes = || {
+        Routes::from(
+            Table::new().route(
+                "/blocking",
+                typed(move |req: Req| async move {
+                    let field = tokio::task::spawn_blocking(move || req.rendered(field()).into_string()).await.unwrap();
+                    Public::new(minute, Ok::<_, JsonError>(Json((field, filler()))))
+                })
+                .0,
+            ),
+        )
+    };
+    let router = App::new(routes()).router();
     let (status, first, body) = fetch(&router, "GET", "/blocking", &[]).await;
     let (_, again, other) = fetch(&router, "GET", "/blocking", &[]).await;
     assert_eq!(status, StatusCode::OK);
@@ -872,6 +877,27 @@ async fn a_public_answer_with_a_key_rendered_on_another_thread_is_not_kept() {
         assert!(!headers.contains_key(header::AGE), "a kept answer: {headers:?}");
     }
     assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "a key for each");
+
+    // Under `corten dev`, which keeps nothing, the verdict is what tells: the answer's head alone
+    // is the same whether or not dev reads the signal.
+    #[cfg(feature = "log")]
+    {
+        let lines = Lines(std::sync::Arc::default());
+        let _logging = log_to(&lines);
+        let dev = App::new(routes()).dev(true).router();
+        let (status, headers, _) = fetch(&dev, "GET", "/blocking", &[]).await;
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{headers:?}");
+        assert!(
+            text.contains("WARN")
+                && text.contains(
+                    "corten: /blocking is Public, but a release build does not keep its answer: it draws a form's new submit key"
+                ),
+            "{text}"
+        );
+        assert!(!text.contains("a release build would keep its answer"), "{text}");
+    }
 }
 
 /// An answer type of the app's own that is `Public` on one branch and the visitor's on the other,
