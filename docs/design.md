@@ -11502,17 +11502,21 @@ rules something out.
     placements (measured, one run): `plain` -6.53% by the lower bound and -5.77% by the bound,
     median -6.17%, at K = 60, and `unstaged` -1.84% and -0.96%, median -1.62%, at K = 28, each K
     the smallest at which the sizing check passed from that workload's pilot of 100 placements.
-    What a run of the plan resolves is its A/A, the release against itself in the same run:
-    bounds of +0.62% as recorded and +0.31% with its labels swapped on `plain`, and +0.47% and
-    +0.61% on `unstaged`, so both resolved. The Choice was read again for it on 2026-11-27
+    In this run both A/As, the release against itself in the same run, resolved: bounds of
+    +0.62% as recorded and +0.31% with its labels swapped on `plain`, and +0.47% and +0.61% on
+    `unstaged`, each under the +1% the kit asks of an A/A. The Choice was read again for it on
+    2026-11-27
     (UTC). The run bears out three of the statements it stands on: the plan, its command and
     the placement kit make a run with every workload read, at the K the sizing rule gives; the
-    kit's example probe builds at the release's tag and at `main` on both workloads; and the
+    kit's example probe builds at the release's tag and at `main` on both workloads (the
+    placement kit's probe, not `bench/request-cost`'s, whose build at a release's tag for a
+    release's count is still not tried); and the
     release and `main` answer `plain` differently, by a difference the run recorded and nobody
     reviewed (the `corten-shell` header, the script hash in the policy and the body, 6,124 bytes
     on each side), so part of what `plain` read can be the answer and not the path to it. It
     leaves the rest open. The threshold is still a proposal nobody has accepted: the A/A bounds
-    say what a run resolves, not what rise a release can carry, and the maintainer settles it.
+    are what this one run resolved, not a limit on what a run of the plan can show and not what
+    rise a release can carry, and the maintainer settles it.
     One run of one commit says nothing of runs made weekly and before each release. A reading
     of every change since the release together, here less on both workloads, attributes a cost
     to none of them, so it does not show that a change that merged counted costs a request
@@ -11584,7 +11588,7 @@ rules something out.
     release can carry, its plan, command and page being in the placement kit and one such run
     made, of 2026-11-26, with every workload read; its threshold, `main` at least +2% over the
     release on a workload by the lower bound of its cycles, is a proposal nobody has accepted,
-    beside which that run's A/A bounds, +0.31% to +0.62%, say what a run of the plan resolves
+    beside which that run's A/A bounds, +0.31% to +0.62%, are what one run resolved
     and not what rise a release can carry, the 2% above being of instruction counts between
     releases; and the placement kit's example
     probe, on the two workloads the trend's plan takes from it, shows what costs around the

@@ -40,10 +40,11 @@ after each part with the two it recorded. A placement that fails any of them mak
 (`bodies-<workload>.txt`) for whoever reads the row.
 
 The threshold is the plan's, +2% on the lower bound, a proposal until the maintainer settles it.
-The first run, of 2026-11-26, shows what a run of this plan resolves: each A/A's bound, as
-recorded and with its labels swapped, was +0.62% and +0.31% on `plain` at K = 60 and +0.47% and
-+0.61% on `unstaged` at K = 28. One run does not show what rise a release can carry, so it does
-not settle the threshold. It is not the +1% a measured change is held to: that is
+In the first run, of 2026-11-26, both A/As resolved: each A/A's bound, as recorded and with its
+labels swapped, was +0.62% and +0.31% on `plain` at K = 60 and +0.47% and +0.61% on `unstaged`
+at K = 28, under the +1% the kit asks of an A/A. Those are one run's bounds, not a limit on what
+a run of this plan can show, and one run does not show what rise a release can carry, so it does
+not settle the threshold. The threshold is not the +1% a measured change is held to: that is
 read on the bound, and the kit's own page for a gated part still prints that reading (a pilot's
 reads nothing: it sizes K). For a run past the threshold the command drafts an issue with the
 pull requests merged since the row before it, or since the release when the draft says so, and
