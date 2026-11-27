@@ -78,7 +78,7 @@
 // 0 when every part ran to its end as a dry run, though nothing was read, and 3 otherwise.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, cpSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve as path, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { K_MAX, K_MIN, problems as planProblems } from "./plan.mjs";
@@ -303,10 +303,38 @@ export function issue({ date, tag, base, head, threshold, readings, line, since 
 
 const BODIES = /^body (\d+) bytes as received, sha256 ([0-9a-f]{16}) A and ([0-9a-f]{16}) B$/;
 
-/** What turns.sh kept of the two bodies it compared, its answers/bodies.txt: { line, bytes, a, b }, or null when the file is not that. */
+const KINDS = [["isFIFO", "a FIFO"], ["isDirectory", "a directory"], ["isSymbolicLink", "a symbolic link"], ["isSocket", "a socket"], ["isBlockDevice", "a block device"], ["isCharacterDevice", "a character device"]];
+
+/**
+ * The text of a file the kit left, read only when it is a regular file of its own: never
+ * through a link, and a FIFO or a device is never opened, so no read of one can hold the run.
+ * Throws an error with code ENOTREG for anything else, and lstat's when it is not there.
+ */
+export function regular(file) {
+  const not = (s) => { const e = new Error(`${file} is ${KINDS.find(([k]) => s[k]())?.[1] ?? "something else"}, not a regular file, so it is not read`); e.code = "ENOTREG"; return e; };
+  const s = lstatSync(file);
+  if (!s.isFile()) throw not(s);
+  // Opened without following a link and without waiting, so one put in its place since is refused, not read.
+  const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const f = fstatSync(fd);
+    if (!f.isFile()) throw not(f);
+    return readFileSync(fd, "utf8");
+  } finally { closeSync(fd); }
+}
+
+/** Whether a path is there, a link or a FIFO included, without opening or following it. */
+function there(file) {
+  try { lstatSync(file); return true; } catch (e) { if (e.code === "ENOENT") return false; throw e; }
+}
+
+/**
+ * What turns.sh kept of the two bodies it compared, its answers/bodies.txt: { line, bytes, a, b },
+ * or null when the file is not that. One that is not a regular file is not read: that throws.
+ */
 export function bodies(file) {
   let text;
-  try { text = readFileSync(file, "utf8"); } catch { return null; }
+  try { text = regular(file); } catch (e) { if (e.code === "ENOTREG") throw e; return null; }
   const m = BODIES.exec(text.replace(/\r?\n$/, ""));
   return m && { line: m[0], bytes: Number(m[1]), a: m[2], b: m[3] };
 }
@@ -318,15 +346,17 @@ export function bodies(file) {
  */
 export function stray(results, schedule, w, kept) {
   for (const { comparison: c, i } of schedule) {
-    const d = `p${String(i).padStart(3, "0")}`, got = bodies(join(results, c, d, "answers", "bodies.txt")), b = c === `change-${w}` ? kept.b : kept.a;
+    const d = `p${String(i).padStart(3, "0")}`, b = c === `change-${w}` ? kept.b : kept.a;
+    let got;
+    try { got = bodies(join(results, c, d, "answers", "bodies.txt")); } catch (e) { if (e.code === "ENOTREG") return `${c} ${d}: ${e.message}`; throw e; }
     if (!got || got.bytes !== kept.bytes || got.a !== kept.a || got.b !== b) return `${c} ${d} answered with other bodies than the run recorded before any turn (${got ? got.line : "no bodies.txt as the kit writes it"}; recorded: sha256 ${kept.a} and ${b})`;
   }
   return null;
 }
 
-/** What a step that failed said: the last line of its output a reader can use. */
+/** What a step that failed said: the last line of its output a reader can use (a file that is not there said nothing). */
 function said(log, pattern = /\S/) {
-  const lines = existsSync(log) ? readFileSync(log, "utf8").split(/\r?\n/).filter((l) => pattern.test(l)) : [];
+  const lines = there(log) ? regular(log).split(/\r?\n/).filter((l) => pattern.test(l)) : [];
   return (lines.at(-1) ?? "it printed nothing").trim().slice(0, 400);
 }
 
@@ -444,13 +474,17 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
     // Stopped at its deadline, the check may have compared the answers already (diff.txt can be
     // there) but did not finish: its servers' stop is not confirmed, so nothing it left is read.
     if (failed && (failed.status === 124 || failed.status === 137)) { why[w] = `the check of the two sides' answers did not finish within a placement's time limit, ${t.plan.placementSeconds} s, and was stopped, its servers' cleanup unconfirmed`; continue; }
-    // A comparison that found the answers the same left a diff.txt, an empty one: none is nothing to read.
-    const at = join(work, "compare", "answers"), diff = failed && !existsSync(join(at, "diff.txt")) ? "" : readFileSync(join(at, "diff.txt"), "utf8");
     // A difference is read only as turns.sh says one after a stop of both servers that passed its
     // checks (serve.mjs said each ended, and nothing accepted on either port when checked): its
     // status 4 and that line together. A difference it found and then failed to clean up after,
-    // or any other failure, leaves the workload not read.
-    const differs = failed?.status === 4 && diff !== "" && readFileSync(failed.log, "utf8").split("\n").includes(`turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked`);
+    // or any other failure, leaves the workload not read, and nothing that check left is opened:
+    // turns.sh may have refused what was at diff.txt (a FIFO, say), which a read could wait on.
+    const confirmed = failed?.status === 4 && readFileSync(failed.log, "utf8").split("\n").includes(`turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked`);
+    if (failed && !confirmed) { why[w] = `the two sides' answers could not be compared: ${failed.said}`; continue; }
+    // A comparison that found the answers the same left a diff.txt, an empty one: none is nothing
+    // to read. Each file the check left is read only as a regular file of its own.
+    const at = join(work, "compare", "answers"), diff = failed && !there(join(at, "diff.txt")) ? "" : regular(join(at, "diff.txt"));
+    const differs = confirmed && diff !== "";
     if (failed && !differs) { why[w] = `the two sides' answers could not be compared: ${failed.said}`; continue; }
     const b = bodies(join(at, "bodies.txt"));
     if (!b || (!failed && b.a !== b.b)) { why[w] = "the two sides' answers were compared, and their bodies' digests are not there as the kit keeps them (answers/bodies.txt)"; continue; }
@@ -474,7 +508,7 @@ export function run({ dir, plan = PLAN, page = PAGE, date = new Date().toISOStri
   // reading, or why it has none. A part counts only when each of its steps ended with status 0
   // and every placement it was resolved to have answered with the bodies the check kept; a
   // report a failed part left is not read.
-  const json = (...f) => JSON.parse(readFileSync(join(...f), "utf8"));
+  const json = (...f) => JSON.parse(regular(join(...f)));
   const workload = (w) => {
     const pilot = join(dir, `${w}-pilot`), gated = join(dir, `${w}-gated`);
     const part = (name, work, more = []) => {

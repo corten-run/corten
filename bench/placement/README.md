@@ -278,7 +278,10 @@ part still reads its bound against +1%, as for a change; the trend's row does no
 What the command trusts is what the kit's own scripts wrote in `<run dir>` during this run, when
 the step that wrote it ended with status 0. It does not defend against a file edited by hand or
 by another process. It does guarantee that nothing it cannot read becomes a pass or loses the
-row: such a workload is "not read", and the row is written.
+row: such a workload is "not read", and the row is written. It reads a file a step left only as
+a regular file of its own, never through a link, and never opens a FIFO, a directory or a device
+there, so no file left behind can hold the run; and of an answers check that failed (any status
+but 4 with its line), it opens nothing at all.
 
 For a run past its threshold the command drafts an issue, its title and body kept as
 `<run dir>/issue.md`, with the pull requests `main` merged from the row before it to this one.

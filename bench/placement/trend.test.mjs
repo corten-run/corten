@@ -359,10 +359,13 @@ function git(args, { tags = TAGS, shallow = { status: 0, text: "false\n" }, prom
 //   late     workloads whose answers check was stopped at its time limit
 //   differed workloads whose answers differ and whose check ended otherwise than turns.sh ends
 //            one after a confirmed stop (status 4 and DIFFERS): its status and what it said after the diff
+//   piped    a workload's answers check leaves a FIFO at answers/<at> ({ at, status, text }: the
+//            check's status and what it said), or a part's second placement one at its bodies.txt,
+//            each with a process that opens it to write only after a while (fifo() below)
 const DIFF = `5c5\n< corten-shell: 618f77240fa962cf\n---\n> corten-shell: c21cf50c33ce3fc2\nbodies differ: 6124 and 6124 bytes, sha256 ${DIGEST.base.repeat(4)} and ${DIGEST.head.repeat(4)}\n`;
 const DIFFERS = (w) => `turns: ${w}: A and B answer differently; both servers ended and nothing accepted on either port when checked\n`;
 let made = 0;
-function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], differed = {}, build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
+function command({ reports = {}, differ = ["plain"], real = false, silent = {}, late = [], differed = {}, build = {}, sizes = {}, ended = {}, written = {}, placed = {}, short = [], undiffed = {}, piped = {}, before = null, dry = false, date = "2026-12-02", ...asked } = {}) {
   const dir = join(tmp, `run-${++made}`), page = join(tmp, `page-${made}.md`), calls = [], said = [];
   writeFileSync(page, before ? insert(BLANK, before) : BLANK);
   const env = { ...process.env, ...(dry ? { DRYRUN: "1" } : {}) };
@@ -406,6 +409,11 @@ function command({ reports = {}, differ = ["plain"], real = false, silent = {}, 
       writeFileSync(join(given, "bodies.txt"), BODY(DIGEST.base, mine));
       // The same answers leave an empty diff.txt (undiffed: none, or with "dir" one that cannot be read).
       if (undiffed[w] === "dir") mkdirSync(join(given, "diff.txt")); else if (!undiffed[w]) writeFileSync(join(given, "diff.txt"), "");
+      if (piped[w]) {
+        if (differ.includes(w)) writeFileSync(join(given, "diff.txt"), DIFF);
+        fifo(join(given, piped[w].at));
+        return out(piped[w].status, piped[w].text);
+      }
       if (!differ.includes(w)) return out(0, "answers: same\n");
       writeFileSync(join(given, "diff.txt"), DIFF);
       return differed[w] ? out(differed[w].status, `${DIFF}${differed[w].text}`) : out(4, `${DIFF}${DIFFERS(w)}`);
@@ -422,7 +430,8 @@ function command({ reports = {}, differ = ["plain"], real = false, silent = {}, 
       if (short.includes(key) && i > 1) continue;
       const at = join(res, c, `p${String(i).padStart(3, "0")}`, "answers");
       mkdirSync(at, { recursive: true });
-      writeFileSync(join(at, "bodies.txt"), i === 2 && c !== `aa-${w}` && placed[key] ? placed[key] : BODY(DIGEST.base, c === `change-${w}` ? mine : DIGEST.base));
+      if (i === 2 && piped[key]) fifo(join(at, "bodies.txt"));
+      else writeFileSync(join(at, "bodies.txt"), i === 2 && c !== `aa-${w}` && placed[key] ? placed[key] : BODY(DIGEST.base, c === `change-${w}` ? mine : DIGEST.base));
     }
     const left = written[key] ?? (part === "pilot" ? piloted(w, reports[w]?.K ?? 69, dry ? { dry, pilot: { sizing: { ok: false, K: null } } } : {}) : reports[w]);
     leave(stamped(left));
@@ -555,12 +564,12 @@ test("not read, never a pass: a side the kit refuses, answers not compared, a pi
     assert.ok(cut.line.includes("`plain` not read: the check of the two sides' answers did not finish within a placement's time limit, 600 s, and was stopped, its servers' cleanup unconfirmed;"), `${status}: ${cut.line}`);
     assert.ok(!existsSync(join(cut.dir, "expect-plain.txt")) && !cut.said.includes("answer differently. The run records this difference"), String(status));
   }
-  // A comparison that ended with status 0 and left no diff.txt, or one that cannot be read, found
+  // A comparison that ended with status 0 and left no diff.txt, or one that is no regular file, found
   // nothing the run can read as "the same": that workload is not read, the other is, and the row is written.
-  for (const [how, word] of [[true, "ENOENT"], ["dir", "EISDIR"]]) {
+  for (const [how, word] of [[true, "ENOENT: "], ["dir", `${join("check-unstaged", "compare", "answers", "diff.txt")} is a directory, not a regular file, so it is not read)`]]) {
     const bare = command({ reports: PASS, undiffed: { unstaged: how } });
     assert.deepEqual([bare.exit, rows(bare.page).length, bare.file("row.md").includes(bare.line), bare.calls], [3, 1, true, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("plain")]]);
-    assert.ok(bare.line.includes(`${PLAIN}, answers differ as recorded; \`unstaged\` not read: what the check before any turn left could not be read (${word}: `) && bare.line.endsWith("| not read: `unstaged` |"), bare.line);
+    assert.ok(bare.line.includes(`${PLAIN}, answers differ as recorded; \`unstaged\` not read: what the check before any turn left could not be read (${word}`) && bare.line.endsWith("| not read: `unstaged` |"), bare.line);
   }
   // A pilot that sizes no K: the gated part is not resolved, built or run. What plan.mjs said
   // is the row's reason, less the run's directory, which is the host's.
@@ -643,6 +652,52 @@ test("a placement that answered with another body than the check kept makes its 
   assert.equal(few.exit, 3);
   assert.ok(few.line.includes(`\`plain\` not read: the gated part: aa-plain p002 answered with other bodies than the run recorded before any turn (no bodies.txt as the kit writes it; recorded: sha256 ${DIGEST.base} and ${DIGEST.base}); ${UNSTAGED} |`), few.line);
   assert.ok(command({ reports: PASS, short: ["pilot unstaged"] }).line.includes("`unstaged` not read: the pilot part: pilot-unstaged p002 answered with other bodies"));
+});
+
+// A FIFO the kit left where a file is read, on Linux alone. A read that opened it would wait for
+// a writer; each has one, a process that opens it to write after OPEN_AFTER and so lets such a
+// read end, which takes the run past BOUND. A run that opens no FIFO ends well within BOUND.
+const FIFOS = { skip: process.platform === "linux" && spawnSync("sh", ["-c", "command -v mkfifo"]).status === 0 ? false : "needs Linux with mkfifo" };
+const OPEN_AFTER = 10000, BOUND = 5000, openers = [];
+function fifo(file) {
+  rmSync(file, { force: true });
+  assert.equal(spawnSync("mkfifo", [file]).status, 0, `mkfifo ${file}`);
+  openers.push(spawn(process.execPath, ["-e", `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(file)}, ""), ${OPEN_AFTER});`], { stdio: "ignore" }));
+}
+// Each opener is a child of this process that has not been waited for while it has no exit status here, so the signal reaches it alone.
+async function unopened() {
+  await Promise.all(openers.splice(0).map((p) => p.exitCode !== null || p.signalCode !== null ? null : new Promise((done) => { p.once("exit", done); p.kill("SIGKILL"); })));
+}
+const timed = (f) => { const start = performance.now(), r = f(); return { ...r, took: performance.now() - start }; };
+
+test("a FIFO at diff.txt that turns.sh refused (exit 1) is never opened: that workload is not read, and the run goes on to the next", FIFOS, async (t) => {
+  t.after(unopened);
+  const r = timed(() => command({ reports: PASS, differ: [], piped: { plain: { at: "diff.txt", status: 1, text: "turns: plain: answers/diff.txt cannot be written as a new file: something is there before the check made it\n" } } }));
+  assert.ok(r.took < BOUND, `the run took ${Math.round(r.took)} ms: it waited on the FIFO`);
+  assert.equal(r.exit, 3);
+  assert.deepEqual(r.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("unstaged")]);
+  assert.ok(r.line.includes(`\`plain\` not read: the two sides' answers could not be compared: turns: plain: answers/diff.txt cannot be written as a new file: something is there before the check made it; ${UNSTAGED} |`), r.line);
+});
+
+test("a FIFO at diff.txt or bodies.txt after answers turns.sh found the same (status 0) or different (status 4) is refused, not opened", FIFOS, async (t) => {
+  t.after(unopened);
+  for (const at of ["diff.txt", "bodies.txt"]) for (const [status, differ, text] of [[0, [], "answers: same\n"], [4, ["plain"], `${DIFF}${DIFFERS("plain")}`]]) {
+    const name = `${at}, status ${status}`, r = timed(() => command({ reports: PASS, differ, piped: { plain: { at, status, text } } }));
+    assert.ok(r.took < BOUND, `${name}: the run took ${Math.round(r.took)} ms: it waited on the FIFO`);
+    assert.equal(r.exit, 3, name);
+    assert.deepEqual(r.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("unstaged")], name);
+    assert.ok(r.line.includes(`\`plain\` not read: what the check before any turn left could not be read (${join("check-plain", "compare", "answers", at)} is a FIFO, not a regular file, so it is not read); ${UNSTAGED} |`), `${name}: ${r.line}`);
+    assert.ok(!existsSync(join(r.dir, "expect-plain.txt")) && !existsSync(join(r.dir, "bodies-plain.txt")), name);
+  }
+});
+
+test("a FIFO at a placement's bodies.txt is refused, not opened: that workload is not read, and the run goes on to the next", FIFOS, async (t) => {
+  t.after(unopened);
+  const r = timed(() => command({ reports: PASS, piped: { "pilot plain": true } }));
+  assert.ok(r.took < BOUND, `the run took ${Math.round(r.took)} ms: it waited on the FIFO`);
+  assert.equal(r.exit, 3);
+  assert.deepEqual(r.calls, [...CHECKS("plain"), ...CHECKS("unstaged"), ...PARTS("plain").slice(0, 3), ...PARTS("unstaged")]);
+  assert.ok(r.line.includes(`\`plain\` not read: the pilot part: pilot-plain p002: ${join("plain-pilot", "results", "pilot-plain", "p002", "answers", "bodies.txt")} is a FIFO, not a regular file, so it is not read; ${UNSTAGED} |`), r.line);
 });
 
 let refusals = 0;
