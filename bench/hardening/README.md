@@ -34,6 +34,25 @@ A passed row is not evidence that those protections exist.
 Connection-flood resistance: not measured.
 
 Use the [grouped benchmark procedure](../workloads/CLOUD.md) for an official round.
+For a deployed-edge case, nginx accepts the public `localhost:8080` authority
+and forwards the original `Host` and `Origin`. The app receives the exact
+`MARKETPLACE_PUBLIC_ORIGIN=https://localhost:8080` configuration; native direct
+preflight still reaches the app at `http://127.0.0.1:8080`. The proxy strips
+client-supplied forwarding metadata about the public authority and scheme. It
+does not translate `Origin` or provide the application's CSRF protection. This deployment
+differs from r96, where nginx forwarded its internal upstream name as `Host`.
+The Corten marketplace adapter also requires the exact configured origin on
+alert writes to the public authority; its direct listener retains the native check.
+
+Before a full rerun after a deployment change, a dedicated test host can exercise
+one fixture case per app against the real TLS edge with the same qualification gates:
+
+```sh
+node bench/hardening/run.mjs w1 --build --out /tmp/hardening-edge-check --review edge-deployment-check --verify-case deployed-edge --verify-source fixture --verify-phase request-limit
+```
+
+This filtered run is diagnostic, not an official group result.
+
 Before the first cell, the runner prepares its Node upstream, Playwright checker,
 nginx edge and OpenSSL certificate images. It reuses successful local lookups
 and otherwise makes one bounded pull of the same reference. The Playwright

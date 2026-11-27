@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { isLocale, sameOrigin, type MarketplaceRecord } from "../../../../lib/marketplace";
+import { isLocale, type MarketplaceRecord } from "../../../../lib/marketplace";
 import { fetchMarketplaceRecord } from "../../../../lib/marketplace-server";
-import { submitAlert } from "../../../../lib/alerts-http";
+import { marketplaceFormIsSameOrigin, submitAlert } from "../../../../lib/alerts-http";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader("Cache-Control", "private, no-store");
@@ -12,12 +12,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const locale = String(req.query.locale ?? "");
   if (!isLocale(locale)) return res.status(400).json({ error: "Unsupported locale" });
   const protocol = (req.socket as { encrypted?: boolean }).encrypted ? "https:" : "http:";
-  const headers = new Headers();
-  for (const name of ["origin", "sec-fetch-site"]) {
-    const value = req.headers[name];
-    if (typeof value === "string") headers.set(name, value);
-  }
-  if (!sameOrigin(new Request(protocol + "//" + req.headers.host + req.url, { headers })))
+  if (!marketplaceFormIsSameOrigin(req, protocol + "//" + req.headers.host + req.url))
     return res.status(403).json({ error: "Forbidden" });
   if (!(req.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded"))
     return res.status(415).json({ error: "Expected form data" });

@@ -184,3 +184,31 @@ live-delivery and recoverable-live browser/fault suites with `--apps aspnet --bu
 then independently verify saved artifacts. Retain the emitted runtime version,
 source hashes and new image ID. A passing subset is not complete group admission;
 old .NET 10 live images and their captures do not qualify this patch.
+
+## Test Package Refresh
+
+Checked 2026-11-26 on `e8734f929`, for
+[#1541 bench/fullstack's ASP.NET marketplace tests, a CI gate, run on xunit 2.9.3, which NuGet marks deprecated in favor of xunit.v3, with a test SDK and runner a major behind](https://github.com/corten-run/corten/issues/1541).
+Only `apps/aspnet/tests` changes. The app's code, its production packages and the published
+binary the timed workload runs do not; the test files are still copied into the image's build
+context, so the build input is not byte-identical. Earlier evidence stays as recorded.
+
+| Package | Before | After |
+|---|---|---|
+| xunit | 2.9.3 (deprecated) | replaced by `xunit.v3.mtp-off` 4.0.3 |
+| xunit.runner.visualstudio | 3.1.1 | 4.0.1 |
+| Microsoft.NET.Test.Sdk | 17.14.1 | 18.12.0 |
+| AngleSharp | 1.10.0 | 1.11.0 |
+
+Each is the newest stable in NuGet's flat-container index
+(`https://api.nuget.org/v3-flatcontainer/<id>/index.json`). The project takes xunit.v3's
+`mtp-off` package, which turns off its Microsoft Testing Platform support, because the
+default `xunit.v3` 4.x package brings Microsoft Testing Platform v2, whose build refuses the
+VSTest `dotnet test` that CI runs on the .NET 10 SDK and later. Keeping VSTest leaves the CI
+command unchanged. xunit v3 test projects are executables (`OutputType` `Exe`). The test code
+passes `TestContext.Current.CancellationToken` where xunit's analyzer rule xUnit1051 asks for it.
+
+`dotnet test tests/Marketplace.Tests.csproj -c Release` on `mcr.microsoft.com/dotnet/sdk:11.0.100`:
+18 passed, zero failed or skipped, before and after the change, and the build reports no
+warnings after it. `dotnet list package --deprecated`, `--outdated` and `--vulnerable` on the
+project report nothing. The app's normal Dockerfile still builds.

@@ -372,6 +372,38 @@ for (const outcome of ["stable", "gone", "start-changed", "different-image", "su
   });
 }
 
+for (const [mode, outcome] of [["prepare", "anchored"], ["prepare", "unanchored"], ["prepare", "wrong-image"],
+  ["check-only-no-build", "anchored"], ["fixture", "anchored"], ["timing", "anchored"]]) {
+  test(`JSON API ${mode} executable bookends: ${outcome}`, async (t) => {
+    let faults = 0, openings = 0, switched = false;
+    const f = await fixture(t, [], false, () => faults++, 0, false, mode);
+    const pid = outcome === "unanchored" ? 5000 : 4242;
+    if (pid !== 4242) f.members.push(pid);
+    f.override = (path, operation) => {
+      if (path === `/proc/${pid}/exe` && operation === "open" && ++openings === 2 && outcome === "wrong-image")
+        f.nextExecutable = false;
+      if (path === `/proc/${pid}/cmdline` && !switched) {
+        switched = true; f.nextExecutable = true;
+      }
+      if (path === `/proc/${pid}/exe` && operation === "link" && switched) return "/bin/successor";
+    };
+    f.readExecutable = () => Buffer.from(switched ? "next executable" : "original executable");
+    await f.tick(); assert.equal(switched, true);
+    const replay = await f.finish();
+    if (mode === "prepare" && outcome === "anchored") {
+      assert.equal(faults, 0); assert.equal(replay.status, "verified");
+      assert.equal(openings, 2); assert.equal(f.proof().executables.length, 2);
+      assert.deepEqual(replay.samples.flatMap((s) => s.processes.map((p) => p.executableSha256)),
+        ["original executable", "next executable"].map((s) => createHash("sha256").update(s).digest("hex")));
+    } else {
+      assert.equal(faults, 1); assert.equal(replay.status, "blocked");
+      assert.equal(f.terminal.observerFailures.first.operation, mode !== "prepare" ? "executable-recheck"
+        : outcome === "unanchored" ? "executable-recheck-inode" : "executable-recheck-successor");
+      if (mode === "prepare") assert.equal(f.proof().executables.length, 1);
+    }
+  });
+}
+
 for (const prior of ["mutated", "other-process"]) test(`catalog executable successor rejects ${prior} prior evidence`, async (t) => {
   let faults = 0, openings = 0;
   const f = await fixture(t, [], false, () => faults++, 0, true);

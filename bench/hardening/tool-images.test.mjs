@@ -8,7 +8,7 @@ const version = lock.packages["node_modules/@playwright/test"].version;
 const refs = {
   node: "node:26.13.1-trixie-slim@sha256:615a27817f7b9508f0de73eb1cc8fc8894ab122bee56c1a7a568b72cd1032067",
   checker: `mcr.microsoft.com/playwright:v${version}-noble`,
-  edge: "nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7",
+  edge: "nginx:1.31.10-alpine@sha256:7fc0fb4af7bf006aeb31aea88069976060f8f0a0a86b667126742cc17f4e31ae",
   cert: "alpine/openssl@sha256:6821afa2476e11be343f29275f2ca24291720ff0a7148bd131fd8e314ff26d9e",
 };
 const ids = Object.fromEntries(Object.keys(refs).map((role, i) => [role, { Id: "sha256:" + String(i + 1).repeat(64) }]));

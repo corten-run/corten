@@ -15,6 +15,8 @@ import { RUNS, compare, declared, figure, over, readings } from "./compare.mjs";
 import { median } from "./figures.mjs";
 import { cases } from "./requests.mjs";
 
+const CASES = Object.keys(cases).length;
+
 const kit = dirname(fileURLToPath(import.meta.url));
 const names = Object.keys(cases);
 /** What each run's JSON must say it is of, by its file. */
@@ -95,7 +97,7 @@ const verdict = (markdown) => /** @type {string} */ (markdown.split("\n").find((
 
 test("the runs to take are every case's instructions, four at a depth of 16, every case's allocations and three idle readings three times", () => {
   const all = readings();
-  assert.equal(all.length, 10 + 4 + 10 + 3 * RUNS);
+  assert.equal(all.length, CASES + 4 + CASES + 3 * RUNS);
   assert.equal(RUNS, 3);
   assert.deepEqual(all[0], { file: "count-get.json", script: "count.mjs", options: ["--json", "--cases", "get"], expect: { kind: "instructions", case: "get", depth: 1, requests: 1000 } });
   assert.deepEqual(all.filter(({ options }) => options.includes("--depth")).map(({ file, options, expect: of }) => [file, options.join(" "), of.requests]), [
@@ -226,7 +228,7 @@ test("a change inside the budget passes as counted, and the table gives every ru
   assert.deepEqual([status, holds], [0, true]);
   assert.match(markdown, /^## What a request costs: `bbbbbbbbb` against `aaaaaaaaa`$/m);
   assert.equal(verdict(markdown), `**Passes as counted.** No case's instructions a request rise by more than +0.5% of base's, no case's allocations rise, idle memory does not rise, and both builds gave every case its answer. ${readCounted}`);
-  assert.match(markdown, /^Both builds give the same answer, byte for byte with its `Date` and `ETag` masked, in all 10 cases\.$/m);
+  assert.ok(markdown.split("\n").includes(`Both builds give the same answer, byte for byte with its \`Date\` and \`ETag\` masked, in all ${CASES} cases.`), markdown);
   // Each count, the longest window's seconds and the most the other threads ran in a window.
   assert.ok(markdown.includes("| `get` | 20,000 | 20,100 | +100 | +0.500% | 20000 20000 20001 (0.9 s; others 243 in 1) | 20100 20100 20101 (0.9 s; others 243 in 1) |  |"), markdown);
   assert.ok(markdown.includes("| `post` | 20,001 | 19,000 | -1,001 | -5.005% | 20001 20001 20002 (0.9 s; others 243 in 1) | 19000 19001 19000 (0.9 s; others 243 in 1) |  |"), markdown);
@@ -235,7 +237,7 @@ test("a change inside the budget passes as counted, and the table gives every ru
   // Each run's growth in bytes, its rounded figure a connection after it, and what base allows.
   assert.ok(markdown.includes("| after one request | 42,106,880 | 42,106,880 | 0 | 0.00% | 8,192 | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) | 42,102,784 (8,421) 42,110,976 (8,422) 42,106,880 (8,421) |  |"), markdown);
   // A row a case and a row a reading, and no section for runs with no figure when all gave one.
-  assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, 10 + 4 + 10 + 3);
+  assert.equal(markdown.split("\n").filter((line) => line.startsWith("| `") || /^\| (after|before) /.test(line)).length, CASES + 4 + CASES + 3);
   // Each idle run is given whole, with its before, after, growth and page size, which decide.
   const record = markdown.split("\n").filter((line) => /^(base|head), .*, run [1-3]: /.test(line));
   assert.equal(record.length, 2 * 3 * 3, markdown);
@@ -423,8 +425,8 @@ test("a probe that did not build is said once: against base it leaves the change
   const counted = compare(empty, head, { description: counting });
   assert.equal(counted.status, 1);
   assert.equal(verdict(counted.markdown), `**Does not pass as counted:** ${said}. ${readCounted} By CONTRIBUTING.md (Pull requests, item 2.1) the change is then measured: the description says \`Request path: measured\`, gives what the measured way asks, and keeps these counts.`);
-  assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, 10 + 4 + 10 + 3);
-  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`\.$/m);
+  assert.equal(counted.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
+  assert.match(counted.markdown, /^No answer to compare in `get`, `post`, `post-absolute`, `unstaged`, `pipeline`, `text`, `page`, `get-browser`, `text-browser`, `page-browser`, `get-any`, `unstaged-any`, `get-any-last`, `unstaged-any-last`, `unstaged-any-name`, `unstaged-any-long`, `unstaged-any-encoded`, `unstaged-any-short`, `unstaged-subdomain`\.$/m);
   const measured = compare(empty, head, { description: measuring });
   assert.deepEqual([measured.status, measured.holds], [0, false]);
   assert.equal(verdict(measured.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said}. ${readMeasured}`);
@@ -435,7 +437,7 @@ test("a probe that did not build is said once: against base it leaves the change
   assert.equal(verdict(broken.markdown), `**Declared measured: these counts are reported and decide nothing.** As counted they would not pass: ${said.replace("base", "head")}; \`get\`'s instructions has no figure on base (\`the run left no output\`). ${readMeasured} The job fails whatever the description says: the probe is the kit's, and a change it no longer builds against changes it in the same pull request.`);
   // A build with nothing in its directory and no word of why lacks every figure and every answer.
   rmSync(join(empty, "unbuilt"));
-  assert.equal(verdict(compare(base, empty, { description: counting }).markdown).match(/ has no (figure|answer) on (base and )?head /g)?.length, 10 + 4 + 10 + 3 * RUNS + 10);
+  assert.equal(verdict(compare(base, empty, { description: counting }).markdown).match(/ has no (figure|answer) on (base and )?head /g)?.length, CASES + 4 + CASES + 3 * RUNS + CASES);
   // The file being there is the failure: empty, and beside every figure and answer of a build
   // that ran all the same, it leaves that build none.
   const whole = builds(t);
@@ -443,7 +445,7 @@ test("a probe that did not build is said once: against base it leaves the change
   const marked = compare(whole.base, whole.head, { description: counting });
   assert.equal(marked.status, 1);
   assert.ok(verdict(marked.markdown).startsWith(`**Does not pass as counted:** the probe did not build against base (\`the build left no word of why\`). ${readCounted} By `), marked.markdown);
-  assert.equal(marked.markdown.match(/\| no figure \|$/gm)?.length, 10 + 4 + 10 + 3);
+  assert.equal(marked.markdown.match(/\| no figure \|$/gm)?.length, CASES + 4 + CASES + 3);
   assert.doesNotMatch(marked.markdown, /^\| `get` \| 20,000 /m);
   writeFileSync(join(whole.head, "unbuilt"), "");
   assert.equal(compare(whole.base, whole.head, { description: measuring }).status, 1);

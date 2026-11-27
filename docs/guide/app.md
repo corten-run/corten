@@ -345,7 +345,8 @@ its name says why it answers 421. An app served under names it cannot list in ad
 customer's own domain) says `Policy::any_host()` (`HOSTS=*`) and checks them itself; its `Host`
 is still read, for the `400` above. The check reads one header and compares it with a short
 list; what it does not find there as written (a subdomain's own part, another host's name, any
-name when the app answers to any) is also read byte by byte.
+name when the app answers to any) is also checked, and is taken only when every byte of it
+passes; a name with a byte that does not is refused.
 
 ## The client's address
 
@@ -1420,7 +1421,17 @@ it last of eight
 (counted over a socket at `5c7b006dc`, each build in turn, each figure the
 difference of the two builds' medians of three runs, with main built a
 second time counting within 2 of main but for one request, 6 away, so the 49 is not told from
-55; [design Choice 28](../design.md#choice-fixed-stages)). Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+55; [design Choice 28](../design.md#choice-fixed-stages)). Since its name is read sixteen bytes at a
+look, an unstaged request to it costs 84.5 more than before the refusals with `Host` first
+(0.75%), 226.9 with it second and 285.6 with it last of eight, most of that for a later line the
+two searches for it, and a `GET` through the stages 84.1 (0.51%) with it first and 283.4 with
+it last of eight; an app that names its hosts pays 2 to 9 fewer than with the first reader
+(`b52f57475` against `fca4ccd58` and main, measured the same way).
+[`bench/request-cost`](../../bench/request-cost/README.md) counted an earlier tree of the change,
+`ea3983d0b` against `3d84f7de4`, as 17 to 28 fewer a request in an app that answers to any
+host and 1 to 9 fewer in one that names its hosts; its hosted job's table counts the change's
+last head against its merge base, with names of 6, 40 and 4,096 bytes as well, and a name under
+`localhost` in one that names its hosts. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
 1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
 through the stages, against axum's router in the same app.
 
