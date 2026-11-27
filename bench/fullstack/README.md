@@ -2035,6 +2035,153 @@ with the production profile. It reaches each app directly, with no edge, on the 
 c-8 and cores, so it measures the bare app: a deployment's proxy in front of it may absorb some of
 these clients first.
 
+### The catalog count and its A/A
+
+A change the catalog's item page or item JSON exercises is counted on one build of each side
+([CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests), item 2) with `count-pairs.mjs`, which
+runs `count.mjs <round> 1 corten <target>` once an invocation, the side's image tagged
+`cb-corten` first by the image ID pinned when the run started, and runs beside the change's
+pairs an A/A of its own: the same two side names, `base` and `head`, with the base's image under
+both, in the same run.
+
+```sh
+BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=4-7 node bench/fullstack/count-pairs.mjs <prefix> cb-corten-base cb-corten-head [pairs=100] [page,json]
+```
+
+Pair 0 of each target is not recorded and pairs 1 to 100 are; pair 0 gives no sample, but an
+invocation of it that is not valid fails its comparison as any other does. A pair is four invocations: the
+change's two and its A/A's two, the side named `base` and the A/A first in odd pairs, `head` and
+the change first in even ones. Each comparison's bound is the 59th smallest of its 100 changes in
+user plus kernel cycles a request, `head` over `base` less 1, and the A/A is read as recorded and
+with its labels swapped. The changes are ordered, and each bound less +1% is read against the
+band, exactly from the whole cycle counts a request (`count-perf.mjs` rounds each to a whole
+number), so a bound at an end of the band is inside. The pair count is a whole number from 5, the
+fewest that give a 95% bound, to 999, so every round name has one length, and each target is
+named once; anything else is refused before a lock is taken or Docker is called.
+
+Its records are in `results/<prefix>/`: `run.json`, written before the first invocation, with both
+images' IDs, the ordered schedule, what `count.mjs` is given (its arguments and the `BENCH_*`
+settings it reads), the SHA-256 and size of each file the count runs (`count.mjs` and every module
+it imports, the k6 script, `fixtures/items.json` it mounts into the app, and `count-pairs.mjs` and
+its imports), and the host as the count's environment reaches it (the Docker daemon's ID, version
+and name, `DOCKER_HOST` and `DOCKER_CONTEXT`, the `docker` and `perf` the count's PATH gives with
+their versions, the kernel, Node and the k6 image by digest); `invocations.jsonl`, each invocation
+as it starts and as it ends, with the SHA-256 and size of the three files it is read from (its
+`instructions.json` row, its k6 summary and `count-images.json`); each invocation's log under
+`inv/`; and `report.json`. A wrapper that starts `count-pairs.mjs`, as a kit's `run.sh` does, is
+not among the files it binds; what it runs is. Each invocation's own output is
+`results/<round>/` as `count.mjs` writes it, and must not exist before it runs, since `count.mjs`
+merges into an `instructions.json` it finds: the run refuses to start if any does, and an
+invocation whose path appeared since is recorded as not valid and not run. An invocation is valid
+only when its tag succeeded and named the side's image before and after it, the container
+`count.mjs` counted was started from the side's image by ID (`count.mjs` records it in
+`count-images.json` before the warmup), `count.mjs` exited 0,
+and its one row has 5,000 requests, none failed, each of its five counts a whole number with
+perf's running percentage at 100% (user plus kernel cycles at most 2^53 - 1, so their sum is
+exact), all of k6's checks passed, and the three files it is read
+from are the bytes sealed when it ended: one replaced, removed or never written leaves it not
+valid. The side's image is the ID `run.json` pins for the side of the invocation's slot in the
+schedule; a replay reads each record against that, not against the image the record names.
+`count.mjs` attaches `perf` to the counted container by the ID `docker run` gave and removes
+it by that ID. k6 reaches it by its name, `fsw-corten`, which Docker's DNS answers for every
+running container on the load's network that has it as its name or an alias, in any case
+(`FSW-CORTEN` too), so before `perf`
+attaches and again once it stops, `count.mjs` lists the network's containers and records the
+count failed unless exactly one answers to `fsw-corten` and it is that ID. It reads each
+container's endpoint by the network's name, as Docker keys it, even where `BENCH_NETWORK` gives
+the network's ID. A container that joins
+and leaves the network between those two checks is not seen. An invocation that was started is never started again: the command run again goes on from
+the first one not started, and refuses if the images' IDs, the schedule, a setting, a file the
+count runs or the host differ from `run.json`, or the host cannot be established; one
+interrupted leaves its comparison with no bound. A stop asked for after the last invocation is
+honored before the report is written. `run.lock` in the ledger and, on the Docker daemon, a
+container named `corten-count-pairs-lock` (made from the base's image, with no network, and
+running `sleep` for seven days, so `docker container prune`, which
+removes stopped containers, leaves it while a run goes on) keep two runners apart, whatever directory each starts from: the daemon makes that container for one
+runner only, and the lock stands for its `cb-corten` tag and the `fsw-corten` container
+`count.mjs` starts. Each lock is made only where none is and removed only by the runner that made
+it (the container by the ID it was made with), so one left by a runner that was killed is removed
+by hand (`docker rm -f`), as its message says. Other tools that tag `cb-corten` (a round's steps) do not take it.
+Before each invocation, as each ends and before the report, the runner checks that
+`corten-count-pairs-lock` is still the container it made and still running (a hand can remove
+it and another runner make its own) and that each file `run.json` binds still has its bytes. Where either does
+not, it stops, naming the lost lock or the file, with no further invocation and no report, and
+exits 2; an invocation that ran while it changed is recorded as not valid. The report gives each comparison's bounds and, as diagnostics, each
+side's median user cycles, kernel cycles, user and kernel instructions and user L1
+instruction-cache misses a request, with the median per-pair change in each; a pair not valid
+is named by its comparison, pair and side.
+
+The supported procedure needs, for the run's whole length, a resumed run included, a Docker
+host and network the run has to itself and a private checkout no one changes. The checks above
+are made at their checkpoints and no more: the lock keeps out another `count-pairs.mjs`, not
+other tools; the network check sees a container answering to `fsw-corten` only while it is there
+at a check; and the kit's hashes detect a change to a file that is still present when the next
+check reads it, not one made and undone between two checks. A run's records (`run.json`,
+`invocations.jsonl`, `inv/` and `report.json`) and each invocation's `results/<round>/` are
+kept together, as one run's: the seals tie each invocation's files to the ledger's lines, and
+nothing ties a ledger to its run, so another run's ledger and outputs put in their place pass
+them.
+
+Until a run's own A/A resolves, the count neither holds nor clears. The A/A resolves when both of
+its bounds, less +1%, are inside the default band (-2.98% to +3.33%, as
+[design Choice 72](../../docs/design.md#choice-placement-runs) prints it); then the change's bound
+is read against the band as item 2 reads it: above, a miss; below, it meets +1%; inside, not
+decided. Where the A/A has both bounds and either is outside the band, the change is "not
+decided", read as one inside the band is, whatever its own bound: a miss there no longer holds
+the pull request by itself. Where the A/A has no bound (an invocation that failed, pair 0's included, too few
+pairs), the count failed, as one whose change has no bound has: it returns to the maintainer and
+does not pass until the maintainer decides. The A/A doubles a run's time: 808 invocations for
+both targets where the change alone is 404, about 7.8 hours at the 34.8 s an invocation took on
+the host of
+[#2066 Poll a connection's wait for shutdown only when the wait was woken, not at every wake of its task](https://github.com/corten-run/corten/pull/2066)
+(measured per invocation there; the total is estimated). It shows only whether this run's two
+base-against-base bounds landed inside the band; it does not say why when they did not.
+
+Why: on that host (8 CPUs of a Xeon Platinum 8168 as `lscpu` prints them, one thread a core, the
+app on CPU 1 and k6 on CPUs 4 to 7) the count of the base's image against itself read `json`'s
+bound at +9.85%, outside the band, and `page`'s at +1.34%
+([#2150 The catalog count reads json a miss for an image against itself (bound +9.85%), so it cannot hold or clear a pull request](https://github.com/corten-run/corten/issues/2150)).
+What that A/A run's posted pairs show, and what they do not. Each figure below is worked from its
+100 recorded pairs of each target (`page` then `json` in each pair, the base first in odd pairs),
+except where it says it is read from the kit's posted tables:
+
+1. Label swaps. Each recorded A/A pair of a target has its two values swapped with probability
+   one half, independently, and each draw is read by the actual rule: both bounds, as drawn and
+   with its labels swapped, the 59th smallest of 100, less +1%, inside the default band.
+   Of 100,000 draws (mulberry32, seed 2150), 49.3% for `json` and 19.6% for `page` do not resolve;
+   the drawn bound alone is outside in 24.8% and 9.8%. With these pairs' spread, that host did not
+   reliably resolve the band for an image against itself.
+2. Spread. One image's 200 recorded A/A values of a target (both sides) range up to 1.78 times
+   their least for `json` and 1.68 for `page`, and 77 and 72 of them are within 10% of their
+   least. User instructions a request stay within 0.8% across one image's invocations in the
+   posted tables, so user instructions did not change in number as the cycles did; that does not
+   rule out more work in the kernel, whose cycles a request ran from 53,720 to 80,815 on the
+   A/A's `json` (posted tables). Whether user and kernel cycles rise in the same invocations is
+   not in the posted tables.
+3. Order in time. Over the 400 recorded A/A invocations in run order, the logarithm of each value
+   over its target's median has a lag-1 Pearson correlation of -0.02. That says one invocation's
+   value does not predict the next's linearly; it does not show the invocations are independent.
+4. Names and order within a pair. Nothing `count.mjs` or the kit's `run.sh`
+   (`plan-2066/catalog-kit/catalog/run.sh` under the tag `evidence/shutdown-poll-plan`) does differs by
+   the side's name in an A/A: the image tagged is one image, and the name reaches only the
+   round's name (`base` and `head` are four letters each) and the directories and labels made
+   from it. The side run second was higher in 57 of 100 `page` pairs and 56 of 100 `json` pairs
+   (exact binomial test at one half, one-sided, P = 0.097 and 0.136). `head` was higher than
+   `base` in 62 of 100 `json` pairs (exact binomial, two-sided, P = 0.021), for one of two targets
+   read (`page`: 45 of 100). The median of `json`'s `head` values over the median of its `base`
+   values, less 1, is +11.62%; the label-swap draws above reach a difference at least that large
+   either way in 18.7% of draws.
+
+What sets an invocation's level is not shown. Two hypotheses fit the pairs: where a fresh
+container's code and data land (its addresses and physical pages, set at each start), or another
+CPU on the app's physical core, which a VM's `lscpu` does not show, being busy for that
+invocation (k6's four CPUs among the candidates). One run on such a host would locate the
+variation without identifying its cause: one app container kept running, counted for ten windows
+of 5,000 requests in a row, then started again, twenty times. Levels steady inside a container
+and apart between containers put the variation between starts; levels that move as much inside a
+container put it within one. The 808 invocations' records saved for that issue would also say,
+with no run, whether user and kernel cycles rise together in an invocation.
+
 ### Drift across rounds
 
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent

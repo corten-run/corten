@@ -1823,7 +1823,7 @@ async fn an_upgrade_without_a_switchable_connection_is_a_400_without_upgrade() {
 }
 
 /// A handshake with no `Sec-Fetch-Site` (what Chromium and Firefox send) is held to its `Origin`
-/// against `Host`, scheme included once the app says it is HTTPS only: a plain-http page on the
+/// against the requested authority, scheme included once the app says it is HTTPS only: a plain-http page on the
 /// app's host cannot open a socket to the HTTPS app with the user's `Secure` cookies (#1212).
 /// Allowed, a oneshot answers 400, since it cannot switch; refused, 403.
 #[tokio::test]
@@ -1834,10 +1834,9 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
     let app = |policy: Policy| {
         App::new(Routes::from(Table::new().route("/ws", get(|upgrade: Upgrade| async move { upgrade.websocket(nothing) }))))
             .policy(policy.host("app.example"))
-            .router()
     };
-    let status = |router: crate::Router, origin: &'static str, host: &'static str| async move {
-        let req = Request::get("/ws")
+    let at = |router: crate::Router, uri: &'static str, origin: &'static str, host: &'static str| async move {
+        let req = Request::get(uri)
             .header("host", host)
             .header("origin", origin)
             .header("connection", "upgrade")
@@ -1849,8 +1848,28 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
         router.oneshot(req).await.unwrap().status()
     };
     let (open, refused) = (StatusCode::BAD_REQUEST, StatusCode::FORBIDDEN);
-    let https_only = app(Policy::new().hsts());
-    let either = app(Policy::new());
+    let router = app(Policy::new()).router();
+    for (origin, expected) in [("http://localhost", open), ("http://proxy.example", refused)] {
+        assert_eq!(at(router.clone(), "http://localhost/ws", origin, "proxy.example").await, expected, "{origin}");
+    }
+    struct PathOnly;
+    impl crate::Middleware for PathOnly {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
+            *req.uri_mut() = http::Uri::from_static("/ws");
+            let host = crate::security::request_host(req.uri(), || req.headers().get(header::HOST));
+            assert_eq!(host.and_then(|h| h.text()), Some("proxy.example"), "authority available to the extractor");
+            next.run(req).await
+        }
+    }
+    let rewritten = app(Policy::new()).middleware(PathOnly).router();
+    assert_eq!(
+        at(rewritten, "http://localhost/ws", "http://localhost", "proxy.example").await,
+        refused,
+        "admission used the target, but the extractor no longer has its authority"
+    );
+    let status = |router, origin, host| at(router, "/ws", origin, host);
+    let https_only = app(Policy::new().hsts()).router();
+    let either = app(Policy::new()).router();
     assert_eq!(status(https_only.clone(), "http://app.example", "app.example").await, refused, "a plain-http page");
     assert_eq!(status(https_only.clone(), "https://app.example", "app.example").await, open);
     assert_eq!(status(https_only.clone(), "https://app.example", "app.example:443").await, open, "the default port");

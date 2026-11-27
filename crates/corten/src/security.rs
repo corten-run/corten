@@ -366,7 +366,7 @@ impl Policy {
         self
     }
 
-    /// Answers whatever `Host` a request names, for an app whose names are not known in advance
+    /// Answers whatever host a request asks for, for an app whose names are not known in advance
     /// (one served under each customer's own domain) and that checks them itself. See
     /// [`Policy::host`] for what this gives up. A request HTTP does not allow is still a `400`.
     pub fn any_host(mut self) -> Self {
@@ -1379,8 +1379,8 @@ impl Applied {
 
     /// The 403 for a write another site sent. A mount's extra origins can send token-based writes,
     /// never a write using ambient cookies.
-    pub fn refuse(&self, method: &Method, origin: &mut Origin<'_>, from_mount: bool) -> Option<Response> {
-        if !Origin::checks(method) || from_mount || origin.permits(&self.allowed_origins, self.hsts) {
+    pub fn refuse(&self, req: &Request, origin: &mut Origin<'_>, from_mount: bool) -> Option<Response> {
+        if !Origin::checks(req.method()) || from_mount || origin.permits(&self.allowed_origins, self.hsts, req.uri()) {
             return None;
         }
         Some(crate::cache::unshared((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response()))
@@ -1625,15 +1625,18 @@ impl Policy {
     /// cannot set: `same-origin` is accepted as is (so a proxy that rewrites `Host` cannot break
     /// writes) and anything cross-site is refused. A browser sends it only to a secure origin
     /// (and Chromium and Firefox not on a WebSocket handshake); older browsers not at all. Then
-    /// `Origin` must be an `http` or `https` origin on `Host`: the same name and port (a missing
+    /// `Origin` must be an `http` or `https` origin on the requested authority (the target's,
+    /// or the `Host` line when the target has none): the same name and port (a missing
     /// one is the scheme's default), and over `https`, or on loopback, when the app is HTTPS only
     /// ([`Policy::hsts`]). A request with neither header is not from a browser (a native app, an
     /// agent, a webhook); those authenticate with tokens, not ambient cookies, so it passes.
-    pub fn same_origin(&self, method: &Method, headers: &HeaderMap) -> bool {
+    /// Pass the request's URI as received: a path-only URI compares `Origin` with `Host`
+    /// even if the original target had an authority.
+    pub fn same_origin(&self, method: &Method, uri: &http::Uri, headers: &HeaderMap) -> bool {
         if !Origin::checks(method) {
             return true;
         }
-        write_allowed(&self.allowed_origins, self.hsts, headers)
+        write_allowed(&self.allowed_origins, self.hsts, uri, headers)
     }
 
     /// The other origins [`Policy::allow_origin`] lets write.
@@ -1651,8 +1654,8 @@ impl Policy {
 /// origins), or a client that is not a browser: [`Policy::same_origin`] past its methods, and
 /// what a switch to a WebSocket is held to ([`crate::upgrade::Upgrade`]). `https_only`: the app
 /// is served only over HTTPS ([`Policy::hsts`]).
-pub(crate) fn write_allowed(allowed: &[String], https_only: bool, headers: &HeaderMap) -> bool {
-    Origin::new(headers).permits(allowed, https_only)
+pub(crate) fn write_allowed(allowed: &[String], https_only: bool, uri: &http::Uri, headers: &HeaderMap) -> bool {
+    Origin::new(headers).permits(allowed, https_only, uri)
 }
 
 /// The security checks' view of the original request. The host check, CORS and the debug form
@@ -1692,7 +1695,7 @@ impl<'a> Origin<'a> {
         !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
     }
 
-    fn permits(&mut self, allowed: &[String], https_only: bool) -> bool {
+    fn permits(&mut self, allowed: &[String], https_only: bool, uri: &http::Uri) -> bool {
         let origin = self.value().and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
         if let Some(origin) = &origin {
             if allowed.iter().any(|allowed| allowed == origin) {
@@ -1708,20 +1711,20 @@ impl<'a> Origin<'a> {
         match origin {
             None => true,
             Some(origin) if origin == "null" => false,
-            Some(origin) => origin_of_host(&origin, https_only, self.host()),
+            Some(origin) => origin_of_host(&origin, https_only, request_host(uri, || self.host())),
         }
     }
 }
 
-/// Whether `origin` (an `Origin` header) is a page's on the request's `Host` ([`on_host`]), over
+/// Whether `origin` (an `Origin` header) is a page's on the requested authority ([`on_host`]), over
 /// `https` or loopback when the app is `https_only`. Without `https_only` the scheme is not
 /// compared: behind a proxy that ends TLS the app cannot tell which it is served over, so a
 /// plain-http page on its host passes (docs/design.md#limit-origin-scheme). Out of line: only a
 /// request without `Sec-Fetch-Site` comes here.
 #[cold]
 #[inline(never)]
-fn origin_of_host(origin: &str, https_only: bool, host: Option<&HeaderValue>) -> bool {
-    let host = host.and_then(|host| host.to_str().ok()).unwrap_or("");
+fn origin_of_host(origin: &str, https_only: bool, host: Option<RequestHost<'_>>) -> bool {
+    let host = host.and_then(RequestHost::text).unwrap_or("");
     match on_host(origin, host) {
         Some(("https", _)) => true,
         Some((_, at)) => !https_only || loopback(at),
@@ -1729,7 +1732,7 @@ fn origin_of_host(origin: &str, https_only: bool, host: Option<&HeaderValue>) ->
     }
 }
 
-/// `origin` (an `Origin` header) when it is a page's on `host` (a `Host` header): its scheme,
+/// `origin` (an `Origin` header) when it is a page's on the requested authority `host`: its scheme,
 /// `http` or `https`, and its `host[:port]`. The name and port must be `host`'s, a port left out
 /// being the scheme's default (`https://app.example` is on `app.example:443`). `None` for another
 /// scheme (an app's own, `capacitor://localhost`, is no page on this host) or an origin with a
@@ -1922,6 +1925,40 @@ impl Asked {
     }
 }
 
+/// The authority in its borrowed form. Host admission checks the original bytes of a line;
+/// origin comparisons use text, and a write can keep the authority for its answer.
+#[derive(Clone, Copy)]
+pub(crate) enum RequestHost<'a> {
+    Target(&'a http::uri::Authority),
+    Line(&'a HeaderValue),
+}
+
+impl<'a> RequestHost<'a> {
+    pub(crate) fn text(self) -> Option<&'a str> {
+        match self {
+            Self::Target(at) => Some(at.as_str()),
+            Self::Line(line) => line.to_str().ok(),
+        }
+    }
+
+    pub(crate) fn into_header(self) -> Option<HeaderValue> {
+        match self {
+            Self::Target(at) => HeaderValue::from_bytes(at.as_str().as_bytes()).ok(),
+            Self::Line(line) => Some(line.clone()),
+        }
+    }
+}
+
+/// The authority a request asks for, port included (RFC 9112 3.2.2). `line` can return the
+/// value already read while checking the Host line's grammar; it is not needed for a whole URL.
+#[inline]
+pub(crate) fn request_host<'a>(uri: &'a http::Uri, line: impl FnOnce() -> Option<&'a HeaderValue>) -> Option<RequestHost<'a>> {
+    match uri.authority() {
+        Some(at) => Some(RequestHost::Target(at)),
+        None => line().map(RequestHost::Line),
+    }
+}
+
 /// A request's `Host` line, and whether it has another. Most requests have one line to a name,
 /// which the map's two counts say without a look at any of them, and `Host` first, where a
 /// client writes it (RFC 9110 7.2 asks it to), so the line is taken without a search for it.
@@ -1967,9 +2004,8 @@ fn read<'h>(req: &Request, lines: impl FnOnce() -> (Option<&'h HeaderValue>, boo
     if more {
         return Asked::Malformed;
     }
+    // Keep the path-form check inline on unstaged routes; the choice of authority must agree with `request_host`.
     match (req.uri().authority(), host) {
-        // [`named`], with the choice between its two readers made here, so the one an app
-        // that answers to any host needs is in line.
         (None, Some(host)) => match hosts {
             Some(names) => among(host.as_bytes(), names),
             None => any(host.as_bytes()),
@@ -2389,8 +2425,8 @@ impl FormCheck {
         fn text(value: &Option<HeaderValue>) -> Option<&str> {
             value.as_ref().and_then(|v| v.to_str().ok())
         }
-        let host = text(&self.host)
-            .or_else(|| self.uri.authority().map(|at| at.as_str()))
+        let host = request_host(&self.uri, || self.host.as_ref())
+            .and_then(RequestHost::text)
             .map(|at| at.rsplit_once('@').map_or(at, |(_, at)| at).to_ascii_lowercase());
         let origin = text(&self.origin).filter(|origin| *origin != "null").and_then(address);
         let ours = match &self.site {
@@ -3286,18 +3322,49 @@ mod tests {
     }
 
     #[test]
+    fn the_target_supplies_its_authority_without_reading_the_host_line() {
+        let uri = http::Uri::from_static("https://shop.example:8443/items");
+        let host = request_host(&uri, || panic!("absolute-form needs no header lookup"));
+        assert_eq!(host.and_then(RequestHost::text), Some("shop.example:8443"));
+    }
+
+    #[test]
+    fn admission_and_request_host_agree_for_target_line_and_neither() {
+        for (uri, field, wanted) in [
+            ("http://listed.example/", Some("other.example"), Some("listed.example")),
+            ("http://listed.example:bad/", Some("other.example"), Some("listed.example:bad")),
+            ("/", Some("other.example"), Some("other.example")),
+            ("/", None, None),
+        ] {
+            let mut builder = http::Request::builder().uri(uri);
+            if let Some(host) = field {
+                builder = builder.header(header::HOST, host);
+            }
+            let mut req = builder.body(crate::http::Body::empty()).unwrap();
+            mark_unnamed(&mut req);
+            let host = request_host(req.uri(), || req.headers().get(header::HOST)).and_then(RequestHost::text);
+            assert_eq!(host, wanted);
+            let names = [String::from("listed.example")];
+            for hosts in [Some(&names[..]), None] {
+                let expected = host.map_or(Asked::Malformed, |name| named(name.as_bytes(), hosts));
+                assert_eq!(read(&req, || host_lines(req.headers()), hosts), expected, "{uri} {field:?} {hosts:?}");
+            }
+        }
+    }
+
+    #[test]
     fn the_origin_check_reads_only_the_headers_needed_to_decide() {
         let allowed = ["https://admin.example".to_string()];
         let request = headers(&[("origin", "https://admin.example"), ("sec-fetch-site", "cross-site"), ("host", "localhost")]);
         let mut origin = Origin::new(&request);
-        assert!(origin.permits(&allowed, false));
+        assert!(origin.permits(&allowed, false, &http::Uri::default()));
         assert!(origin.site.is_none() && origin.host.is_none());
-        assert!(!origin.permits(&[], false));
+        assert!(!origin.permits(&[], false, &http::Uri::default()));
         assert!(origin.site.is_some() && origin.host.is_none());
 
         let request = headers(&[("origin", "http://localhost"), ("host", "localhost")]);
         let mut origin = Origin::new(&request);
-        assert!(origin.permits(&[], false));
+        assert!(origin.permits(&[], false, &http::Uri::default()));
         assert_eq!(origin.site, Some(None), "an absent header is cached too");
         assert!(origin.host.is_some());
     }
@@ -3306,36 +3373,43 @@ mod tests {
     fn writes_from_other_sites_are_refused_and_non_browsers_pass() {
         let p = Policy::new().allow_origin("https://admin.example.com/");
         let post = Method::POST;
-        assert!(p.same_origin(&Method::GET, &headers(&[("sec-fetch-site", "cross-site")])), "reads are not checked");
-        assert!(
-            p.same_origin(&post, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://a.com"), ("host", "a.com")]))
-        );
+        let uri = http::Uri::default();
+        assert!(p.same_origin(&Method::GET, &uri, &headers(&[("sec-fetch-site", "cross-site")])), "reads are not checked");
+        assert!(p.same_origin(
+            &post,
+            &uri,
+            &headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://a.com"), ("host", "a.com")])
+        ));
         assert!(
             p.same_origin(
                 &post,
+                &uri,
                 &headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://a.com"), ("host", "app:8080")])
             ),
             "a proxy that rewrites Host does not break same-origin writes"
         );
         assert!(!p.same_origin(
             &post,
+            &uri,
             &headers(&[("sec-fetch-site", "cross-site"), ("origin", "https://evil.com"), ("host", "a.com")])
         ));
         assert!(!p.same_origin(
             &post,
+            &uri,
             &headers(&[("sec-fetch-site", "same-site"), ("origin", "https://sub.a.com"), ("host", "a.com")])
         ));
         assert!(
-            !p.same_origin(&post, &headers(&[("origin", "https://evil.com"), ("host", "a.com")])),
+            !p.same_origin(&post, &uri, &headers(&[("origin", "https://evil.com"), ("host", "a.com")])),
             "older browsers: Origin only"
         );
-        assert!(!p.same_origin(&post, &headers(&[("origin", "null"), ("host", "a.com")])), "sandboxed frames send null");
-        assert!(p.same_origin(&post, &headers(&[("origin", "http://localhost:8080"), ("host", "localhost:8080")])));
+        assert!(!p.same_origin(&post, &uri, &headers(&[("origin", "null"), ("host", "a.com")])), "sandboxed frames send null");
+        assert!(p.same_origin(&post, &uri, &headers(&[("origin", "http://localhost:8080"), ("host", "localhost:8080")])));
         assert!(p.same_origin(
             &post,
+            &uri,
             &headers(&[("sec-fetch-site", "same-site"), ("origin", "https://admin.example.com"), ("host", "a.com")])
         ));
-        assert!(p.same_origin(&post, &headers(&[])), "native apps and agents send neither header");
+        assert!(p.same_origin(&post, &uri, &headers(&[])), "native apps and agents send neither header");
     }
 
     #[test]
@@ -3510,8 +3584,13 @@ mod tests {
     #[test]
     fn an_allowed_origin_may_be_an_apps_own_scheme() {
         let post = Method::POST;
+        let uri = http::Uri::default();
         let from = |policy: &Policy, origin: &'static str| {
-            policy.same_origin(&post, &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]))
+            policy.same_origin(
+                &post,
+                &uri,
+                &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]),
+            )
         };
         let app = Policy::new().allow_origin("capacitor://localhost");
         assert_eq!(app.allowed_origins(), ["capacitor://localhost"]);
@@ -3569,8 +3648,13 @@ mod tests {
     #[test]
     fn an_allowed_origin_with_its_default_port_lets_its_writes_through() {
         let post = Method::POST;
+        let uri = http::Uri::default();
         let from = |policy: &Policy, origin: &'static str| {
-            policy.same_origin(&post, &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]))
+            policy.same_origin(
+                &post,
+                &uri,
+                &headers(&[("origin", origin), ("sec-fetch-site", "cross-site"), ("host", "app.example")]),
+            )
         };
         let default_port = Policy::new().allow_origin("https://admin.example.com:443");
         assert!(from(&default_port, "https://admin.example.com"));
@@ -3582,14 +3666,15 @@ mod tests {
         assert!(from(&ipv6, "http://[::1]:3000"));
     }
 
-    /// A write with no `Sec-Fetch-Site` is held to its whole origin against `Host`: under hsts
+    /// A write with no `Sec-Fetch-Site` is checked against the requested authority: under hsts
     /// a plain-http page on the app's host is another origin (#1212), and a default port is the
     /// same whether it is written or not.
     #[test]
     fn a_write_without_sec_fetch_site_is_held_to_its_scheme_and_port() {
         let post = Method::POST;
+        let uri = http::Uri::default();
         let write = |policy: &Policy, origin: &'static str, host: &'static str| {
-            policy.same_origin(&post, &headers(&[("origin", origin), ("host", host)]))
+            policy.same_origin(&post, &uri, &headers(&[("origin", origin), ("host", host)]))
         };
         let https_only = Policy::new().hsts();
         let either = Policy::new();
@@ -3598,14 +3683,15 @@ mod tests {
         assert!(write(&either, "http://app.example", "app.example"), "without hsts the public scheme is unknown");
         assert!(write(&either, "https://app.example", "app.example"));
         assert!(
-            https_only.same_origin(&post, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "http://app.example")])),
+            https_only.same_origin(&post, &uri, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "http://app.example")])),
             "Sec-Fetch-Site still decides when it is sent"
         );
         assert!(
-            Policy::new()
-                .hsts()
-                .allow_origin("http://legacy.example")
-                .same_origin(&post, &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])),
+            Policy::new().hsts().allow_origin("http://legacy.example").same_origin(
+                &post,
+                &uri,
+                &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])
+            ),
             "an origin the app allows is its own choice"
         );
 
@@ -3636,7 +3722,7 @@ mod tests {
         assert!(!write(&either, "http://app.example:443", "app.example"), "not http's default port");
         assert!(!write(&either, "http://app.example", "app.example:443"));
         assert!(!write(&https_only, "http://app.example:443", "app.example:443"), "the scheme, not only the port");
-        assert!(!https_only.same_origin(&post, &headers(&[("origin", "https://app.example")])), "no Host to match");
+        assert!(!https_only.same_origin(&post, &uri, &headers(&[("origin", "https://app.example")])), "no Host to match");
 
         // Under hsts a plain-http page is refused unless it is on loopback, which a browser
         // counts as secure but sends no `Sec-Fetch-Site` from over plain http.

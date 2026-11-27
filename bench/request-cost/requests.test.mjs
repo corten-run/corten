@@ -51,6 +51,7 @@ test("each case is its request, byte for byte, to its configuration", () => {
   const expected = {
     get: ["api", `GET /baseline11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
     post: ["api", `POST /baseline11?a=1&b=2 HTTP/1.1\r\n${host}Content-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
+    "post-absolute": ["api", `POST http://localhost:8123/baseline11?a=1&b=2 HTTP/1.1\r\n${host}Origin: http://localhost:8123\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n20`],
     unstaged: ["api", `GET /unstaged11?a=1&b=2 HTTP/1.1\r\n${host}\r\n`],
     pipeline: ["api", `GET /pipeline HTTP/1.1\r\n${host}\r\n`],
     text: ["pages", `GET /text HTTP/1.1\r\n${host}\r\n`],
@@ -75,7 +76,7 @@ test("an answer is the case's only as a 200 with the case's body and encoding", 
   const row = (/** @type {number} */ n) => `<tr><td>${n}</td><td>A row of the page, about as long as a row of a listing is</td><td>${n * 7}</td></tr>`;
   const page = `<!DOCTYPE html><html lang="en"><head></head><body><main><h1>Items</h1><table>${row(118)}${row(119)}</table></main></body></html>`;
   const zstd = (/** @type {string} */ text) => zlib.zstdCompressSync(Buffer.from(text, "latin1")).latin1Slice();
-  for (const [name, body] of Object.entries({ get: "3", post: "23", unstaged: "3", pipeline: "ok", text: "ok", page, "get-browser": "3", "text-browser": "ok" })) {
+  for (const [name, body] of Object.entries({ get: "3", post: "23", "post-absolute": "23", unstaged: "3", pipeline: "ok", text: "ok", page, "get-browser": "3", "text-browser": "ok" })) {
     assert.equal(unexpected(name, answer(body)), null, name);
     assert.match(String(unexpected(name, answer(body, "", "404 Not Found"))), /^not a 200: HTTP\/1\.1 404 Not Found$/, name);
     assert.match(String(unexpected(name, answer(body, "", "2000 OK"))), /^not a 200/, name);
