@@ -7,7 +7,8 @@
 //     whose count step started in this boot and did not end is refused there, as run-all.mjs
 //     refuses it, before anything it left is cleared: start it on a new droplet, or reboot this one.
 //     A launch holds /var/lib/corten-bench/launch-<round>.lock there until the round's unit starts;
-//     another launch of the round refuses while it is held)
+//     another launch of the round refuses while it is held. A launch whose unit's start was not
+//     acknowledged leaves it, with how to check the round and remove it)
 //   --detach: start the round and leave: it runs on the droplet by itself; collect it later.
 //   --collect: look at the round once: download its results and destroy the droplet if it has
 //     ended (exit 0 when it finished, 1 when it stopped short), or show where it is (exit 3).
@@ -56,7 +57,7 @@ import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, steps, takeLaunch, unit } from "./round.mjs";
+import { browserSuite, clearAfterCustody, fixtureError, hostOnlyFile, hoursFor, launchLock, ownsLaunch, quote, relaunchCustody, relaunchError, releaseLaunch, roundNameError, startSettled, startUnit, steps, takeLaunch, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -149,6 +150,9 @@ let mayDestroy = true;
 // The launch lock this run may hold on the droplet (launch), until it is released.
 const lock = launchLock(round);
 let lockHeld = false;
+// Whether the launch sent the round's unit its start and did not hear how it went (launch): the
+// round may be running, so the droplet is left as it is, neither collected from nor destroyed.
+let startUnknown = false;
 // Exit statuses of a launch's steps on the droplet (round.mjs): the lock another launch holds
 // (takeLaunch), and the lock lost or the custody changed since its check (ownsLaunch,
 // clearAfterCustody). Neither is tried again: each would refuse again.
@@ -207,7 +211,7 @@ const scp = (/** @type {string} */ from, /** @type {string} */ to) => run("scp",
 // Runs `script` on the droplet for at most `limit` minutes there, one such script at a time: a
 // retry after a dropped connection waits for the attempt it replaces (or its time limit) rather
 // than running beside it (two apt or docker builds at once).
-const remote = (/** @type {string} */ script, /** @type {number} */ limit, /** @type {{ quiet?: boolean }=} */ options) => ssh(
+const remote = (/** @type {string} */ script, /** @type {number} */ limit, /** @type {{ quiet?: boolean, allowFail?: boolean }=} */ options) => ssh(
   `flock -w ${limit * 60} /tmp/droplet.lock timeout -k 30 ${limit * 60} bash -c ${quote(script)}`,
   { timeout: (2 * limit + 2) * minute, ...options },
 );
@@ -319,7 +323,8 @@ const launch = async () => {
   // droplet (round.mjs, launchLock): another launch of the round refuses there, and every step
   // below that changes the droplet first checks the lock is still this one's (but the upload, which
   // only writes src.tgz for a step that does to unpack). A failure releases it; an interrupt
-  // (Ctrl-C), whose step may still be running there, leaves it, with how to remove it.
+  // (Ctrl-C), whose step may still be running there, or a start not acknowledged leaves it, with
+  // how to remove it.
   const token = `${hostname().replace(/[^A-Za-z0-9._-]/g, "_")}-${process.pid}-${randomUUID()}`;
   const owns = ownsLaunch(lock, token);
   let started = false;
@@ -404,14 +409,29 @@ const launch = async () => {
       "systemctl daemon-reload",
       suite === "fullstack" ? `systemctl enable --quiet ${unitName}` : "true",
     ].join(" && "), 2), lockLost);
-    // Starting a unit that has started does nothing, so this can be tried again.
+    // The start runs under the same flock as the other steps, after the lock check (round.mjs,
+    // startUnit), and says when systemctl's start has returned. One that failed after saying so has
+    // settled, and starting a unit that has started does nothing, so it is tried again. One whose
+    // acknowledgment did not come back (a dropped connection, its time limit, no turn at the flock)
+    // may still be starting the round: it is not tried again, and the lock stays (below).
     mayDestroy = false;
-    await retry(3, () => ssh(`${owns}\nsystemctl start ${unitName} && systemctl is-active --quiet ${unitName}`), lockLost);
+    await retry(3, () => {
+      const r = remote(startUnit(lock, token, unitName), 2, { quiet: true, allowFail: true });
+      if (r.status === 0) return r;
+      const out = String(r.stdout ?? "");
+      if (out) process.stdout.write(out);
+      const settled = startSettled(out);
+      startUnknown = !lockLost(r) && !settled;
+      throw Object.assign(new Error(`the start of ${unitName} failed: ${String(r.stderr ?? "").trim() || `exit ${r.status}`}${settled ? "" : " (its acknowledgment did not come back)"}`), { status: r.status, unknown: startUnknown });
+    }, (e) => lockLost(e) || e.unknown);
     started = true;
   } catch (e) {
     // A step that failed has ended there (a remote step's limit there is shorter than its limit
-    // here), and release runs under the same flock as remote steps, after any still running.
-    if (!started) await releaseLock(token);
+    // here), and release runs under the same flock as remote steps, after any still running. A
+    // start not acknowledged is the exception: whether the round is starting is not known, so the
+    // lock is left, as an interrupt leaves it, with how to check and remove it.
+    if (startUnknown) console.log(`the start of ${unitName} on the droplet at ${host} was not acknowledged, so whether round ${round} is running is not known and the launch lock ${lock} is left there: see whether it runs with ssh root@${host} systemctl status ${unitName} (the droplet is left for a --collect, below), and once no droplet.mjs is launching round ${round} there, remove the lock with ssh root@${host} rm ${lock}`);
+    else if (!started) await releaseLock(token);
     throw e;
   }
   // Started: the lock has done its work. One left behind refuses the next launch until removed.
@@ -547,8 +567,9 @@ try {
 } catch (e) {
   // A run that waits for its round (not --collect, which leaves the droplet for the next look) and
   // cannot go on keeps what the round measured, then destroys the droplet as it would at the end.
-  // If the download fails too, the droplet stays for a --collect.
-  if (!collect && !mayDestroy) {
+  // If the download fails too, the droplet stays for a --collect. A start not acknowledged may have
+  // started the round, which goes on by itself: the droplet is left for a --collect.
+  if (!collect && !mayDestroy && !startUnknown) {
     console.log(`the round could not go on (${String(/** @type {any} */ (e).message).split("\n")[0]}); downloading what it has`);
     try {
       await downloadAll("partial results (the round did not finish)");

@@ -1387,10 +1387,12 @@ three runs:
    longest it took in r14, conform's twice a local estimate; the builds' in item 10) and stops one that runs past it
    or prints nothing for an hour (SIGTERM to its process group, SIGKILL 30 s later, neither once
    its process has been reaped). A call ends when its process exits: output that something it
-   started holds open is released 10 s after the exit, and the call is then taken as stopped, never
-   as a clean exit. A stopped call whose process is still running 40 s after its SIGTERM is left
-   and ends the round in whatever step it is, with the reason in `skipped.txt`: no clean slate,
-   later call, step or summary runs beside it, and the round is recorded failed. A call that could
+   started holds open is released 10 s after the exit, never taken as a clean exit. A call so
+   released, or a stopped call whose process is still running 40 s after its SIGTERM (which is
+   left), ends the round in whatever step it is, the build step included, with the reason in
+   `skipped.txt`: what held its output or the process itself was not seen to end, so no clean
+   slate, later call (the next app's build), step or summary runs beside it, and the round is
+   recorded failed. A call that could
    not be started (no process) is taken as stopped, never as an exit. A kernel lockup (r8's) panics the kernel, which reboots the
    droplet; the unit starts again at boot and the round goes on from the next step.
    The count step is the exception to going on: a count call that exits 4 (a `perf` it started not
@@ -1416,12 +1418,16 @@ three runs:
    boot and did not end, or ends in a cut line. Such a round goes on from a new droplet, or, for a
    count step that started in this boot, after a reboot. From that check until the round's unit
    has started, the launch holds `/var/lib/corten-bench/launch-<round>.lock` on the droplet, a
-   link `ln -s` makes only when none is there: another launch of the round refuses while it is
-   held, every later step that changes the droplet first checks it is still this launch's (but
-   the upload, which only writes `/bench/src.tgz` for a step that does to unpack), and the clear
-   runs in one step with a second check that must read as the first did. A launch that
-   fails releases it; one interrupted (Ctrl-C) leaves it, and says how to remove it once no launch
-   is running (`rm` it on the droplet). The upload leaves out the working tree's own
+   link `ln -sT` makes only when nothing is at that path, and which must then read as this
+   launch's: another launch of the round refuses while it is held (or while anything else is
+   there), every later step that changes the droplet, the unit's start included, first checks it
+   is still this launch's and runs one at a time with the others (but the upload, which only writes
+   `/bench/src.tgz` for a step that does to unpack), and the clear runs in one step with a second
+   check that must read as the first did. A launch that fails releases it; one interrupted
+   (Ctrl-C), or whose unit's start was sent but not acknowledged (a dropped connection, so whether
+   the round is starting is not known; such a start is not tried again), leaves it, and says how
+   to check the round and remove the lock once no launch is running (`rm` it on the droplet). The
+   upload leaves out the working tree's own
    `results-<round>.progress` and `results-<round>.log` files, and `droplet.mjs` refuses an
    archive that holds one, as the clear comes before the upload is unpacked.
    A droplet

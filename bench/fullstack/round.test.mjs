@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, rmdirSync, rmSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -214,6 +214,61 @@ test("a build left running after its stop ends the round; one stopped and seen t
   await assert.rejects(run, /the round stopped in its build step/);
   assert.deepEqual(log.slice(-2), ["call gin", "skip build: build.mjs r13 gin was still running, so the round stops here and nothing more runs on this host"]);
   assert.ok(!log.includes("reset"));
+});
+
+test("a call whose output is released after its exit ends the round in any step: no clean slate and no next build beside what held it", async () => {
+  // Through superviseCall itself: the call exits (0 or an error) while something it started holds its output.
+  const heldCall = async (/** @type {string} */ label, /** @type {number} */ code) => {
+    const held = fakeChild();
+    const run = superviseCall(/** @type {any} */ (held), { label, limitMs: Infinity, idleMs: Infinity, releaseMs: 20, write: () => {}, signalGroup: () => assert.fail("no group signal after the exit") });
+    held.exitCode = code; held.emit("exit", code, null);
+    return run;
+  };
+  // The build step: the first app's build is released after its exit; the next app's build does not start.
+  for (const code of [0, 1]) {
+    const all = calls("r13", "10", ["corten", "gin"], ["u1", "u2"]);
+    /** @type {string[]} */
+    const log = [];
+    const run = buildStep(all, [], {
+      minutes: () => 0,
+      call: async (limit, args) => { log.push(`call ${args.at(-1)}`); return args.at(-1) === "corten" ? heldCall("build.mjs", code) : { stopped: null, code: 0 }; },
+      progress: (what) => log.push(`progress ${what}`),
+      skip: (step, why) => log.push(`skip ${step}: ${why}`),
+      reset: () => log.push("reset"),
+    });
+    const outcome = await run.then(() => "resolved", (e) => e);
+    assert.ok(!log.includes("call gin"), `build B started beside what held build A's output (exit ${code}):\n${log.join("\n")}`);
+    assert.match(String(outcome), /the round stopped in its build step/, String(code));
+    assert.deepEqual(log, ["progress build corten", "call corten", `skip build: build.mjs exited ${code} but its output stayed open 0 s after, so it was released, so the round stops here and nothing more runs on this host`], String(code));
+  }
+  const released = await heldCall("build.mjs", 0);
+  assert.equal(released.live, true);
+  assert.match(released.stopped ?? "", /^build\.mjs exited 0 but its output stayed open 0 s after, so it was released$/);
+  // Another step: no clean slate, later call, step or summary.
+  const { run, log } = await runRound(async (script) => (script === "look.mjs" ? heldCall("look.mjs", 0) : {}));
+  await assert.rejects(run, /the round stopped in its browser step/);
+  for (const after of ["reset", "call bytes.mjs", "progress end browser", "build", "call summarize.mjs", "done", "progress finished"]) assert.ok(!log.includes(after), `${after} after a released call\n${log.join("\n")}`);
+  // A count's release still names count.mjs's own halt.
+  const count = await runRound(async (script) => (script === "count.mjs" ? heldCall("count.mjs", 4) : {}));
+  await assert.rejects(count.run, /count\.mjs exited 4: a perf it started was not seen to end; the round stopped in its count step/);
+  // The control: an exit whose output closes goes on to the next app's build.
+  const all = calls("r13", "10", ["corten", "gin"], ["u1", "u2"]);
+  /** @type {string[]} */
+  const clean = [];
+  await buildStep(all, [], {
+    minutes: () => 0,
+    call: async (limit, args) => {
+      clean.push(`call ${args.at(-1)}`);
+      const child = fakeChild();
+      const run = superviseCall(/** @type {any} */ (child), { label: "build.mjs", limitMs: Infinity, idleMs: Infinity, releaseMs: 5000, write: () => {}, signalGroup: () => {} });
+      child.exitCode = 0; child.emit("exit", 0, null); child.emit("close", 0, null);
+      return run;
+    },
+    progress: () => {},
+    skip: (step, why) => clean.push(`skip ${step}: ${why}`),
+    reset: () => clean.push("reset"),
+  });
+  assert.deepEqual(clean, ["call corten", "call gin"]);
 });
 
 test("a round that starts again in its count step goes on only where that step started in another boot, known by its ID", () => {
@@ -438,6 +493,21 @@ test("a launch's lock is taken by one launch at a time, and the clear runs only 
     assert.equal(target(), null);
     assert.ok(!existsSync(`${lock}.cleared`));
     assert.equal(sh(takeLaunch(lock, "launch-b")).status, 0);
+    // A directory at the lock's path: `ln -s` alone would put the link inside it and go on.
+    // Refused, with nothing made inside it, and so is a plain file there.
+    assert.equal(sh(releaseLaunch(lock, "launch-b")).status, 0);
+    mkdirSync(lock);
+    const dir = sh(takeLaunch(lock, "launch-a"));
+    assert.equal(dir.status, 3, dir.stderr);
+    assert.match(dir.stderr, /is held \(not a link: something else is at its path\)/);
+    assert.deepEqual(readdirSync(lock), []);
+    assert.equal(sh(ownsLaunch(lock, "launch-a")).status, 4);
+    rmdirSync(lock);
+    writeFileSync(lock, "launch-a");
+    assert.equal(sh(takeLaunch(lock, "launch-a")).status, 3);
+    rmSync(lock);
+    assert.equal(sh(takeLaunch(lock, "launch-a")).status, 0);
+    assert.equal(target(), "launch-a");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -479,6 +549,9 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       'case "$last" in *"so nothing is cleared"*) if [ -f "$FAKE_HOOK" ]; then sh "$FAKE_HOOK"; fi ;; esac',
       // /bench only where a path starts (not the second of /bench/bench).
       'script=$(printf "%s" "$last" | sed -E -e "s#(^|[^A-Za-z0-9_./-])/bench#\\1$FAKE_REMOTE/bench#g" -e "s#/var/lib/corten-bench#$FAKE_REMOTE/lock#g" -e "s#/sys/fs/cgroup#$FAKE_REMOTE/cgroup#g" -e "s#/etc/systemd/system#$FAKE_REMOTE/systemd#g" -e "s#/tmp/droplet.lock#$FAKE_REMOTE/droplet.lock#g")',
+      // FAKE_DROP_START: the unit's start runs there, and then the connection drops before its
+      // output comes back, as ssh reports a connection lost.
+      'case "$last" in *"systemctl start corten-bench-r1"*|*"start settled"*) if [ -n "$FAKE_DROP_START" ]; then bash -c "$script" >/dev/null 2>&1; echo "Connection to 203.0.113.9 closed by remote host." >&2; exit 255; fi ;; esac',
       'exec bash -c "$script"',
       "",
     ].join("\n"), { mode: 0o755 });
@@ -503,8 +576,8 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     const remoteLog = join(remote, "bench", "bench", "fullstack", "results-r1.log");
     const lock = join(remote, "lock", "launch-r1.lock");
     const target = () => { try { return readlinkSync(lock); } catch { return null; } };
-    /** @param {{ progress?: string | null, extra?: string[], hook?: string, held?: string }} setup */
-    const launch = ({ progress = null, extra = [], hook, held }) => {
+    /** @param {{ progress?: string | null, extra?: string[], hook?: string, held?: string, fake?: Record<string, string> }} setup */
+    const launch = ({ progress = null, extra = [], hook, held, fake = {} }) => {
       rmSync(remote, { recursive: true, force: true });
       mkdirSync(join(remote, "bench", "bench", "fullstack"), { recursive: true });
       mkdirSync(join(remote, "systemd"), { recursive: true });
@@ -519,7 +592,7 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
       rmSync(join(root, "hook"), { force: true });
       if (hook) writeFileSync(join(root, "hook"), hook);
       for (const file of ["log", "systemctl"]) rmSync(join(root, file), { force: true });
-      const r = spawnSync(process.execPath, [join(fullstack, "droplet.mjs"), "r1", "--host", "203.0.113.9", ...extra, "--detach"], { cwd: tree, encoding: "utf8", env, timeout: 120_000 });
+      const r = spawnSync(process.execPath, [join(fullstack, "droplet.mjs"), "r1", "--host", "203.0.113.9", ...extra, "--detach"], { cwd: tree, encoding: "utf8", env: { ...env, ...fake }, timeout: 120_000 });
       const calls = existsSync(join(root, "log")) ? readFileSync(join(root, "log"), "utf8").split("\n=====\n").filter(Boolean) : [];
       const units = existsSync(join(root, "systemctl")) ? readFileSync(join(root, "systemctl"), "utf8").trim().split("\n") : [];
       return { ...r, calls, units, started: units.includes("start corten-bench-r1"), progress: existsSync(remoteProgress) ? readFileSync(remoteProgress, "utf8") : null };
@@ -578,6 +651,25 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.equal(taken.progress, unfinished(other));
     notStarted(taken, "lock taken");
     assert.equal(target(), "another-launch");
+    // The unit's start runs under the flock the other steps use, after its lock check. Its
+    // connection drops once the start has run there: the outcome is not known, so it is not tried
+    // again and the lock is left, with how to check the round and remove the lock.
+    const dropped = launch({ progress: unfinished(other), fake: { FAKE_DROP_START: "1" } });
+    assert.notEqual(dropped.status, 0, dropped.stdout);
+    assert.ok(dropped.started, dropped.units.join("; "));
+    const starts = dropped.calls.filter((c) => c.includes("systemctl start corten-bench-r1") || c.includes("start settled"));
+    assert.equal(starts.length, 1, starts.join("\n---\n"));
+    assert.match(starts[0], /flock -w \d+ \/tmp\/droplet\.lock/);
+    assert.ok(starts[0].includes("no longer holds"), starts[0]);
+    assert.match(dropped.stdout, /the start of corten-bench-r1 on the droplet at 203\.0\.113\.9 was not acknowledged, so whether round r1 is running is not known and the launch lock \/var\/lib\/corten-bench\/launch-r1\.lock is left there/);
+    assert.match(dropped.stdout, /systemctl status corten-bench-r1/);
+    assert.match(dropped.stdout, /rm \/var\/lib\/corten-bench\/launch-r1\.lock/);
+    assert.ok(!dropped.calls.some((c) => c.includes("launch release")), "an unacknowledged start released the lock");
+    assert.notEqual(target(), null, "an unacknowledged start released the lock");
+    assert.notEqual(target(), "another-launch");
+    // The round may be running: the droplet is left for a --collect, nothing downloaded from it.
+    assert.ok(!dropped.stdout.includes("downloading what it has"), dropped.stdout);
+    assert.match(dropped.stdout, /droplet 203\.0\.113\.9 is left as it is \(a round there goes on by itself\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

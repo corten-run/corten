@@ -133,10 +133,12 @@ export const killGraceMs = 30_000;
  * `close` then never comes. The output gets `releaseMs` after the exit to close; then it is
  * destroyed and the call settles with its exit code and a reason, so a released output never
  * reads as a clean success. A stopped call whose process does not exit at all is released
- * `graceMs + releaseMs` after the stop, left running unreferenced, and settles the same way,
- * with `live` true: its stop was not confirmed, and the caller starts no more work on the host
- * (runSteps, buildStep). A process that could not be started (it has no PID; Node sets its exit
- * code before the error comes) settles with a reason, never as an exit.
+ * `graceMs + releaseMs` after the stop, left running unreferenced, and settles the same way.
+ * Either release settles with `live` true: whatever held the output (or the process itself) was
+ * not seen to end, so its cleanup is unconfirmed, and the caller starts no more work on the host,
+ * neither a clean slate nor the next call (runSteps, buildStep). A process that could not be
+ * started (it has no PID; Node sets its exit code before the error comes) settles with a reason,
+ * never as an exit.
  * The effects are passed in so round.test.mjs runs this with its own.
  * @param {import("node:events").EventEmitter & { pid?: number, exitCode: number | null, signalCode: string | null, stdout?: any, stderr?: any, unref: () => void }} child
  * @param {{
@@ -182,7 +184,9 @@ export function superviseCall(child, { label, limitMs, idleMs, signalGroup, writ
       release = setTimeout(() => {
         const running = !reaped();
         child.stdout?.destroy(); child.stderr?.destroy();
-        if (running) { child.unref(); live = true; }
+        if (running) child.unref();
+        // Released after an exit too: what holds the output may still run, beside any later work.
+        live = true;
         settle(running ? `${label} was still running ${Math.round(ms / 1000)} s after it was stopped, so it was left and its output released`
           : `${label} exited ${code ?? child.signalCode} but its output stayed open ${Math.round(ms / 1000)} s after, so it was released`);
       }, ms);
@@ -392,9 +396,10 @@ export const relaunchCustody = (unitName, progressFile, { unitDir = "/etc/system
 
 /**
  * Where droplet.mjs holds a round's launch on a droplet, from its custody check (relaunchCustody)
- * through its unit's start: a symbolic link whose target is the launch's token, made with `ln -s`,
- * which fails when the link exists, so two launches of a round cannot both hold it. Outside /bench,
- * which a launch removes, and kept across a reboot.
+ * through its unit's start: a symbolic link whose target is the launch's token, made with `ln -sT`,
+ * which fails when anything is at the path (without -T, a directory there would get the link
+ * inside it), so two launches of a round cannot both hold it. Outside /bench, which a launch
+ * removes, and kept across a reboot.
  * @param {string} round
  */
 export const launchLock = (round) => `/var/lib/corten-bench/launch-${round}.lock`;
@@ -409,18 +414,44 @@ export const launchLock = (round) => `/var/lib/corten-bench/launch-${round}.lock
 export const hostOnlyFile = (member) => /^(?:\.\/)?bench\/(?:fullstack|live)\/results-[^/]+\.(?:progress|log)$/.test(member.trim());
 
 /**
- * Takes the launch lock for `token`, or exits 3 with how to clear it when another launch holds it.
- * One this token already holds (a step tried again after its connection dropped) is taken again.
+ * Takes the launch lock for `token`, or exits 3 with how to clear it when another launch holds it
+ * or something else is at its path (a directory or file, which `rm` alone may not remove). One this
+ * token already holds (a step tried again after its connection dropped) is taken again. Whichever
+ * way, it goes on only when the lock then reads as `token`'s own link.
  * @param {string} lock launchLock's path
  * @param {string} token this launch's own, which no other launch has
  */
 export const takeLaunch = (lock, token) => [
   `mkdir -p ${quote(lock.slice(0, lock.lastIndexOf("/")) || "/")} || exit 1`,
-  `if ! ln -s ${quote(token)} ${quote(lock)} 2>/dev/null && [ "$(readlink ${quote(lock)})" != ${quote(token)} ]; then`,
-  `  echo "the launch lock ${lock} is held ($(readlink ${quote(lock)} || echo 'unreadable')): another droplet.mjs is launching this round here, or one stopped part way through its launch. When none is and the round's unit is not running, remove it on the droplet (rm ${lock}) and launch again" >&2`,
+  `ln -sT ${quote(token)} ${quote(lock)} 2>/dev/null`,
+  `if [ "$(readlink ${quote(lock)} 2>/dev/null)" != ${quote(token)} ]; then`,
+  `  echo "the launch lock ${lock} is held ($(readlink ${quote(lock)} 2>/dev/null || echo 'not a link: something else is at its path')): another droplet.mjs is launching this round here, or one stopped part way through its launch. When none is and the round's unit is not running, remove it on the droplet (rm ${lock}) and launch again" >&2`,
   "  exit 3",
   "fi",
 ].join("\n");
+
+/**
+ * Starts the round's unit once the launch still holds its lock (ownsLaunch, exit 4 and nothing
+ * started otherwise), then prints "start settled <status>" when `systemctl start` has returned
+ * (it waits for the start's job) and fails (exit 1) unless the unit is then active. droplet.mjs
+ * runs it under the flock its other steps use; output without that line (startSettled) leaves
+ * whether the unit is starting unknown.
+ * @param {string} lock
+ * @param {string} token
+ * @param {string} unitName
+ */
+export const startUnit = (lock, token, unitName) => [
+  ownsLaunch(lock, token),
+  `systemctl start ${quote(unitName)}; started=$?`,
+  `echo "start settled $started"`,
+  `[ "$started" = 0 ] && systemctl is-active --quiet ${quote(unitName)} || exit 1`,
+].join("\n");
+
+/**
+ * Whether startUnit's output says its `systemctl start` returned.
+ * @param {string} output
+ */
+export const startSettled = (output) => /^start settled \d+$/m.test(output.replaceAll("\r", ""));
 
 /**
  * Fails (exit 4) unless the launch lock is still `token`'s, so no step of a launch whose lock was
@@ -520,7 +551,9 @@ export const buildsLeft = (all, built) => all.filter(([step]) => step === "build
  * `buildBudgetMinutes`, when it skips the rest, naming them. A call stopped at its limit, or one
  * whose build.mjs exited with an error (build.mjs records an app's failed step itself and exits 0,
  * so an error exit means it could not), skips that app alone and asks for `reset` (a clean slate:
- * the containers and images it left); the next app's build goes on. `built` gets each app as its
+ * the containers and images it left); the next app's build goes on. A call left running after its
+ * stop or whose output was released (superviseCall's `live`) stops the round instead (leftRunning):
+ * no clean slate and no next build. `built` gets each app as its
  * build starts, after `progress` has recorded it, so a restart during it skips that app. The
  * effects are run-all.mjs's, passed in, so round.test.mjs runs this loop itself.
  * @param {ReturnType<typeof calls>} all
@@ -558,9 +591,10 @@ export async function buildStep(all, built, { minutes, call, progress, skip, res
 }
 
 /**
- * Stops the round where a call was left running (superviseCall's `live`): it was stopped and not
- * seen to exit, so it may still hold the host's cores, containers or counters, and no clean slate,
- * later call or step may run beside it. Records why as `step`'s skip and throws.
+ * Stops the round where a call was left running or its output released (superviseCall's `live`):
+ * it, or something it started that held its output, was not seen to end, so it may still hold the
+ * host's cores, containers or counters, and no clean slate, later call or step may run beside it.
+ * Records why as `step`'s skip and throws.
  * @param {string} step
  * @param {{ stopped: string | null, live?: boolean }} result
  * @param {(step: string, why: string) => void} skip
@@ -593,8 +627,8 @@ export function countHalt({ stopped, code }) {
  * its step and asks for `reset`; `build` runs the build step (buildStep), `open` and `close` start
  * and stop what a step needs (the browser step's apps; `open` gives why browser.mjs cannot run, or
  * null), and `done` is called once the summary has run, before the round is recorded finished. A
- * count call whose end stops the round (countHalt), or any call left running after its stop
- * (superviseCall's `live`), stops it there: the reason is recorded as the step's skip, and no later
+ * count call whose end stops the round (countHalt), or any call left running after its stop or
+ * whose output was released (superviseCall's `live`), stops it there: the reason is recorded as the step's skip, and no later
  * call, clean slate, step or summary runs, nor is the step's end or the round's finish recorded; this throws, and run-all.mjs records the round failed, which it does not
  * start again (resumeAt). The effects are run-all.mjs's, passed in, so round.test.mjs runs this
  * loop itself.
@@ -625,12 +659,14 @@ export async function runSteps(list, all, { call, progress, skip, reset, build, 
     if (step === "build") await build(clock());
     else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
       const result = await call(limit, args);
-      leftRunning(step, result, skip);
+      // A count's own halt is named first (it says why a perf may still count); any call left
+      // running or with its output released stops the round all the same.
       const halt = step === "count" ? countHalt(result) : null;
       if (halt) {
         skip(step, `${halt}, so the round stops here and nothing more runs on this host`);
         throw new Error(`${halt}; the round stopped in its count step`);
       }
+      leftRunning(step, result, skip);
       if (result.stopped) {
         skip(step, result.stopped);
         reset();
