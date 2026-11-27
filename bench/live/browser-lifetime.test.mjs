@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { isDeepStrictEqual } from "node:util";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { fanoutJourney, waitForFanoutDrain } from "./fanout.mjs";
 import { portFor, settingsFor, workloadFor } from "./native.mjs";
 import { browserJourney, runLiveAdapters } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
@@ -80,7 +83,7 @@ async function fixture(t, app) {
 }
 
 const apps = "aspnet,express", options = { group, requested: apps, profile: "bounded" };
-async function runnerFixture(t) {
+async function runnerFixture(t, measured) {
   const scratch = await mkdtemp(join(tmpdir(), "live-browser-lifetime-")), out = join(scratch, "evidence");
   t.after(async () => {
     const rel = relative(resolve(tmpdir()), resolve(scratch)); assert.ok(rel && rel !== ".." && !rel.startsWith(`..${sep}`));
@@ -89,7 +92,10 @@ async function runnerFixture(t) {
   const images = new Map(), containers = new Map(), history = [];
   for (const [i, app] of apps.split(",").entries()) {
     const index = String(i + 1), id = index.repeat(64), image = `sha256:${id}`;
-    images.set(portFor(app).image, { app, image, id, port: new URL(await fixture(t, app)).port });
+    const native = measured?.app === app ? measured : undefined;
+    images.set(portFor(app).image, native ? { app, id: native.provenance.containerId, image: native.provenance.imageId,
+      port: new URL(native.host.base).port, top: native.provenance.processInventory }
+      : { app, image, id, port: new URL(await fixture(t, app)).port });
   }
   const ok = (stdout = "") => ({ status: 0, stdout });
   return { out, history, spawn(program, args) {
@@ -113,7 +119,7 @@ async function runnerFixture(t) {
       Config: { Labels: { "agent.owner": "codex", "agent.task": "bench-parity-live" } },
       NetworkSettings: { Ports: { "8080/tcp": [{ HostPort: entry.port }] } },
       HostConfig: { NanoCpus: 1e9, Memory: 2 ** 30, MemorySwap: 2 ** 30 } }]));
-    if (args[0] === "top") return ok("PID PPID COMMAND\n1001 1 fixture\n");
+    if (args[0] === "top") return ok(entry.top ?? "PID PPID COMMAND\n1001 1 fixture\n");
     if (args[0] === "rm") {
       assert.deepEqual(args, ["rm", "-f", "-v", entry.id]);
       history.push(`remove:${entry.app}`); containers.delete(entry.id); return ok();
@@ -122,6 +128,8 @@ async function runnerFixture(t) {
   } };
 }
 const readArtifact = async (out, name) => JSON.parse(gunzipSync(await readFile(join(out, name))));
+const savedExpress = async (name) => JSON.parse(gunzipSync(await readFile(new URL(
+  `./evidence/review-v3-express/express-${name}.json.gz`, import.meta.url))));
 
 test("live runner uses a fresh Chromium for the next adapter after a real disconnect", { timeout: 90000 }, async t => {
   // Existing hosted native-workload step sets this flag in the Playwright image.
@@ -153,6 +161,195 @@ test("live runner uses a fresh Chromium for the next adapter after a real discon
   const replay = await verifyRound(out);
   assert.equal(replay.readyForLoad, false);
   assert.equal(replay.inspected.length, 4); assert.deepEqual(replay.unqualified, []);
+});
+
+test("native fanout drain aborts a stalled fetch at its deadline without retrying", async (t) => {
+  let calls = 0, aborted = false;
+  t.mock.method(globalThis, "fetch", async (_url, { signal }) => {
+    calls++;
+    return new Promise((_, reject) => {
+      const watchdog = setTimeout(() => reject(new Error("probe did not abort")), 1500);
+      signal.addEventListener("abort", () => {
+        aborted = true; clearTimeout(watchdog); reject(signal.reason);
+      }, { once: true });
+    });
+  });
+  const run = new AbortController();
+  assert.equal(await waitForFanoutDrain("http://127.0.0.1:1", 100, run.signal), "timeout");
+  assert.equal(calls, 1);
+  assert.equal(aborted, true);
+  assert.equal(run.signal.aborted, false);
+});
+
+for (const mode of ["drained", "close-reject", "shared-budget", "timeout", "late-zero", "fetch", "body-fetch", "malformed",
+  "invalid-json", "unavailable", "redirect"]) {
+  test(`failed native fanout teardown: ${mode}`, async (t) => {
+    const { app, group, provenance, qualification, schema, profile, ...measured } = await savedExpress("fanout-1");
+    const { out, history, spawn } = await runnerFixture(t, { app, provenance, host: measured.host });
+    const events = [], attached = { connections: 2, subscriptions: 2, pendingTasks: 2, queueEvents: 0,
+      queuePeak: 0, historyEvents: 0, historyPeak: 0, queueLimit: settings.queueLimit, historyLimit: settings.historyLimit };
+    let current, active = false, closed = 0, polls = 0, offset = 0;
+    let contextId = 0, closing = 0, teardownNow;
+    const sibling = Promise.withResolvers();
+    const now = performance.now.bind(performance);
+    t.mock.method(performance, "now", () => teardownNow ?? now() + offset);
+    t.mock.method(globalThis, "fetch", async (target, options) => {
+      const path = new URL(target).pathname;
+      if (path === "/parity/configure") {
+        events.push(`configure:${current}:${active ? 400 : 200}`);
+        return Response.json({}, { status: active ? 400 : 200 });
+      }
+      assert.equal(path, "/parity/resources");
+      if (!current) return Response.json({}); // Startup.
+      if (mode === "close-reject" && closing) {
+        events.push("drain:premature");
+        active = false;
+        sibling.resolve();
+        return Response.json({ connections: 0, subscriptions: 0 });
+      }
+      if (closed !== 2) {
+        events.push(`attach:${current}`);
+        return Response.json(attached);
+      }
+      events.push(`drain:${++polls}`);
+      assert.equal(options.redirect, "manual");
+      if (mode === "fetch") throw new Error("unsaved fixture fetch details");
+      if (mode === "body-fetch") return new Response(new ReadableStream({
+        start(controller) { controller.error(new TypeError("unsaved fixture body details")); },
+      }));
+      if (mode === "malformed") return Response.json({ connections: 0, subscriptions: "0" });
+      if (mode === "invalid-json") return new Response('{"connections":0,"subscriptions":');
+      if (mode === "unavailable") return Response.json({}, { status: 503 });
+      if (mode === "redirect") return Response.redirect("http://127.0.0.1:1/not-resources");
+      if (mode === "timeout" || mode === "late-zero") offset = settings.maxCleanupMs + 1;
+      if (mode === "shared-budget") teardownNow += 1001;
+      if (mode === "late-zero" || mode === "shared-budget" || (mode === "drained" && polls === 3)) {
+        active = false;
+        return Response.json({ connections: 0, subscriptions: 0 });
+      }
+      if (mode === "drained") return Response.json({ connections: polls === 1 ? 0 : 1, subscriptions: polls === 1 ? 1 : 0 });
+      return Response.json(attached);
+    });
+    let launched = true;
+    const browser = { isConnected: () => launched, async close() { launched = false; }, async newContext() {
+      const id = ++contextId, page = new EventEmitter();
+      Object.assign(page, { setDefaultTimeout() {}, async content() { return ""; }, async waitForFunction() {},
+        async goto() { if (current === 4) throw new Error("fixture ended final cell"); },
+        async evaluate(_fn, arg) {
+          if (arg?.seq) {
+            if (mode === "shared-budget") teardownNow = now();
+            if (mode !== "close-reject") throw new Error("fixture publisher failed");
+            assert.equal(arg.seq, 1);
+            offset = 650; // Next offered event is refused at the real lag gate.
+          }
+          if (arg?.queueLimit) active = true;
+          return [];
+        } });
+      return { async newPage() { return page; }, async close() {
+        if (current === 2 && mode === "close-reject") {
+          closing++;
+          events.push(`close:${id}`);
+          if (id === 1) throw new Error("unsaved context close details");
+          await sibling.promise;
+          events.push("sibling:closed");
+          return;
+        }
+        if (current === 2 && ++closed === 2) {
+          if (mode === "shared-budget") teardownNow += settings.maxCleanupMs - 1000;
+          events.push("closed:2");
+        }
+      }, async newCDPSession() {
+        return { on() {}, async send() { return { targetInfo: { targetId: "fixture", browserContextId: "fixture" } }; } };
+      } };
+    } };
+    const run = runLiveAdapters({ ...options, requested: "express", out, measure: true }, {
+      spawn, chromium: { async launch() { return browser; } },
+      async journey(_browser, _base, _input, { scenario }) {
+        const { app, group, scenario: _name, provenance, workload, settings, schema, profile, ...observed } = await savedExpress(scenario);
+        return observed;
+      },
+      fanout(browser, base, settings, clients, port, _kernel, renderer, teardown) {
+        current = clients; events.push(`attempt:${clients}`);
+        if (clients === 1) return measured;
+        return fanoutJourney(browser, base, settings, clients, port, () => ({ receipt: { startedAt: now() } }), renderer, teardown);
+      },
+    });
+    if (mode === "close-reject") {
+      // The second close remains pending after the first rejects. Allow it to
+      // finish only if the probe was wrongly called, or on test teardown.
+      t.after(() => sibling.resolve());
+    }
+    if (mode === "drained") assert.equal(await run, false);
+    else await assert.rejects(run, /native fanout teardown refused/);
+    assert.deepEqual(history, ["start:express", "remove:express"]);
+    assert.equal(launched, false);
+    assert.deepEqual(events, ["attempt:1", "attempt:2", "configure:2:200", "attach:2",
+      ...(mode === "close-reject" ? ["close:1", "close:2"] : ["closed:2", "drain:1"]),
+      ...(mode === "drained" ? ["drain:2", "drain:3", "attempt:4", "configure:4:200"] : [])]);
+    assert.equal((await readArtifact(out, "express-fanout-1.json.gz")).schema, "native-live-fanout/v3");
+    const failed = await readArtifact(out, "express-fanout-2.json.gz");
+    assert.equal(failed.error, mode === "close-reject" ? "native publisher behind offered rate" : "fixture publisher failed");
+    assert.equal(failed.schema, "native-live-fanout-failure/v1");
+    assert.ok(!Object.hasOwn(failed, "summary"));
+    const replay = await verifyRound(out);
+    assert.equal(replay.readyForLoad, false);
+    assert.deepEqual(replay.passed, ["express"]);
+    assert.deepEqual(replay.measured, []);
+    assert.deepEqual(replay.unqualified, []);
+    if (mode === "close-reject") {
+      assert.equal(failed.publisherLag.sequence, 2);
+      assert.ok(failed.publisherLag.lagMs > 500);
+      assert.equal(failed.browsers.length, 2);
+      assert.doesNotMatch(JSON.stringify(failed), /unsaved context close details/);
+    }
+    if (mode === "drained") {
+      assert.equal(failed.teardownFailure, undefined);
+      assert.equal((await readArtifact(out, "express-fanout-4.json.gz")).error, "fixture ended final cell");
+    } else {
+      assert.equal(failed.teardownFailure, { "close-reject": "context-close", "shared-budget": "timeout", "late-zero": "timeout", "body-fetch": "fetch",
+        "invalid-json": "malformed", redirect: "unavailable" }[mode] ?? mode);
+      assert.equal(replay.cancelled, true);
+      assert.deepEqual(replay.notAttempted.express, { scenarios: [], clients: [4] });
+      assert.equal(existsSync(join(out, "express-fanout-4.json.gz")), false);
+    }
+  });
+}
+
+for (const [name, clients, cancelled, refusal] of [
+  ["later retained cell", 2, true, /fanout evidence follows teardown refusal/],
+  ["uncancelled terminal cell", 4, false, /fanout teardown refusal requires cancellation/],
+]) test(`saved fanout teardown refuses ${name}`, async (t) => {
+  const { app, provenance, host } = await savedExpress("fanout-1");
+  const { out, spawn } = await runnerFixture(t, { app, provenance, host });
+  t.mock.method(globalThis, "fetch", async () => Response.json({ connections: 0, subscriptions: 0 }));
+  const browser = { isConnected: () => true, async close() {} };
+  await runLiveAdapters({ ...options, requested: "express", out, measure: true }, {
+    spawn, chromium: { async launch() { return browser; } },
+    async journey(_browser, _base, _input, { scenario }) {
+      const { app, group, scenario: _name, provenance, workload, settings, schema, profile, ...observed } = await savedExpress(scenario);
+      return observed;
+    },
+    async fanout() { throw new Error("fixture publisher failed"); },
+  });
+  assert.equal((await verifyRound(out)).readyForLoad, false);
+  const manifestPath = join(out, "express-measurements.json"), coveragePath = join(out, "coverage.json");
+  const manifest = JSON.parse(await readFile(manifestPath)), ledger = JSON.parse(await readFile(coveragePath));
+  const file = manifest.files.find(({ file }) => file === `express-fanout-${clients}.json.gz`);
+  const artifact = await readArtifact(out, file.file);
+  const bytes = gzipSync(JSON.stringify({ ...artifact, teardownFailure: "context-close" }));
+  await writeFile(join(out, file.file), bytes);
+  file.sha256 = createHash("sha256").update(bytes).digest("hex");
+  if (cancelled) ledger.cancelled = true;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await writeFile(coveragePath, JSON.stringify(ledger));
+  await assert.rejects(verifyRound(out), refusal);
+  if (!cancelled) {
+    await writeFile(coveragePath, JSON.stringify({ ...ledger, cancelled: true }));
+    const stopped = await verifyRound(out);
+    assert.equal(stopped.cancelled, true);
+    assert.equal(stopped.readyForLoad, false);
+    assert.deepEqual(stopped.measured, []);
+  }
 });
 
 test("production cancellation of the last readiness probe is not a startup failure", { timeout: 10000 }, async (t) => {
@@ -192,11 +389,12 @@ test("production cancellation during launch closes the browser and removes its o
   assert.deepEqual(replay.notAttempted.aspnet, { scenarios: ["normal", "slow-reader"], clients: [] });
 });
 
-for (const stage of ["scenario", "fanout"]) test(`production cancellation retains completed ${stage} prefix and never retries`, async (t) => {
+for (const stage of ["scenario", "fanout", "fanout-lag"]) test(`production cancellation retains completed ${stage} prefix and never retries`, async (t) => {
   const { out, history, spawn } = await runnerFixture(t);
   const stop = new AbortController(), attempts = [];
+  const publisherLag = { sequence: 2, lagMs: 500.25, previousSendMs: 500.25 };
   let closed = 0;
-  await assert.rejects(runLiveAdapters({ ...options, out, measure: stage === "fanout" }, {
+  await assert.rejects(runLiveAdapters({ ...options, out, measure: stage !== "scenario" }, {
     spawn, signal: stop.signal, chromium: { async launch() { return { async close() { closed++; }, isConnected: () => closed === 0 }; } },
     async journey(_browser, _base, _input, settings, port) {
       assert.equal(port.directory, "aspnet");
@@ -209,6 +407,7 @@ for (const stage of ["scenario", "fanout"]) test(`production cancellation retain
     fanout(_browser, _base, _settings, clients) {
       attempts.push(clients);
       stop.abort(new Error("controlled stop"));
+      if (stage === "fanout-lag") throw Object.assign(new Error("native publisher behind offered rate"), { evidence: { publisherLag } });
       throw new Error("synthetic in-flight fanout failed");
     },
   }), /controlled stop/);
@@ -223,7 +422,14 @@ for (const stage of ["scenario", "fanout"]) test(`production cancellation retain
     assert.deepEqual(replay.inspected, ["aspnet-normal.json.gz"]);
     assert.deepEqual(replay.notAttempted.aspnet, { scenarios: ["slow-reader"], clients: [] });
   } else {
-    assert.equal((await readArtifact(out, "aspnet-fanout-1.json.gz")).schema, "native-live-fanout-failure/v1");
+    const failed = await readArtifact(out, "aspnet-fanout-1.json.gz");
+    assert.equal(failed.schema, "native-live-fanout-failure/v1");
+    assert.ok(!Object.hasOwn(failed, "summary"));
+    assert.deepEqual(replay.measured, []);
+    if (stage === "fanout-lag") {
+      assert.equal(failed.error, "native publisher behind offered rate");
+      assert.deepEqual(failed.publisherLag, publisherLag);
+    } else assert.ok(!Object.hasOwn(failed, "publisherLag"));
     assert.deepEqual(replay.notAttempted.aspnet, { scenarios: [], clients: [2, 4] });
     assert.equal(replay.inspected.length, 3);
   }

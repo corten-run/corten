@@ -53,8 +53,8 @@ const exact = (value, keys, at) => {
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
-  // The Live Delivery workload-end receipt does not change native live CLI/defaults.
-  "bench/live/parity.mjs": "4ca59a001e9405e4e09a5ffe300b055f6d461f912aafde0782e9465c338c9289",
+  // The Live Delivery workload-end receipt and failed fanout teardown fence do not change native live CLI/defaults.
+  "bench/live/parity.mjs": "d66ec20570d522185cc6a64bd2af15d60b42782f04a47f4a3ff2821b521b053d",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
