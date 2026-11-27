@@ -37,7 +37,8 @@
 // anything that can fail). No invocation is run again: the command run again goes on from the first
 // not started, and refuses where count.mjs was started and its end was not recorded, as it may have
 // exited 4, or where it exited 4 or was stopped by a signal (a perf or probe it started may still
-// count). Past such an exit the runner asks Docker nothing but the daemon's lock's removal, bounded.
+// count), refusing before any Docker call. Past such an exit the runner asks Docker nothing but
+// the daemon's lock's removal, which it waits for no longer than its bound, however Docker answers.
 // `run.lock` in the ledger and, on the Docker daemon, a container named corten-count-pairs-lock
 // that only one runner can make and that runs while it is held, so a prune leaves it (the lock on
 // the daemon's `cb-corten` tag and the `fsw-corten` container count.mjs starts, whatever directory
@@ -45,7 +46,7 @@
 // Before each invocation, as each ends and before the report, it stops with no report if that
 // container is not the one it made or a file run.json binds has other bytes. It writes `report.json` and prints the report once every invocation has ended, unless it was
 // asked to stop.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
@@ -98,6 +99,43 @@ const HOLDER = "run.corten.count-pairs.holder";
 export const LOCK_SECONDS = 7 * 24 * 3600;
 /** How long the daemon's lock's removal may take, in ms, so a halt reaches the caller however Docker answers. */
 export const RELEASE_MS = 10_000;
+/**
+ * A command run without blocking, its output not kept, resolved with its exit status once it exits
+ * or with a null status at `timeout` ms, when it is sent SIGKILL. The deadline does not wait on the
+ * child: one that does not exit after the signal (a client stuck in the kernel) is left, unref'd,
+ * so it keeps neither this process nor its caller from going on.
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {{ env?: Record<string, string | undefined>, timeout?: number }} [opts]
+ * @param {typeof spawn} [start]
+ * @returns {Promise<{ status: number | null }>}
+ */
+export function spawnBounded(cmd, args, opts = {}, start = spawn) {
+  return new Promise((done) => {
+    /** @type {ReturnType<typeof spawn>} */
+    let child;
+    try { child = start(cmd, args, { stdio: "ignore", env: opts.env, windowsHide: true }); } catch { return done({ status: null }); }
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} done({ status: null }); }, opts.timeout ?? RELEASE_MS);
+    child.on("error", () => { clearTimeout(timer); done({ status: null }); });
+    child.on("exit", (code) => { clearTimeout(timer); done({ status: code }); });
+    child.unref();
+  });
+}
+/**
+ * `promise`'s value, or `fallback` once `ms` have passed or where it rejects: a deadline that does
+ * not depend on what the promise waits for.
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {T} fallback
+ * @returns {Promise<T>}
+ */
+export function within(promise, ms, fallback) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const deadline = new Promise((done) => { timer = setTimeout(done, ms, fallback); });
+  return /** @type {Promise<T>} */ (Promise.race([promise.catch(() => fallback), deadline])).finally(() => clearTimeout(timer));
+}
 /**
  * The runner's exec: a command run to its end, its output to `log` when given and none kept with
  * `output` false, killed at `timeout` ms when given (a command past its bound gives a null status).
@@ -539,22 +577,24 @@ export function environmentOf(exec, env, which) {
  * remove while it runs. Throws, naming its holder, where one is there. `held` says whether the
  * container of that name is still the one made and still running (a hand can remove it and another
  * runner make its own); `release` removes it by the ID it was made with, so never one another
- * runner made after it.
+ * runner made after it, through `bounded` and within RELEASE_MS whatever `bounded` does, as it runs
+ * after a halt too.
  * @param {(cmd: string, args: string[], options?: { env?: Record<string, string | undefined>, timeout?: number, output?: boolean }) => { status: number | null, stdout?: string }} exec
  * @param {Record<string, string | undefined>} env
  * @param {string} image
  * @param {string} ledger
+ * @param {(cmd: string, args: string[], options: { env?: Record<string, string | undefined>, timeout: number }) => Promise<{ status: number | null }>} [bounded]
  */
-export function daemonLock(exec, env, image, ledger) {
+export async function daemonLock(exec, env, image, ledger, bounded = spawnBounded) {
   const holder = `process ${process.pid} on ${hostname()}, since ${new Date().toISOString()}, for ${ledger}`;
   const made = exec("docker", ["create", "--name", DAEMON_LOCK, "--network", "none", "--label", `${HOLDER}=${holder}`, "--label", `run.corten.count-pairs.token=${randomUUID()}`, "--entrypoint", "sleep", image, String(LOCK_SECONDS)], { env });
   const id = (made.stdout ?? "").trim();
   if (made.status === 0 && /^[0-9a-f]{64}$/.test(id)) {
-    // Bounded (RELEASE_MS), as it runs after a halt too: a docker that does not answer is given up.
-    const release = () => exec("docker", ["rm", "-f", id], { env, timeout: RELEASE_MS, output: false }).status === 0;
+    // A docker that does not answer is given up at RELEASE_MS, and not waited for past it.
+    const release = () => within(bounded("docker", ["rm", "-f", id], { env, timeout: RELEASE_MS }).then((r) => r.status === 0), RELEASE_MS, false);
     const started = exec("docker", ["start", id], { env });
     if (started.status !== 0) {
-      const removed = release();
+      const removed = await release();
       throw new Error(`could not start the daemon's lock: docker start exited ${started.status ?? "-"}${removed ? "" : `; remove it with docker rm -f ${DAEMON_LOCK}`}`);
     }
     return {
@@ -614,6 +654,7 @@ const differences = (/** @type {Record<string, any>} */ a, /** @type {Record<str
  * Runs a count's invocations not yet started, then reads them all.
  * @param {{ prefix: string, images: { base: string, head: string }, last: number, targets: string[], results: string,
  *   exec: (cmd: string, args: string[], options?: { log?: string, env?: Record<string, string | undefined>, timeout?: number, output?: boolean }) => { status: number | null, signal?: string | null, stdout?: string },
+ *   bounded?: (cmd: string, args: string[], options: { env?: Record<string, string | undefined>, timeout: number }) => Promise<{ status: number | null }>,
  *   env?: Record<string, string | undefined>, kit?: string, which?: (name: string) => string | null, stop?: () => boolean,
  *   now?: () => number, log?: (line: string) => void }} o
  */
@@ -627,22 +668,53 @@ export async function runPairs(o) {
     return r.status === 0 ? (r.stdout ?? "").trim() : "";
   };
   mkdirSync(join(dir, "inv"), { recursive: true });
+  /** @type {(() => void | Promise<void>)[]} */
   const releases = [lock(join(dir, "run.lock"), dir)];
   try {
+    // A halt the ledger has kept is read first, under run.lock and before any Docker call: a perf it
+    // left may still count, so this host is asked nothing more.
+    const records = readRecords(join(dir, "invocations.jsonl"));
+    const halted = haltOf(records);
+    if (halted) throw new Error(halted);
     // The daemon's lock is a container made from the base's image, so the base's ID is read first; a
     // new run refuses one image for both sides before it takes the lock, a run going on in locked().
     const base = id(o.images.base), head = id(o.images.head);
     if (!base || !head) throw new Error("no image for a side");
     if (base === head && !existsSync(join(dir, "run.json"))) throw new Error("the two sides are one image: the A/A is the run's own, so the change's sides must differ");
-    const daemon = daemonLock(o.exec, env, base, dir);
-    releases.push(() => { if (!daemon.release()) log(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK} if no runner is going`); });
-    return await locked(o, { dir, now, log, env, id, held: daemon.held });
+    const daemon = await daemonLock(o.exec, env, base, dir, o.bounded ?? spawnBounded);
+    releases.push(async () => { if (!(await daemon.release())) log(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK} if no runner is going`); });
+    return await locked(o, { dir, now, log, env, id, held: daemon.held, records });
   } finally {
-    for (const release of releases.reverse()) release();
+    for (const release of releases.reverse()) await release();
   }
 }
 
-async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string, held: () => boolean }} */ { dir, now, log, env, id, held }) {
+/** A perf count.mjs could not see end may still run on this host (count-perf.mjs): nothing more is counted on it. */
+const halt = (/** @type {string} */ name) => `count.mjs exited ${HALT_EXIT} in ${name}: a perf it started was not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
+// A count.mjs stopped by a signal did not see each perf and probe it started end (the probe runs
+// in a process group of its own, which the signal may not reach): the same halt, unconfirmed.
+const signalled = (/** @type {string} */ name, /** @type {string} */ signal) => `count.mjs was stopped by ${signal} in ${name} before it saw each perf and probe it started end: one may still count, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
+
+/**
+ * Why a ledger's invocations stop the run before anything else is asked of the host, or null: a
+ * count.mjs that exited HALT_EXIT, was stopped by a signal, or was started with no end recorded.
+ * @param {Map<string, any>} records
+ */
+function haltOf(records) {
+  for (const [name, r] of records) if (r.rc === HALT_EXIT) return halt(name);
+  for (const [name, r] of records) if (r.signal) return signalled(name, r.signal);
+  // A count.mjs started with no end recorded: its exit, if it was kept, is not 4, but what it
+  // counted was not sealed; if not, it may have been 4. Either way the run does not go on.
+  for (const [name, r] of records) {
+    if (r.dispatched == null || r.ended != null) continue;
+    return r.exited != null
+      ? `count.mjs exited ${r.rc ?? r.signal ?? "-"} in ${name} and the end of that invocation (the image it counted and its sealed outputs) was not recorded; stopped with no report. Count under a new prefix`
+      : `count.mjs was started in ${name} and its exit was not recorded: it may have exited ${HALT_EXIT}, a perf it started not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
+  }
+  return null;
+}
+
+async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type {{ dir: string, now: () => number, log: (line: string) => void, env: Record<string, string | undefined>, id: (image: string) => string, held: () => boolean, records: Map<string, any> }} */ { dir, now, log, env, id, held, records }) {
   const file = join(dir, "invocations.jsonl"), runFile = join(dir, "run.json");
   const kitDir = o.kit ?? here;
   const plan = schedule(o.last, o.targets, o.prefix);
@@ -676,22 +748,7 @@ async function locked(/** @type {Parameters<typeof runPairs>[0]} */ o, /** @type
     return out;
   };
   const stopIf = (/** @type {string[]} */ why, /** @type {string} */ where) => { if (why.length) throw new Error(`${why.join("; ")} (${where}); stopped with no report`); };
-  const records = readRecords(file);
-  // A perf count.mjs could not see end may still run on this host (count-perf.mjs): nothing more is counted on it.
-  const halt = (/** @type {string} */ name) => `count.mjs exited ${HALT_EXIT} in ${name}: a perf it started was not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
-  // A count.mjs stopped by a signal did not see each perf and probe it started end (the probe runs
-  // in a process group of its own, which the signal may not reach): the same halt, unconfirmed.
-  const signalled = (/** @type {string} */ name, /** @type {string} */ signal) => `count.mjs was stopped by ${signal} in ${name} before it saw each perf and probe it started end: one may still count, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`;
-  for (const [name, r] of records) if (r.rc === HALT_EXIT) throw new Error(halt(name));
-  for (const [name, r] of records) if (r.signal) throw new Error(signalled(name, r.signal));
-  // A count.mjs started with no end recorded: its exit, if it was kept, is not 4, but what it
-  // counted was not sealed; if not, it may have been 4. Either way the run does not go on.
-  for (const [name, r] of records) {
-    if (r.dispatched == null || r.ended != null) continue;
-    throw new Error(r.exited != null
-      ? `count.mjs exited ${r.rc ?? r.signal ?? "-"} in ${name} and the end of that invocation (the image it counted and its sealed outputs) was not recorded; stopped with no report. Count under a new prefix`
-      : `count.mjs was started in ${name} and its exit was not recorded: it may have exited ${HALT_EXIT}, a perf it started not seen to end, so no further count runs on this host; stopped with no report. Count on a fresh host under a new prefix`);
-  }
+  // The ledger's halts were refused before any Docker call (runPairs, haltOf).
   for (const inv of plan) {
     if (records.has(inv.name)) continue;
     if (o.stop?.()) throw new Error(`stopped before ${inv.name}; run the command again to go on`);
@@ -786,7 +843,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let stopped = false;
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stopped = true; });
   try {
-    const { md, targets: read } = await runPairs({ ...options, images: { base, head }, results: join(here, "results"), exec: spawnExec, stop: () => stopped, log: (l) => console.log(new Date().toISOString(), l) });
+    const { md, targets: read } = await runPairs({ ...options, images: { base, head }, results: join(here, "results"), exec: spawnExec, bounded: spawnBounded, stop: () => stopped, log: (l) => console.log(new Date().toISOString(), l) });
     console.log(md);
     process.exit(complete(read) ? 0 : 1);
   } catch (e) {

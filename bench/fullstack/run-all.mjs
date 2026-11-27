@@ -15,7 +15,8 @@
 //     next; in the build step it skips the app that was building and goes on with the next app.
 //     In the count step it goes on only where it started in another boot, by the boot's ID on the
 //     step's start line: a start again in the same boot, which cannot tell its perf is gone, ends
-//     the round (round.mjs, countRestartError).
+//     the round (round.mjs, countRestartError), as does a progress file whose last line was cut
+//     short. Each line is written whole and synced before its step starts (appendLine).
 //     A skipped step is written to the log and to results/<round>/skipped.txt
 //     ("<time> step <name> skipped: <why>", the app named in the why for a build), which
 //     summarize.mjs copies into summary.json. Before that, the kernel's log of the boot that
@@ -27,14 +28,14 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil } from "./round.mjs";
+import { appendLine, buildStep, calls, countRestartError, idleMinutes, mayStart, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil } from "./round.mjs";
 import { k6Image } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -54,15 +55,16 @@ const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms)
 const progressFile = join(here, `results-${round}.progress`);
 /** This boot's ID, or null where it cannot be read. */
 const bootId = () => { try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null; } catch { return null; } };
-// Synced to disk (the file and, when it is new, its directory), so a line written just before a
-// kernel panic is still there after the reboot. The count step's start names the boot it started
-// in, so a start again in that boot does not go on past it (countRestartError).
+// Written whole or not at all (appendLine throws, and the step is not started), then synced to disk
+// (the file and, when it is new, its directory), so a line written just before a kernel panic is
+// still there after the reboot. The count step's start names the boot it started in, so a start
+// again in that boot does not go on past it (countRestartError).
 const progress = (/** @type {string} */ what) => {
   if (!unattended) return;
   const created = !existsSync(progressFile);
-  const fd = openSync(progressFile, "a");
+  const fd = openSync(progressFile, "a+");
   const line = what === "start count" ? `${what} ${bootId() ?? ""}`.trimEnd() : what;
-  try { writeSync(fd, `${now()} ${line}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+  try { appendLine(fd, `${now()} ${line}`); fsyncSync(fd); } finally { closeSync(fd); }
   if (created) { const dir = openSync(here, "r"); try { fsyncSync(dir); } finally { closeSync(dir); } }
 };
 const skippedFile = join(here, "results", round, "skipped.txt");

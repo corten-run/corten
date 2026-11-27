@@ -11,7 +11,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as countPairs from "./count-pairs.mjs";
-import { BAND, compare, complete, COUNTS, DAEMON_LOCK, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, RELEASE_MS, resolution, runPairs, schedule, spawnExec } from "./count-pairs.mjs";
+import { EventEmitter } from "node:events";
+import { BAND, compare, complete, COUNTS, DAEMON_LOCK, inside, invalid, lock, MARGIN, markdown, MIN_PAIRS, optionsError, parsePairs, readRun, reading, RELEASE_MS, resolution, runPairs, schedule, spawnBounded, spawnExec, within } from "./count-pairs.mjs";
 
 /** n recorded pairs whose changes are spread evenly from lo to hi. */
 const spread = (lo, hi, n = 100) => Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
@@ -95,7 +96,9 @@ function host(results, { row = () => ({}), rc = () => 0, signal = () => null, ta
   };
   /** What `docker container prune` does: removes every container not running. */
   const prune = () => { for (const [name, c] of state.containers) if (!c.running) state.containers.delete(name); };
-  return { ids, state, exec, paths, prune, which: (name) => paths[name] ?? null };
+  /** The daemon's lock's removal, as the runner makes it: the same stand-in, answered without blocking. */
+  const bounded = async (cmd, args, options) => exec(cmd, args, options);
+  return { ids, state, exec, bounded, paths, prune, which: (name) => paths[name] ?? null };
 }
 
 /** A temporary results directory and count kit for one test. */
@@ -110,7 +113,7 @@ function scratch() {
   return { results, kit, done: () => rmSync(results, { recursive: true, force: true }) };
 }
 const env = { BENCH_APP_CPUS: "1", BENCH_LOAD_CPUS: "4-7", PATH: "/usr/bin" };
-const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, kit: s.kit, exec: h.exec, which: h.which, env, now: () => 0, ...over });
+const options = (s, h, over = {}) => ({ prefix: "t1", images: { base: "cb-corten-base", head: "cb-corten-head" }, last: 6, targets: ["json"], results: s.results, kit: s.kit, exec: h.exec, bounded: h.bounded, which: h.which, env, now: () => 0, ...over });
 /** The calls that change what is counted: a tag or a count. */
 const counts = (h) => h.state.tags.length + h.state.counted.length;
 
@@ -412,48 +415,121 @@ test("a count.mjs stopped by a signal stops the run as an exit 4 does: no furthe
   }
 });
 
-test("past a count.mjs exit 4 or a signal the runner asks Docker only to remove its lock, within a bound, so the halt reaches the caller however Docker answers", async () => {
+test("past a count.mjs exit 4 or a signal the runner asks Docker only to remove its lock, and waits for that no longer than RELEASE_MS, however Docker answers", async (t) => {
   const stuck = "t1-json-ab-002-base";
   for (const [how, over] of [["exit 4", { rc: (/** @type {string} */ round) => (round === stuck ? 4 : 0) }], ["SIGKILL", { signal: (/** @type {string} */ round) => (round === stuck ? "SIGKILL" : null) }]]) {
-    for (const stalled of [false, true]) {
+    // withheld: a docker client that does not exit, even after its SIGKILL (one stuck in the kernel).
+    for (const answer of ["withheld", "failed", "removed"]) {
       const s = scratch();
+      t.mock.timers.enable({ apis: ["setTimeout"] });
       try {
         const h = host(s.results, over);
-        /** @type {[string, string[], any][]} */
+        /** @type {string[][]} */
         const after = [];
+        /** @type {[string[], any][]} */
+        const removals = [];
         let returned = false;
-        const lockId = () => h.state.containers.get(DAEMON_LOCK)?.id;
         let held = "";
+        /** @type {() => void} */
+        let asked = () => {};
+        const asking = new Promise((/** @type {(v?: unknown) => void} */ r) => (asked = r));
         const exec = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts = {}) => {
           if (returned) {
-            after.push([cmd, args, opts]);
-            // A docker that does not answer: given up at its bound, a null status.
-            if (stalled) return { status: null, signal: "SIGKILL" };
+            after.push([cmd, ...args]);
+            // A removal made by a call that returns once its child exits waits on that child, past
+            // any SIGKILL its timeout sends: here, a while past RELEASE_MS.
+            if (answer === "withheld" && args[0] === "rm") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RELEASE_MS + 2000);
+            return { status: null, signal: "SIGKILL" };
           }
           const r = h.exec(cmd, args, opts);
-          if (String(args[0]).endsWith("count.mjs") && args[1] === stuck) { returned = true; held = lockId() ?? ""; }
+          if (String(args[0]).endsWith("count.mjs") && args[1] === stuck) { returned = true; held = h.state.containers.get(DAEMON_LOCK)?.id ?? ""; }
           return r;
+        };
+        const bounded = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => {
+          removals.push([[cmd, ...args], opts]);
+          asked();
+          if (answer === "withheld") return new Promise(() => {});
+          return Promise.resolve(answer === "failed" ? { status: null } : h.exec(cmd, args, opts));
         };
         /** @type {string[]} */
         const said = [];
-        await assert.rejects(runPairs(options(s, { ...h, exec }, { log: (/** @type {string} */ l) => said.push(l) })), how === "exit 4" ? /count\.mjs exited 4 in t1-json-ab-002-base/ : /stopped by SIGKILL in t1-json-ab-002-base/, how);
-        assert.ok(returned, how);
-        // No image read, seal or lock check after it: one call, the lock's removal by its ID, bounded.
-        assert.deepEqual(after.map(([cmd, args]) => [cmd, ...args]), [["docker", "rm", "-f", held]], `${how}${stalled ? ", stalled" : ""}`);
-        assert.equal(after[0][2].timeout, RELEASE_MS);
-        if (stalled) assert.ok(said.some((l) => l.includes(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK}`)), said.join("\n"));
-        else assert.equal(h.state.containers.size, 0);
+        const started = Date.now();
+        const run = runPairs(options(s, { ...h, exec, bounded }, { log: (/** @type {string} */ l) => said.push(l) }));
+        await Promise.race([asking, run.then(() => {}, () => {})]);
+        t.mock.timers.tick(RELEASE_MS);
+        await assert.rejects(run, how === "exit 4" ? /count\.mjs exited 4 in t1-json-ab-002-base/ : /stopped by SIGKILL in t1-json-ab-002-base/, how);
+        const where = `${how}, ${answer}`;
+        assert.ok(Date.now() - started < RELEASE_MS, `${where}: returned ${Date.now() - started} ms after it started`);
+        assert.ok(returned, where);
+        // No image read, seal or lock check after it, and no call that waits on its child: one
+        // removal of the lock by its ID, not waited for past its bound.
+        assert.deepEqual(after, [], where);
+        assert.deepEqual(removals.map(([c]) => c), [["docker", "rm", "-f", held]], where);
+        assert.equal(removals[0][1].timeout, RELEASE_MS, where);
+        if (answer === "removed") assert.equal(h.state.containers.size, 0, where);
+        else assert.ok(said.some((l) => l.includes(`the daemon's lock was not removed: remove it with docker rm -f ${DAEMON_LOCK}`)), `${where}: ${said.join("\n")}`);
+        // run.lock is released all the same.
+        assert.ok(!existsSync(join(s.results, "t1", "run.lock")), where);
       } finally {
+        t.mock.timers.reset();
         s.done();
       }
     }
   }
-  // The bound is the runner's exec's: a command past it is killed and given a null status.
+  // The bound is the runner's exec's for every other call: a command past it is killed and given a null status.
   const started = Date.now();
   const r = spawnExec(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 500, output: false });
   assert.equal(r.status, null);
   assert.ok(Date.now() - started < 20_000, `returned ${Date.now() - started} ms after it started`);
   assert.equal(spawnExec(process.execPath, ["-e", "process.exit(0)"], { timeout: 20_000, output: false }).status, 0);
+});
+
+test("the lock's removal settles at its deadline whether or not its command exits, and does not keep the process for it", async () => {
+  // A docker client that ignores its SIGKILL and never exits, as one stuck in the kernel does.
+  const child = Object.assign(new EventEmitter(), { signals: /** @type {string[]} */ ([]), unrefd: false, kill(/** @type {string} */ signal) { this.signals.push(signal); return true; }, unref() { this.unrefd = true; } });
+  const started = Date.now();
+  assert.deepEqual(await spawnBounded("docker", ["rm", "-f", "x"], { timeout: 300 }, /** @type {any} */ (() => child)), { status: null });
+  assert.ok(Date.now() - started < 10_000, `settled ${Date.now() - started} ms after it started`);
+  assert.deepEqual(child.signals, ["SIGKILL"]);
+  assert.ok(child.unrefd, "the child is unref'd, so it keeps neither the runner nor its caller");
+  // A real command: one past its bound is killed and given a null status; one that exits gives its status; one not found, null.
+  const t0 = Date.now();
+  assert.deepEqual(await spawnBounded(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 500 }), { status: null });
+  assert.ok(Date.now() - t0 < 20_000, `settled ${Date.now() - t0} ms after it started`);
+  assert.deepEqual(await spawnBounded(process.execPath, ["-e", "process.exit(3)"], { timeout: 20_000 }), { status: 3 });
+  assert.deepEqual(await spawnBounded(join(tmpdir(), "no-such-docker-here"), [], { timeout: 20_000 }), { status: null });
+  // The deadline itself does not wait on what it bounds: a promise that never settles, or rejects, gives the fallback.
+  assert.equal(await within(new Promise(() => {}), 50, false), false);
+  assert.equal(await within(Promise.reject(new Error("EIO")), 20_000, false), false);
+  assert.equal(await within(Promise.resolve(true), 20_000, false), true);
+});
+
+test("a ledger that kept a halt is refused when run again before any Docker call: no image, lock, environment or count", async () => {
+  const stuck = "t1-json-ab-002-base";
+  for (const [kind, over, why] of [
+    ["exit 4", { rc: (/** @type {string} */ round) => (round === stuck ? 4 : 0) }, /count\.mjs exited 4 in t1-json-ab-002-base/],
+    ["SIGTERM", { signal: (/** @type {string} */ round) => (round === stuck ? "SIGTERM" : null) }, /count\.mjs was stopped by SIGTERM in t1-json-ab-002-base/],
+    ["no exit", { onCount: (/** @type {string} */ round) => { if (round === stuck) throw new Error("the runner died"); } }, /count\.mjs was started in t1-json-ab-002-base and its exit was not recorded/],
+  ]) {
+    const s = scratch();
+    try {
+      const h = host(s.results, /** @type {any} */ (over));
+      await assert.rejects(runPairs(options(s, h)), kind === "no exit" ? /the runner died/ : why, kind);
+      const calls = h.state.calls;
+      let removals = 0;
+      const bounded = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => { removals += 1; return h.bounded(cmd, args, opts); };
+      await assert.rejects(runPairs(options(s, { ...h, bounded })), why, kind);
+      assert.equal(h.state.calls - calls, 0, `${kind}: ${h.state.calls - calls} calls on the host when run again`);
+      assert.equal(removals, 0, kind);
+      // Refused under run.lock: another runner's lock is reported as before, and this one's is released.
+      assert.ok(!existsSync(join(s.results, "t1", "run.lock")), kind);
+      writeFileSync(join(s.results, "t1", "run.lock"), JSON.stringify({ pid: 1, host: "elsewhere", started: "then", ledger: "t1" }) + "\n");
+      await assert.rejects(runPairs(options(s, h)), /is locked by process 1 on elsewhere/, kind);
+      assert.equal(h.state.calls - calls, 0, kind);
+    } finally {
+      s.done();
+    }
+  }
 });
 
 test("a count.mjs started with no end recorded stops the run when run again: its exit not kept may have been 4, and one kept was not sealed", async () => {

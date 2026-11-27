@@ -1,6 +1,7 @@
 // The parts of a round that run-all.mjs and droplet.mjs share and round.test.mjs tests: the
 // steps, run-all.mjs's calls with their time limits, where a stopped round goes on, and the systemd
 // unit a round runs under on a droplet. No side effects.
+import { fstatSync, readSync, writeSync } from "node:fs";
 import { HALT_EXIT } from "./count-perf.mjs";
 
 /** run-all.mjs's steps, in order. The builds come last, so a slow one costs no other step its time. */
@@ -205,6 +206,9 @@ export function resumeAt(progress, from = steps[0]) {
  * @param {string | null} bootId this boot's ID, or null where it cannot be read
  */
 export function countRestartError(progress, bootId) {
+  // A last line with no end is a write cut short (appendLine), which may have been the count
+  // step's start: what it was is not known, so it is read as a count step that did not end.
+  if (progress.length && !progress.endsWith("\n")) return "the round's progress file ends in a line cut short, so whether its count step started is not known and a perf or probe that step started may still run; nothing more runs on this host";
   /** @type {string | null} */
   let running = null;
   /** @type {string | undefined} */
@@ -221,6 +225,29 @@ export function countRestartError(progress, bootId) {
   return why && `the round stopped in its count step and ${why}, so a perf or probe that step started may still run; nothing more runs on this host`;
 }
 const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Appends `line` and its newline to the progress file open on `fd` (read and append, "a+"), every
+ * byte of it, or throws: `write` (writeSync) may write fewer bytes than it was given, and is called
+ * again for the rest, and one that writes none, or throws, leaves the line cut short and this
+ * throws, so a step whose start was not written whole is not started. A last line a write before
+ * this one cut short is ended first, so this line, "failed" included, is read on its own; until
+ * then countRestartError reads that cut line as a count step that did not end. The caller syncs.
+ * @param {number} fd
+ * @param {string} line
+ * @param {(fd: number, buffer: Buffer, offset: number, length: number) => number} [write]
+ */
+export function appendLine(fd, line, write = writeSync) {
+  const { size } = fstatSync(fd);
+  const last = Buffer.alloc(1);
+  const cut = size > 0 && readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a;
+  const bytes = Buffer.from(`${cut ? "\n" : ""}${line}\n`, "utf8");
+  for (let at = 0; at < bytes.length;) {
+    const n = write(fd, bytes, at, bytes.length - at);
+    if (!Number.isSafeInteger(n) || n <= 0) throw new Error(`the progress line ${JSON.stringify(line)} was cut short: ${at} of its ${bytes.length} bytes were written`);
+    at += n;
+  }
+}
 
 /**
  * The apps whose build calls are in `all` and not in `built`, in the order they run: what the

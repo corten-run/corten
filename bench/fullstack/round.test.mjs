@@ -2,14 +2,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { acknowledgments, countRow, measurePerfCounts, parsePerCpuCounts, parsePerfCounts, passEvents, perfCountArgs, perfProbeArgs, PROBE_SETS, probeVerdict, runBounded, selectedCpus, UnconfirmedPerf } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
-import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
+import { appendLine, browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, countHalt, countRestartError, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, runSteps, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -188,6 +189,119 @@ test("a round that starts again in its count step goes on only where that step s
   assert.equal(countRestartError("", boot), null);
   // resumeAt reads the start line with its boot ID as before.
   assert.deepEqual(resumeAt(started(`start count ${other}`), "fixture"), resumeAt(started("start count"), "fixture"));
+  // A last line with no end was a write cut short, which may have been the count step's start, whole
+  // or not: read as a count step that did not end, in this boot or another.
+  const cut = "the round's progress file ends in a line cut short, so whether its count step started is not known and a perf or probe that step started may still run; nothing more runs on this host";
+  for (const text of ["t boot\nt start fixture\nt end fixture\nt start co", "t boot\nt start fixture\nt end fixture\nt sta", "t boot\nt start fixture\nt end fixture\nt", `t boot\nt start count ${other}`, "t boot\nt start conform\nt end conf"]) {
+    assert.equal(countRestartError(text, boot), cut, JSON.stringify(text));
+  }
+});
+
+test("a progress line is written whole before its step starts, or the step is not started and the cut line is read as an unfinished count step", async () => {
+  const root = mkdtempSync(join(tmpdir(), "progress-line-"));
+  try {
+    const file = join(root, "results-r1.progress");
+    const append = (/** @type {string} */ line, /** @type {any} */ write) => { const fd = openSync(file, "a+"); try { appendLine(fd, line, write); } finally { closeSync(fd); } };
+    // A write that takes 3 bytes at a time: called again for the rest, so the line is whole.
+    const calls = [];
+    append("t boot");
+    append("t start count 0f1e2d3c-4b5a-4968-8776-655443322110", (/** @type {number} */ fd, /** @type {Buffer} */ b, /** @type {number} */ at, /** @type {number} */ n) => (calls.push(n), writeSync(fd, b, at, Math.min(3, n))));
+    assert.equal(readFileSync(file, "utf8"), "t boot\nt start count 0f1e2d3c-4b5a-4968-8776-655443322110\n");
+    assert.ok(calls.length > 1, String(calls.length));
+    // A write that stops part way (writes none, or fails): the line is cut short and appendLine throws.
+    for (const stop of ["none", "ENOSPC"]) {
+      writeFileSync(file, "t boot\nt start fixture\nt end fixture\n");
+      let n = 0;
+      const short = (/** @type {number} */ fd, /** @type {Buffer} */ b, /** @type {number} */ at, /** @type {number} */ len) => {
+        if (n++ === 0) return writeSync(fd, b, at, 10);
+        if (stop === "none") return 0;
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+      };
+      assert.throws(() => append("2026-11-26T10:00:00.000Z start count 0f1e2d3c-4b5a-4968-8776-655443322110", short), stop === "none" ? /was cut short: 10 of its 74 bytes were written/ : /ENOSPC/, stop);
+      const text = readFileSync(file, "utf8");
+      assert.equal(text, "t boot\nt start fixture\nt end fixture\n2026-11-26", stop);
+      // A start again reads it as a count step that did not end.
+      assert.match(countRestartError(text, "0f1e2d3c-4b5a-4968-8776-655443322110") ?? "", /ends in a line cut short/, stop);
+      // The next line is written on a line of its own, so the round's failure is read as one.
+      append("t failed");
+      assert.equal(readFileSync(file, "utf8"), "t boot\nt start fixture\nt end fixture\n2026-11-26\nt failed\n", stop);
+      assert.equal(resumeAt(readFileSync(file, "utf8"), "count").ended, "failed", stop);
+    }
+    // A step whose start was not written is not started.
+    const log = [];
+    await assert.rejects(runSteps(["count", "conform"], [["count", 60, "count.mjs", "r1"], ["conform", 60, "conform.mjs", "r1"]], {
+      call: async (_, args) => { log.push(`call ${args[0]}`); return { stopped: null, code: 0 }; },
+      progress: (what) => { log.push(`progress ${what}`); if (what === "start count") throw new Error("the progress line was cut short"); },
+      skip: () => {}, reset: () => {}, build: async () => {}, open: async () => null, close: () => {}, linux: true, clock: () => 0, summary: ["summarize.mjs", "r1"], done: () => {},
+    }), /cut short/);
+    assert.deepEqual(log, ["progress start count"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unattended run-all.mjs whose count step's start is written short writes the rest before it counts, and one whose write fails does not count and records the round failed", { skip: process.platform !== "linux" && "an unattended round runs on Linux only" }, async () => {
+  const bench = resolve(import.meta.dirname, "..");
+  const root = mkdtempSync(join(tmpdir(), "run-all-short-"));
+  const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  try {
+    for (const mode of ["short", "enospc"]) {
+      const copy = join(root, mode, "bench");
+      for (const file of importClosure(join(import.meta.dirname, "run-all.mjs"))) {
+        mkdirSync(dirname(join(copy, relative(bench, file))), { recursive: true });
+        copyFileSync(file, join(copy, relative(bench, file)));
+      }
+      const here = join(copy, "fullstack");
+      const stand = (/** @type {string} */ script) => writeFileSync(join(here, script), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, ${JSON.stringify(script)} + "\\n");\nprocess.exit(0);\n`);
+      for (const script of ["count.mjs", "conform.mjs", "summarize.mjs"]) stand(script);
+      // fs.writeSync as the kernel may answer it: the count step's start line takes only 10 bytes,
+      // and the next write after it takes the rest ("short") or fails ("enospc").
+      const patch = join(root, mode, "short-write.mjs");
+      writeFileSync(patch, `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const real = fs.writeSync;
+let cut = null;
+fs.writeSync = function (fd, data, offset, length, position) {
+  const buf = typeof data === "string" ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const from = typeof data === "string" ? 0 : offset ?? 0;
+  const len = typeof data === "string" ? buf.length : length ?? buf.length - from;
+  if (cut === null && buf.subarray(from, from + len).toString().includes("start count")) { cut = fd; return real.call(this, fd, buf, from, 10); }
+  if (cut === fd) { cut = -1; if (${JSON.stringify(mode)} === "enospc") throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" }); }
+  return real.call(this, fd, data, offset, length, position);
+};
+syncBuiltinESMExports();
+`);
+      const scratch = join(root, mode, "tmp");
+      mkdirSync(scratch);
+      const child = spawn(process.execPath, ["--import", pathToFileURL(patch).href, join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
+        cwd: here, env: { PATH: dirname(process.execPath), HOME: scratch, TMPDIR: scratch, BENCH_APP_CPUS: "1" }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      let said = "";
+      for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (said += d));
+      const exit = await new Promise((done) => child.on("close", done));
+      const ran = existsSync(join(here, "ran.txt")) ? readFileSync(join(here, "ran.txt"), "utf8").split("\n").filter(Boolean) : [];
+      const text = readFileSync(join(here, "results-r1.progress"), "utf8");
+      const lines = text.split("\n").filter(Boolean);
+      if (mode === "short") {
+        assert.equal(exit, 0, said);
+        // The start line is whole, on its own line, and names this boot.
+        assert.equal(lines[1].split(" ").slice(1).join(" "), `start count ${boot}`, text);
+        assert.deepEqual(lines.map((l) => l.split(" ").slice(1, 3).join(" ")), ["boot", "start count", "end count", "start conform", "end conform", "start summary", "finished"], text);
+        assert.deepEqual(ran, ["count.mjs", "conform.mjs", "summarize.mjs"], said);
+      } else {
+        assert.equal(exit, 1, said);
+        assert.deepEqual(ran, [], `count dispatched after its start line was cut short: ${said}`);
+        assert.match(said, /round failed: .*ENOSPC/, said);
+        // The cut line stays as it is, and the failure is read on its own line: the round does not start again.
+        assert.equal(lines.length, 3, text);
+        assert.equal(lines[1].length, 10, text);
+        assert.equal(lines[2].split(" ").slice(1).join(" "), "failed", text);
+        assert.equal(resumeAt(text, "count").ended, "failed", text);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 /** The relative module files `entry` imports, itself included, followed through every file they import. */
@@ -255,7 +369,7 @@ test("an unattended run-all.mjs that starts again in the boot its count step sta
   const root = mkdtempSync(join(tmpdir(), "run-all-restart-"));
   const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
   try {
-    for (const [name, at] of [["same", boot], ["legacy", ""], ["other", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]]) {
+    for (const [name, at] of [["same", boot], ["legacy", ""], ["other", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"], ["cut", null]]) {
       const copy = join(root, name, "bench");
       for (const file of importClosure(join(import.meta.dirname, "run-all.mjs"))) {
         mkdirSync(dirname(join(copy, relative(bench, file))), { recursive: true });
@@ -265,7 +379,8 @@ test("an unattended run-all.mjs that starts again in the boot its count step sta
       const stand = (/** @type {string} */ script) => writeFileSync(join(here, script), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(join(here, "ran.txt"))}, ${JSON.stringify(script)} + "\\n");\nprocess.exit(0);\n`);
       for (const script of ["count.mjs", "conform.mjs", "summarize.mjs"]) stand(script);
       // A start before this one, which stopped in its count step: run-all.mjs killed, or the host restarted.
-      writeFileSync(join(here, "results-r1.progress"), `t boot\nt ${`start count ${at}`.trimEnd()}\n`);
+      // "cut": a start line written short, with no end, as a write before appendLine could leave it.
+      writeFileSync(join(here, "results-r1.progress"), at === null ? "t boot\nt start co" : `t boot\nt ${`start count ${at}`.trimEnd()}\n`);
       const scratch = join(root, name, "tmp");
       mkdirSync(scratch);
       const child = spawn(process.execPath, [join(here, "run-all.mjs"), "r1", "10", "count", "conform", "--unattended"], {
@@ -285,8 +400,9 @@ test("an unattended run-all.mjs that starts again in the boot its count step sta
       } else {
         assert.equal(exit, 1, `${name}: ${said}`);
         assert.deepEqual(ran, [], `${name}: ${said}`);
-        assert.deepEqual(progress, ["boot", "start count", "boot", "failed"], `${name}: ${said}`);
-        assert.match(skipped, name === "same" ? /step count skipped: the round stopped in its count step and it started again in the boot its count step started in, so a perf or probe that step started may still run; nothing more runs on this host/ : /its count step's start recorded no boot ID/, name);
+        assert.deepEqual(progress, ["boot", name === "cut" ? "start co" : "start count", "boot", "failed"], `${name}: ${said}`);
+        assert.match(skipped, name === "same" ? /step count skipped: the round stopped in its count step and it started again in the boot its count step started in, so a perf or probe that step started may still run; nothing more runs on this host/
+          : name === "cut" ? /step count skipped: the round's progress file ends in a line cut short, so whether its count step started is not known/ : /its count step's start recorded no boot ID/, name);
       }
     }
   } finally {

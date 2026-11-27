@@ -1394,7 +1394,10 @@ three runs:
    it does not start again at boot. `run-all.mjs` writes the boot's ID on the count step's start
    line, and a round that starts again while its count step had not ended goes on only where that
    ID is another boot's: one started again in the same boot (`run-all.mjs` itself killed or
-   stopped), or with no ID to compare, ends the round the same way, before its clean slate.
+   stopped), or with no ID to compare, ends the round the same way, before its clean slate. Each
+   progress line is written whole and synced before its step starts (a write cut short stops the
+   round there, recorded failed), and a progress file whose last line was cut short is read as a
+   count step that had not ended.
    A droplet
    that does not answer for 15 minutes while `droplet.mjs` waits or collects is power-cycled,
    with the same effect (the full comparison only; `--collect` gives up, leaving the droplet,
@@ -1555,7 +1558,9 @@ three runs:
    on a fresh host under a new prefix; a `count.mjs` stopped by a signal did not see its `perf`s
    end either, and is taken the same way. `count-pairs.mjs` writes `count.mjs`'s exit to its ledger
    before anything else it does for that invocation, so a 4 is kept whatever fails after it, and
-   past a 4 or a signal it asks Docker only to remove its lock, killed after 10 s. `droplet.mjs` turns off the droplet's automatic
+   past a 4 or a signal it asks Docker only to remove its lock, killed after 10 s and not waited
+   for past then, so a Docker client stuck in the kernel does not hold up the halt; run again, it
+   reads that halt from its ledger and refuses before it asks Docker anything. `droplet.mjs` turns off the droplet's automatic
    package updates before provisioning, so a reboot comes back on the kernel `perf` was installed
    for.
 6. Browser (`browser.mjs`): every app running at once on the app core, items from the item API,
