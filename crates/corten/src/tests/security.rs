@@ -386,6 +386,11 @@ pub(super) async fn inline_page(req: Req) -> Public<HtmlResult> {
     Public::new(std::time::Duration::from_secs(60), req.page(Inline { req: &req }))
 }
 
+/// The same page with the default caching.
+pub(super) async fn inline_default_page(req: Req) -> HtmlResult {
+    req.page(Inline { req: &req })
+}
+
 #[tokio::test]
 async fn the_csp_allows_the_import_map_by_hash_and_a_nonce_only_when_the_shell_asks() {
     let (_, headers, body) = call(app(routes(), None), "GET", None).await;
@@ -422,6 +427,83 @@ async fn the_app_refuses_cross_site_writes() {
     };
     assert_eq!(router.clone().oneshot(req("cross-site")).await.unwrap().status(), StatusCode::FORBIDDEN);
     assert_eq!(router.oneshot(req("same-origin")).await.unwrap().status(), StatusCode::OK);
+}
+
+/// A proxy may forward the whole target. The port is part of its authority, rather than
+/// the port of the connection to the proxy or the value of the separate Host line.
+#[tokio::test]
+async fn absolute_target_names_the_origin_of_a_write() {
+    use crate::security::Policy;
+    for (policy, path_status) in
+        [(Policy::new(), StatusCode::MISDIRECTED_REQUEST), (Policy::new().any_host(), StatusCode::NO_CONTENT)]
+    {
+        let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
+        let router = App::new(Routes::from(routes)).policy(policy).router();
+        // The in-process router did not read an HTTP/1.1 message from a connection. No Host
+        // line is required here, but the authority is still available to the origin check.
+        let no_line = Request::post("http://localhost/").header("origin", "http://localhost").body(Body::empty()).unwrap();
+        assert_eq!(router.clone().oneshot(no_line).await.unwrap().status(), StatusCode::NO_CONTENT);
+        let path = Request::post("/").header("host", "proxy.example").body(Body::empty()).unwrap();
+        assert_eq!(router.clone().oneshot(path).await.unwrap().status(), path_status);
+        for (target, origin, site, expected) in [
+            ("http://localhost/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("http://localhost/", "http://proxy.example", None, StatusCode::FORBIDDEN),
+            ("http://localhost:8000/", "http://localhost:8000", None, StatusCode::NO_CONTENT),
+            ("http://localhost:8000/", "http://localhost", None, StatusCode::FORBIDDEN),
+            ("http://localhost:80/", "http://localhost", None, StatusCode::NO_CONTENT),
+            ("https://localhost/", "https://localhost:443", None, StatusCode::NO_CONTENT),
+            ("http://localhost/", "http://localhost", Some("cross-site"), StatusCode::FORBIDDEN),
+            ("http://localhost/", "http://localhost", Some("same-origin"), StatusCode::NO_CONTENT),
+        ] {
+            let mut req = Request::post(target).header("host", "proxy.example").header("origin", origin);
+            if let Some(site) = site {
+                req = req.header("sec-fetch-site", site);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), expected, "{target} {origin} {site:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_absolute_form_write_over_a_connection_reaches_the_named_route() {
+    let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::NO_CONTENT }));
+    let (addr, stop, server) = on_the_wire(App::new(Routes::from(routes))).await;
+    let mut wire = Wire::to(addr).await;
+    let (status, _, _) = wire
+        .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://localhost\r\nContent-Length: 0\r\n\r\n")
+        .await;
+    assert_eq!(status, 204);
+    let (status, _, _) = wire
+        .ask(b"POST http://localhost/ HTTP/1.1\r\nHost: proxy.example\r\nOrigin: http://other.example\r\nContent-Length: 0\r\n\r\n")
+        .await;
+    assert_eq!(status, 403);
+    drop(wire);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[test]
+fn an_authority_form_target_supplies_the_origin_comparisons_port() {
+    let policy = crate::security::Policy::new();
+    let req = Request::builder()
+        .method(http::Method::CONNECT)
+        .uri("shop.example:8443")
+        .header("origin", "https://shop.example:8443")
+        .header("host", "shop.example")
+        .body(())
+        .unwrap();
+    assert!(policy.same_origin(req.method(), req.uri(), req.headers()));
+}
+
+#[test]
+fn an_https_only_policy_checks_the_origin_against_the_supplied_target() {
+    let policy = crate::security::Policy::new().hsts();
+    let uri = http::Uri::from_static("https://shop.example/");
+    for (origin, allowed) in [("https://shop.example", true), ("http://shop.example", false)] {
+        let req = Request::post(uri.clone()).header("origin", origin).header("host", "proxy.example").body(()).unwrap();
+        assert_eq!(policy.same_origin(req.method(), req.uri(), req.headers()), allowed, "{origin}");
+    }
 }
 
 /// A write redirected to an origin the form's page does not allow in `form-action` is an error in
@@ -482,6 +564,8 @@ async fn a_write_redirected_outside_form_action_is_an_error_in_debug_builds() {
         let (status, _) = send("/else", "POST", mode).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}");
     }
+    let (status, _) = send("http://app.localhost/own", "POST", &[("host", "proxy.example")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "a redirect to the target's own host is 'self'");
     // Without a Referer the form may be on any of the app's pages: the checkout area allows this.
     let (status, _) = send("/sibling", "POST", &[]).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "some page of the app allows it");
@@ -1753,7 +1837,7 @@ struct WalledAnswer<'a> {
 }
 
 /// Every answer [`lines_answer`] makes.
-const LINES_KINDS: [&str; 47] = [
+const LINES_KINDS: [&str; 49] = [
     "text",
     "created",
     "missing",
@@ -1801,6 +1885,8 @@ const LINES_KINDS: [&str; 47] = [
     "xml",
     "alone",
     "empty-text",
+    "bare-no-store",
+    "bare-public",
 ];
 
 /// An answer by name: what a handler, a middleware or an upstream can leave on one that the
@@ -1895,6 +1981,14 @@ fn lines_answer(kind: &str) -> Response {
             res
         }
         "empty-text" => (StatusCode::NO_CONTENT, "").into_response(),
+        // A `Cache` answer whose header a middleware took out: settled by its mark.
+        "bare-no-store" | "bare-public" => {
+            let mut res = "bare".into_response();
+            let cache = if kind == "bare-no-store" { Cache::no_store() } else { Cache::public(Duration::from_secs(60)) };
+            cache.apply(&mut res);
+            res.headers_mut().remove("cache-control");
+            res
+        }
         other => panic!("no answer named {other}"),
     }
 }
@@ -2054,12 +2148,13 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 }
                 let (mut one, mut each) = (lines_answer(kind), lines_answer(kind));
                 let said = format!("{name}, {scope}: {kind}, nonce taken {taken}, the runtime's {swap}");
-                if !applied.ready(&mut one, &lines, slot.as_ref(), csp) {
+                if !applied.ready(&mut one, &lines, slot.as_ref(), csp, seen.caller) {
                     assert_eq!(lines_of(one.headers()), lines_of(each.headers()), "{said}: left as it was");
                     left += 1;
                     return false;
                 }
-                let seen = Seen { nonce: taken, ..seen };
+                // As the app reads it: a nonce taken from the request's slot (an API's has none).
+                let seen = Seen { nonce: slot.as_ref().is_some_and(|slot| slot.taken().is_some()), ..seen };
                 applied.headers(&mut each, slot.as_ref(), csp, false);
                 if page {
                     applied.document(&mut each, csp, swap);
@@ -2086,7 +2181,7 @@ fn an_answer_s_lines_given_in_one_pass_are_the_ones_the_stages_insert() {
                 // A page's request that took its nonce names it in the policy.
                 assert_eq!(ready(kind, true, false, anyone()), !page, "{name}, {scope}: {kind}, its nonce taken");
             }
-            for kind in ["two", "no-store", "vary", "policy", "cookie", "alone", "relayed"] {
+            for kind in ["two", "no-store", "vary", "policy", "cookie", "alone", "relayed", "bare-no-store", "bare-public"] {
                 assert!(!ready(kind, false, false, anyone()), "{name}, {scope}: {kind}");
             }
             // A document gets lines of its own after the policy's, unless the policy has none for it.

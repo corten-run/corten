@@ -11,7 +11,8 @@ import { edgeOffset, nginxConf } from "../fullstack/edge.mjs";
 import { nativeBuildArchiveArgs } from "../mixed-production/build-context.mjs";
 import { cpuSetWithin, hardeningCpuGate, hardeningGateMs, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
-export const proxyConfig = () => nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
+export const edgePublicOrigin = "https://localhost:8080";
+export const proxyConfig = () => nginxConf([["target", { port: 8080 - edgeOffset, publicAuthority: new URL(edgePublicOrigin).host }]], 1);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const savedProofVersion = 2;
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -370,7 +371,8 @@ function verifyWorker(r, cell, summary, receipts, isolatedRun) {
   for (const key of ["User", "WorkingDir"]) assert.equal(info.Config[key] ?? "", image.Config[key] ?? "");
   const environment = new Map((image.Config.Env ?? []).map((s) => [s.slice(0, s.indexOf("=")), s.slice(s.indexOf("=") + 1)]));
   const overrides = step === "application" ? { MARKETPLACE_SOURCE: cell.source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json",
-    API_BASE: upstream, PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }
+    API_BASE: upstream, PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections),
+    ...(cell.mode === "deployed-edge" ? { MARKETPLACE_PUBLIC_ORIGIN: edgePublicOrigin } : {}) }
     : role === "qualification" ? { PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
       ...(cell.mode === "deployed-edge" && !["qualification", "native-controls", "parity"].includes(step)
         ? { NODE_EXTRA_CA_CERTS: "/results/cert/cert.pem", BENCH_EDGE_CERT: "/results/cert/cert.pem" } : {}) } : {};

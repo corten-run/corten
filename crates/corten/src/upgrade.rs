@@ -121,7 +121,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Upgrade {
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
         if !asks(parts) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "this route switches protocols: send an HTTP/1.1 GET with Connection: upgrade and an Upgrade header",
             )
             .with_status(StatusCode::BAD_REQUEST)
@@ -156,14 +156,14 @@ impl Upgrade {
         let https_only = shared.is_some_and(|s| s.https_only);
         // Under an API, the sites its `allow_origin` names too, as for its writes.
         let api = shared.and_then(|s| s.scopes.as_ref()?.mount(parts.uri.path()));
-        if !crate::security::write_allowed(allowed, https_only, &parts.headers)
+        if !crate::security::write_allowed(allowed, https_only, &parts.uri, &parts.headers)
             && !api.is_some_and(|mount| crate::security::allowed(&parts.headers, mount.origins()))
         {
-            return Err(Error::new("a switch from another site's page is refused, as a cross-site write is")
+            return Err(Error::corten("a switch from another site's page is refused, as a cross-site write is")
                 .with_status(StatusCode::FORBIDDEN));
         }
         let Some(on) = parts.extensions.remove::<OnUpgrade>() else {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "this connection cannot switch protocols: an HTTP/1.1 connection served by corten::serve can (not HTTP/2, not a test's app.test())",
             )
             .with_status(StatusCode::BAD_REQUEST));
@@ -191,16 +191,18 @@ impl Upgrade {
         Fut: Future<Output = ()> + Send + 'static,
     {
         if !self.protocol().eq_ignore_ascii_case("websocket") {
-            return Err(Error::new(format!("the request asks to switch to {:?}, not websocket", self.protocol()))
+            return Err(Error::corten(format!("the request asks to switch to {:?}, not websocket", self.protocol()))
                 .with_status(StatusCode::BAD_REQUEST));
         }
         if self.version.as_ref().is_none_or(|v| v.as_bytes() != b"13") {
-            return Err(Error::new(WrongVersion).with_status(StatusCode::UPGRADE_REQUIRED));
+            return Err(Error::corten(WrongVersion).with_status(StatusCode::UPGRADE_REQUIRED));
         }
         // 16 random bytes, base64: 24 characters, the last two padding.
         let key = match &self.key {
             Some(key) if key.len() == 24 && key.as_bytes().ends_with(b"==") => key.as_bytes(),
-            _ => return Err(Error::new("a WebSocket handshake needs a Sec-WebSocket-Key").with_status(StatusCode::BAD_REQUEST)),
+            _ => {
+                return Err(Error::corten("a WebSocket handshake needs a Sec-WebSocket-Key").with_status(StatusCode::BAD_REQUEST))
+            }
         };
         let mut headers = HeaderMap::with_capacity(3);
         headers.insert(header::SEC_WEBSOCKET_ACCEPT, HeaderValue::try_from(accept(key)).expect("base64 is a header value"));

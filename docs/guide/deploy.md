@@ -85,7 +85,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 
 | | What | Why |
 |---|---|---|
-| 1 | pass the browser's `Host` as it came, port included, and list the names in `HOSTS` | the app answers `421` to a name it does not know ([Host names](app.md#host-names)); a write or a WebSocket handshake without `Sec-Fetch-Site` (Chromium and Firefox sent none on one here) is checked by comparing its `Origin` with `Host` (name and port, a default port the same written or left out, and an `https` origin under `Policy::hsts`; [WebSockets](app.md#websockets-and-relays)), so with any other `Host` the app's own pages cannot open a WebSocket (measured: 403 with nginx's `$host`, which drops the port) unless `Policy::allow_origin` names the public origin; nginx's `proxy_pass` sends the upstream's name (`app:8080`) unless told otherwise |
+| 1 | forward the requested authority, port included, and list the names in `HOSTS` | for a path sent upstream, put the public host and port in `Host`; if the upstream target is a whole URL, put the public authority there. Its authority takes precedence over `Host` ([Host names](app.md#host-names)). An internal address there makes the write check trust the internal origin rather than the public one when `Sec-Fetch-Site` is absent. The app answers `421` to a name it does not know. A write or a WebSocket handshake without `Sec-Fetch-Site` (Chromium and Firefox sent none on one here) is checked by comparing its `Origin` with the requested authority (name and port, a default port the same written or left out, and an `https` origin under `Policy::hsts`; [WebSockets](app.md#websockets-and-relays)), so forwarding the wrong authority can prevent the app's own pages from opening a WebSocket (measured: 403 with nginx's `$host`, which drops the port) unless `Policy::allow_origin` names the public origin; nginx's `proxy_pass` sends the upstream's name (`app:8080`) unless told otherwise |
 | 2 | set `X-Forwarded-For`, and list the proxy's addresses in `PROXIES` | otherwise every request comes from the proxy ([The client's address](app.md#the-clients-address)) |
 | 3 | serve browsers and native clients HTTP/2 or HTTP/3 | each open live stream holds a connection, and over HTTP/1.1 a browser has about six per host ([Connection](live-data.md#connection)); a native app's `URLSession` caps HTTP/1.1 connections the same way and HTTP/2 lifts it, while OkHttp's cap counts calls whatever the protocol and is raised in the app ([Surfaces](../architecture.md#native-apps-next-not-built)); on a mobile link one connection for all of them also saves the other handshakes (HTTP/3 can keep it across a switch from Wi-Fi to cellular, where the client speaks it and the edge supports migration) |
 | 4 | pass event streams on as they are written | a buffered stream arrives late or not at all (below) |
@@ -833,8 +833,8 @@ binds a port of its own names it on the second, with `--port 8443` before `--pro
 to be a release that has `--port`. One without it builds nothing with the line: where the
 Dockerfile's own check of the command (below) has not refused it first, it refuses `--port`
 as an argument `corten build` does not take, before it builds the app. The fix is to move the
-version on the Dockerfile's install line to a release that has `--port`. Not tried in an image
-build: no release has the option yet.
+version on the Dockerfile's install line to a release that has `--port`: 0.3.0 is the first. An
+older release refusing `--port` in an image build has not been tried.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
@@ -858,13 +858,14 @@ What the argument asks of the app and its build, which the ordinary build does n
   release without the option is refused there, before the app is built. 0.2.0 is one: its
   `corten build` took no arguments and would build the ordinary binary without a word. A
   `corten` built from a commit between releases writes the number of the release before it,
-  so its Dockerfile is refused this way until that line names a release that has the option.
+  so its Dockerfile installs that release's command, not the commit's, and is refused this way
+  only when that release lacks the option (a command built before 0.3.0 wrote 0.2.0).
 - `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
   builds with its own, and `corten build` refuses a toolchain without the component, naming
   it; that file's `components` is where rustup takes it from. Not tried in an image build.
 - The build takes longer, and the app's target cache holds the instrumented copy beside the
   release. The starter's own image at `f909c0d2d`, its install line pointed at that checkout
-  since no release has the option yet, so the 45 seconds are not an install from crates.io;
+  since no release had the option then, so the 45 seconds are not an install from crates.io;
   one build each on a desktop with a lint run beside it:
   69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
   afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the
@@ -973,7 +974,8 @@ or offline-handoff campaign can
 [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
 after official timing or untimed JSON preparation, once the last native command's sealed
 lifetime verifies termination and an empty accounting scope, and every new user-space identity
-is a proved udev worker. Timing requires worker birth strictly after the sealed terminal cutoff;
+is a proved udev worker, including where the daemon and workers share the distribution's
+`/usr/bin/udevadm` executable. Timing requires worker birth strictly after the sealed terminal cutoff;
 untimed JSON preparation uses its pre-phase census cutoff instead. The bounded wait, worker exit
 and ordinary whole-host boundary checks must all pass. Replay uses the measured checkout: this
 cannot qualify old evidence that lacks the proof or discount activity during measurement.

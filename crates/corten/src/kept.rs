@@ -677,7 +677,7 @@ impl Written {
 /// or, where it found no counts by path, with the others like it.
 pub(crate) struct Writing<'a> {
     answers: &'a Answers,
-    /// The path's count and the request's `Host`; none for a write that found no counts to
+    /// The path's count and the requested authority; none for a write that found no counts to
     /// count in, which is counted with the others like it ([`Store::early`]).
     counted: Option<(usize, Option<HeaderValue>)>,
     answered: bool,
@@ -726,7 +726,7 @@ impl Drop for Writing<'_> {
 }
 
 /// The path of a place on this site that `to` (a `Location`) names: one that starts at the
-/// root, or a whole URL with the request's `Host`. Another site's page is not kept here, and a
+/// root, or a whole URL with the requested authority. Another site's page is not kept here, and a
 /// reference relative to the request's path is not followed.
 fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
     let path = |rest: &'a [u8]| rest.split(|byte| matches!(byte, b'?' | b'#')).next().unwrap_or(rest);
@@ -1159,7 +1159,12 @@ impl Answers {
         }
         let count = count_of(req.uri().path().as_bytes());
         signal.writes(count);
-        Writing { answers: self, counted: Some((count, req.headers().get(header::HOST).cloned())), answered: false }
+        let host = crate::security::request_host(req.uri(), || req.headers().get(header::HOST));
+        Writing {
+            answers: self,
+            counted: Some((count, host.and_then(crate::security::RequestHost::into_header))),
+            answered: false,
+        }
     }
 
     /// Counts a write to the paths `count` is for, so no page kept for them stands: every
@@ -1505,9 +1510,18 @@ impl Missed {
         }
         let (mut parts, body) = res.into_parts();
         // Exact size: one held `Bytes`.
-        let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
-            // A body of an exact size that could not be read: not a page to send as it is.
-            return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
+        let body = match crate::body::to_bytes(body, usize::MAX).await {
+            Ok(body) => body,
+            // A body of an exact size that could not be read: not a page to send as it is. The
+            // failure in its place is Corten's, not the handler's, so it is never shared whatever
+            // the page said (the error page drawn for it may read the request's `Cookie`).
+            Err(error) => {
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: a page to keep could not be read");
+                let failed =
+                    crate::response::IntoResponse::into_response(crate::Error::corten("corten: the page could not be read"));
+                return crate::cache::unshared_in_place_of(&parts.extensions, failed);
+            }
         };
         // A copy of its own length: a page's buffer is sized for the last page rendered and an
         // eighth more, and the bytes made from it would hold all of that for as long as they are

@@ -713,7 +713,9 @@ impl std::error::Error for Unserved {}
 #[cold]
 pub(crate) fn unserved(dev: bool, message: String) -> Error {
     print_unserved(dev, &message);
-    Error::new(Unserved(message))
+    // Corten's, not the handler's, wherever it is answered: inside the handler, behind the app's
+    // middleware, or in an answer's place.
+    Error::corten(Unserved(message))
 }
 
 /// Prints a debug build's error about the app's code to stderr outside `corten dev`, where a router
@@ -792,7 +794,8 @@ pub(crate) type ErrorPage = dyn Fn(Failure, Parts) -> Pin<Box<dyn Future<Output 
 ///
 /// It is sent with the failure's status (or as it answers, when it redirects). The extractors see
 /// the request's URL, `Cookie` and `Authorization` (so a caller is found as for the handler),
-/// `Accept-Language` and its mode; not its other headers or its body:
+/// `Accept-Language` and its mode; not its other headers or its body. An extractor's rejection
+/// is sent in the page's place, and is never shared, as a handler's extractor's is not:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -833,7 +836,8 @@ macro_rules! error_page_fn {
                 $(
                     let $t = match $t::from_request_parts(&mut parts, &state).await {
                         Ok(value) => value,
-                        Err(rejection) => return rejection.into_response(),
+                        // About who is asking, as a handler's extractor's rejection may be.
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                 )*
                 match self(failure, $($t,)*).await {
@@ -878,12 +882,14 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
         *res.status_mut() = status;
     } else if !res.status().is_redirection() {
         // The error page itself failed (in a debug build, a component the app does not list):
-        // plain text, so a broken error page cannot fail again.
+        // plain text, so a broken error page cannot fail again, kept from a CDN as the failed page
+        // was (an extractor's rejection is).
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
-        res = match detail {
+        let plain = match detail {
             Some(detail) => (status, format!("The page could not be shown.\n\n{detail}")).into_response(),
             None => (status, "The page could not be shown.").into_response(),
         };
+        res = crate::cache::unshared_in_place_of(res.extensions(), plain);
     }
     // Search engines skip it, whatever the layout says: the offline page is a 200.
     res.headers_mut().insert(HeaderName::from_static("x-robots-tag"), HeaderValue::from_static("noindex"));
@@ -1477,12 +1483,14 @@ fn notice_cookie(headers: &HeaderMap, plain: bool) -> Option<(&str, Gone)> {
 /// the notice is held to as well), and an `Origin` of this host, as the same-origin check on a
 /// write without that header requires ([`crate::security::Policy::same_origin`]), a default
 /// port written or left out alike.
-pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn plain_origin(uri: &Uri, headers: &HeaderMap) -> bool {
     if headers.contains_key("sec-fetch-site") {
         return false;
     }
-    let text = |name| headers.get(name).and_then(|v: &HeaderValue| v.to_str().ok());
-    let (Some(origin), Some(host)) = (text(header::ORIGIN), text(header::HOST)) else { return false };
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else { return false };
+    let Some(host) = crate::security::request_host(uri, || headers.get(header::HOST)).and_then(|at| at.text()) else {
+        return false;
+    };
     matches!(crate::security::on_host(origin, host), Some(("http", at)) if !crate::security::loopback(at))
 }
 
@@ -1588,7 +1596,7 @@ impl Req {
             } else {
                 None
             },
-            plain_write: write && !shared.https_only && plain_origin(headers),
+            plain_write: write && !shared.https_only && plain_origin(uri, headers),
             write,
             whole_action,
             fetched,
@@ -1829,7 +1837,7 @@ impl Req {
             (modules?, vars, crate::layout::Places::default())
         };
         let Some(at) = HEAD_AT.take() else {
-            return Err(Error::new("corten: the document's <head> has no <Corten />"));
+            return Err(Error::corten("corten: the document's <head> has no <Corten />"));
         };
         #[cfg(debug_assertions)]
         if self.shared.dev && !swap {
@@ -3027,7 +3035,7 @@ impl Req {
     /// `corten::http::Uri` to leave the app. Works with and without
     /// JavaScript.
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)))
     }
 
@@ -3091,15 +3099,15 @@ impl Req {
     /// ```
     pub fn resend_to<For>(&self, to: &(impl crate::route::OnSite + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         if !self.write {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::resend_to sends a write's form on, and this request is a GET or HEAD, which a redirect repeats as it is: use req.redirect",
             ));
         }
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         // A derived route always writes a path on this site; a hand-written `write_href` might not:
         // never send a form's body elsewhere.
         if !on_site(&value) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::resend_to sends a form only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
@@ -3160,10 +3168,10 @@ impl Req {
     /// }
     /// ```
     pub fn redirect_with_notice(&self, to: &(impl crate::route::OnSite + ?Sized), notice: impl std::fmt::Display) -> HtmlResult {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         // A derived route always writes a path on this site; a hand-written `write_href` might not.
         if !on_site(&value) {
-            return Err(Error::new(
+            return Err(Error::corten(
                 "corten: Req::redirect_with_notice sends the browser only to a path on this site, and this address is not one (a hand-written Route's write_href that does not start with one /, or writes a \\ or a control character)",
             ));
         }
@@ -3249,7 +3257,7 @@ impl Req {
     /// [`Req::redirect`]. Parameters the old URL had are the route's to carry
     /// (`#[route(prefix = ..)]` for ones named by data), so only the ones it knows move with it.
     pub fn moved<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
-        let value = crate::route::header_value(to).map_err(Error::new)?;
+        let value = crate::route::header_value(to).map_err(Error::corten)?;
         if self.mode == Mode::Action || (self.fetched && (has_fragment(&value) || elsewhere(&value))) {
             return Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)));
         }
@@ -3288,11 +3296,12 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
     if !(res.headers().contains_key(SHELL_HEADER) && res.headers().contains_key("refresh")) {
         return res;
     }
-    unserved(
+    let error = unserved(
         dev,
         "this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead".to_owned(),
     )
-    .into_response()
+    .into_response();
+    crate::cache::unshared_in_place_of(res.extensions(), error)
 }
 
 /// A page answering a browser's post, with a success status, at a path whose route has no `GET`
@@ -3395,7 +3404,7 @@ fn in_place_of(res: Response, dev: bool, message: String) -> Response {
             error.headers_mut().append(name.clone(), value.clone());
         }
     }
-    error
+    crate::cache::unshared_in_place_of(&parts.extensions, error)
 }
 
 /// A write's redirect to an origin the form's page does not allow in `form-action`: Chromium
@@ -3425,7 +3434,7 @@ fn redirect_outside_form_action(res: Response, check: Option<&crate::security::F
             error.headers_mut().append(name, value.clone());
         }
     }
-    error
+    crate::cache::unshared_in_place_of(&parts.extensions, error)
 }
 
 /// What a debug build says of a write redirected to `to`, when the form's page does not allow it.
@@ -3673,6 +3682,9 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let mut res = res;
     let status = res.status();
     let error = status.is_client_error() || status.is_server_error();
+    // A refusal goes out as it was made (a `200` an extractor's rejection chose, a redirect, a
+    // relayed failure): its mark is on it, and the app's cache rule reads it as it goes out
+    // ([`crate::cache::Unshared`]).
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
         return res;
     }
@@ -3682,7 +3694,12 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         drop(asked);
         return crate::api::json_failure(res, shared.dev, None).await;
     }
+    // A `NoStore` answer: the page that replaces it is one too; and one that is no handler's own (a
+    // refusal, the router's own failure, a panic, the deadline), which the page in its place is too.
+    let marks = crate::cache::Marks::of(res.extensions());
     if let Some(crate::caller::SignIn(to)) = res.extensions().get::<crate::caller::SignIn>().cloned() {
+        // A refusal, whoever made it: the redirect or page in its place is never shared either.
+        let marks = crate::cache::Marks { unshared: true, ..marks };
         let kept = std::mem::take(res.headers_mut());
         let Some(message) = sign_in_loops(asked.path(), &to) else {
             #[cfg(debug_assertions)]
@@ -3691,14 +3708,14 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
                 tracing::error!("corten: {message}");
                 print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                return carried(kept, error_page(shared, asked, failure).await);
+                return carried(kept, marks, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(asked.mode, asked.fetched, to));
+            return carried(kept, marks, redirect(asked.mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
         let failure = if shared.dev { failure } else { failure.without_detail() };
-        return carried(kept, error_page(shared, asked, failure).await);
+        return carried(kept, marks, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
     // Read here, before the answer's body is taken; not in a release build, where it would be one
@@ -3720,20 +3737,25 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // under it in dev mode; any other client (probes, webhooks) still gets the text.
     let rejection = failed.is_none() && cause.is_none() && browser && crate::api::is_plain_text(res.headers());
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
+        // A failure sent as it is: to a client that does not ask for HTML, or with a body that is
+        // not plain text. Its marks go out with it.
         return res;
     }
     // What the handler and the app's middleware said besides the body (a request id,
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
     if rejection {
-        let text = crate::body::to_bytes(res.into_body(), 16 * 1024).await.unwrap_or_default();
+        // The body alone: the answer's extensions are read again once the page is drawn.
+        let text = crate::body::to_bytes(std::mem::take(res.body_mut()), 16 * 1024).await.unwrap_or_default();
         let text = String::from_utf8_lossy(&text);
         tracing::debug!(status = status.as_u16(), "corten: request rejected: {text}");
         failed = Some(crate::Failed(Arc::from(text.trim())));
     }
     if offline && status == StatusCode::NOT_FOUND {
-        // The PWA's offline page, which the service worker keeps: a 200.
-        return carried(kept, error_page(shared, asked, Failure::Offline).await);
+        // The PWA's offline page, which the service worker keeps: a 200. It is the app's error page
+        // in place of the router's `404`, so it is settled as one too; the worker's own cache keeps
+        // it whatever its `Cache-Control` says.
+        return carried_from(kept, marks, error_page(shared, asked, Failure::Offline).await, res.extensions_mut());
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {
@@ -3757,7 +3779,20 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    carried(kept, error_page(shared, asked, failure).await)
+    carried_from(kept, marks, error_page(shared, asked, failure).await, res.extensions_mut())
+}
+
+/// [`carried`], for the error page drawn in the place of the failed answer whose extensions are
+/// `answer`: when they hold its `Unshared` mark alone and the page has none (the router's `404`
+/// with the error page), the page takes that map, rather than a new one made for the same mark.
+/// Nothing else of the failed answer's is carried. `answer` is borrowed after the page is drawn,
+/// so the request's future holds nothing more across that await.
+fn carried_from(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response, answer: &mut http::Extensions) -> Response {
+    if marks.unshared && !marks.no_store && answer.len() == 1 && res.extensions().is_empty() {
+        *res.extensions_mut() = std::mem::take(answer);
+        return carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
+    }
+    carried(kept, marks, res)
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
@@ -3778,14 +3813,22 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 /// on still decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written
 /// by hand, on any of its lines, however a reader could find it) makes `res` `no-store` too:
 /// whoever set it said nothing may keep the answer, a failure included. Its other directives
-/// described the failed answer, so they are not carried.
-fn carried(kept: HeaderMap, mut res: Response) -> Response {
+/// described the failed answer, so they are not carried. `res` gets the failed answer's `marks`
+/// ([`crate::cache::Marks`]): the page that replaces a `NoStore` answer is `NoStore` too, whatever
+/// a middleware made of the answer's header, and the page in place of an answer that is no
+/// handler's own (a refusal, a failure no handler answered) is never shared, by the app's cache
+/// rule or another app's that relays it inline. A plain-text failure a browser gets the error page
+/// for (an extractor's rejection is marked where it was made) is only that: a handler's own is
+/// its answer.
+fn carried(kept: HeaderMap, marks: crate::cache::Marks, mut res: Response) -> Response {
+    marks.put(&mut res);
     if kept.is_empty() {
         return res;
     }
     use http::header::Entry;
     let headers = res.headers_mut();
-    if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
+    if !marks.no_store && kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()))
+    {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
     }
     // Allocates only for a failure that varied on something.
@@ -3893,7 +3936,7 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "a panic with no message".to_string());
             tracing::error!("corten: {method} {} panicked: {message}", uri.path());
-            let mut res = Error::new(format!("the handler panicked: {message}")).into_response();
+            let mut res = Error::corten(format!("the handler panicked: {message}")).into_response();
             res.extensions_mut().insert(Cause::Panicked);
             res
         }
@@ -3915,11 +3958,12 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
-            Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
+            Error::corten("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
         }
         // A body over its limit, read past so the client reads the 413: still the 413.
         Waited::PastLimit(over) => {
             signal.abort(crate::Abort::Deadline);
+            // Corten's own errors ([`Error::corten`]).
             match over {
                 Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
                 Over::Upload(limit) => Error::from(crate::form::UploadError::TooLarge { limit }),
@@ -3930,7 +3974,7 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
-            let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
+            let mut res = crate::cache::unshared(StatusCode::SERVICE_UNAVAILABLE.into_response());
             res.extensions_mut().insert(Cause::TimedOut);
             res
         }
@@ -3957,12 +4001,13 @@ struct Late(Waited);
 
 /// `fut`'s output, or [`Late`] once it has waited `limit`. The timer starts the first time `fut`
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
-/// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
+/// one: about 600 ns a request measured with `tokio::time::timeout`. It is the connection's where
+/// the connection keeps one ([`crate::deadline`]). Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
 async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
     use std::{pin::pin, task::Poll};
     let mut fut = pin!(fut);
-    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut timer = pin!(crate::deadline::Timer::Unset);
     std::future::poll_fn(|cx| {
         crate::extract::forget_wait();
         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
@@ -3982,7 +4027,7 @@ async fn within_late<S: crate::app::Steps>(
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
     let mut fut = pin!(Some(next.run(pending.take())));
-    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut timer = pin!(crate::deadline::Timer::Unset);
     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {
         if limit.is_some() {
@@ -4014,18 +4059,11 @@ async fn within_late<S: crate::app::Steps>(
 
 #[inline]
 fn waited_until<T>(
-    mut timer: std::pin::Pin<&mut Option<tokio::time::Sleep>>,
+    timer: std::pin::Pin<&mut crate::deadline::Timer>,
     limit: std::time::Duration,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<Result<T, Late>> {
-    use std::task::Poll;
-    if timer.is_none() {
-        timer.set(Some(tokio::time::sleep(limit)));
-    }
-    match timer.as_pin_mut().map(|timer| timer.poll(cx)) {
-        Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
-        _ => Poll::Pending,
-    }
+    timer.poll(limit, cx).map(|()| Err(Late(crate::extract::waited())))
 }
 
 thread_local! {
@@ -4436,7 +4474,7 @@ fn unruled_vars(page: &str, rules: &str) -> Result<()> {
             }
             let Some(value) = tag.attr("data-vars") else { continue };
             if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
-                return Err(Error::new(format!(
+                return Err(Error::corten(format!(
                     "the page has data-vars=\"{value}\" and no rule for it, so that size paints at its initial value: markup placed with raw() keeps no values; render the view into a corten::Rendered and place that"
                 )));
             }
@@ -4519,7 +4557,7 @@ mod carried_tests {
         kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         let mut res = Response::new(Body::empty());
         res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
-        let res = carried(kept, res);
+        let res = carried(kept, crate::cache::Marks { unshared: false, no_store: false }, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
     }

@@ -10,7 +10,7 @@ import test from "node:test";
 import * as provider from "./cloud-provider.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { publicError } from "./droplet.mjs";
-import { providerDiagnostic } from "./cloud-options.mjs";
+import { providerDiagnostic, unsentCreate } from "./cloud-options.mjs";
 import { accountId, campaign, commit, context, harness as controllerHarness, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
 import { settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
@@ -64,7 +64,9 @@ test("worker create mode accepts only its pinned size, region and image; recover
     ["dedicated-blr1", "nyc1", false], ["dedicated-blr1", "blr1", false, "c-16"], ["dedicated-lon1", "lon1", false, "c-8", "other-image"],
     ["dedicated-nyc1", "nyc1", false],
     ["c16-generator-v1", "sfo2", true, "c-16"], ["c16-generator-v1", "sfo2", false],
-    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
+    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"],
+    ["json-c32-generator-v1", "sfo2", true, "c-32"], ["json-c32-generator-v1", "sfo2", false, "c-16"],
+    ["json-c32-generator-v1", "sfo3", false, "c-32"], ["json-c16-generator-v1", "sfo2", false, "c-32"]]) {
     await t.test(`${createMode}: ${size}/${region}/${image}`, async (t) => {
       const forged = ["sfo3", "dedicated-nyc1"].includes(createMode);
       if (forged) assert.throws(() => provider.providerTransport({ repo: resolve("."), createMode }), /unknown provider create mode/);
@@ -79,6 +81,8 @@ test("worker create mode accepts only its pinned size, region and image; recover
         const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
         assert.equal(listed[0].region.slug, region);
         assert.equal(listed[0].size_slug, size);
+        const posts = h.state().calls.filter(({ method }) => method === "POST");
+        assert.deepEqual(posts.map(({ path }) => path), ["/v2/droplets"]);
       } else {
         await assert.rejects(h.run(create));
         assert.equal(h.state().consumes, 0);
@@ -428,6 +432,18 @@ test("success IPC cannot smuggle diagnostics, unknown fields or nonempty failed 
     });
     assert.equal(h.launches, 1);
   }
+});
+
+test("cancellation at the create transport boundary never sends an action to the worker", async (t) => {
+  let cancelled = false;
+  const h = harness(t, "success", undefined, () => cancelled);
+  await h.run(account);
+  cancelled = true;
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+    "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
+  assert.equal(await h.run(create, 60000, true), unsentCreate);
+  await h.run.close();
+  assert.deepEqual(h.state().calls.map(({ method }) => method), ["GET"]);
 });
 
 test("deadline and cancellation reap an unsettled worker, preserve uncertainty and never retry", async (t) => {

@@ -1,1 +1,0 @@
-- The dedicated Mixed Production benchmark selects Django's Granian ASGI build and checks that the recorded image and runtime command match that selection. Other Django benchmark groups keep their existing deployment. [#1304 Benchmark parity: Django in approved workload groups](https://github.com/corten-run/corten/issues/1304)

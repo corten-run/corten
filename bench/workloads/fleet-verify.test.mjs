@@ -245,6 +245,16 @@ test("retirement evidence is independently rebound and never qualifies a partial
     save(); const report = await p.verify();
     assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false); assert.equal(p.calls.length, 0);
     assert.equal(report.groups[0].outcome, kind === "unused" ? "unused-retired" : "setup-failed-retired");
+    if (kind === "setup-failed") {
+      p.seed(groupNames[1]);
+      const changed = await p.verify({ async inspect(input) {
+        assert.equal(p.calls.length, 0);
+        writeFileSync(proof, `${JSON.stringify(record)}\n`);
+        return p.inspect(input);
+      } });
+      assert.equal(changed.groups[0].error, "group-retirement-changed");
+      save();
+    }
     record.id = "124"; save();
     assert.equal((await p.verify()).groups[0].outcome, "error", "a self-consistent hash cannot authorize foreign retirement evidence");
   }
