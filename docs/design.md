@@ -12929,7 +12929,8 @@ rules something out.
     preloaded, three counts of each case that agree within 1 and three runs of each idle figure
     over 5,000 connections, for `main` at `0e1d764fb`, for this change at `568aa8d1a`, with the
     switch off and on (on by one call added to the kit's probe); between `568aa8d1a` and the
-    commit that wrote this, no file under `crates/` differs; the figures are in the
+    commit that wrote this, no file under `crates/` differs but in how one test is laid out;
+    the figures are in the
     text above, and the ones of earlier heads it names were taken the same way against the
     `main` of their time: `f02d8511f` against `8270df196`, `7076a0c95` and `8dbd3db5f` against
     `aa526350f`, with the same files under `crates/`, `2764ce975` and `553b27040` against

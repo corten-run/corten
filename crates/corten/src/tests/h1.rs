@@ -1270,7 +1270,8 @@ async fn a_connection_keeps_its_deadlines_timer_and_takes_it_to_hyper() {
             tokio::time::sleep(Duration::from_millis(2)).await;
             format!("read {}", body.len())
         };
-        let table = Table::new().route("/", get(|| async { "hi" })).route("/wait", get(wait)).route("/read", crate::router::post(read));
+        let table =
+            Table::new().route("/", get(|| async { "hi" })).route("/wait", get(wait)).route("/read", crate::router::post(read));
         App::new(Routes::from(table)).deadline(Duration::from_secs(5))
     };
     let waits = format!("GET /wait HTTP/1.1\r\n{HOST}\r\n");
