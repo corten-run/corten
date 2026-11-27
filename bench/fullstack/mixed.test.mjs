@@ -136,16 +136,26 @@ test("the item API answers a late item as the item, after SLOW_MS, and an unknow
   try {
     // It says how many items it serves once it listens.
     await new Promise((ready) => server.stdout.once("data", ready));
+    /** @type {string[]} */
+    const order = [];
     const at = async (/** @type {string} */ id) => {
       const started = Date.now();
       const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`);
-      return { status: r.status, body: await r.text(), ms: Date.now() - started };
+      const answer = { status: r.status, body: await r.text(), ms: Date.now() - started };
+      order.push(id);
+      return answer;
     };
+    // One request first, so the times below are not a process's first answer.
+    assert.equal((await at("item_3")).status, 200);
+    order.length = 0;
     const [now, late, unknown] = await Promise.all([at("item_3"), at("item_slow_3"), at("item_slow_9")]);
     assert.equal(now.status, 200);
     assert.equal(late.status, 200);
     assert.equal(late.body, now.body, "the late item is the item");
-    assert.ok(late.ms >= 290 && now.ms < 290, `late ${late.ms} ms, at once ${now.ms} ms`);
+    // The late one waits SLOW_MS, a lower bound load cannot break; the others are not held to a
+    // time, which a busy machine can exceed, but to answering before it, sent together with it.
+    assert.ok(late.ms >= 290, `late ${late.ms} ms`);
+    assert.equal(order.at(-1), "item_slow_3", `answered in the order ${order.join(", ")} (late ${late.ms} ms, at once ${now.ms} ms)`);
     assert.equal(unknown.status, 404);
   } finally {
     server.kill();
