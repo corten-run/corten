@@ -409,23 +409,20 @@ const launch = async () => {
       "systemctl daemon-reload",
       suite === "fullstack" ? `systemctl enable --quiet ${unitName}` : "true",
     ].join(" && "), 2), lockLost);
-    // The start runs under the same flock as the other steps, after the lock check (round.mjs,
-    // startUnit), and says when it has settled: systemctl's start succeeded, or it failed and the
-    // manager then lists no job for the unit and reads it inactive or failed. One that failed after
-    // saying so cannot still be starting, and starting a unit that has started does nothing, so it
-    // is tried again. One that did not say so (its reply from systemd lost while the job goes on, a
-    // job still queued, a query that failed, a dropped connection, its time limit, no turn at the
-    // flock) may still be starting the round: it is not tried again, and the lock stays (below).
+    // The start runs once, under the same flock as the other steps, after the lock check (round.mjs,
+    // startUnit), and says it has settled only when systemctl's start succeeded. Any other return
+    // may only have lost systemd's reply while the job goes on, and nothing read afterwards can tie
+    // the unit's state to this start; so may a dropped connection, its time limit or no turn at the
+    // flock. Such a start may still be starting the round: it is not tried again, and the lock and
+    // the droplet stay (below). A lost lock (exit 4) started nothing, and fails as any step does.
     mayDestroy = false;
-    await retry(3, () => {
-      const r = remote(startUnit(lock, token, unitName), 2, { quiet: true, allowFail: true });
-      if (r.status === 0) return r;
-      const out = String(r.stdout ?? "");
+    const begun = remote(startUnit(lock, token, unitName), 2, { quiet: true, allowFail: true });
+    if (begun.status !== 0) {
+      const out = String(begun.stdout ?? "");
       if (out) process.stdout.write(out);
-      const settled = startSettled(out);
-      startUnknown = !lockLost(r) && !settled;
-      throw Object.assign(new Error(`the start of ${unitName} failed: ${String(r.stderr ?? "").trim() || `exit ${r.status}`}${settled ? "" : " (it did not settle: its acknowledgment did not come back, or a start job may still be running)"}`), { status: r.status, unknown: startUnknown });
-    }, (e) => lockLost(e) || e.unknown);
+      startUnknown = !lockLost(begun) && !startSettled(out);
+      throw Object.assign(new Error(`the start of ${unitName} failed: ${String(begun.stderr ?? "").trim() || `exit ${begun.status}`}${startUnknown ? " (it was not acknowledged: systemctl start did not succeed, or its answer did not come back, and a start job may still be running)" : ""}`), { status: begun.status, unknown: startUnknown });
+    }
     started = true;
   } catch (e) {
     // A step that failed has ended there (a remote step's limit there is shorter than its limit

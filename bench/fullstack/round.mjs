@@ -433,38 +433,27 @@ export const takeLaunch = (lock, token) => [
 /**
  * Starts the round's unit once the launch still holds its lock (ownsLaunch, exit 4 and nothing
  * started otherwise), and fails (exit 1) unless `systemctl start` succeeded and the unit is then
- * active. It prints "start settled <status>" only when the start can no longer run: `systemctl
- * start` returned 0 (it waits for the start's job), or, when it returned anything else, a fresh
- * query of the manager in this same script finds no job queued for the unit (`systemctl list-jobs`
- * succeeds and lists none) and then reads it inactive or failed. A start that returned nonzero may
- * only have lost its reply from systemd (over D-Bus) while its job goes on, so a query that fails, a
- * job listed or any other state prints nothing. droplet.mjs runs it under the flock its other steps
- * use; output without that line (startSettled) leaves whether the unit is starting unknown.
+ * active. It prints "start settled 0" only when `systemctl start` returned 0 (it waits for the
+ * start's job). A start that returned anything else may only have lost its reply from systemd
+ * (over D-Bus) while its job goes on, and no later query of the manager can tie what it reads to
+ * this start, so it prints nothing. droplet.mjs runs it under the flock its other steps use; output
+ * without that line (startSettled) leaves whether the unit is starting unknown.
  * @param {string} lock
  * @param {string} token
- * @param {string} unitName the round's unit, without ".service"
+ * @param {string} unitName
  */
-export const startUnit = (lock, token, unitName) => {
-  const service = quote(`${unitName}.service`);
-  return [
-    ownsLaunch(lock, token),
-    `systemctl start ${quote(unitName)}; started=$?`,
-    `if [ "$started" = 0 ]; then`,
-    `  echo "start settled $started"`,
-    // The jobs are listed before the state is read: with no job left, nothing of this start can
-    // make the unit active after the state is read.
-    `elif jobs=$(systemctl list-jobs --no-legend --no-pager ${service}) && [ -z "$jobs" ] && state=$(systemctl show -p ActiveState --value ${service}); then`,
-    `  case "$state" in inactive|failed) echo "start settled $started" ;; esac`,
-    `fi`,
-    `[ "$started" = 0 ] && systemctl is-active --quiet ${quote(unitName)} || exit 1`,
-  ].join("\n");
-};
+export const startUnit = (lock, token, unitName) => [
+  ownsLaunch(lock, token),
+  `systemctl start ${quote(unitName)}; started=$?`,
+  `[ "$started" = 0 ] && echo "start settled 0"`,
+  `[ "$started" = 0 ] && systemctl is-active --quiet ${quote(unitName)} || exit 1`,
+].join("\n");
 
 /**
- * Whether startUnit's output says its start has settled: it succeeded, or it can no longer run.
+ * Whether startUnit's output says its `systemctl start` succeeded, so that start can no longer run.
  * @param {string} output
  */
-export const startSettled = (output) => /^start settled \d+$/m.test(output.replaceAll("\r", ""));
+export const startSettled = (output) => /^start settled 0$/m.test(output.replaceAll("\r", ""));
 
 /**
  * Fails (exit 4) unless the launch lock is still `token`'s, so no step of a launch whose lock was

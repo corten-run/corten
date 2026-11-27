@@ -320,8 +320,9 @@ test("a relaunch on a droplet reads the round's progress file there as run-all.m
 });
 
 // systemctl as relaunchCustody, startUnit and droplet.mjs call it, answering from FAKE_* variables
-// (a known, disabled, inactive unit with no control group of its own and no job queued, whose start
-// succeeds, unless they say otherwise), each call recorded in FAKE_SYSTEMCTL_LOG.
+// (a known, disabled, inactive unit with no control group of its own, whose start succeeds, unless
+// they say otherwise; FAKE_RELOAD_HOOK, when set, runs at daemon-reload), each call recorded in
+// FAKE_SYSTEMCTL_LOG.
 const fakeSystemctl = [
   "#!/bin/sh",
   'printf "%s\\n" "$*" >> "$FAKE_SYSTEMCTL_LOG"',
@@ -335,7 +336,7 @@ const fakeSystemctl = [
   '  disable) exit "${FAKE_DISABLE_RC:-0}" ;;',
   '  stop) exit "${FAKE_STOP_RC:-0}" ;;',
   '  start) exit "${FAKE_START_RC:-0}" ;;',
-  '  list-jobs) [ -z "$FAKE_JOBS_FAIL" ] || exit 1; [ -z "$FAKE_JOBS" ] || printf "%s\\n" "$FAKE_JOBS" ;;',
+  '  daemon-reload) [ -z "$FAKE_RELOAD_HOOK" ] || sh "$FAKE_RELOAD_HOOK" ;;',
   '  is-enabled) echo "${FAKE_ENABLED-disabled}"; [ "${FAKE_ENABLED-disabled}" = enabled ] ;;',
   "esac",
   "exit 0",
@@ -515,7 +516,7 @@ test("a launch's lock is taken by one launch at a time, and the clear runs only 
   }
 });
 
-test("startUnit says its start settled only when systemctl start succeeded, or when the manager then lists no job for the unit and reads it inactive or failed", { skip: process.platform === "win32" && "stands in for systemctl with a shell script" }, () => {
+test("startUnit says its start settled only when systemctl start succeeded, and asks the manager nothing more after one that did not", { skip: process.platform === "win32" && "stands in for systemctl with a shell script" }, () => {
   const root = mkdtempSync(join(tmpdir(), "start-unit-"));
   try {
     const bin = join(root, "bin");
@@ -529,35 +530,30 @@ test("startUnit says its start settled only when systemctl start succeeded, or w
       const r = spawnSync("bash", ["-c", startUnit(lock, token, "corten-bench-r1")], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_SYSTEMCTL_LOG: log, ...fake } });
       return { ...r, settled: startSettled(r.stdout), calls: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [] };
     };
-    // A start that succeeded has settled; the manager is not asked again.
+    // A start that succeeded has settled; the manager is asked only whether the unit is active.
     const ok = run({});
     assert.equal(ok.status, 0, ok.stderr);
     assert.equal(ok.stdout, "start settled 0\n");
+    assert.ok(ok.settled);
     assert.deepEqual(ok.calls, ["start corten-bench-r1", "is-active --quiet corten-bench-r1"]);
-    // One that failed, with no job left for the unit and the unit inactive or failed, has settled:
-    // the jobs are listed before the state is read.
-    for (const state of ["failed", "inactive"]) {
-      const r = run({ FAKE_START_RC: "1", FAKE_STATE: state });
-      assert.equal(r.status, 1, state);
-      assert.equal(r.stdout, "start settled 1\n", state);
-      assert.deepEqual(r.calls, ["start corten-bench-r1", "list-jobs --no-legend --no-pager corten-bench-r1.service", "show -p ActiveState --value corten-bench-r1.service"], state);
-    }
-    // One that failed but may still be starting the unit (its reply from systemd lost while its job
-    // goes on): a job listed, a query that failed, or any other state. Nothing settled is printed.
+    // Any other return may only have lost its reply from systemd while its job goes on, whatever
+    // the manager would say afterwards: nothing settled is printed, and nothing more is asked.
     for (const [label, fake] of /** @type {[string, Record<string, string>][]} */ ([
-      ["a start job queued", { FAKE_JOBS: "41 corten-bench-r1.service start waiting" }],
-      ["a start job running, the unit inactive", { FAKE_JOBS: "41 corten-bench-r1.service start running", FAKE_STATE: "inactive" }],
-      ["the jobs could not be listed", { FAKE_JOBS_FAIL: "1", FAKE_STATE: "failed" }],
-      ["the state could not be read", { FAKE_STATE_FAIL: "1" }],
-      ["activating", { FAKE_STATE: "activating" }],
-      ["active", { FAKE_STATE: "active" }],
-      ["no state", { FAKE_STATE: "" }],
+      ["failed, the unit failed", { FAKE_START_RC: "1", FAKE_STATE: "failed" }],
+      ["failed, the unit inactive", { FAKE_START_RC: "1", FAKE_STATE: "inactive" }],
+      ["failed, the unit active", { FAKE_START_RC: "1", FAKE_STATE: "active" }],
+      ["unit not found", { FAKE_START_RC: "5" }],
+      ["the job failed", { FAKE_START_RC: "3" }],
     ])) {
-      const r = run({ FAKE_START_RC: "1", ...fake });
+      const r = run(fake);
       assert.equal(r.status, 1, label);
       assert.equal(r.stdout, "", label);
       assert.ok(!r.settled, label);
+      assert.deepEqual(r.calls, ["start corten-bench-r1"], label);
     }
+    // Only the line for a start that succeeded says it settled.
+    for (const out of ["start settled 1\n", "start settled\n", "start settled 0 later\n", ""]) assert.ok(!startSettled(out), out);
+    assert.ok(startSettled("start settled 0\r\n"));
     // A launch that no longer holds the lock starts nothing.
     const lost = run({}, "launch-b");
     assert.equal(lost.status, 4, lost.stderr);
@@ -725,11 +721,12 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.notEqual(target(), "another-launch");
     // The round may be running: the droplet is left for a --collect, nothing downloaded from it.
     assert.ok(!dropped.stdout.includes("downloading what it has"), dropped.stdout);
-    assert.match(dropped.stdout, /droplet 203\.0\.113\.9 is left as it is \(a round there goes on by itself\)/);    assert.match(dropped.stdout, /systemctl list-jobs/);
+    assert.match(dropped.stdout, /droplet 203\.0\.113\.9 is left as it is \(a round there goes on by itself\)/);
+    assert.match(dropped.stdout, /systemctl list-jobs/);
     assert.match(dropped.stdout, /do not run --collect until the unit is running, or no start job for it is queued and it is inactive or failed/);
-    // systemctl start returns nonzero while the manager still lists its start job (its reply from
-    // systemd lost while the job goes on): not settled, so not tried again, and the lock stays.
-    const queued = launch({ progress: unfinished(other), fake: { FAKE_START_RC: "1", FAKE_JOBS: "41 corten-bench-r1.service start waiting" } });
+    // systemctl start returns nonzero, its reply from systemd lost while its job is still queued
+    // (the unit inactive until the job runs): not settled, so not tried again, and the lock stays.
+    const queued = launch({ progress: unfinished(other), fake: { FAKE_START_RC: "1" } });
     assert.notEqual(queued.status, 0, queued.stdout);
     assert.deepEqual(queued.units.filter((u) => u === "start corten-bench-r1"), ["start corten-bench-r1"], queued.units.join("; "));
     assert.ok(!queued.stdout.includes("start settled"), queued.stdout);
@@ -739,16 +736,35 @@ test("droplet.mjs on a reused droplet holds the round's launch from its custody 
     assert.ok(!queued.calls.some((c) => c.includes("launch release")), "a start whose job is queued released the lock");
     assert.notEqual(target(), null, "a start whose job is queued released the lock");
     assert.ok(!queued.stdout.includes("downloading what it has"), queued.stdout);
-    // The control: the start failed, no job is left and the unit failed. It has settled, so it is
-    // tried again (three times in all) and the lock is released, as before.
+    // The control: the start failed and the unit then reads failed. Nothing read afterwards ties
+    // that state to this start, so it is not acknowledged either: one start, no retry, the lock and
+    // the droplet left, nothing downloaded, and the operator told how to check.
     const failed = launch({ progress: unfinished(other), fake: { FAKE_START_RC: "1", FAKE_STATE: "failed" }, fast: true });
     assert.notEqual(failed.status, 0, failed.stdout);
-    assert.equal(failed.units.filter((u) => u === "start corten-bench-r1").length, 3, failed.units.join("; "));
-    assert.match(failed.stdout, /^start settled 1$/m);
-    assert.match(failed.stdout, /retrying \(2 of 2\): the start of corten-bench-r1 failed/);
-    assert.ok(!failed.stdout.includes("was not acknowledged"), failed.stdout);
-    assert.ok(failed.calls.some((c) => c.includes("launch release")), "a settled start kept the lock");
-    assert.equal(target(), null, "a settled start kept the lock");
+    assert.deepEqual(failed.units.filter((u) => u === "start corten-bench-r1"), ["start corten-bench-r1"], failed.units.join("; "));
+    assert.ok(!failed.units.some((u) => u.startsWith("list-jobs")), failed.units.join("; "));
+    assert.ok(!failed.stdout.includes("start settled"), failed.stdout);
+    assert.ok(!failed.stdout.includes("retrying"), failed.stdout);
+    assert.match(failed.stdout, /the start of corten-bench-r1 on the droplet at 203\.0\.113\.9 was not acknowledged, so whether round r1 is running is not known and the launch lock \/var\/lib\/corten-bench\/launch-r1\.lock is left there/);
+    assert.match(failed.stdout, /systemctl list-jobs/);
+    assert.match(failed.stdout, /do not run --collect until/);
+    assert.match(failed.stdout, /rm \/var\/lib\/corten-bench\/launch-r1\.lock/);
+    assert.ok(!failed.calls.some((c) => c.includes("launch release")), "a failed start released the lock");
+    assert.notEqual(target(), null, "a failed start released the lock");
+    assert.ok(!failed.stdout.includes("downloading what it has"), failed.stdout);
+    assert.match(failed.stdout, /droplet 203\.0\.113\.9 is left as it is \(a round there goes on by itself\)/);
+    // The lock taken by another launch just before the start (at the unit's daemon-reload): the
+    // start step refuses (exit 4) and starts nothing, so it is not an unknown start, and the other
+    // launch's lock is left as it is.
+    writeFileSync(join(root, "reload-hook"), `rm -f '${lock}' && ln -s another-launch '${lock}'\n`);
+    const lost = launch({ progress: unfinished(other), fake: { FAKE_RELOAD_HOOK: join(root, "reload-hook") }, fast: true });
+    assert.notEqual(lost.status, 0, lost.stdout);
+    assert.ok(lost.units.includes("daemon-reload"), lost.units.join("; "));
+    assert.ok(!lost.started, lost.units.join("; "));
+    assert.match(lost.stderr, /this launch no longer holds/);
+    assert.ok(!lost.stdout.includes("was not acknowledged"), lost.stdout);
+    assert.ok(!/retrying \(\d of \d\): the start/.test(lost.stdout), lost.stdout);
+    assert.equal(target(), "another-launch");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
