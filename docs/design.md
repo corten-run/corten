@@ -8310,8 +8310,9 @@ rules something out.
     that decides, not from a second list of its rules, which could drift from what the build does.
     That code is compiled twice, the route's and its answer's checks alike (`Keeping` and
     `Missed::keep`, by a `TELL` parameter): `corten dev`'s copy records each refusal, a drawn
-    submit key at the same watch and the same return as a release build (so a key drawn as the
-    body is read is said by neither), counts the head of an answer whose locale was chosen late as
+    submit key from the same marks and at the same return as a release build (the answer's mark,
+    read before `Missed::keep`, and the request's signal, which `Missed::keep` reads first, each
+    said as `Verdict::DrewKey`; so a key drawn as the body is read is said by neither), counts the head of an answer whose locale was chosen late as
     a release build names it, from a copy, so the answer the app's middleware sees is the one it
     saw with no store, and leaves an answer it would keep for its body to be watched; a release
     build's copy does none of this. In `router_cost` (callgrind, three rounds each, against
@@ -8323,9 +8324,11 @@ rules something out.
     copy does no more work; with a second copy in the program the compiler no longer inlines
     putting the kept entry on the answer (about 29 of those 32 under rustc 1.100.0) and lays out
     the rest slightly otherwise, and the ways tried to keep one copy as it was cost more than
-    these. `corten dev`'s copy watches the handler through a borrow, a type of its own, since
-    sharing the release copy's watch made the compiler stop inlining it there, 23 more on each
-    page not kept or stored.
+    these. `corten dev`'s copy runs no watch of its own: the handler is watched inside the route's
+    own answer future, the same future in both builds (`8ae94288d`), and both read the marks that
+    watch and a render leave. The copy main had when this change merged it (`027178adf`, which
+    dropped it) watched the handler through a borrow, a type of its own, since sharing the release
+    copy's watch made the compiler stop inlining it there, 23 more on each page not kept or stored.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
     give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
